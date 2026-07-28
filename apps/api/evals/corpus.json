@@ -1,0 +1,19 @@
+[
+  {
+    "source": "northstar.md",
+    "text": "The Northstar project launches in October. Maya Chen owns the launch. Its goal is to reduce customer onboarding time by forty percent.",
+    "questions": [
+      "Who owns the Northstar launch?",
+      "What onboarding improvement is Northstar targeting?"
+    ]
+  },
+  {
+    "source": "juniper.md",
+    "text": "Project Juniper uses a violet deployment ring for canary releases. The rollback window is fifteen minutes.",
+    "questions": [
+      "What color is the Juniper deployment ring?",
+      "How long is the Juniper rollback window?"
+    ]
+  }
+]
+

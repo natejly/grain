@@ -1,0 +1,16 @@
+{
+  "name": "agentic-knowledge-workspace",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev": "pnpm --filter @workspace/web dev",
+    "build": "pnpm --filter @workspace/api-client build && pnpm --filter @workspace/web build",
+    "lint": "pnpm --filter @workspace/web lint",
+    "typecheck": "pnpm --filter @workspace/api-client typecheck && pnpm --filter @workspace/web typecheck",
+    "test": "pnpm --filter @workspace/web test",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0"
+  }
+}

@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e "apps/api[dev]"
+      - run: ruff check apps/api
+      - run: mypy apps/api/app
+      - run: PYTHONPATH=apps/api pytest apps/api/tests
+      - run: PYTHONPATH=apps/api python apps/api/scripts/evaluate_retrieval.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npx --yes pnpm@9.15.9 install --frozen-lockfile
+      - run: npx --yes pnpm@9.15.9 lint
+      - run: npx --yes pnpm@9.15.9 typecheck
+      - run: npx --yes pnpm@9.15.9 test
+      - run: npx --yes pnpm@9.15.9 build
+      - run: npx playwright install --with-deps chromium
+      - run: npx --yes pnpm@9.15.9 test:e2e
+
+      - name: Check OpenAPI contract drift
+        run: |
+          cp packages/api-client/openapi.json /tmp/openapi.json
+          PYTHONPATH=apps/api python scripts/export_openapi.py
+          diff -u /tmp/openapi.json packages/api-client/openapi.json
