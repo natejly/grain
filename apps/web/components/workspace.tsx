@@ -2,7 +2,6 @@
 
 import {
   Activity,
-  AppWindow,
   ArrowUp,
   BarChart3,
   Check,
@@ -15,26 +14,20 @@ import {
   LockKeyhole,
   Menu,
   MessageSquare,
-  MoreHorizontal,
   Network,
   Paperclip,
   Plug,
   Plus,
   RefreshCw,
-  ShieldCheck,
   Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
 import type {
-  AppPreview,
   AuditEvent,
   Bootstrap,
   Citation,
   Conversation,
-  Dashboard,
-  DashboardRun,
-  DashboardSpec,
   Dataset,
   GeneratedApp,
   IntegrationProvider,
@@ -45,19 +38,26 @@ import type {
   Source,
   ToolCall,
 } from "@workspace/api-client";
-import { WorkspaceApi } from "@workspace/api-client";
-import { FormEvent, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiError, WorkspaceApi } from "@workspace/api-client";
+import {
+  FormEvent,
+  Fragment,
+  MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import { ApiHealthBanner } from "./api-health-banner";
 import { SandboxFrame } from "./sandbox-frame";
-import { Snapshot } from "./snapshot-renderer";
 
 type View =
   | "chat"
   | "sources"
   | "graph"
-  | "analytics"
-  | "apps"
+  | "dashboards"
   | "integrations"
   | "activity";
 
@@ -65,11 +65,40 @@ const api = new WorkspaceApi(
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
 );
 
-const starterPrompts = [
-  "Summarize the indexed sources.",
-  "List the main facts and their citations.",
-  "/tool github-zen",
-];
+/**
+ * An unreachable API already has a dedicated banner with a retry, so it returns
+ * "" here rather than also raising a toast full of "Failed to fetch".
+ */
+function describeError(caught: unknown, fallback: string): string {
+  if (caught instanceof ApiError && caught.offline) return "";
+  if (caught instanceof Error && caught.message) return caught.message;
+  return fallback;
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 72);
+}
+
+function baseName(filename: string): string {
+  return filename.replace(/\.[^.]+$/, "") || filename;
+}
+
+function isTabular(filename: string): boolean {
+  return /\.(csv|json)$/i.test(filename);
+}
+
+const PAGE_TITLES: Record<View, string> = {
+  chat: "Chat",
+  sources: "Sources",
+  graph: "Graph",
+  dashboards: "Dashboards",
+  integrations: "Integrations",
+  activity: "Activity",
+};
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -109,8 +138,6 @@ export function Workspace() {
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
-  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
-  const [dashboardRuns, setDashboardRuns] = useState<Record<string, DashboardRun>>({});
   const [apps, setApps] = useState<GeneratedApp[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationProvider[]>([]);
   const [view, setView] = useState<View>("chat");
@@ -119,8 +146,7 @@ export function Workspace() {
   const [runStatus, setRunStatus] = useState("");
   const [provenance, setProvenance] = useState<ProvenanceChunk | null>(null);
   const [loadingProvenance, setLoadingProvenance] = useState(false);
-  const [appPreview, setAppPreview] = useState<AppPreview | null>(null);
-  const [studioAppId, setStudioAppId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | "new" | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -128,10 +154,16 @@ export function Workspace() {
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeConversationRef = useRef<string | null>(null);
+  const datasetAttempts = useRef(new Set<string>());
 
   const pendingApprovals = useMemo(
     () => toolCalls.filter((call) => call.status === "proposed"),
     [toolCalls],
+  );
+
+  const dashboards = useMemo(
+    () => apps.filter((app) => app.app_type === "code"),
+    [apps],
   );
 
   const refreshSecondary = useCallback(async () => {
@@ -146,25 +178,17 @@ export function Workspace() {
   }, []);
 
   const refreshExpansion = useCallback(async () => {
-    const [
-      nextGraph,
-      nextMemories,
-      nextDatasets,
-      nextDashboards,
-      nextApps,
-      nextIntegrations,
-    ] = await Promise.all([
-      api.getGraph(),
-      api.listMemory(),
-      api.listDatasets(),
-      api.listDashboards(),
-      api.listApps(),
-      api.listIntegrations(),
-    ]);
+    const [nextGraph, nextMemories, nextDatasets, nextApps, nextIntegrations] =
+      await Promise.all([
+        api.getGraph(),
+        api.listMemory(),
+        api.listDatasets(),
+        api.listApps(),
+        api.listIntegrations(),
+      ]);
     setGraph(nextGraph);
     setMemories(nextMemories);
     setDatasets(nextDatasets);
-    setDashboards(nextDashboards);
     setApps(nextApps);
     setIntegrations(nextIntegrations);
   }, []);
@@ -180,7 +204,6 @@ export function Workspace() {
         nextGraph,
         nextMemories,
         nextDatasets,
-        nextDashboards,
         nextApps,
         nextIntegrations,
       ] = await Promise.all([
@@ -192,7 +215,6 @@ export function Workspace() {
         api.getGraph(),
         api.listMemory(),
         api.listDatasets(),
-        api.listDashboards(),
         api.listApps(),
         api.listIntegrations(),
       ]);
@@ -204,7 +226,6 @@ export function Workspace() {
       setGraph(nextGraph);
       setMemories(nextMemories);
       setDatasets(nextDatasets);
-      setDashboards(nextDashboards);
       setApps(nextApps);
       setIntegrations(nextIntegrations);
       setError("");
@@ -214,7 +235,7 @@ export function Workspace() {
         setMessages(await api.listMessages(chats[0].id));
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not load workspace");
+      setError(describeError(caught, "Could not load workspace"));
     }
   }, []);
 
@@ -245,6 +266,37 @@ export function Workspace() {
     return () => window.clearInterval(timer);
   }, [sources]);
 
+  // A ready CSV/JSON source becomes a queryable dataset on its own, so
+  // dashboards can bind to it without a separate builder step.
+  useEffect(() => {
+    const pending = sources.filter(
+      (source) =>
+        source.status === "ready" &&
+        isTabular(source.filename) &&
+        !datasets.some((dataset) => dataset.source_id === source.id) &&
+        !datasetAttempts.current.has(source.id),
+    );
+    if (pending.length === 0) return;
+    pending.forEach((source) => datasetAttempts.current.add(source.id));
+    void (async () => {
+      for (const source of pending) {
+        try {
+          const created = await api.createDataset(
+            baseName(source.filename),
+            source.id,
+          );
+          setDatasets((items) =>
+            items.some((item) => item.id === created.id)
+              ? items
+              : [created, ...items],
+          );
+        } catch {
+          // The source is still searchable in chat; it just has no dataset.
+        }
+      }
+    })();
+  }, [sources, datasets]);
+
   useEffect(() => {
     if (!graph || !["queued", "building"].includes(graph.status)) return;
     const timer = window.setInterval(() => {
@@ -269,7 +321,7 @@ export function Workspace() {
     try {
       setMessages(await api.listMessages(id));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not open conversation");
+      setError(describeError(caught, "Could not open conversation"));
     }
   }
 
@@ -283,7 +335,7 @@ export function Workspace() {
       setView("chat");
       setSidebarOpen(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not create conversation");
+      setError(describeError(caught, "Could not create conversation"));
     }
   }
 
@@ -318,7 +370,7 @@ export function Workspace() {
       }
       await refreshSecondary();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not delete chat");
+      setError(describeError(caught, "Could not delete chat"));
     }
   }
 
@@ -393,16 +445,16 @@ export function Workspace() {
       setConversations(await api.listConversations());
       await refreshSecondary();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The event stream disconnected");
+      setError(describeError(caught, "The event stream disconnected"));
     } finally {
       setActiveRun((current) => (current === runId ? null : current));
       setRunStatus("");
     }
   }
 
-  async function submitPrompt(event?: FormEvent, promptOverride?: string) {
+  async function submitPrompt(event?: FormEvent) {
     event?.preventDefault();
-    const content = (promptOverride ?? draft).trim();
+    const content = draft.trim();
     if (!content || activeRun) return;
     setDraft("");
     setError("");
@@ -427,7 +479,7 @@ export function Workspace() {
       void followRun(response.run.id, conversationId);
     } catch (caught) {
       setDraft(content);
-      setError(caught instanceof Error ? caught.message : "Could not send message");
+      setError(describeError(caught, "Could not send message"));
     }
   }
 
@@ -437,7 +489,7 @@ export function Workspace() {
     try {
       setProvenance(await api.getChunk(chunkId));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not load provenance");
+      setError(describeError(caught, "Could not load provenance"));
     } finally {
       setLoadingProvenance(false);
     }
@@ -459,7 +511,7 @@ export function Workspace() {
       await refreshSecondary();
       await refreshExpansion();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Upload failed");
+      setError(describeError(caught, "Upload failed"));
     } finally {
       setUploading(false);
       setDragging(false);
@@ -475,7 +527,7 @@ export function Workspace() {
       await refreshSecondary();
       await refreshExpansion();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not delete source");
+      setError(describeError(caught, "Could not delete source"));
     }
   }
 
@@ -490,7 +542,7 @@ export function Workspace() {
         void followRun(call.run_id, call.conversation_id);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not record decision");
+      setError(describeError(caught, "Could not record decision"));
     }
   }
 
@@ -506,94 +558,53 @@ export function Workspace() {
       }
       await refreshSecondary();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not rebuild graph");
+      setError(describeError(caught, "Could not rebuild graph"));
     }
   }
 
-  async function createDatasetFromSource(
-    sourceId: string,
+  /**
+   * Creates the shell for a new dashboard. Slugs are unique workspace-wide, so
+   * a collision retries with a short suffix rather than failing the first send.
+   */
+  async function createDashboard(
     name: string,
-    description: string,
-  ) {
+    visibility: "private" | "public",
+  ): Promise<GeneratedApp> {
     setError("");
-    try {
-      await api.createDataset(name, sourceId, description);
-      await refreshExpansion();
-      await refreshSecondary();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not create dataset");
-      throw caught;
+    const base = slugify(name) || "dashboard";
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const slug =
+        attempt === 0 ? base : `${base}-${Math.random().toString(36).slice(2, 6)}`;
+      try {
+        const created = await api.createApp({
+          name,
+          slug,
+          visibility,
+          app_type: "code",
+          dashboard_ids: [],
+        });
+        setApps((items) => [created, ...items]);
+        return created;
+      } catch (caught) {
+        if (caught instanceof ApiError && caught.status === 409) continue;
+        throw caught;
+      }
     }
+    throw new Error("Could not find a free address for that name");
   }
 
-  async function createDashboard(payload: {
-    name: string;
-    description?: string;
-    dataset_id: string;
-    spec: DashboardSpec;
-  }) {
-    setError("");
-    try {
-      const created = await api.createDashboard(payload);
-      setDashboards((items) => [created, ...items]);
-      const run = await api.runDashboard(created.id);
-      setDashboardRuns((items) => ({ ...items, [created.id]: run }));
-      await refreshSecondary();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not create dashboard");
-      throw caught;
-    }
-  }
-
-  async function createDatasetVersion(datasetId: string, sourceId: string) {
-    setError("");
-    try {
-      await api.createDatasetVersion(datasetId, sourceId);
-      await refreshExpansion();
-      await refreshSecondary();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not create dataset version");
-    }
-  }
-
-  async function runDashboard(dashboardId: string) {
-    setError("");
-    try {
-      const run = await api.runDashboard(dashboardId);
-      setDashboardRuns((items) => ({ ...items, [dashboardId]: run }));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not run dashboard");
-    }
-  }
-
-  async function createGeneratedApp(payload: {
-    name: string;
-    slug: string;
-    description?: string;
-    visibility: "private" | "public";
-    app_type?: "dashboard" | "code";
-    dashboard_ids: string[];
-  }) {
-    setError("");
-    try {
-      const created = await api.createApp(payload);
-      setApps((items) => [created, ...items]);
-      await refreshSecondary();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not create app");
-      throw caught;
-    }
-  }
-
-  async function createGeneratedAppRelease(app: GeneratedApp, dashboardIds: string[]) {
-    setError("");
-    try {
-      const updated = await api.createAppRelease(app.id, dashboardIds);
-      setApps((items) => items.map((item) => (item.id === updated.id ? updated : item)));
-      await refreshSecondary();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not create release");
-    }
+  async function generateDashboard(
+    app: GeneratedApp,
+    prompt: string,
+    datasetIds: string[],
+  ): Promise<GeneratedApp> {
+    const updated = await api.generateApp(app.id, {
+      prompt,
+      dataset_ids: datasetIds,
+    });
+    setApps((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+    await refreshSecondary();
+    return updated;
   }
 
   async function publishGeneratedApp(app: GeneratedApp, releaseId: string) {
@@ -603,7 +614,7 @@ export function Workspace() {
       setApps((items) => items.map((item) => (item.id === updated.id ? updated : item)));
       await refreshSecondary();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not publish release");
+      setError(describeError(caught, "Could not publish this version"));
     }
   }
 
@@ -614,16 +625,7 @@ export function Workspace() {
       setApps((items) => items.map((item) => (item.id === updated.id ? updated : item)));
       await refreshSecondary();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not roll back release");
-    }
-  }
-
-  async function previewGeneratedApp(app: GeneratedApp) {
-    setError("");
-    try {
-      setAppPreview(await api.previewApp(app.id));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not load app preview");
+      setError(describeError(caught, "Could not roll back"));
     }
   }
 
@@ -633,7 +635,7 @@ export function Workspace() {
       const { authorize_url } = await api.connectIntegration(provider);
       window.location.href = authorize_url;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not start OAuth");
+      setError(describeError(caught, "Could not start OAuth"));
     }
   }
 
@@ -650,7 +652,7 @@ export function Workspace() {
       await api.disconnectIntegration(accountId);
       setIntegrations(await api.listIntegrations());
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not disconnect");
+      setError(describeError(caught, "Could not disconnect"));
     }
   }
 
@@ -671,18 +673,8 @@ export function Workspace() {
       await refreshSecondary();
       await refreshExpansion();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not sync");
+      setError(describeError(caught, "Could not sync"));
     }
-  }
-
-  async function generateAppCode(app: GeneratedApp, prompt: string, datasetIds: string[]) {
-    setError("");
-    const updated = await api.generateApp(app.id, {
-      prompt,
-      dataset_ids: datasetIds,
-    });
-    setApps((items) => items.map((item) => (item.id === updated.id ? updated : item)));
-    await refreshSecondary();
   }
 
   async function forgetMemory(item: MemoryItem) {
@@ -692,7 +684,7 @@ export function Workspace() {
       await api.deleteMemory(item.id);
       setMemories((items) => items.filter((memory) => memory.id !== item.id));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not forget memory");
+      setError(describeError(caught, "Could not forget memory"));
     }
   }
 
@@ -715,7 +707,6 @@ export function Workspace() {
         <button className="new-thread-button" onClick={newConversation}>
           <Plus size={16} />
           New thread
-          <span>⌘ K</span>
         </button>
 
         <nav className="primary-nav" aria-label="Workspace">
@@ -752,26 +743,15 @@ export function Workspace() {
             <span className="nav-count">{graph?.entities.length || 0}</span>
           </button>
           <button
-            className={view === "analytics" ? "nav-item active" : "nav-item"}
+            className={view === "dashboards" ? "nav-item active" : "nav-item"}
             onClick={() => {
-              setView("analytics");
+              setView("dashboards");
               setSidebarOpen(false);
             }}
           >
             <BarChart3 size={17} />
             Dashboards
             <span className="nav-count">{dashboards.length}</span>
-          </button>
-          <button
-            className={view === "apps" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("apps");
-              setSidebarOpen(false);
-            }}
-          >
-            <AppWindow size={17} />
-            Apps
-            <span className="nav-count">{apps.length}</span>
           </button>
           <button
             className={view === "integrations" ? "nav-item active" : "nav-item"}
@@ -803,7 +783,6 @@ export function Workspace() {
 
         <div className="thread-heading">
           <span>Recent threads</span>
-          <MoreHorizontal size={15} />
         </div>
         <div className="thread-list">
           {conversations.length === 0 ? (
@@ -842,7 +821,7 @@ export function Workspace() {
           </div>
           <div>
             <strong>{bootstrap?.identity.user_name || "Connecting…"}</strong>
-            <span>Signed in</span>
+            <span>{bootstrap?.identity.workspace_name || ""}</span>
           </div>
         </div>
       </aside>
@@ -866,21 +845,7 @@ export function Workspace() {
             <Menu size={19} />
           </button>
           <div className="page-context">
-            <strong>
-              {view === "chat"
-                ? activeTitle
-                : view === "sources"
-                  ? "Sources"
-                  : view === "graph"
-                    ? "Graph"
-                    : view === "analytics"
-                      ? "Dashboards"
-                      : view === "apps"
-                        ? "Apps"
-                        : view === "integrations"
-                          ? "Integrations"
-                          : "Activity"}
-            </strong>
+            <strong>{view === "chat" ? activeTitle : PAGE_TITLES[view]}</strong>
           </div>
           <div className="topbar-actions">
             <div
@@ -892,10 +857,6 @@ export function Workspace() {
               }
             >
               {bootstrap?.model_provider.model || "Loading provider"}
-            </div>
-            <div className="local-status">
-              <span />
-              Connected
             </div>
           </div>
         </header>
@@ -947,29 +908,12 @@ export function Workspace() {
           />
         )}
 
-        {view === "analytics" && (
-          <AnalyticsView
-            sources={sources}
-            datasets={datasets}
-            dashboards={dashboards}
-            runs={dashboardRuns}
-            createDataset={createDatasetFromSource}
-            createDatasetVersion={createDatasetVersion}
-            createDashboard={createDashboard}
-            runDashboard={runDashboard}
-          />
-        )}
-
-        {view === "apps" && (
-          <AppsView
-            apps={apps}
-            dashboards={dashboards}
-            createApp={createGeneratedApp}
-            createRelease={createGeneratedAppRelease}
+        {view === "dashboards" && (
+          <DashboardsView
+            apps={dashboards}
+            openEditor={setEditing}
             publish={publishGeneratedApp}
             rollback={rollbackGeneratedApp}
-            preview={previewGeneratedApp}
-            openStudio={(app) => setStudioAppId(app.id)}
           />
         )}
 
@@ -994,49 +938,17 @@ export function Workspace() {
         )}
       </main>
 
-      {studioAppId && (
-        <AppStudio
-          app={apps.find((item) => item.id === studioAppId) || null}
+      {editing && (
+        <DashboardEditor
+          app={editing === "new" ? null : apps.find((item) => item.id === editing) || null}
           datasets={datasets}
-          generate={generateAppCode}
+          create={createDashboard}
+          generate={generateDashboard}
           publish={publishGeneratedApp}
-          onClose={() => setStudioAppId(null)}
+          onCreated={setEditing}
+          onClose={() => setEditing(null)}
           setError={setError}
         />
-      )}
-
-      {appPreview && (
-        <div className="drawer-scrim" onClick={() => setAppPreview(null)}>
-          <aside
-            className="provenance-drawer app-preview-drawer"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="drawer-header">
-              <div>
-                <span>Draft preview · v{appPreview.version}</span>
-                <strong>{appPreview.name}</strong>
-              </div>
-              <button
-                className="icon-button"
-                onClick={() => setAppPreview(null)}
-                aria-label="Close preview"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="app-preview-content">
-              {(appPreview.manifest.dashboards || []).map((dashboard) => (
-                <section className="published-card" key={dashboard.id}>
-                  <header>
-                    <h2>{dashboard.name}</h2>
-                    {dashboard.description && <p>{dashboard.description}</p>}
-                  </header>
-                  <Snapshot dashboard={dashboard} />
-                </section>
-              ))}
-            </div>
-          </aside>
-        </div>
       )}
 
       {(provenance || loadingProvenance) && (
@@ -1065,10 +977,6 @@ export function Workspace() {
                   </span>
                 </div>
                 <div className="provenance-content">{provenance.content}</div>
-                <div className="provenance-foot">
-                  <ShieldCheck size={15} />
-                  Indexed from the stored original. No generated text.
-                </div>
               </>
             )}
           </aside>
@@ -1085,7 +993,7 @@ type ChatViewProps = {
   setDraft: (value: string) => void;
   activeRun: string | null;
   runStatus: string;
-  submitPrompt: (event?: FormEvent, promptOverride?: string) => Promise<void>;
+  submitPrompt: (event?: FormEvent) => Promise<void>;
   openCitation: (citation: Citation) => Promise<void>;
   setView: (view: View) => void;
   endRef: React.RefObject<HTMLDivElement | null>;
@@ -1109,14 +1017,7 @@ function ChatView({
         {messages.length === 0 ? (
           <div className="welcome">
             <h1>New conversation</h1>
-            <p>Ask a question about the indexed sources.</p>
-            <div className="prompt-grid">
-              {starterPrompts.map((prompt) => (
-                <button key={prompt} onClick={() => void submitPrompt(undefined, prompt)}>
-                  <span>{prompt}</span>
-                </button>
-              ))}
-            </div>
+            <p>Ask a question about your sources.</p>
           </div>
         ) : (
           <div className="message-column">
@@ -1202,9 +1103,6 @@ function ChatView({
             </button>
           </div>
         </form>
-        <p className="composer-caption">
-          Responses use indexed passages. Verify citations when accuracy matters.
-        </p>
       </div>
     </section>
   );
@@ -1234,7 +1132,6 @@ function SourcesView({
       <div className="page-heading">
         <div>
           <h1>Sources</h1>
-          <p>Files available for retrieval and citation.</p>
         </div>
         <button className="primary-button" onClick={() => fileInputRef.current?.click()}>
           <Plus size={16} />
@@ -1371,7 +1268,6 @@ function GraphView({ graph, memories, rebuild, openChunk, forgetMemory }: GraphV
       <div className="page-heading">
         <div>
           <h1>Knowledge graph</h1>
-          <p>Rebuildable entities and co-occurrence links derived from indexed passages.</p>
         </div>
         <button
           className="secondary-button"
@@ -1399,10 +1295,12 @@ function GraphView({ graph, memories, rebuild, openChunk, forgetMemory }: GraphV
           <strong>{memories.length}</strong>
           <span>long-term memories</span>
         </div>
-        <div>
-          <strong>{graph?.status || "loading"}</strong>
-          <span>{graph?.built_at ? `built ${formatRelative(graph.built_at)}` : "projection state"}</span>
-        </div>
+        {graph?.built_at && (
+          <div>
+            <strong>{graph.status}</strong>
+            <span>built {formatRelative(graph.built_at)}</span>
+          </div>
+        )}
       </div>
 
       {nodes.length === 0 ? (
@@ -1481,7 +1379,7 @@ function GraphView({ graph, memories, rebuild, openChunk, forgetMemory }: GraphV
         <div className="panel-title">
           <div>
             <strong>Long-term memory</strong>
-            <p>Durable notes learned from your conversations. Recalled automatically in chat.</p>
+            <p>Recalled automatically in chat.</p>
           </div>
           <span className="panel-count">{memories.length}</span>
         </div>
@@ -1521,799 +1419,361 @@ function GraphView({ graph, memories, rebuild, openChunk, forgetMemory }: GraphV
   );
 }
 
-type AnalyticsViewProps = {
-  sources: Source[];
-  datasets: Dataset[];
-  dashboards: Dashboard[];
-  runs: Record<string, DashboardRun>;
-  createDataset: (sourceId: string, name: string, description: string) => Promise<void>;
-  createDatasetVersion: (datasetId: string, sourceId: string) => Promise<void>;
-  createDashboard: (payload: {
-    name: string;
-    description?: string;
-    dataset_id: string;
-    spec: DashboardSpec;
-  }) => Promise<void>;
-  runDashboard: (dashboardId: string) => Promise<void>;
+type DashboardsViewProps = {
+  apps: GeneratedApp[];
+  openEditor: (value: string | "new") => void;
+  publish: (app: GeneratedApp, releaseId: string) => Promise<void>;
+  rollback: (app: GeneratedApp, releaseId: string) => Promise<void>;
 };
 
-function AnalyticsView({
-  sources,
-  datasets,
-  dashboards,
-  runs,
-  createDataset,
-  createDatasetVersion,
-  createDashboard,
-  runDashboard,
-}: AnalyticsViewProps) {
-  const tabularSources = sources.filter(
-    (source) =>
-      source.status === "ready" && /\.(csv|json)$/i.test(source.filename),
-  );
-  const [sourceId, setSourceId] = useState("");
-  const [datasetName, setDatasetName] = useState("");
-  const [datasetDescription, setDatasetDescription] = useState("");
-  const [datasetId, setDatasetId] = useState("");
-  const [dashboardName, setDashboardName] = useState("");
-  const [visualization, setVisualization] =
-    useState<DashboardSpec["visualization"]>("bar");
-  const [groupBy, setGroupBy] = useState("");
-  const [metricField, setMetricField] = useState("");
-  const [metricOperation, setMetricOperation] =
-    useState<"count" | "sum" | "avg" | "min" | "max">("sum");
-  const [working, setWorking] = useState(false);
-
-  const selectedDataset =
-    datasets.find((dataset) => dataset.id === datasetId) || datasets[0];
-  const numericColumns =
-    selectedDataset?.columns.filter((column) =>
-      ["integer", "number"].includes(column.type),
-    ) || [];
-  const selectedGroup =
-    groupBy && selectedDataset?.columns.some((column) => column.name === groupBy)
-      ? groupBy
-      : selectedDataset?.columns[0]?.name || "";
-  const selectedMetric =
-    metricField && numericColumns.some((column) => column.name === metricField)
-      ? metricField
-      : numericColumns[0]?.name || "";
-
-  async function submitDataset(event: FormEvent) {
-    event.preventDefault();
-    const chosenSource = sourceId || tabularSources[0]?.id;
-    if (!chosenSource || !datasetName.trim()) return;
-    setWorking(true);
-    try {
-      await createDataset(chosenSource, datasetName.trim(), datasetDescription.trim());
-      setDatasetName("");
-      setDatasetDescription("");
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function submitDashboard(event: FormEvent) {
-    event.preventDefault();
-    if (!selectedDataset || !dashboardName.trim()) return;
-    const operation = selectedMetric ? metricOperation : "count";
-    const label =
-      operation === "count" ? "count" : `${operation}_${selectedMetric}`;
-    const metric =
-      operation === "count"
-        ? { field: null, operation: "count" as const, label }
-        : { field: selectedMetric, operation, label };
-    setWorking(true);
-    try {
-      await createDashboard({
-        name: dashboardName.trim(),
-        dataset_id: selectedDataset.id,
-        spec: {
-          visualization,
-          query: {
-            group_by: selectedGroup || null,
-            metrics: [metric],
-            order_by: label,
-            order_direction: "desc",
-            limit: 100,
-          },
-          x_field: selectedGroup || label,
-          y_fields: [label],
-        },
-      });
-      setDashboardName("");
-    } finally {
-      setWorking(false);
-    }
-  }
-
+function DashboardsView({ apps, openEditor, publish, rollback }: DashboardsViewProps) {
   return (
-    <section className="content-page analytics-page">
+    <section className="content-page dashboards-page">
       <div className="page-heading">
         <div>
           <h1>Dashboards</h1>
-          <p>Versioned CSV and JSON datasets with bounded, typed queries.</p>
         </div>
+        <button className="primary-button" onClick={() => openEditor("new")}>
+          <Plus size={16} />
+          Add dashboard
+        </button>
       </div>
 
-      <div className="builder-grid">
-        <form className="builder-card" onSubmit={(event) => void submitDataset(event)}>
-          <div className="builder-title">
-            <Database size={17} />
-            <strong>New dataset</strong>
-          </div>
-          <label>
-            Source
-            <select
-              value={sourceId || tabularSources[0]?.id || ""}
-              onChange={(event) => setSourceId(event.target.value)}
-              disabled={tabularSources.length === 0}
-            >
-              {tabularSources.map((source) => (
-                <option value={source.id} key={source.id}>
-                  {source.filename}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Name
-            <input
-              value={datasetName}
-              onChange={(event) => setDatasetName(event.target.value)}
-              placeholder="Revenue"
-              maxLength={160}
-            />
-          </label>
-          <label>
-            Description
-            <input
-              value={datasetDescription}
-              onChange={(event) => setDatasetDescription(event.target.value)}
-              placeholder="Optional"
-              maxLength={500}
-            />
-          </label>
-          <button
-            className="primary-button"
-            type="submit"
-            disabled={!tabularSources.length || !datasetName.trim() || working}
-          >
-            Create dataset
-          </button>
-        </form>
-
-        <form className="builder-card" onSubmit={(event) => void submitDashboard(event)}>
-          <div className="builder-title">
-            <BarChart3 size={17} />
-            <strong>New dashboard</strong>
-          </div>
-          <label>
-            Dataset
-            <select
-              value={selectedDataset?.id || ""}
-              onChange={(event) => {
-                setDatasetId(event.target.value);
-                setGroupBy("");
-                setMetricField("");
-              }}
-              disabled={datasets.length === 0}
-            >
-              {datasets.map((dataset) => (
-                <option value={dataset.id} key={dataset.id}>
-                  {dataset.name} · v{dataset.current_version}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Name
-            <input
-              value={dashboardName}
-              onChange={(event) => setDashboardName(event.target.value)}
-              placeholder="Revenue by team"
-              maxLength={160}
-            />
-          </label>
-          <div className="field-pair">
-            <label>
-              Group
-              <select
-                value={selectedGroup}
-                onChange={(event) => setGroupBy(event.target.value)}
-              >
-                {selectedDataset?.columns.map((column) => (
-                  <option value={column.name} key={column.name}>
-                    {column.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Chart
-              <select
-                value={visualization}
-                onChange={(event) =>
-                  setVisualization(event.target.value as DashboardSpec["visualization"])
-                }
-              >
-                <option value="bar">Bar</option>
-                <option value="line">Line</option>
-                <option value="donut">Donut</option>
-                <option value="table">Table</option>
-              </select>
-            </label>
-          </div>
-          <div className="field-pair">
-            <label>
-              Metric
-              <select
-                value={selectedMetric}
-                onChange={(event) => setMetricField(event.target.value)}
-                disabled={numericColumns.length === 0}
-              >
-                {numericColumns.map((column) => (
-                  <option value={column.name} key={column.name}>
-                    {column.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Operation
-              <select
-                value={numericColumns.length ? metricOperation : "count"}
-                onChange={(event) =>
-                  setMetricOperation(
-                    event.target.value as "count" | "sum" | "avg" | "min" | "max",
-                  )
-                }
-              >
-                <option value="sum">Sum</option>
-                <option value="avg">Average</option>
-                <option value="min">Minimum</option>
-                <option value="max">Maximum</option>
-                <option value="count">Count</option>
-              </select>
-            </label>
-          </div>
-          <button
-            className="primary-button"
-            type="submit"
-            disabled={!selectedDataset || !dashboardName.trim() || working}
-          >
-            Create dashboard
-          </button>
-        </form>
-      </div>
-
-      <div className="dataset-strip">
-        {datasets.length === 0 ? (
-          <span>No datasets yet.</span>
-        ) : (
-          datasets.map((dataset) => (
-            <div key={dataset.id}>
-              <Database size={15} />
-              <strong>{dataset.name}</strong>
-              <span>
-                {dataset.row_count.toLocaleString()} rows · {dataset.columns.length} columns · v
-                {dataset.current_version}
-              </span>
-              {tabularSources[0] && (
-                <button
-                  title={`Create a new version from ${tabularSources[0].filename}`}
-                  onClick={() =>
-                    void createDatasetVersion(
-                      dataset.id,
-                      sourceId || tabularSources[0].id,
-                    )
-                  }
-                >
-                  New version
-                </button>
-              )}
-            </div>
-          ))
-        )}
-      </div>
-
-      <div className="dashboard-grid">
-        {dashboards.length === 0 ? (
-          <div className="feature-empty">
-            <BarChart3 size={24} />
-            <strong>No dashboards yet</strong>
-            <span>Create a dataset, then define a bounded aggregation.</span>
-          </div>
-        ) : (
-          dashboards.map((dashboard) => (
-            <article className="dashboard-card" key={dashboard.id}>
-              <div className="dashboard-card-head">
-                <div>
-                  <strong>{dashboard.name}</strong>
-                  <span>{dashboard.spec.visualization} · {formatRelative(dashboard.updated_at)}</span>
-                </div>
-                <button onClick={() => void runDashboard(dashboard.id)}>
-                  <RefreshCw size={14} />
-                  Run
-                </button>
-              </div>
-              {runs[dashboard.id] ? (
-                <DashboardResultView run={runs[dashboard.id]} />
-              ) : (
-                <button
-                  className="dashboard-run-empty"
-                  onClick={() => void runDashboard(dashboard.id)}
-                >
-                  Run dashboard
-                </button>
-              )}
-            </article>
-          ))
-        )}
+      <div className="dashboard-gallery">
+        {apps.map((app) => (
+          <DashboardTile
+            key={app.id}
+            app={app}
+            open={() => openEditor(app.id)}
+            publish={publish}
+            rollback={rollback}
+          />
+        ))}
+        <button className="dashboard-add-tile" onClick={() => openEditor("new")}>
+          <Plus size={22} />
+          Add dashboard
+        </button>
       </div>
     </section>
   );
 }
 
-function DashboardResultView({ run }: { run: DashboardRun }) {
-  const { result } = run;
-  const xField = run.dashboard.spec.x_field || result.columns[0];
-  const yField = run.dashboard.spec.y_fields[0] || result.columns[1];
-  const numericValues = result.rows.map((row) => Number(row[yField] || 0));
-  const maximum = Math.max(...numericValues, 1);
-
-  if (run.dashboard.spec.visualization === "table") {
-    return (
-      <div className="result-table-wrap">
-        <table className="result-table">
-          <thead>
-            <tr>
-              {result.columns.map((column) => (
-                <th key={column}>{column}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {result.rows.slice(0, 12).map((row, index) => (
-              <tr key={index}>
-                {result.columns.map((column) => (
-                  <td key={column}>{String(row[column] ?? "—")}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  return (
-    <div className={`mini-chart ${run.dashboard.spec.visualization}`}>
-      {result.rows.slice(0, 12).map((row, index) => {
-        const value = numericValues[index] || 0;
-        return (
-          <div className="mini-bar-row" key={index}>
-            <span>{String(row[xField] ?? "—")}</span>
-            <div>
-              <i style={{ width: `${Math.max(2, (value / maximum) * 100)}%` }} />
-            </div>
-            <strong>{value.toLocaleString()}</strong>
-          </div>
-        );
-      })}
-      <small>
-        {result.row_count} rows · {result.elapsed_ms.toFixed(1)} ms
-        {result.truncated ? " · truncated" : ""}
-      </small>
-    </div>
-  );
-}
-
-type AppsViewProps = {
-  apps: GeneratedApp[];
-  dashboards: Dashboard[];
-  createApp: (payload: {
-    name: string;
-    slug: string;
-    description?: string;
-    visibility: "private" | "public";
-    app_type?: "dashboard" | "code";
-    dashboard_ids: string[];
-  }) => Promise<void>;
-  createRelease: (app: GeneratedApp, dashboardIds: string[]) => Promise<void>;
+type DashboardTileProps = {
+  app: GeneratedApp;
+  open: () => void;
   publish: (app: GeneratedApp, releaseId: string) => Promise<void>;
   rollback: (app: GeneratedApp, releaseId: string) => Promise<void>;
-  preview: (app: GeneratedApp) => Promise<void>;
-  openStudio: (app: GeneratedApp) => void;
 };
 
-function AppsView({
-  apps,
-  dashboards,
-  createApp,
-  createRelease,
-  publish,
-  rollback,
-  preview,
-  openStudio,
-}: AppsViewProps) {
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [visibility, setVisibility] = useState<"private" | "public">("private");
-  const [appType, setAppType] = useState<"dashboard" | "code">("dashboard");
-  const [selected, setSelected] = useState<string[]>([]);
-  const [working, setWorking] = useState(false);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    const dashboardIds =
-      appType === "code"
-        ? []
-        : selected.length
-          ? selected
-          : dashboards.slice(0, 1).map((item) => item.id);
-    if (!name.trim() || !slug.trim()) return;
-    if (appType === "dashboard" && dashboardIds.length === 0) return;
-    setWorking(true);
-    try {
-      await createApp({
-        name: name.trim(),
-        slug: slug.trim().toLowerCase(),
-        visibility,
-        app_type: appType,
-        dashboard_ids: dashboardIds,
-      });
-      setName("");
-      setSlug("");
-      setSelected([]);
-    } finally {
-      setWorking(false);
-    }
-  }
+function DashboardTile({ app, open, publish, rollback }: DashboardTileProps) {
+  const [showVersions, setShowVersions] = useState(false);
+  const current =
+    app.releases.find((release) => release.id === app.current_release_id) ||
+    app.releases[0] ||
+    null;
+  const latest = app.releases[0] || null;
 
   return (
-    <section className="content-page apps-page">
-      <div className="page-heading">
-        <div>
-          <h1>Apps</h1>
-          <p>Immutable dashboard snapshots with explicit publish and rollback.</p>
-        </div>
-      </div>
-
-      <form className="app-builder" onSubmit={(event) => void submit(event)}>
-        <div className="builder-title">
-          <AppWindow size={17} />
-          <strong>New app</strong>
-        </div>
-        <div className="app-builder-fields">
-          <label>
-            Name
-            <input
-              value={name}
-              onChange={(event) => {
-                setName(event.target.value);
-                if (!slug) {
-                  setSlug(
-                    event.target.value
-                      .toLowerCase()
-                      .replace(/[^a-z0-9]+/g, "-")
-                      .replace(/^-|-$/g, ""),
-                  );
-                }
-              }}
-              placeholder="Operations brief"
-              maxLength={160}
-            />
-          </label>
-          <label>
-            Slug
-            <input
-              value={slug}
-              onChange={(event) => setSlug(event.target.value)}
-              placeholder="operations-brief"
-              pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
-              minLength={3}
-              maxLength={80}
-            />
-          </label>
-          <label>
-            Visibility
-            <select
-              value={visibility}
-              onChange={(event) =>
-                setVisibility(event.target.value as "private" | "public")
-              }
-            >
-              <option value="private">Workspace only</option>
-              <option value="public">Public link</option>
-            </select>
-          </label>
-          <label>
-            Type
-            <select
-              value={appType}
-              onChange={(event) =>
-                setAppType(event.target.value as "dashboard" | "code")
-              }
-            >
-              <option value="dashboard">Dashboard snapshot</option>
-              <option value="code">Coded app (AI-generated)</option>
-            </select>
-          </label>
-        </div>
-        {appType === "dashboard" ? (
-          <fieldset className="dashboard-picker">
-            <legend>Dashboards</legend>
-            {dashboards.map((dashboard) => (
-              <label key={dashboard.id}>
-                <input
-                  type="checkbox"
-                  checked={selected.includes(dashboard.id)}
-                  onChange={(event) =>
-                    setSelected((items) =>
-                      event.target.checked
-                        ? [...items, dashboard.id]
-                        : items.filter((id) => id !== dashboard.id),
-                    )
-                  }
-                />
-                {dashboard.name}
-              </label>
-            ))}
-            {dashboards.length === 0 && <span>Create a dashboard first.</span>}
-          </fieldset>
+    <article className="dashboard-tile">
+      <div className="dashboard-tile-preview">
+        {current ? (
+          <SandboxFrame
+            key={current.id}
+            src={api.frameUrl(app.id, current.id)}
+            title={app.name}
+            snapshots={current.manifest.snapshots || {}}
+            className="tile-frame"
+          />
         ) : (
-          <p className="app-builder-hint">
-            Coded apps are generated from a prompt in the Studio and run in a
-            sandboxed frame with no network access. Create the app, then open
-            its Studio to generate.
-          </p>
+          <span className="dashboard-tile-blank">No version yet</span>
         )}
-        <button
-          className="primary-button"
-          type="submit"
-          disabled={
-            !name.trim() ||
-            !slug.trim() ||
-            (appType === "dashboard" && dashboards.length === 0) ||
-            working
-          }
-        >
-          {appType === "code" ? "Create coded app" : "Create draft"}
+        <button className="dashboard-tile-open" onClick={open}>
+          Edit
         </button>
-      </form>
-
-      <div className="app-list">
-        {apps.length === 0 ? (
-          <div className="feature-empty">
-            <AppWindow size={24} />
-            <strong>No apps yet</strong>
-            <span>Package one or more dashboards into a static release.</span>
-          </div>
-        ) : (
-          apps.map((app) => {
-            const current =
-              app.releases.find((release) => release.id === app.current_release_id) ||
-              app.releases[0];
-            const latest = app.releases[0];
-            return (
-              <article className="app-card" key={app.id}>
-                <div className="app-card-head">
-                  <div className="app-icon">
-                    {app.visibility === "public" ? <Globe2 size={18} /> : <LockKeyhole size={18} />}
-                  </div>
-                  <div>
-                    <strong>{app.name}</strong>
-                    <span>
-                      /apps/{app.slug} · {app.visibility}
-                    </span>
-                  </div>
-                  <span className={`release-status ${current?.status || "draft"}`}>
-                    {current?.status || "draft"}
-                  </span>
-                </div>
-
-                {current && (
-                  <div className="app-snapshot">
-                    <div>
-                      <strong>v{current.version}</strong>
-                      <span>
-                        {current.manifest.kind === "code"
-                          ? "sandboxed coded app"
-                          : `${current.manifest.dashboards?.length || 0} dashboards`}
-                      </span>
-                    </div>
-                    <span>{current.content_hash.slice(0, 12)}</span>
-                  </div>
-                )}
-
-                <div className="app-actions">
-                  {app.app_type === "code" ? (
-                    <button onClick={() => openStudio(app)}>Studio</button>
-                  ) : (
-                    <button
-                      onClick={() =>
-                        void createRelease(
-                          app,
-                          dashboards.map((dashboard) => dashboard.id),
-                        )
-                      }
-                      disabled={dashboards.length === 0}
-                    >
-                      New snapshot
-                    </button>
-                  )}
-                  {app.app_type !== "code" && app.releases.length > 0 && (
-                    <button onClick={() => void preview(app)}>Preview</button>
-                  )}
-                  {latest?.status === "draft" && (
-                    <button
-                      className="publish-button"
-                      onClick={() => void publish(app, latest.id)}
-                    >
-                      Publish v{latest.version}
-                    </button>
-                  )}
-                  {app.visibility === "public" && app.current_release_id && (
-                    <a href={`/apps/${app.slug}`} target="_blank" rel="noreferrer">
-                      Open
-                    </a>
-                  )}
-                </div>
-
-                {app.releases.length > 1 && (
-                  <div className="release-list">
-                    {app.releases.map((release) => (
-                      <div key={release.id}>
-                        <span>
-                          v{release.version} · {release.status}
-                        </span>
-                        {release.id !== app.current_release_id &&
-                          release.status !== "draft" && (
-                            <button onClick={() => void rollback(app, release.id)}>
-                              Roll back
-                            </button>
-                          )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </article>
-            );
-          })
-        )}
       </div>
-    </section>
+
+      <div className="dashboard-tile-foot">
+        <div>
+          <strong>{app.name}</strong>
+          <span>
+            {app.visibility === "public" ? (
+              <Globe2 size={12} />
+            ) : (
+              <LockKeyhole size={12} />
+            )}
+            {current ? `v${current.version} · ${current.status}` : "not built yet"}
+          </span>
+        </div>
+        <div className="dashboard-tile-actions">
+          {latest?.status === "draft" && (
+            <button
+              className="publish-button"
+              onClick={() => void publish(app, latest.id)}
+            >
+              Publish v{latest.version}
+            </button>
+          )}
+          {app.visibility === "public" && app.current_release_id && (
+            <a href={`/apps/${app.slug}`} target="_blank" rel="noreferrer">
+              Open
+            </a>
+          )}
+          {app.releases.length > 1 && (
+            <button onClick={() => setShowVersions((value) => !value)}>
+              Versions
+            </button>
+          )}
+        </div>
+      </div>
+
+      {showVersions && (
+        <div className="release-list">
+          {app.releases.map((release) => (
+            <div key={release.id}>
+              <span>
+                v{release.version} · {release.status}
+              </span>
+              {release.id !== app.current_release_id &&
+                release.status !== "draft" && (
+                  <button onClick={() => void rollback(app, release.id)}>
+                    Roll back
+                  </button>
+                )}
+            </div>
+          ))}
+        </div>
+      )}
+    </article>
   );
 }
 
-type AppStudioProps = {
+type DashboardEditorProps = {
   app: GeneratedApp | null;
   datasets: Dataset[];
-  generate: (app: GeneratedApp, prompt: string, datasetIds: string[]) => Promise<void>;
+  create: (name: string, visibility: "private" | "public") => Promise<GeneratedApp>;
+  generate: (
+    app: GeneratedApp,
+    prompt: string,
+    datasetIds: string[],
+  ) => Promise<GeneratedApp>;
   publish: (app: GeneratedApp, releaseId: string) => Promise<void>;
+  onCreated: (id: string) => void;
   onClose: () => void;
   setError: (message: string) => void;
 };
 
-function AppStudio({ app, datasets, generate, publish, onClose, setError }: AppStudioProps) {
+/**
+ * Chat on the left, the live dashboard on the right. Turn history is the
+ * release history: every generation stores its prompt in the manifest, so the
+ * transcript survives reloads without a second source of truth.
+ */
+function DashboardEditor({
+  app,
+  datasets,
+  create,
+  generate,
+  publish,
+  onCreated,
+  onClose,
+  setError,
+}: DashboardEditorProps) {
+  const [name, setName] = useState("Untitled dashboard");
+  const [visibility, setVisibility] = useState<"private" | "public">("private");
   const [prompt, setPrompt] = useState("");
-  const [selected, setSelected] = useState<string[]>([]);
+  const [overrides, setOverrides] = useState<string[] | null>(null);
+  const [pending, setPending] = useState("");
   const [working, setWorking] = useState(false);
-  const [frameNonce, setFrameNonce] = useState(0);
+  const [nonce, setNonce] = useState(0);
+  const logRef = useRef<HTMLDivElement>(null);
 
-  if (!app) return null;
-  const latest = app.releases[0];
-  const codeRelease = latest?.manifest.kind === "code" ? latest : null;
+  const latest = app?.releases[0] || null;
+  const bound =
+    latest?.manifest.data_bindings?.map((binding) => binding.dataset_id) || null;
+  const active = overrides ?? bound ?? datasets.map((dataset) => dataset.id);
+  const history = app ? [...app.releases].reverse() : [];
+  const versions = app?.releases.length ?? 0;
 
-  async function runGenerate() {
-    if (!app || !prompt.trim()) return;
+  useEffect(() => {
+    const log = logRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [versions, pending, working]);
+
+  async function send(event?: FormEvent) {
+    event?.preventDefault();
+    const text = prompt.trim();
+    if (!text || working) return;
     setWorking(true);
+    setPending(text);
+    setPrompt("");
     try {
-      await generate(app, prompt.trim(), selected);
-      setFrameNonce((value) => value + 1);
+      let target = app;
+      if (!target) {
+        target = await create(name.trim() || "Untitled dashboard", visibility);
+        onCreated(target.id);
+      }
+      await generate(target, text, active);
+      setNonce((value) => value + 1);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Generation failed");
+      setPrompt(text);
+      setError(describeError(caught, "Could not build that dashboard"));
     } finally {
+      setPending("");
       setWorking(false);
     }
   }
 
   return (
     <div className="drawer-scrim" onClick={onClose}>
-      <aside className="app-studio" onClick={(event) => event.stopPropagation()}>
+      <aside className="dashboard-editor" onClick={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div>
-            <span>App Studio · sandboxed</span>
-            <strong>{app.name}</strong>
+            {app ? (
+              <>
+                <span>
+                  {latest ? `v${latest.version} · ${latest.status}` : "not built yet"}
+                </span>
+                <strong>{app.name}</strong>
+              </>
+            ) : (
+              <>
+                <span>New dashboard</span>
+                <input
+                  className="editor-name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  aria-label="Dashboard name"
+                  maxLength={160}
+                />
+              </>
+            )}
           </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close studio">
+          {!app && (
+            <label className="editor-visibility">
+              <input
+                type="checkbox"
+                checked={visibility === "public"}
+                onChange={(event) =>
+                  setVisibility(event.target.checked ? "public" : "private")
+                }
+              />
+              Public link
+            </label>
+          )}
+          {app && latest?.status === "draft" && (
+            <button
+              className="publish-button"
+              onClick={() => void publish(app, latest.id)}
+            >
+              Publish v{latest.version}
+            </button>
+          )}
+          <button className="icon-button" onClick={onClose} aria-label="Close editor">
             <X size={18} />
           </button>
         </div>
 
-        <div className="studio-body">
-          <div className="studio-controls">
-            <label>
-              What should this app show?
-              <textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder={
-                  codeRelease
-                    ? "Describe a change; the current app is used as the starting point…"
-                    : "e.g. A training dashboard with weekly distance and a highlights table"
-                }
-                rows={3}
-                maxLength={4000}
-              />
-            </label>
-            <fieldset className="dashboard-picker">
-              <legend>Datasets the app may use</legend>
-              {datasets.map((dataset) => (
-                <label key={dataset.id}>
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(dataset.id)}
-                    onChange={(event) =>
-                      setSelected((items) =>
-                        event.target.checked
-                          ? [...items, dataset.id]
-                          : items.filter((id) => id !== dataset.id),
-                      )
-                    }
-                  />
-                  {dataset.name}
-                </label>
-              ))}
-              {datasets.length === 0 && (
-                <span>No datasets yet — the app will be static.</span>
+        <div className="editor-body">
+          <div className="editor-chat">
+            <div className="editor-log" ref={logRef}>
+              {history.length === 0 && !pending && (
+                <p className="editor-hint">
+                  {datasets.length === 0
+                    ? "Describe the dashboard you want. Upload a CSV or JSON source to give it data."
+                    : "Describe the dashboard you want."}
+                </p>
               )}
-            </fieldset>
-            <div className="studio-actions">
-              <button
-                className="primary-button"
-                onClick={() => void runGenerate()}
-                disabled={!prompt.trim() || working}
-              >
-                {working
-                  ? "Generating…"
-                  : codeRelease
-                    ? `Generate v${(latest?.version || 0) + 1}`
-                    : "Generate"}
-              </button>
-              {codeRelease && codeRelease.status === "draft" && (
-                <button
-                  className="publish-button"
-                  onClick={() => void publish(app, codeRelease.id)}
-                >
-                  Publish v{codeRelease.version}
-                </button>
+              {history.map((release) => (
+                <Fragment key={release.id}>
+                  {release.manifest.prompt && (
+                    <div className="editor-turn user">{release.manifest.prompt}</div>
+                  )}
+                  <div className="editor-turn system">Built v{release.version}</div>
+                </Fragment>
+              ))}
+              {pending && <div className="editor-turn user">{pending}</div>}
+              {working && (
+                <div className="editor-turn system">
+                  <span className="thinking-dots">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  Building
+                </div>
               )}
             </div>
-            <p className="studio-note">
-              <ShieldCheck size={13} /> Generated code runs in a sandboxed frame:
-              no network, no cookies, no page access. Data flows only through the
-              typed dataset query API.
-            </p>
+
+            <form className="editor-composer" onSubmit={(event) => void send(event)}>
+              {datasets.length > 0 && (
+                <div className="data-chips">
+                  <Database size={13} />
+                  {datasets.map((dataset) => {
+                    const on = active.includes(dataset.id);
+                    return (
+                      <button
+                        type="button"
+                        key={dataset.id}
+                        className={on ? "data-chip on" : "data-chip"}
+                        aria-pressed={on}
+                        onClick={() =>
+                          setOverrides(
+                            on
+                              ? active.filter((id) => id !== dataset.id)
+                              : [...active, dataset.id],
+                          )
+                        }
+                      >
+                        {dataset.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="editor-input">
+                <textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void send();
+                    }
+                  }}
+                  placeholder={
+                    app ? "Describe a change…" : "Describe this dashboard…"
+                  }
+                  rows={2}
+                  maxLength={4000}
+                  disabled={working}
+                />
+                <button
+                  className="send-button"
+                  type="submit"
+                  disabled={!prompt.trim() || working}
+                  aria-label="Send"
+                >
+                  <ArrowUp size={18} />
+                </button>
+              </div>
+            </form>
           </div>
 
-          <div className="studio-preview">
-            {codeRelease ? (
+          <div className="editor-preview">
+            {app && latest ? (
               <SandboxFrame
-                key={`${codeRelease.id}-${frameNonce}`}
-                src={api.frameUrl(app.id, codeRelease.id)}
+                key={`${latest.id}-${nonce}`}
+                src={api.frameUrl(app.id, latest.id)}
                 title={`${app.name} preview`}
-                snapshots={codeRelease.manifest.snapshots || {}}
-                bindings={codeRelease.manifest.data_bindings || []}
+                snapshots={latest.manifest.snapshots || {}}
+                bindings={latest.manifest.data_bindings || []}
                 api={api}
                 className="sandbox-frame"
               />
             ) : (
               <div className="feature-empty">
-                <AppWindow size={22} />
-                <strong>No version yet</strong>
-                <span>Describe the app and generate a first version.</span>
+                <BarChart3 size={22} />
+                <strong>Nothing here yet</strong>
+                <span>Send a message to build the first version.</span>
               </div>
             )}
           </div>
@@ -2372,7 +1832,7 @@ function IntegrationsView({
       setGarminEmail("");
       setGarminPassword("");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Garmin login failed");
+      setError(describeError(caught, "Garmin login failed"));
     } finally {
       setGarminWorking(false);
     }
@@ -2392,14 +1852,7 @@ function IntegrationsView({
       <div className="page-heading">
         <div>
           <h1>Integrations</h1>
-          <p>
-            Connect external accounts. Synced data lands as sources and datasets, and the
-            assistant gets read-only tools for live lookups.
-          </p>
-        </div>
-        <div className="security-badge">
-          <ShieldCheck size={16} />
-          Tokens encrypted at rest
+          <p>Synced data lands as sources and datasets.</p>
         </div>
       </div>
 
@@ -2501,10 +1954,9 @@ function IntegrationsView({
       </div>
 
       <div className="integration-note">
-        <ShieldCheck size={14} />
-        Garmin uses the unofficial Connect API (no partner program), so it can break if
-        Garmin changes things and does not support MFA-protected accounts yet. Garmin
-        devices that auto-sync to Strava are also covered by the Strava integration.
+        Garmin uses the unofficial Connect API, so it can break when Garmin changes
+        things, and MFA-protected accounts are not supported yet. Garmin devices that
+        auto-sync to Strava are covered by the Strava integration instead.
       </div>
     </section>
   );
@@ -2526,10 +1978,6 @@ function ActivityView({ calls, events, decide, activeRun }: ActivityViewProps) {
           <h1>Activity</h1>
           <p>Review tool requests and recorded actions.</p>
         </div>
-        <div className="security-badge">
-          <ShieldCheck size={16} />
-          Read-only tools
-        </div>
       </div>
 
       <div className="activity-grid">
@@ -2547,7 +1995,6 @@ function ActivityView({ calls, events, decide, activeRun }: ActivityViewProps) {
               </div>
               <strong>No pending requests</strong>
               <p>Tool calls requiring approval appear here.</p>
-              <code>/tool github-zen</code>
             </div>
           ) : (
             pending.map((call) => (
@@ -2560,13 +2007,8 @@ function ActivityView({ calls, events, decide, activeRun }: ActivityViewProps) {
                     <span>Assistant request</span>
                     <strong>{call.tool_name}</strong>
                   </div>
-                  <span className="method-pill">GET</span>
                 </div>
                 <div className="request-url">{call.request_url}</div>
-                <div className="safety-note">
-                  <ShieldCheck size={14} />
-                  HTTPS, allowlisted host, 10-second timeout, 256 KB cap
-                </div>
                 <div className="decision-buttons">
                   <button onClick={() => void decide(call, "denied")}>
                     <X size={15} />

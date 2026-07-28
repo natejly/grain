@@ -40,6 +40,21 @@ describe("WorkspaceApi", () => {
     expect(health.status).toBe("ok");
   });
 
+  it("turns an unreachable API into a typed offline error", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new TypeError("Failed to fetch"),
+    );
+    const api = new WorkspaceApi("http://example.test");
+
+    await expect(api.listSources()).rejects.toMatchObject({
+      status: 0,
+      offline: true,
+    });
+    await expect(api.listSources()).rejects.toThrow(
+      "Cannot reach the API at http://example.test",
+    );
+  });
+
   it("parses ordered resumable SSE events", async () => {
     const body = [
       "id: 3",

@@ -44,6 +44,20 @@ Full plan: ~/.claude/plans/first-fix-frontend-and-keen-wadler.md
       (password never stored; encrypted garth session token), sync → garmin-activities dataset,
       garmin_list_activities LLM tool, Integrations-view credential form, MFA rejected cleanly.
 
+## Phase 5 — NLP dashboards + frontend cleanup ✅
+Full plan: ~/.claude/plans/squishy-sprouting-cherny.md
+- [x] Merge Dashboards + Apps into one Dashboards nav entry (`View` loses analytics/apps)
+- [x] Delete AnalyticsView / DashboardResultView / AppsView / AppStudio + their state
+- [x] DashboardsView: grid of live sandboxed tiles, publish / Open / versions+rollback
+- [x] DashboardEditor: chat left, live preview right; transcript rebuilt from release prompts
+- [x] Auto-create a dataset when a CSV/JSON source reaches ready (replaces the builder form)
+- [x] Remove AI slop: fake Connected pill, ⌘K badge, starter prompts, trust badges,
+      GET pill + safety note, sandbox blurbs, page sub-blurbs, "projection state"
+- [x] api-client: fetch failures become ApiError(status 0) — no more raw "Failed to fetch";
+      workspace.tsx routes every catch through describeError() so offline shows only the banner
+- [x] Fixed a real handshake race the new e2e caught (see lessons.md)
+- [x] Verify: make lint ✓, pytest 40 ✓, vitest 4 ✓, pnpm build ✓, e2e 2/2 ✓
+
 ## Review
 - All four phases + Garmin landed. Verification at each phase: ruff, mypy, pytest
   (40 tests), tsc, eslint, vitest (3), `pnpm build`, Playwright e2e (2), migration

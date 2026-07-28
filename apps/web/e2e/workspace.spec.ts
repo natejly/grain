@@ -45,7 +45,7 @@ test("upload, cited answer, provenance, graph, approval, and deletion", async ({
   await expect(page.getByText("northstar-e2e.md")).toHaveCount(0);
 });
 
-test("build a dataset, dashboard, and published app", async ({ page }) => {
+test("build a dashboard from chat, then publish it", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /Sources/ }).click();
   await page.locator('input[type="file"]').setInputFiles({
@@ -58,32 +58,36 @@ test("build a dataset, dashboard, and published app", async ({ page }) => {
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
   await page.getByRole("button", { name: /Dashboards/ }).click();
-  const datasetBuilder = page.locator(".builder-card").first();
-  await datasetBuilder.getByLabel("Name").fill("E2E revenue");
-  await datasetBuilder.getByLabel("Description").fill("Release-gate dataset");
-  await datasetBuilder.getByRole("button", { name: "Create dataset" }).click();
-  await expect(page.getByText("E2E revenue", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Add dashboard" }).first().click();
 
-  const dashboardBuilder = page.locator(".builder-card").nth(1);
-  await dashboardBuilder.getByLabel("Name").fill("E2E revenue by team");
-  await dashboardBuilder.getByLabel("Group").selectOption("team");
-  await dashboardBuilder.getByLabel("Metric").selectOption("revenue");
-  await dashboardBuilder.getByRole("button", { name: "Create dashboard" }).click();
-  await expect(page.getByText("E2E revenue by team", { exact: true })).toBeVisible();
-  await expect(page.getByText("North", { exact: true })).toBeVisible();
+  await page.getByLabel("Dashboard name").fill("E2E revenue app");
+  await page.getByLabel("Public link").check();
+  // The ready CSV becomes a dataset on its own; the chip proves it landed.
+  const chip = page.getByRole("button", { name: "revenue-e2e" });
+  await expect(chip).toBeVisible();
+  await expect(chip).toHaveAttribute("aria-pressed", "true");
 
-  await page.getByRole("button", { name: /Apps/ }).click();
-  await page.getByLabel("Name").fill("E2E revenue app");
-  await page.getByLabel("Visibility").selectOption("public");
-  await page.getByLabel("E2E revenue by team").check();
-  await page.getByRole("button", { name: "Create draft" }).click();
-  await expect(page.getByText("E2E revenue app", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Publish v1" }).click();
-  await expect(page.getByRole("link", { name: "Open" })).toBeVisible();
-  const publishedPath = await page.getByRole("link", { name: "Open" }).getAttribute("href");
-  expect(publishedPath).toBeTruthy();
+  const composer = page.getByPlaceholder("Describe this dashboard…");
+  await composer.fill("Show revenue by team");
+  await composer.press("Enter");
+
+  await expect(page.getByText("Built v1")).toBeVisible({ timeout: 30_000 });
+  const preview = page.frameLocator(".editor-preview iframe");
+  await expect(preview.getByText("revenue-e2e")).toBeVisible();
+  await expect(preview.getByText("North").first()).toBeVisible();
+
+  const editor = page.locator(".dashboard-editor");
+  await editor.getByRole("button", { name: "Publish v1" }).click();
+  await expect(page.getByRole("button", { name: "Publish v1" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Close editor" }).click();
+
+  await expect(page.getByText("v1 · published")).toBeVisible();
+  const openLink = page.getByRole("link", { name: "Open" });
+  const publishedPath = await openLink.getAttribute("href");
+  expect(publishedPath).toBe("/apps/e2e-revenue-app");
+
   await page.goto(publishedPath!);
   await expect(page.getByRole("heading", { name: "E2E revenue app" })).toBeVisible();
-  await expect(page.getByText("E2E revenue by team", { exact: true })).toBeVisible();
-  await expect(page.getByText("North", { exact: true })).toBeVisible();
+  const published = page.frameLocator(".published-code-app iframe");
+  await expect(published.getByText("North").first()).toBeVisible();
 });

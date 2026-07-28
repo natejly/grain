@@ -323,9 +323,15 @@ function makeKey(): string {
 export class ApiError extends Error {
   constructor(
     message: string,
+    /** HTTP status, or 0 when the request never reached the API. */
     public readonly status: number,
   ) {
     super(message);
+  }
+
+  /** True when the API could not be reached at all (offline, wrong port, CORS). */
+  get offline(): boolean {
+    return this.status === 0;
   }
 }
 
@@ -347,11 +353,18 @@ export class WorkspaceApi {
     if (mutation && !headers.has("Idempotency-Key")) {
       headers.set("Idempotency-Key", makeKey());
     }
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers,
-      credentials: "include",
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        headers,
+        credentials: "include",
+      });
+    } catch {
+      // fetch rejects with an opaque "Failed to fetch" TypeError; the caller
+      // only needs to know the API was unreachable.
+      throw new ApiError(`Cannot reach the API at ${this.baseUrl}`, 0);
+    }
     if (!response.ok) {
       let message = `Request failed (${response.status})`;
       try {
@@ -643,13 +656,18 @@ export class WorkspaceApi {
   }
 
   async *streamRun(runId: string, after = 0): AsyncGenerator<RunEvent> {
-    const response = await fetch(
-      `${this.baseUrl}/api/runs/${runId}/events?after=${after}`,
-      {
-        headers: { ...this.headers, Accept: "text/event-stream" },
-        credentials: "include",
-      },
-    );
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.baseUrl}/api/runs/${runId}/events?after=${after}`,
+        {
+          headers: { ...this.headers, Accept: "text/event-stream" },
+          credentials: "include",
+        },
+      );
+    } catch {
+      throw new ApiError(`Cannot reach the API at ${this.baseUrl}`, 0);
+    }
     if (!response.ok || !response.body) {
       throw new ApiError("Could not open the run event stream", response.status);
     }

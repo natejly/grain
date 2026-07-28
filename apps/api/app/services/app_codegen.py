@@ -22,9 +22,10 @@ FIELDNOTE_RUNTIME = """<script>
 (function () {
   var pending = {};
   var counter = 0;
+  var handler = null;
+  var delivered = false;
   window.fieldnote = {
     snapshots: {},
-    onData: null,
     query: function (dataset, query) {
       return new Promise(function (resolve, reject) {
         var requestId = "q" + (counter += 1);
@@ -36,13 +37,21 @@ FIELDNOTE_RUNTIME = """<script>
       });
     }
   };
+  // onData may be assigned before or after the host delivers data, so the
+  // setter replays whatever already arrived instead of dropping the render.
+  Object.defineProperty(window.fieldnote, "onData", {
+    get: function () { return handler; },
+    set: function (fn) {
+      handler = fn;
+      if (delivered && typeof fn === "function") fn(window.fieldnote.snapshots);
+    }
+  });
   window.addEventListener("message", function (event) {
     var msg = event.data || {};
     if (msg.type === "fieldnote:init") {
       window.fieldnote.snapshots = msg.snapshots || {};
-      if (typeof window.fieldnote.onData === "function") {
-        window.fieldnote.onData(window.fieldnote.snapshots);
-      }
+      delivered = true;
+      if (typeof handler === "function") handler(window.fieldnote.snapshots);
     }
     if (msg.type === "fieldnote:result" && pending[msg.requestId]) {
       var entry = pending[msg.requestId];

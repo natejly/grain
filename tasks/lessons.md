@@ -6,6 +6,15 @@
   of the interaction. (Found via the e2e race in `uploadFiles()`: adding two API
   calls to `refreshExpansion` made the post-await `setView("sources")` land
   after the test clicked into Dashboards.)
+- A postMessage handshake between a host page and an iframe must be
+  order-independent in BOTH directions. `SandboxFrame` only sent data in reply
+  to the frame's "ready" ping, which works when React creates the iframe
+  (listener first) but not on a server-rendered page, where the frame can load
+  and ping before hydration — published code apps silently rendered "Waiting for
+  data…". Fix was two-sided: host posts init on mount + load + ready, and the
+  injected runtime makes `onData` a setter that replays already-delivered
+  snapshots. Rule: never assume the other side is listening yet; make delivery
+  idempotent and replayable.
 - "It won't build/run" reports deserve reproduction before code changes: here
   typecheck/lint/build/boot were all green, and the real fix was DX (one-command
   `make dev` + an API-down banner), not code.

@@ -87,8 +87,20 @@ export function SandboxFrame({
       }
     }
 
+    function sendInit() {
+      post({ type: "fieldnote:init", snapshots });
+    }
+
+    // On a server-rendered page the frame can finish loading before this
+    // effect runs, so its "ready" ping is already gone. Sending on mount and
+    // on load as well covers every ordering; the frame handles repeats.
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    frame.addEventListener("load", sendInit);
+    sendInit();
+    return () => {
+      window.removeEventListener("message", onMessage);
+      frame.removeEventListener("load", sendInit);
+    };
   }, [snapshots, bindings, api]);
 
   return (
