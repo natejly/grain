@@ -1,5 +1,14 @@
 # Lessons
 
+- A relative `sqlite:///./data/x.db` means a *different file per working
+  directory*. `uvicorn` ran from the repo root, `make migrate` cd'd into
+  apps/api — so every migration landed on a phantom apps/api/data copy while the
+  app kept a schema frozen at whatever `create_all` first produced. Symptom was a
+  500 ("no such column: generated_apps.app_type") in one feature, months after
+  the migration "ran". Rule: anchor relative data paths to the repo root in
+  settings, and have the dev entrypoint run `alembic upgrade head` before boot so
+  drift fails loudly at startup instead of silently inside a feature.
+
 - Never call `setView(...)`/navigation state setters *after* an awaited chain in
   an async handler — by the time the awaits resolve, the user may have navigated
   and the setter clobbers their view. Set view state synchronously at the start

@@ -25,6 +25,12 @@ done
 
 trap 'kill 0 2>/dev/null' EXIT INT TERM
 
+# Before the API boots, so a database that predates a migration fails loudly
+# here instead of surfacing as a 500 inside whichever feature needs the column.
+echo "[dev] applying migrations"
+(cd apps/api && ../../.venv/bin/alembic upgrade head) 2>&1 | sed -u 's/^/[db] /'
+[ "${PIPESTATUS[0]}" -eq 0 ] || fail "alembic upgrade failed — see [db] logs above"
+
 .venv/bin/uvicorn app.main:app --app-dir apps/api --reload --host 127.0.0.1 --port "$API_PORT" 2>&1 \
   | sed -u 's/^/[api] /' &
 

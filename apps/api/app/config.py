@@ -4,8 +4,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def project_root() -> Path:
+    """Repo root, so relative paths mean the same thing from any working dir."""
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "Makefile").is_file() and (candidate / "apps").is_dir():
+            return candidate
+    return Path.cwd()
 
 
 class Settings(BaseSettings):
@@ -41,6 +49,28 @@ class Settings(BaseSettings):
     integrations_encryption_key: Optional[SecretStr] = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @field_validator("database_url")
+    @classmethod
+    def _anchor_sqlite_path(cls, value: str) -> str:
+        """Pin a relative sqlite file to the repo root.
+
+        `uvicorn` runs from the repo root while `alembic` runs from apps/api, so
+        a relative URL silently pointed each at its own database file — schema
+        migrations landed on a phantom copy while the app kept an old schema.
+        """
+        prefix = "sqlite:///"
+        if not value.startswith(prefix):
+            return value
+        path = value[len(prefix) :]
+        if not path or path == ":memory:" or Path(path).is_absolute():
+            return value
+        return f"{prefix}{(project_root() / path).resolve()}"
+
+    @field_validator("objects_dir")
+    @classmethod
+    def _anchor_objects_dir(cls, value: Path) -> Path:
+        return value if value.is_absolute() else (project_root() / value).resolve()
 
     @property
     def allowed_tool_hosts(self) -> set[str]:
