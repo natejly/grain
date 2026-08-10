@@ -49,6 +49,80 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_codegen_max_output_tokens: int = 16000
 
+    # --- Sandbox (server-side execution, ADR 0005) -------------------------
+    # Execution runs in per-session microVMs at a provider, never on this host.
+    # SANDBOX_PROVIDER=fake is the in-process test double; it executes nothing
+    # and exists so the tool, quota and approval layers are testable without a
+    # key. It is not an offline mode — "fake" refuses to boot outside dev/test.
+    # Off by default, and this one is deliberately NOT the fail-closed inversion
+    # the auth and model settings use. Those default to their safe state and the
+    # unsafe state is opt-in; here the "safe" state and the "off" state are the
+    # same thing, because execution needs a provider key that no existing deploy
+    # has. Defaulting this to True made Settings refuse to boot everywhere the
+    # key was absent — which is every environment that predates this feature,
+    # including the test suite. So: opt in, and once you have opted in,
+    # _guard_sandbox insists the configuration actually works.
+    sandbox_enabled: bool = False
+    # subprocess — this host, this uid, NO isolation. Development only, and
+    #              _guard_sandbox makes that structural rather than advisory.
+    # container  — Docker with --network none and dropped capabilities. The
+    #              real boundary, and the deployment target.
+    # e2b        — hosted Firecracker microVMs. Kept behind the seam as a
+    #              managed option; not the default.
+    # fake       — executes nothing. Test double.
+    sandbox_provider: Literal["subprocess", "container", "e2b", "fake"] = "subprocess"
+    sandbox_api_key: Optional[SecretStr] = None
+    # Blank means the provider's default image (Python + pandas/matplotlib).
+    sandbox_template: str = ""
+
+    # --- Container driver --------------------------------------------------
+    # Built from infra/sandbox/Dockerfile, which is also the package policy:
+    # the sandbox has no network, so anything importable has to already be in
+    # the image. `make sandbox-image` builds it.
+    sandbox_container_image: str = "jasmine-sandbox:latest"
+    sandbox_docker_binary: str = "docker"
+    # Interpreter for the `subprocess` driver. Blank means the API's own venv,
+    # whose package set is NOT the container image's — code that imports scipy in
+    # development may fail in deployment. Point this at a venv built from
+    # infra/sandbox/requirements to make the two agree.
+    sandbox_python_binary: str = ""
+    sandbox_memory_mb: int = 2048
+    sandbox_cpus: float = 2.0
+    # Fork-bomb ceiling. Low enough to matter, high enough that a multiprocessing
+    # Pool over a few cores still works.
+    sandbox_pids_limit: int = 256
+    # Per-session scratch on the host, bind-mounted at /workspace. Files written
+    # here survive between executions, which is what makes a session a workspace
+    # rather than a one-shot. Anchored to the repo root like every other path.
+    sandbox_workdir: Path = Path("./data/sandboxes")
+    # How long a sandbox stays up between uses before the provider reclaims it.
+    # Sessions are paused rather than killed on timeout, so this is a cost dial,
+    # not a data-loss one: a paused sandbox resumes with its filesystem intact.
+    sandbox_session_timeout_seconds: int = 900
+    sandbox_exec_timeout_seconds: float = 120.0
+    # Quotas, enforced before creation rather than discovered on the invoice.
+    sandbox_max_concurrent_per_workspace: int = 3
+    sandbox_max_execs_per_run: int = 20
+    # A paused sandbox costs storage indefinitely, so idle ones get reaped.
+    sandbox_session_idle_days: int = 7
+    # none      — no egress at all. THE DEFAULT, and the reason this feature has
+    #             no exfiltration story to worry about: prompt injection through
+    #             an uploaded document cannot send anything anywhere if there is
+    #             no route. The cost is that packages cannot be installed at
+    #             runtime, which is why infra/sandbox/Dockerfile pre-bakes them.
+    # allowlist — only SANDBOX_HOST_ALLOWLIST. For a workspace that genuinely
+    #             needs to reach a named API.
+    # open      — full egress. Deliberate opt-in. Turning this on re-opens the
+    #             path ADR 0005 describes: a sandbox holding the user's
+    #             documents, with a socket, running code an injected document
+    #             may have influenced.
+    # Cloud metadata and link-local ranges are denied in every mode including
+    # `open`; that denial lives in code (services/sandbox/policy.py), not here,
+    # because it is not a policy an operator should be able to switch off.
+    sandbox_network_policy: Literal["open", "allowlist", "none"] = "none"
+    sandbox_host_allowlist: str = "pypi.org,files.pythonhosted.org,registry.npmjs.org"
+    sandbox_max_output_bytes: int = 64 * 1024
+
     # --- Retrieval ---------------------------------------------------------
     # Three independently switchable stages, so each can be ablated and measured
     # on its own (RESEARCH.md §4). Every one of them degrades to the stage below
@@ -161,7 +235,10 @@ class Settings(BaseSettings):
     auth_rate_limit_attempts: int = 20
     auth_rate_limit_window_seconds: int = 300
     email_sender: Literal["console", "smtp"] = "console"
-    email_from: str = "no-reply@fieldnote.local"
+    # Unlike session_cookie_name above, this one *is* a user-visible surface:
+    # it is the From address a recipient reads in their mail client, so it
+    # carries the product name and nothing depends on its old value.
+    email_from: str = "no-reply@jasmine.local"
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
@@ -214,7 +291,7 @@ class Settings(BaseSettings):
             return value
         return f"{prefix}{(project_root() / path).resolve()}"
 
-    @field_validator("objects_dir")
+    @field_validator("objects_dir", "sandbox_workdir")
     @classmethod
     def _anchor_objects_dir(cls, value: Path) -> Path:
         return value if value.is_absolute() else (project_root() / value).resolve()
@@ -253,6 +330,43 @@ class Settings(BaseSettings):
         if self.scripted_model_script is None:
             raise ValueError(
                 "MODEL_PROVIDER=scripted requires SCRIPTED_MODEL_SCRIPT"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_sandbox(self) -> Settings:
+        """Mirror _guard_model_provider for the execution provider.
+
+        Same shape, same reason: a sandbox that cannot reach its provider should
+        say so at startup, not on the turn where someone asks it to plot a CSV.
+        The fake provider executes nothing, so reaching it in production would
+        mean silently telling users their code ran when it did not.
+        """
+        if not self.sandbox_enabled:
+            return self
+        if self.sandbox_provider == "e2b":
+            if self.sandbox_api_key is None:
+                raise ValueError(
+                    "SANDBOX_ENABLED=1 with SANDBOX_PROVIDER=e2b requires "
+                    "SANDBOX_API_KEY. Get one at e2b.dev and set it in .env "
+                    "(see .env.example), or leave SANDBOX_ENABLED unset to run "
+                    "without server-side execution."
+                )
+            return self
+        if self.sandbox_provider == "container":
+            return self
+        # `subprocess` runs generated code as this process's own user, with this
+        # process's own filesystem access — .env, the database, ~/.aws. `fake`
+        # executes nothing and would silently tell users their code ran. Neither
+        # belongs in production, and neither is merely defaulted off: this is the
+        # same structural gate that stops MODEL_PROVIDER=scripted and
+        # DEV_AUTO_LOGIN, and it exists because "we will remember to set the
+        # variable" has already failed once in this codebase.
+        if self.app_env not in {"development", "test"}:
+            raise ValueError(
+                f"SANDBOX_PROVIDER={self.sandbox_provider} requires APP_ENV to be "
+                "development or test — it provides no isolation. Deploy with "
+                "SANDBOX_PROVIDER=container."
             )
         return self
 
@@ -340,6 +454,31 @@ class Settings(BaseSettings):
             for host in self.tool_host_allowlist.split(",")
             if host.strip()
         }
+
+    @property
+    def sandbox_allowed_hosts(self) -> List[str]:
+        """Egress allowlist for SANDBOX_NETWORK_POLICY=allowlist.
+
+        A list rather than a set: the provider takes an ordered rule list, and a
+        set would make the sandbox's configuration differ run to run for no
+        reason, which is miserable to debug.
+        """
+        seen: List[str] = []
+        for host in self.sandbox_host_allowlist.split(","):
+            cleaned = host.strip().lower()
+            if cleaned and cleaned not in seen:
+                seen.append(cleaned)
+        return seen
+
+    @property
+    def sandbox_ready(self) -> bool:
+        if not self.sandbox_enabled:
+            return False
+        # Only e2b needs a credential. subprocess and container are local, and
+        # fake needs nothing at all.
+        if self.sandbox_provider == "e2b":
+            return self.sandbox_api_key is not None
+        return True
 
     @property
     def allowed_web_origins(self) -> List[str]:

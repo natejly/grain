@@ -12,6 +12,7 @@ import {
   Network,
   Plug,
   SquarePen,
+  Terminal,
   type LucideIcon,
 } from "lucide-react";
 import type { View } from "./shared";
@@ -54,6 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { view: "documents", label: "Documents", icon: FileText },
       { view: "projects", label: "Projects", icon: Braces },
+      { view: "sandbox", label: "Sandbox", icon: Terminal },
       { view: "boards", label: "Boards", icon: KanbanSquare },
       { view: "dashboards", label: "Dashboards", icon: BarChart3 },
     ],

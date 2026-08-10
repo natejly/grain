@@ -6,6 +6,10 @@ const config = [
     ignores: [
       ".next/**",
       ".next-e2e/**",
+      // Next writes a build here when NEXT_DIST_DIR is pointed at it during a
+      // review run. Same generated output as .next/**, and linting it drowned
+      // the report in 204 errors from code we did not write.
+      ".next-review/**",
       "next-env.d.ts",
       "node_modules/**",
       // Generated from node_modules by scripts/sync-sandbox-assets.mjs — a

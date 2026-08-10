@@ -31,7 +31,8 @@ test("each group opens to a default view with its siblings in reach", async ({ p
 
   await sidebar(page).getByRole("button", { name: /^Create/ }).click();
   await expect(page.locator(".documents-layout")).toBeVisible();
-  await expect(tabs(page, "Create").getByRole("button")).toHaveCount(4);
+  // Documents, Projects, Sandbox, Boards, Dashboards.
+  await expect(tabs(page, "Create").getByRole("button")).toHaveCount(5);
 
   await sidebar(page).getByRole("button", { name: /^Knowledge/ }).click();
   await expect(page.getByRole("heading", { name: "Sources" })).toBeVisible();

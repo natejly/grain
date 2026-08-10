@@ -85,6 +85,39 @@ script instead of calling a provider (`apps/api/app/services/scripted_model.py`)
 It is what the test suite and the browser suite run on, and the API refuses to
 boot it outside `APP_ENV=development` or `test`.
 
+## Code execution (optional)
+
+The agent can run Python and shell commands — cleaning a spreadsheet, fitting a
+model, drawing a chart — in a sandbox that is not this host. It is off unless you
+turn it on:
+
+```dotenv
+SANDBOX_ENABLED=1
+SANDBOX_PROVIDER=container      # `make sandbox-image` builds the image first
+SANDBOX_NETWORK_POLICY=none     # the default
+```
+
+`container` is the deployment driver: one throwaway `docker run --rm` per
+execution with `--network none`, `--read-only`, `--cap-drop ALL`, a non-root
+user, and pid/memory/cpu limits. `e2b` runs the same interface on hosted
+Firecracker microVMs and needs `SANDBOX_API_KEY`; note that it sends the
+documents being analysed to a third party. `subprocess` **is not a sandbox** —
+it runs generated code as the API's own user — and the API refuses to start with
+it unless `APP_ENV` is `development` or `test`.
+
+Two things are worth understanding before changing the defaults. There is no
+network in the sandbox, so `pip install` does not work at runtime and every
+library the agent might import has to be in `infra/sandbox/Dockerfile` already;
+adding one is an image rebuild. And that missing network is what makes this
+feature safe rather than merely sandboxed: with `SANDBOX_NETWORK_POLICY=open`, a
+document the agent was asked to analyse can carry instructions, the code the
+agent writes can honour them, and it then has both your data and a socket. No
+escape is required for that. Use `allowlist` if you need a package index or one
+named API, and read [the threat model](docs/THREAT_MODEL.md) before using `open`.
+
+Execution tools are approval-gated like every other write tool, and the approval
+card shows the code alongside the session's network policy.
+
 ## Verification
 
 ```bash

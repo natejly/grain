@@ -22,6 +22,7 @@ from .api import (
     mcp,
     memory,
     projects,
+    sandbox,
     sources,
     system,
     tools,
@@ -99,5 +100,6 @@ app.include_router(artifacts.router)
 app.include_router(board_ops.router)
 app.include_router(doc_pending.router)
 app.include_router(projects.router)
+app.include_router(sandbox.router)
 app.include_router(analytics.router)
 app.include_router(generated_apps.router)

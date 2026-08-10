@@ -24,6 +24,7 @@ import {
   type GroupId,
 } from "./views/navigation";
 import { ProjectsView } from "./views/projects";
+import { SandboxView } from "./views/sandbox";
 import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
 import { SourcesView } from "./views/sources";
 import { ThemeToggle } from "./theme-toggle";
@@ -437,6 +438,10 @@ export function Workspace() {
             removeProject={removeProject}
           />
         )}
+
+        {/* Self-contained: sandboxes are metered by the minute, so they are
+            fetched when this view opens rather than with the workspace. */}
+        {view === "sandbox" && <SandboxView setError={setError} />}
 
         {view === "mcp" && (
           <McpView

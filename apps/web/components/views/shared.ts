@@ -11,6 +11,7 @@ export type View =
   | "boards"
   | "data"
   | "projects"
+  | "sandbox"
   | "mcp"
   | "activity";
 
@@ -50,6 +51,7 @@ export const PAGE_TITLES: Record<View, string> = {
   boards: "Boards",
   data: "Databases",
   projects: "Projects",
+  sandbox: "Sandbox",
   integrations: "Integrations",
   mcp: "MCP servers",
   activity: "Activity",

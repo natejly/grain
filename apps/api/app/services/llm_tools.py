@@ -270,6 +270,7 @@ def build_registry(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
     registry.update(integration_tools(db, context))
     registry.update(database_tools(db, context))
     registry.update(mcp_tools(db, context))
+    registry.update(sandbox_tools(db, context))
     return registry
 
 
@@ -319,5 +320,16 @@ def database_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
 def mcp_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
     """Tools discovered on the workspace's configured MCP servers."""
     from .mcp import registry_tools
+
+    return registry_tools(db, context)
+
+
+def sandbox_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """Server-side execution in a hosted microVM (ADR 0005).
+
+    Empty when SANDBOX_ENABLED=0, so a deployment without an execution provider
+    simply has no run tools rather than tools that fail on first use.
+    """
+    from .sandbox import registry_tools
 
     return registry_tools(db, context)

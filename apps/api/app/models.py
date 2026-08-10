@@ -488,6 +488,73 @@ class ProjectFile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class SandboxSession(Base):
+    """A server-side execution sandbox: one microVM, owned by one workspace.
+
+    The row is the authority. `external_id` names a live machine at the provider,
+    and the only way to reach one is to select this table by `workspace_id` —
+    `sandbox.session.resolve_session` is the sole function that does so and it
+    filters before it returns. Nothing accepts a provider id from a caller, which
+    is what keeps one tenant from attaching to another tenant's sandbox.
+    """
+
+    __tablename__ = "sandbox_sessions"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id"),
+        Index("ix_sandbox_sessions_workspace_status", "workspace_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    # Optional: a session bound to a project mirrors that project's files.
+    project_id: Mapped[str] = mapped_column(String(36), default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    provider: Mapped[str] = mapped_column(String(24), default="e2b")
+    external_id: Mapped[str] = mapped_column(String(120))
+    template: Mapped[str] = mapped_column(String(80), default="")
+    label: Mapped[str] = mapped_column(String(120), default="")
+    # running -> paused (resumable) -> killed (terminal). "error" records a
+    # provider failure at creation so the UI can explain it rather than retry.
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    # open | allowlist | none. Recorded per session, not just per workspace, so
+    # changing the workspace default cannot retroactively widen a live sandbox.
+    network_policy: Mapped[str] = mapped_column(String(16), default="open")
+    allow_hosts_json: Mapped[str] = mapped_column(Text, default="[]")
+    error: Mapped[str] = mapped_column(Text, default="")
+    exec_count: Mapped[int] = mapped_column(Integer, default=0)
+    wall_ms_used: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    killed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
+class SandboxExecution(Base):
+    """One code or command execution, kept for the activity trail and for quotas.
+
+    stdout/stderr are stored already clipped to `sandbox_max_output_bytes`: this
+    table is a record of what happened, not a place to park megabytes of build log.
+    """
+
+    __tablename__ = "sandbox_executions"
+    __table_args__ = (Index("ix_sandbox_executions_session", "session_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sandbox_sessions.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(36), default="")
+    tool_call_id: Mapped[str] = mapped_column(String(36), default="")
+    # "code" runs in the persistent interpreter kernel; "command" is a shell.
+    kind: Mapped[str] = mapped_column(String(16), default="code")
+    source: Mapped[str] = mapped_column(Text, default="")
+    exit_code: Mapped[int] = mapped_column(Integer, nullable=True)
+    stdout: Mapped[str] = mapped_column(Text, default="")
+    stderr: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    artifact_count: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class McpServer(Base):
     """A configured MCP server: a stdio subprocess or a streamable HTTP endpoint."""
 

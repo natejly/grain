@@ -1034,3 +1034,67 @@ Follow-ups, not blockers:
 - [x] Verified: tsc ✓, eslint ✓, vitest 144/144 (139 before + 5 in the new
       `tests/navigation.test.ts`), `pnpm build` ✓, e2e 22/22 (18 before + 4 in
       the new `e2e/navigation.spec.ts`).
+
+## Server-side agentic sandbox (ADR 0005) — in progress
+
+Reverses the *browser-only* half of ADR 0004 and keeps its security half. The
+principle ADR 0004 actually bought was "generated code runs somewhere with no
+workspace authority", and a hosted Firecracker microVM keeps that: execution
+still never touches a Jasmine host, holds no session, and cannot reach the
+database. What changes is that the boundary now has a kernel, a filesystem and
+a socket — which is what "analyse this CSV and plot it" has always needed.
+
+Chosen: managed provider (E2B), behind a `SandboxProvider` Protocol so nothing
+above the seam imports the SDK and the whole tool/quota/approval layer is
+testable with a fake and no key.
+
+Capabilities in scope, all four confirmed against the installed SDK:
+data analysis + charts (`run_code` -> structured `Result.chart`, not just a PNG),
+arbitrary package install (`commands.run`), network egress (`allow_internet_access`
++ `network.allow_out/deny_out`), persistent workspaces (`pause(keep_memory=True)`
++ `connect(id)`, and `lifecycle.on_timeout=pause` so an idle gap does not destroy
+a session's filesystem).
+
+- [x] ADR 0005 written - states the residual risk rather than burying it.
+- [x] Migration 0016 + `SandboxSession` / `SandboxExecution`. Verified against a
+      scratch database through the full 0001->0016 chain, not just the new head.
+- [x] `sandbox/types.py` - the provider seam. Frozen, JSON-round-trippable, no
+      provider objects hiding inside, so a handle survives being rebuilt from a
+      row in a different worker process than the one that created it.
+- [x] `sandbox/policy.py` - `ALWAYS_DENIED_CIDRS` (metadata + RFC1918 + loopback,
+      v4 and v6) denied under every policy including `open`; `sandbox_env` is
+      *built*, never filtered from `os.environ`, because a filter is one
+      forgotten name away from leaking a key and the forgotten name is always
+      the one added last.
+- [x] Settings + `_guard_sandbox`, mirroring `_guard_model_provider`: the fake
+      provider cannot be reached outside development/test, and e2b without a key
+      fails at startup rather than on the turn someone asks for a chart.
+- [x] Registered in `llm_tools.build_registry` and `main.py`.
+- [x] Providers (subprocess + container + e2b + fake + factory), session
+      lifecycle + quotas, agent tools + artifact persistence, HTTP routes + UI.
+- [x] Network reversed to `none` by default; packages pre-baked in
+      infra/sandbox/Dockerfile, which is now the package policy.
+- [x] Security tests: cross-tenant, introspection-driven secret-leak, egress
+      floor, fail-closed. Threat model updated with the honest residual risk.
+- [x] **Bug found by the hardening pass and fixed**: `ALL_TRAFFIC` was
+      `0.0.0.0/0` alone, which says nothing about IPv6. Under `allowlist` an
+      unlisted IPv6 destination was reachable unless the driver happened to
+      treat `allow_out` as deny-by-default; under `none` the strictest policy
+      was leaning on the internet flag rather than its own list. Both families
+      are now denied explicitly and each policy's list stands alone. One test
+      asserted the old behaviour and was rewritten rather than deleted.
+- [x] Gates: ruff clean, mypy 94 files clean, **pytest 883 passed**, tsc clean,
+      eslint clean (after ignoring `.next-review/**`, a stray Next build dir
+      that was contributing 204 errors from generated code), vitest 144/144.
+
+Still unproven: the container driver has never run against a real Docker daemon
+— Docker is not installed here, so its tests assert the argv flag by flag. That
+catches a dropped `--network none` in CI, which is the failure that matters, but
+the first real `make sandbox-image && docker run` remains to be done.
+
+**The residual risk, stated once so it is not lost in the diff:** a sandbox on
+egress `open`, holding documents the user uploaded, can send them anywhere. The
+realistic trigger is not a microVM escape - it is prompt injection through a
+document the agent was asked to analyse. `allowlist` closes it and costs
+`pip install`. `open` is the default because the feature is pointless otherwise,
+and that is a judgement call rather than a proof of safety.

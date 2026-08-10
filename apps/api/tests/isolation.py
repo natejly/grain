@@ -71,6 +71,8 @@ from app.models import (
     ProjectFile,
     Run,
     RunEvent,
+    SandboxExecution,
+    SandboxSession,
     Source,
     SyncJob,
     Tool,
@@ -511,6 +513,36 @@ def build_tenant(label: str) -> Tenant:
         ids["app"] = app_row.id
         ids["app_slug"] = slug
         ids["app_release"] = release.id
+
+        # A sandbox session is written straight to the table rather than through
+        # the API on purpose: creating one over HTTP would need a provider, and
+        # the thing under test is whether an id from this row can be used by
+        # another workspace — which does not depend on a machine existing.
+        sandbox = SandboxSession(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            provider="fake",
+            external_id=f"{label.lower()}-{new_id()}",
+            label=f"{label} secret sandbox",
+            status="running",
+            network_policy="open",
+            allow_hosts_json="[]",
+        )
+        db.add(sandbox)
+        db.flush()
+        ids["sandbox_session"] = sandbox.id
+
+        execution = SandboxExecution(
+            workspace_id=workspace_id,
+            session_id=sandbox.id,
+            kind="code",
+            source=f"print('{label} secret code')",
+            stdout=f"{label} secret output",
+            exit_code=0,
+        )
+        db.add(execution)
+        db.flush()
+        ids["sandbox_execution"] = execution.id
 
         db.commit()
     finally:
@@ -980,6 +1012,37 @@ ROUTE_CASES: List[RouteCase] = [
         DENY,
         path_ids={"tool_id": "mcp_tool"},
         query={"enabled": "false"},
+    ),
+    # -- sandbox -----------------------------------------------------------
+    # Sessions are the one resource where "not yours" would be worth money to
+    # confirm: a session id names a live machine with someone's files already
+    # loaded into it. Every route that takes one is therefore a DENY.
+    RouteCase("GET", "/api/sandbox", SCOPED),
+    RouteCase("POST", "/api/sandbox", SCOPED, body={"project_id": "", "label": ""}),
+    RouteCase(
+        "GET",
+        "/api/sandbox/{session_id}/executions",
+        DENY,
+        path_ids={"session_id": "sandbox_session"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/sandbox/{session_id}/run",
+        DENY,
+        path_ids={"session_id": "sandbox_session"},
+        body={"source": "print('stolen')", "kind": "code"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/sandbox/{session_id}/pause",
+        DENY,
+        path_ids={"session_id": "sandbox_session"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/sandbox/{session_id}",
+        DENY,
+        path_ids={"session_id": "sandbox_session"},
     ),
     # -- integrations ------------------------------------------------------
     RouteCase("GET", "/api/integrations", SCOPED),

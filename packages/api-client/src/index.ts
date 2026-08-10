@@ -535,6 +535,77 @@ export type RunEvent = {
   data: Record<string, unknown>;
 };
 
+/**
+ * Egress policy for a sandbox, frozen onto the session when it was created.
+ * "open" reaches the internet, "allowlist" reaches only `allow_hosts`, "none"
+ * reaches nothing. The UI must show this before anyone pastes data in.
+ */
+export type SandboxNetworkPolicy = "open" | "allowlist" | "none";
+
+export type SandboxSessionStatus = "running" | "paused" | "killed" | "error";
+
+/**
+ * One microVM, addressed only by this id. The provider-side id is deliberately
+ * absent from the payload — the server resolves it from the row.
+ */
+export type SandboxSession = {
+  id: string;
+  project_id: string;
+  label: string;
+  /** "e2b", or "fake" in development. */
+  provider: string;
+  template: string;
+  status: SandboxSessionStatus;
+  network_policy: SandboxNetworkPolicy;
+  allow_hosts: string[];
+  error: string;
+  exec_count: number;
+  wall_ms_used: number;
+  created_at: string;
+  last_used_at: string;
+};
+
+export type SandboxExecutionKind = "code" | "command";
+
+export type SandboxExecution = {
+  id: string;
+  kind: SandboxExecutionKind;
+  source: string;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  /** Non-empty when the *user's* code failed. Infrastructure failure is a 5xx. */
+  error: string;
+  artifact_count: number;
+  duration_ms: number;
+  created_at: string;
+};
+
+/**
+ * A chart or image an execution produced. Every field past `kind`/`mime` is
+ * optional because which ones are populated is the server's artifact layer's
+ * choice: large payloads are written to the object store and named by `url`,
+ * small ones ride back inline as base64 in `data`.
+ */
+export type SandboxArtifact = {
+  kind: string;
+  mime: string;
+  url?: string;
+  data?: string;
+  is_main?: boolean;
+  /** Structured chart description, strictly better than a PNG when present. */
+  chart_json?: string;
+};
+
+export type SandboxRun = {
+  execution: SandboxExecution;
+  artifacts: SandboxArtifact[];
+  /** True when output was clipped, so the panel can say so. */
+  truncated: boolean;
+  /** The session as it stands after the run — status and counters included. */
+  session: SandboxSession;
+};
+
 function makeKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -1363,6 +1434,53 @@ export class WorkspaceApi {
 
   previewApp(appId: string): Promise<AppPreview> {
     return this.request(`/api/apps/${appId}/preview`);
+  }
+
+  // --- Sandbox (server-side execution) --------------------------------------
+  // Every method here names a session by its workspace-scoped row id. There is
+  // no method that takes a provider id, because the API accepts none.
+
+  listSandboxSessions(): Promise<SandboxSession[]> {
+    return this.request("/api/sandbox");
+  }
+
+  /** Ensure a session exists for `project_id`; the server reuses a live one. */
+  createSandboxSession(projectId = "", label = ""): Promise<SandboxSession> {
+    return this.request(
+      "/api/sandbox",
+      { method: "POST", body: JSON.stringify({ project_id: projectId, label }) },
+      true,
+    );
+  }
+
+  /**
+   * Run in the session's persistent kernel ("code") or its shell ("command").
+   * Failing *user* code resolves with `execution.error` set; only a provider
+   * failure rejects, so the caller must check both.
+   */
+  runInSandbox(
+    sessionId: string,
+    source: string,
+    kind: SandboxExecutionKind = "code",
+  ): Promise<SandboxRun> {
+    return this.request(
+      `/api/sandbox/${sessionId}/run`,
+      { method: "POST", body: JSON.stringify({ source, kind, language: "python" }) },
+      true,
+    );
+  }
+
+  listSandboxExecutions(sessionId: string, limit = 50): Promise<SandboxExecution[]> {
+    return this.request(`/api/sandbox/${sessionId}/executions?limit=${limit}`);
+  }
+
+  pauseSandboxSession(sessionId: string): Promise<SandboxSession> {
+    return this.request(`/api/sandbox/${sessionId}/pause`, { method: "POST" }, true);
+  }
+
+  /** Destroy the machine. Answers with the killed row, not 204. */
+  killSandboxSession(sessionId: string): Promise<SandboxSession> {
+    return this.request(`/api/sandbox/${sessionId}`, { method: "DELETE" }, true);
   }
 
   async *streamRun(runId: string, after = 0): AsyncGenerator<RunEvent> {
