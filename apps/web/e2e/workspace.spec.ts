@@ -1,10 +1,29 @@
 import { expect, test, type Page } from "@playwright/test";
 
+/**
+ * Navigation is grouped: the sidebar has five groups and a group's siblings sit
+ * in a tab strip above the view. Both navs are addressed by accessible name so
+ * a group label ("Create") never collides with a form button of the same name.
+ */
+async function openView(page: Page, group: string, tab?: RegExp | string) {
+  // The group badge is part of the button's accessible name ("Create 4"), so
+  // anchor on the label rather than asking for an exact match.
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("button", { name: new RegExp(`^${group}`) })
+    .click();
+  if (!tab) return;
+  await page
+    .getByRole("navigation", { name: `${group} views` })
+    .getByRole("button", { name: tab })
+    .click();
+}
+
 test("upload, cited answer, provenance, graph, approval, and deletion", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /Sources/ }).click();
+  await openView(page, "Knowledge", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "northstar-e2e.md",
     mimeType: "text/markdown",
@@ -28,18 +47,18 @@ test("upload, cited answer, provenance, graph, approval, and deletion", async ({
   );
   await page.getByRole("button", { name: "Close provenance" }).click();
 
-  await page.getByRole("button", { name: /Graph/ }).click();
+  await openView(page, "Knowledge", /Graph/);
   await expect(page.getByText("Project Northstar", { exact: true }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Chat", exact: true }).click();
   await composer.fill("/tool github-zen");
   await composer.press("Enter");
-  await page.getByRole("button", { name: /Activity/ }).click();
+  await openView(page, "Activity");
   await expect(page.getByText("github-zen", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Deny" }).click();
   await expect(page.getByText("No pending requests")).toBeVisible();
 
-  await page.getByRole("button", { name: /Sources/ }).click();
+  await openView(page, "Knowledge", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByTitle("Delete source").click();
   await expect(page.getByText("northstar-e2e.md")).toHaveCount(0);
@@ -47,7 +66,7 @@ test("upload, cited answer, provenance, graph, approval, and deletion", async ({
 
 test("build a dashboard from chat, then publish it", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /Sources/ }).click();
+  await openView(page, "Knowledge", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "revenue-e2e.csv",
     mimeType: "text/csv",
@@ -57,7 +76,7 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
   });
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
-  await page.getByRole("button", { name: /Dashboards/ }).click();
+  await openView(page, "Create", /Dashboards/);
   await page.getByRole("button", { name: "Add dashboard" }).first().click();
 
   await page.getByLabel("Dashboard name").fill("E2E revenue app");
@@ -150,7 +169,7 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
     timeout: 20_000,
   });
 
-  await page.getByRole("button", { name: /Documents/ }).click();
+  await openView(page, "Create", /Documents/);
   await page.getByRole("button", { name: /Launch Runbook/ }).click();
   const body = page.locator(".document-source");
   await expect(body).toHaveValue(/Step two: run the migrations\./);
@@ -158,7 +177,7 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
 });
 
 async function openPlaybook(page: Page) {
-  await page.getByRole("button", { name: /Documents/ }).click();
+  await openView(page, "Create", /Documents/);
   await page.getByRole("button", { name: /Rollback Playbook/ }).click();
 }
 

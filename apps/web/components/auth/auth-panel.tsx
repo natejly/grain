@@ -153,7 +153,7 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
             ? "We will email a link to set a new password."
             : showDevOverride
               ? "Local development sign-in is enabled."
-              : "Fieldnote keeps every workspace to itself."}
+              : "Jasmine keeps every workspace to itself."}
         </p>
       </header>
 

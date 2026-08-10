@@ -2,6 +2,8 @@
 
 import type { GraphEdge, GraphEntity } from "@workspace/api-client";
 import { useEffect, useRef, useState } from "react";
+import type { Theme } from "./theme";
+import { useTheme } from "./theme";
 
 /**
  * An Obsidian-style force-directed knowledge graph, in 3D.
@@ -29,17 +31,68 @@ type Simulated = { id: string; x: number; y: number; z: number };
 const MAX_LABELS = 40;
 const NODE_SEGMENTS = 12;
 
-/** Entity type -> hue. Distinct at a glance without being a rainbow. */
-const TYPE_COLORS: Record<string, number> = {
-  organization: 0xe2b86b,
-  project: 0x7c9cff,
-  named_entity: 0x64c78d,
-  concept: 0x929ba8,
+/**
+ * three.js takes literal colours, not CSS variables, so this is the one place
+ * in the app that has to duplicate the palette. It is a full palette per theme
+ * rather than a light tweak: the fog colour has to match the page or the graph
+ * sits in a rectangle of the wrong ground, and hues that read on #0b0d10 wash
+ * out on cream. Values track the tokens in globals.css.
+ *
+ * Entity hues are distinct at a glance without being a rainbow, and each one
+ * clears 3:1 against its theme's page background — nodes are the content here,
+ * so they are graphical objects under WCAG 1.4.11.
+ */
+type GraphPalette = {
+  fog: number;
+  types: Record<string, number>;
+  fallback: number;
+  typedEdge: number;
+  looseEdge: number;
+  label: string;
+  ambient: number;
+  ambientIntensity: number;
+  keyIntensity: number;
 };
-const DEFAULT_COLOR = 0x929ba8;
 
-function colorFor(entity: GraphEntity): number {
-  return TYPE_COLORS[entity.entity_type] ?? DEFAULT_COLOR;
+const PALETTES: Record<Theme, GraphPalette> = {
+  dark: {
+    fog: 0x0b0d10,
+    types: {
+      organization: 0xe2b86b,
+      project: 0x7c9cff,
+      named_entity: 0x64c78d,
+      concept: 0x929ba8,
+    },
+    fallback: 0x929ba8,
+    typedEdge: 0x7c9cff,
+    looseEdge: 0x6b7684,
+    label: "#e7eaf0",
+    ambient: 0xffffff,
+    ambientIntensity: 0.75,
+    keyIntensity: 0.8,
+  },
+  light: {
+    fog: 0xfaf7f0,
+    types: {
+      organization: 0xa87c57,
+      project: 0x2c7454,
+      named_entity: 0x37784b,
+      concept: 0x6b6357,
+    },
+    fallback: 0x6b6357,
+    typedEdge: 0x2c7454,
+    looseEdge: 0x83887c,
+    label: "#2e2a24",
+    ambient: 0xffffff,
+    // Lambert nodes on a light ground need less fill and a firmer key, or
+    // every sphere flattens into a flat disc of its own colour.
+    ambientIntensity: 0.55,
+    keyIntensity: 0.95,
+  },
+};
+
+function colorFor(palette: GraphPalette, entity: GraphEntity): number {
+  return palette.types[entity.entity_type] ?? palette.fallback;
 }
 
 /** Node radius grows with mentions, but sublinearly — a hub must not eat the view. */
@@ -55,10 +108,14 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
   // tear down and rebuild the whole scene on every render.
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
+  // Not a ref: a theme change has to rebuild the scene, because fog, lighting
+  // and every instanced colour are baked in at build time.
+  const theme = useTheme();
 
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount || entities.length === 0) return;
+    const palette = PALETTES[theme];
 
     let disposed = false;
     let cleanup: (() => void) | null = null;
@@ -105,7 +162,7 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
       const scene = new THREE.Scene();
       // Fog is the depth cue that makes a 3D point cloud readable; without it a
       // far node and a small near node are indistinguishable.
-      scene.fog = new THREE.Fog(0x0b0d10, 180, 620);
+      scene.fog = new THREE.Fog(palette.fog, 180, 620);
 
       const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 2000);
       camera.position.set(0, 0, 260);
@@ -117,8 +174,8 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
       controls.minDistance = 40;
       controls.maxDistance = 900;
 
-      scene.add(new THREE.AmbientLight(0xffffff, 0.75));
-      const key = new THREE.DirectionalLight(0xffffff, 0.8);
+      scene.add(new THREE.AmbientLight(palette.ambient, palette.ambientIntensity));
+      const key = new THREE.DirectionalLight(0xffffff, palette.keyIntensity);
       key.position.set(1, 1, 1);
       scene.add(key);
 
@@ -173,7 +230,7 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
       camera.position.set(0, 0, distance);
       camera.updateProjectionMatrix();
       controls.maxDistance = distance * 4;
-      scene.fog = new THREE.Fog(0x0b0d10, distance * 0.55, distance * 2.6);
+      scene.fog = new THREE.Fog(palette.fog, distance * 0.55, distance * 2.6);
 
       // ---- nodes ------------------------------------------------------
       const geometry = new THREE.SphereGeometry(1, NODE_SEGMENTS, NODE_SEGMENTS);
@@ -183,7 +240,7 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
       const baseColors = new Float32Array(entities.length * 3);
       const color = new THREE.Color();
       entities.forEach((entity, position) => {
-        color.setHex(colorFor(entity));
+        color.setHex(colorFor(palette, entity));
         baseColors[position * 3] = color.r;
         baseColors[position * 3 + 1] = color.g;
         baseColors[position * 3 + 2] = color.b;
@@ -232,8 +289,16 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
         return { lines, positions, geometry: lineGeometry, material: lineMaterial, subset };
       }
 
-      const typed = buildLines(typedLinks, { opacity: 0.85, dashed: false, hex: 0x7c9cff });
-      const loose = buildLines(looseLinks, { opacity: 0.5, dashed: true, hex: 0x6b7684 });
+      const typed = buildLines(typedLinks, {
+        opacity: 0.85,
+        dashed: false,
+        hex: palette.typedEdge,
+      });
+      const loose = buildLines(looseLinks, {
+        opacity: 0.5,
+        dashed: true,
+        hex: palette.looseEdge,
+      });
 
       // ---- labels -----------------------------------------------------
       // Sprites billboard for free, which is what makes text readable while the
@@ -255,7 +320,7 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
         canvas.height = 40;
         // Resizing the canvas resets the context, so the font is set again.
         context.font = "600 28px ui-sans-serif, system-ui, sans-serif";
-        context.fillStyle = "#e7eaf0";
+        context.fillStyle = palette.label;
         context.textBaseline = "middle";
         context.fillText(text, 8, 21);
         const texture = new THREE.CanvasTexture(canvas);
@@ -456,7 +521,7 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
       disposed = true;
       cleanup?.();
     };
-  }, [entities, edges]);
+  }, [entities, edges, theme]);
 
   if (entities.length === 0) {
     return (

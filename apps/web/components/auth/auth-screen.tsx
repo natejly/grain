@@ -16,7 +16,7 @@ const OAUTH_ERRORS: Record<string, string> = {
   denied: "Google sign-in was cancelled.",
   exchange: "Google could not confirm that sign-in. Try again.",
   account_exists:
-    "That address already has a Fieldnote password. Sign in with your password instead.",
+    "That address already has a Jasmine password. Sign in with your password instead.",
   account: "That account is not available. Contact whoever owns the workspace.",
   no_email: "Google did not share an email address, so there is nothing to sign in as.",
 };
@@ -26,7 +26,7 @@ export function AuthSplash({ message = "Restoring your session…" }: { message?
   return (
     <div className="auth-shell">
       <div className="auth-stage">
-        <div className="auth-brand">Fieldnote</div>
+        <div className="auth-brand">Jasmine</div>
         <p className="auth-splash">{message}</p>
       </div>
     </div>
@@ -56,7 +56,7 @@ export function AuthScreen({ offline, onSignedIn, onRecovered }: AuthScreenProps
     <div className="auth-shell">
       <ApiHealthBanner api={api} onRecovered={onRecovered} />
       <div className="auth-stage">
-        <div className="auth-brand">Fieldnote</div>
+        <div className="auth-brand">Jasmine</div>
         {offline ? (
           <div className="auth-card">
             <div className="auth-sent">

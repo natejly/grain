@@ -22,3 +22,6 @@ playwright-report/
 test-results/
 # Playwright storage state: a live session cookie, minted per run.
 apps/web/e2e/.auth/
+
+# Next.js build output from review runs
+apps/web/.next-review/

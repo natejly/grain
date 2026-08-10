@@ -40,7 +40,7 @@ export function ApiHealthBanner({ api, onRecovered }: ApiHealthBannerProps) {
     <div className="api-down-banner" role="alert">
       <WifiOff size={15} />
       <span>
-        The Fieldnote API is unreachable at {api.baseUrl}. Start it with{" "}
+        The Jasmine API is unreachable at {api.baseUrl}. Start it with{" "}
         <code>make dev</code>.
       </span>
       <button onClick={() => setNonce((value) => value + 1)}>

@@ -3,6 +3,7 @@ import { ApiError, type Source } from "@workspace/api-client";
 export type View =
   | "chat"
   | "sources"
+  | "memory"
   | "graph"
   | "dashboards"
   | "integrations"
@@ -42,6 +43,7 @@ export function isTabular(filename: string): boolean {
 export const PAGE_TITLES: Record<View, string> = {
   chat: "Chat",
   sources: "Sources",
+  memory: "Memory",
   graph: "Graph",
   dashboards: "Dashboards",
   documents: "Documents",

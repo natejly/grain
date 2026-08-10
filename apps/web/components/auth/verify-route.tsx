@@ -40,7 +40,7 @@ export function VerifyRoute() {
   return (
     <div className="auth-shell">
       <div className="auth-stage">
-        <div className="auth-brand">Fieldnote</div>
+        <div className="auth-brand">Jasmine</div>
         <div className="auth-card">
           <div className="auth-sent">
             {outcome.kind === "failed" ? (

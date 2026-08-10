@@ -19,20 +19,53 @@ SNAPSHOT_ROW_LIMIT = 200
 SAMPLE_ROWS = 5
 
 # Injected into every generated app; the only channel in or out is postMessage.
-FIELDNOTE_RUNTIME = """<script>
+#
+# Naming: the runtime object is `window.jasmine` and the wire messages are
+# `jasmine:*`. `window.fieldnote` is kept as an alias to the *same object*, not
+# a copy — the model was told the old name for every app generated so far, and
+# a body that still says `window.fieldnote.onData = ...` has to keep working.
+# The host speaks both message namespaces for the same reason: a published
+# release stores its own frozen copy of this runtime, so every snapshot cut
+# before today posts `fieldnote:ready` and listens for `fieldnote:init`
+# forever. See SandboxFrame for the host half of that compatibility.
+JASMINE_RUNTIME = """<style>
+:root {
+  color-scheme: light;
+  --jasmine-bg: #fffdf8;
+  --jasmine-surface: #faf7f0;
+  --jasmine-border: #e3dcce;
+  --jasmine-text: #2e2a24;
+  --jasmine-muted: #6b6357;
+  --jasmine-accent: #2c7454;
+  --jasmine-accent-soft: #6fbf9b;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --jasmine-bg: #0b0d10;
+  --jasmine-surface: #12161c;
+  --jasmine-border: #282f39;
+  --jasmine-text: #e7eaf0;
+  --jasmine-muted: #929ba8;
+  --jasmine-accent: #7c9cff;
+  --jasmine-accent-soft: #a8bcff;
+}
+html, body { background: var(--jasmine-bg); color: var(--jasmine-text); }
+</style>
+<script>
 (function () {
   var pending = {};
   var counter = 0;
   var handler = null;
   var delivered = false;
-  window.fieldnote = {
+  window.jasmine = {
     snapshots: {},
+    theme: "light",
     query: function (dataset, query) {
       return new Promise(function (resolve, reject) {
         var requestId = "q" + (counter += 1);
         pending[requestId] = { resolve: resolve, reject: reject };
         parent.postMessage(
-          { type: "fieldnote:query", requestId: requestId, dataset: dataset, query: query || {} },
+          { type: "jasmine:query", requestId: requestId, dataset: dataset, query: query || {} },
           "*"
         );
       });
@@ -40,30 +73,40 @@ FIELDNOTE_RUNTIME = """<script>
   };
   // onData may be assigned before or after the host delivers data, so the
   // setter replays whatever already arrived instead of dropping the render.
-  Object.defineProperty(window.fieldnote, "onData", {
+  Object.defineProperty(window.jasmine, "onData", {
     get: function () { return handler; },
     set: function (fn) {
       handler = fn;
-      if (delivered && typeof fn === "function") fn(window.fieldnote.snapshots);
+      if (delivered && typeof fn === "function") fn(window.jasmine.snapshots);
     }
   });
+  // Same object under the old name: assignments through either reference are
+  // visible through the other, onData included.
+  window.fieldnote = window.jasmine;
   window.addEventListener("message", function (event) {
     var msg = event.data || {};
-    if (msg.type === "fieldnote:init") {
-      window.fieldnote.snapshots = msg.snapshots || {};
+    if (msg.type === "jasmine:init") {
+      window.jasmine.snapshots = msg.snapshots || {};
+      if (msg.theme === "dark" || msg.theme === "light") {
+        window.jasmine.theme = msg.theme;
+        document.documentElement.setAttribute("data-theme", msg.theme);
+      }
       delivered = true;
-      if (typeof handler === "function") handler(window.fieldnote.snapshots);
+      if (typeof handler === "function") handler(window.jasmine.snapshots);
     }
-    if (msg.type === "fieldnote:result" && pending[msg.requestId]) {
+    if (msg.type === "jasmine:result" && pending[msg.requestId]) {
       var entry = pending[msg.requestId];
       delete pending[msg.requestId];
       if (msg.error) entry.reject(new Error(msg.error));
       else entry.resolve(msg.result);
     }
   });
-  parent.postMessage({ type: "fieldnote:ready" }, "*");
+  parent.postMessage({ type: "jasmine:ready" }, "*");
 })();
 </script>"""
+
+# The old module-level name, for any in-tree importer that has not moved yet.
+FIELDNOTE_RUNTIME = JASMINE_RUNTIME
 
 CODEGEN_INSTRUCTIONS = """You generate a single self-contained HTML fragment for a data mini-app
 that runs inside a locked-down sandboxed iframe.
@@ -73,12 +116,17 @@ Hard constraints — the sandbox enforces them, so violations just break the app
 - NO external URLs of any kind: no CDN scripts, stylesheets, fonts, images, or fetch/XHR —
   the frame's CSP is default-src 'none' with connect-src 'none'.
 - Data arrives ONLY through the provided runtime (already injected before your code):
-  * `window.fieldnote.snapshots` — object mapping dataset name to {columns, rows, row_count}.
-  * `window.fieldnote.onData = (snapshots) => …` — called when snapshots arrive; render there.
-  * `await window.fieldnote.query(name, {filters, group_by, metrics, order_by, limit})` —
+  * `window.jasmine.snapshots` — object mapping dataset name to {columns, rows, row_count}.
+  * `window.jasmine.onData = (snapshots) => …` — called when snapshots arrive; render there.
+  * `await window.jasmine.query(name, {filters, group_by, metrics, order_by, limit})` —
     live typed queries (preview only; may reject when offline — fall back to snapshots).
+  * `window.jasmine.theme` — "light" or "dark", set before onData fires.
 - Do not emit <html>, <head>, <body>, <meta>, or another copy of the runtime.
-- Style for a dark background (#0b0d10); keep everything readable and self-contained.
+- The app must work in BOTH themes, so do not hardcode colours. The runtime already
+  sets the page background and text colour and exposes these variables — use them:
+  --jasmine-bg, --jasmine-surface, --jasmine-border, --jasmine-text, --jasmine-muted,
+  --jasmine-accent, --jasmine-accent-soft. For chart series and anything the variables
+  do not cover, read window.jasmine.theme inside onData and pick a palette.
 
 Return ONLY the HTML fragment, no markdown fences, no commentary."""
 
@@ -145,7 +193,7 @@ def build_code_manifest(
     else:
         parts = [f"App name: {app_name}", f"Request: {prompt}"]
         if schema_notes:
-            parts.append("Available datasets (via window.fieldnote):\n" + "\n".join(schema_notes))
+            parts.append("Available datasets (via window.jasmine):\n" + "\n".join(schema_notes))
         else:
             parts.append("No datasets are bound; build a static informational page.")
         if previous_html:
@@ -160,7 +208,7 @@ def build_code_manifest(
         )
 
     lint_generated_html(body)
-    html = FIELDNOTE_RUNTIME + "\n" + body
+    html = JASMINE_RUNTIME + "\n" + body
     manifest = {
         "schema_version": 2,
         "kind": "code",

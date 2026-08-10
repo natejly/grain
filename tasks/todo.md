@@ -1016,3 +1016,21 @@ Follow-ups, not blockers:
   converges over several searches; `scripts/backfill_chunks.py` is the bulk path.
 - Corpus item 13 is still open, and it bounds everything above: 28 questions
   across three strata means one question is 10-12.5 points.
+
+## Navigation: eleven top-level items → five task-shaped groups ✅
+- [x] `views/navigation.ts`: NAV_GROUPS (Chat · Create · Knowledge · Connections ·
+      Activity), `groupForView`, `DEFAULT_GROUP_VIEW`. The sidebar and the tab
+      strip are both generated from it, so there is one place a view can go missing.
+- [x] Sidebar renders five groups; each group's siblings live in a `.view-tabs`
+      strip under the topbar (plain buttons + `aria-current`, not `role=tab`, so
+      the e2e suite's `getByRole("button")` navigation still addresses them).
+- [x] A group reopens where you left it (`groupHome`, keyed off `view` so the
+      OAuth return and an upload's own `setView` are remembered too).
+- [x] **Memory got a real home**: `views/memory.tsx` under Knowledge — list,
+      search, forget. Removed the panel it used to hang off the bottom of Graph,
+      and `GraphView` no longer takes `memories`/`forgetMemory`.
+- [x] Group badges sum their tabs' counts. Graph carries no count: it is a
+      projection of Sources, so counting it would double-count the same input.
+- [x] Verified: tsc ✓, eslint ✓, vitest 144/144 (139 before + 5 in the new
+      `tests/navigation.test.ts`), `pnpm build` ✓, e2e 22/22 (18 before + 4 in
+      the new `e2e/navigation.spec.ts`).

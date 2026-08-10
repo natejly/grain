@@ -1,20 +1,23 @@
 "use client";
 
-import { Network, RefreshCw, Trash2 } from "lucide-react";
-import type { KnowledgeGraph, MemoryItem } from "@workspace/api-client";
+import { Network, RefreshCw } from "lucide-react";
+import type { KnowledgeGraph } from "@workspace/api-client";
 import { useState } from "react";
 import { Graph3D } from "../graph-3d";
 import { formatRelative } from "./shared";
 
 export type GraphViewProps = {
   graph: KnowledgeGraph | null;
-  memories: MemoryItem[];
   rebuild: () => Promise<void>;
   openChunk: (chunkId: string) => Promise<void>;
-  forgetMemory: (item: MemoryItem) => Promise<void>;
 };
 
-export function GraphView({ graph, memories, rebuild, openChunk, forgetMemory }: GraphViewProps) {
+/**
+ * The projection over indexed sources. Long-term memory used to hang off the
+ * bottom of this page; it is its own surface now (views/memory.tsx), and an
+ * entity that came from a memory still says so in its row.
+ */
+export function GraphView({ graph, rebuild, openChunk }: GraphViewProps) {
   const [selected, setSelected] = useState<string | null>(null);
   // No slice and no hand-placed ring: the force simulation lays out whatever the
   // API returns, so the cap belongs to the query, not the renderer.
@@ -51,10 +54,6 @@ export function GraphView({ graph, memories, rebuild, openChunk, forgetMemory }:
         <div>
           <strong>{graph?.edges.length || 0}</strong>
           <span>links shown</span>
-        </div>
-        <div>
-          <strong>{memories.length}</strong>
-          <span>long-term memories</span>
         </div>
         {graph?.built_at && (
           <div>
@@ -106,47 +105,6 @@ export function GraphView({ graph, memories, rebuild, openChunk, forgetMemory }:
           </div>
         </div>
       )}
-
-      <div className="memory-panel">
-        <div className="panel-title">
-          <div>
-            <strong>Long-term memory</strong>
-            <p>Recalled automatically in chat.</p>
-          </div>
-          <span className="panel-count">{memories.length}</span>
-        </div>
-        {memories.length === 0 ? (
-          <div className="feature-empty">
-            <Network size={20} />
-            <strong>No memories yet</strong>
-            <span>Chat with the assistant and durable facts will accumulate here.</span>
-          </div>
-        ) : (
-          <div className="memory-list">
-            {memories.map((item) => (
-              <div className="memory-row" key={item.id}>
-                <div>
-                  <span className={`memory-kind ${item.kind}`}>
-                    {item.kind.replaceAll("_", " ")}
-                  </span>
-                  <p>{item.content}</p>
-                  <small>
-                    {item.importance > 1 && `reinforced ×${item.importance} · `}
-                    updated {formatRelative(item.updated_at)}
-                  </small>
-                </div>
-                <button
-                  className="delete-button"
-                  title="Forget this memory"
-                  onClick={() => void forgetMemory(item)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
     </section>
   );
 }

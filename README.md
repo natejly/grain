@@ -1,6 +1,6 @@
-# Fieldnote
+# Jasmine
 
-Fieldnote is a local-first agentic knowledge workspace. It combines cited chat,
+Jasmine is a local-first agentic knowledge workspace. It combines cited chat,
 explicit tool approval, a rebuildable knowledge graph, bounded analytical
 dashboards, and immutable published app snapshots.
 

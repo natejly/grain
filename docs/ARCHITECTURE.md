@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-Fieldnote is a cited knowledge and analytical workspace, not a general
+Jasmine is a cited knowledge and analytical workspace, not a general
 autonomous-code platform. PostgreSQL is the production system of record. SQLite
 is a deterministic development adapter. Originals live behind an object-storage
 boundary, while derived passages, projections, dataset metadata, and provenance

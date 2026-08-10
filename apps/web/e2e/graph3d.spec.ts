@@ -1,4 +1,23 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+/**
+ * Navigation is grouped: the sidebar has five groups and a group's siblings sit
+ * in a tab strip above the view. Both navs are addressed by accessible name so
+ * a group label ("Create") never collides with a form button of the same name.
+ */
+async function openView(page: Page, group: string, tab?: RegExp | string) {
+  // The group badge is part of the button's accessible name ("Create 4"), so
+  // anchor on the label rather than asking for an exact match.
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("button", { name: new RegExp(`^${group}`) })
+    .click();
+  if (!tab) return;
+  await page
+    .getByRole("navigation", { name: `${group} views` })
+    .getByRole("button", { name: tab })
+    .click();
+}
 
 /**
  * Temporary verification that the 3D graph actually paints, not just that the
@@ -14,7 +33,7 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   await page.goto("/");
   // The graph only has a canvas once there is something to draw, so seed an
   // entity-rich source first — the same flow the main spec uses.
-  await page.getByRole("button", { name: /Sources/ }).click();
+  await openView(page, "Knowledge", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "graph3d-e2e.md",
     mimeType: "text/markdown",
@@ -25,7 +44,7 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   });
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
-  await page.getByRole("button", { name: /Graph/ }).click();
+  await openView(page, "Knowledge", /Graph/);
   await expect(
     page.getByText("Project Northstar", { exact: true }).first(),
   ).toBeVisible();
@@ -44,7 +63,7 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
 
   // Leave the shared workspace as we found it. Without this the source lingers
   // and the main spec's "Delete source" lookup matches two buttons.
-  await page.getByRole("button", { name: /Sources/ }).click();
+  await openView(page, "Knowledge", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .locator(".source-row", { hasText: "graph3d-e2e.md" })

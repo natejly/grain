@@ -1,5 +1,154 @@
+/* ==========================================================================
+   Jasmine — theme tokens
+   ==========================================================================
+
+   Every rule in this file reads these custom properties and nothing else: no
+   rule below this block may name a colour directly, because a raw hex is a
+   rule that can only be right in one theme.
+
+   Three declarations, in this order, and the order is the mechanism:
+
+     :root                                        light — the default
+     @media (prefers-color-scheme: dark)
+       :root:not([data-theme="light"])            dark when the OS asks and the
+                                                  user has not overridden it
+     :root[data-theme="dark"]                     dark when the user overrode it
+
+   So a viewer with no stored choice and no OS preference gets light; the OS
+   preference moves them to dark; and an explicit toggle beats the OS in both
+   directions. `color-scheme` travels with each block so native scrollbars,
+   form controls and the canvas behind the page follow the theme too.
+
+   Contrast: every text token clears WCAG AA (4.5:1) against every surface it
+   is painted on, in both themes. See the palette notes in the ADR-adjacent
+   review for the measured table. */
+
 :root {
+  color-scheme: light;
+
+  /* Cream page, deeper cream chrome, near-white cards. */
+  --bg: #faf7f0;
+  --sidebar: #f5f1e8;
+  --surface: #fffdf8;
+  --surface-raised: #ffffff;
+  --surface-hover: #f0ebe0;
+  --border: #e3dcce;
+  --border-strong: #cfc5b4;
+
+  /* Warm near-black; pure black on cream is a glare edge. */
+  --text: #2e2a24;
+  --text-muted: #6b6357;
+  --text-dim: #726959;
+
+  /* Mint. --accent carries small text, --accent-soft is for fills and shapes. */
+  --accent: #2c7454;
+  --accent-soft: #6fbf9b;
+  --accent-muted: #e4f3ec;
+  --accent-wash: #eff8f3;
+  --accent-muted-hover: #d6ede0;
+  --accent-border: #bce0ce;
+  /* The strong border *is* the soft mint here — one tone, one definition. */
+  --accent-border-strong: var(--accent-soft);
+  --accent-text: #2c7454;
+  --accent-hover: #235d43;
+  --accent-contrast: #ffffff;
+
+  /* Pastel brown: warnings, the needs-approval state, the occasional
+     highlight. Never chrome. */
+  --clay: #a87c57;
+  --clay-muted: #f0e4d8;
+
+  --green: #37784b;
+  --green-muted: #e4f3ec;
+  --green-border: #a8d3b8;
+
+  --amber: #8a5a38;
+  --amber-muted: #f0e4d8;
+
+  --red: #ab4530;
+  --red-muted: #f7e4df;
+  --red-border: #e9bfb3;
+
+  --code-bg: #f5f1e8;
+  --control-disabled-bg: #e8e2d6;
+  --control-disabled-text: #9a9182;
+  --tint: rgba(46, 42, 36, 0.07);
+  --scrim: rgba(46, 42, 36, 0.45);
+  --veil: rgba(250, 247, 240, 0.82);
+
+  --graph-grid: rgba(44, 116, 84, 0.05);
+  --graph-edge: #699680;
+  --graph-node: #d8ede2;
+  --graph-node-stroke: #2c7454;
+  --graph-label: #4a4238;
+
+  /* Backdrop behind an iframe we do not control. */
+  --sandbox-bg: #fffdf8;
+  --preview-bg: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg: #0b0d10;
+    --sidebar: #0e1115;
+    --surface: #12161c;
+    --surface-raised: #171c23;
+    --surface-hover: #1b2129;
+    --border: #282f39;
+    --border-strong: #37414e;
+
+    --text: #e7eaf0;
+    --text-muted: #929ba8;
+    --text-dim: #8a94a1;
+
+    --accent: #7c9cff;
+    --accent-soft: #a8bcff;
+    --accent-muted: #192643;
+    --accent-wash: #121a2a;
+    --accent-muted-hover: #213156;
+    --accent-border: #31436f;
+    --accent-border-strong: #4966af;
+    --accent-text: #c7d2ff;
+    --accent-hover: #94adff;
+    --accent-contrast: #081020;
+
+    --clay: #c99a72;
+    --clay-muted: #302614;
+
+    --green: #64c78d;
+    --green-muted: #14291e;
+    --green-border: #28553c;
+
+    --amber: #e2b86b;
+    --amber-muted: #302614;
+
+    --red: #ec806d;
+    --red-muted: #321b19;
+    --red-border: #633329;
+
+    --code-bg: #080a0d;
+    --control-disabled-bg: #2a3039;
+    --control-disabled-text: #606a76;
+    --tint: rgba(255, 255, 255, 0.08);
+    --scrim: rgba(0, 0, 0, 0.62);
+    --veil: rgba(11, 13, 16, 0.62);
+
+    --graph-grid: rgba(124, 156, 255, 0.035);
+    --graph-edge: #3f4b5e;
+    --graph-node: #1d2a47;
+    --graph-node-stroke: #6688e9;
+    --graph-label: #bdc6d4;
+
+    --sandbox-bg: #0b0d10;
+    --preview-bg: #ffffff;
+  }
+}
+
+:root[data-theme="dark"] {
   color-scheme: dark;
+
   --bg: #0b0d10;
   --sidebar: #0e1115;
   --surface: #12161c;
@@ -7,17 +156,51 @@
   --surface-hover: #1b2129;
   --border: #282f39;
   --border-strong: #37414e;
+
   --text: #e7eaf0;
   --text-muted: #929ba8;
-  --text-dim: #69727e;
+  --text-dim: #8a94a1;
+
   --accent: #7c9cff;
+  --accent-soft: #a8bcff;
   --accent-muted: #192643;
+  --accent-wash: #121a2a;
+  --accent-muted-hover: #213156;
+  --accent-border: #31436f;
+  --accent-border-strong: #4966af;
+  --accent-text: #c7d2ff;
+  --accent-hover: #94adff;
+  --accent-contrast: #081020;
+
+  --clay: #c99a72;
+  --clay-muted: #302614;
+
   --green: #64c78d;
   --green-muted: #14291e;
+  --green-border: #28553c;
+
   --amber: #e2b86b;
   --amber-muted: #302614;
+
   --red: #ec806d;
   --red-muted: #321b19;
+  --red-border: #633329;
+
+  --code-bg: #080a0d;
+  --control-disabled-bg: #2a3039;
+  --control-disabled-text: #606a76;
+  --tint: rgba(255, 255, 255, 0.08);
+  --scrim: rgba(0, 0, 0, 0.62);
+  --veil: rgba(11, 13, 16, 0.62);
+
+  --graph-grid: rgba(124, 156, 255, 0.035);
+  --graph-edge: #3f4b5e;
+  --graph-node: #1d2a47;
+  --graph-node-stroke: #6688e9;
+  --graph-label: #bdc6d4;
+
+  --sandbox-bg: #0b0d10;
+  --preview-bg: #ffffff;
 }
 
 * {
@@ -177,8 +360,8 @@ select:focus-visible {
 }
 
 .approval-count {
-  border-color: #59451e;
-  background: var(--amber-muted);
+  border-color: var(--clay);
+  background: var(--clay-muted);
   color: var(--amber);
 }
 
@@ -297,8 +480,8 @@ select:focus-visible {
   width: 29px;
   height: 29px;
   border-radius: 50%;
-  background: #25304a;
-  color: #bdcaff;
+  background: var(--accent-muted);
+  color: var(--accent-text);
 }
 
 .workspace-identity > div:nth-child(2) {
@@ -363,6 +546,83 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+/* The group this view sits under, so the title is never context-free. Only
+   groups with siblings show it — "Chat / Chat" says nothing. */
+.page-context span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* ---- Sub-navigation inside a group ---- */
+
+.view-tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 9px 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.view-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.view-tab {
+  height: 28px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.view-tab:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.view-tab.active {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent-text);
+}
+
+.view-tab.active svg {
+  color: var(--accent);
+}
+
+.tab-count {
+  min-width: 18px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.view-tab.active .tab-count {
+  color: var(--accent-text);
+}
+
 .topbar-actions {
   margin-left: auto;
   display: flex;
@@ -420,11 +680,17 @@ select:focus-visible {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border: 1px solid #633329;
+  border: 1px solid var(--red-border);
   border-radius: 6px;
   background: var(--red-muted);
-  color: #ffac9c;
+  color: var(--red);
   font-size: 11px;
+}
+
+/* The toast is anchored under the topbar; a group with a tab strip pushes it
+   down so an error never sits on top of the navigation it interrupts. */
+.main-panel.has-tabs .error-toast {
+  top: 115px;
 }
 
 .error-toast span {
@@ -509,14 +775,14 @@ select:focus-visible {
 }
 
 .assistant-mark {
-  border-color: #31436f;
+  border-color: var(--accent-border);
   background: var(--accent-muted);
-  color: #aebfff;
+  color: var(--accent-text);
 }
 
 .message-body {
   padding-left: 31px;
-  color: #d9dde5;
+  color: var(--text);
   font-size: 13px;
   line-height: 1.65;
 }
@@ -555,7 +821,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface-raised);
-  color: #c4cbda;
+  color: var(--text);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 11px;
 }
@@ -565,7 +831,7 @@ select:focus-visible {
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 5px;
-  background: #080a0d;
+  background: var(--code-bg);
 }
 
 .message-body pre code {
@@ -590,10 +856,10 @@ select:focus-visible {
   gap: 5px;
   padding: 0 8px;
   overflow: hidden;
-  border: 1px solid #31436f;
+  border: 1px solid var(--accent-border);
   border-radius: 5px;
   background: var(--accent-muted);
-  color: #b7c5f9;
+  color: var(--accent-text);
   font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -601,8 +867,8 @@ select:focus-visible {
 }
 
 .citations button:hover {
-  border-color: #536fae;
-  color: #dbe3ff;
+  border-color: var(--accent-border-strong);
+  color: var(--text);
 }
 
 .citations button span {
@@ -716,16 +982,16 @@ select:focus-visible {
 .composer-tools .send-button {
   margin-left: auto;
   background: var(--accent);
-  color: #081020;
+  color: var(--accent-contrast);
 }
 
 .composer-tools .send-button:hover {
-  background: #94adff;
+  background: var(--accent-hover);
 }
 
 .composer-tools .send-button:disabled {
-  background: #2a3039;
-  color: #606a76;
+  background: var(--control-disabled-bg);
+  color: var(--control-disabled-text);
   cursor: default;
 }
 
@@ -779,17 +1045,17 @@ select:focus-visible {
   align-items: center;
   gap: 7px;
   padding: 0 12px;
-  border: 1px solid #4966af;
+  border: 1px solid var(--accent-border-strong);
   border-radius: 5px;
   background: var(--accent-muted);
-  color: #c7d2ff;
+  color: var(--accent-text);
   font-size: 10px;
   font-weight: 600;
   cursor: pointer;
 }
 
 .primary-button:hover {
-  background: #213156;
+  background: var(--accent-muted-hover);
 }
 
 .drop-zone {
@@ -810,7 +1076,7 @@ select:focus-visible {
 .drop-zone:hover,
 .drop-zone.dragging {
   border-color: var(--accent);
-  background: #121a2a;
+  background: var(--accent-wash);
 }
 
 .upload-icon,
@@ -1091,7 +1357,7 @@ select:focus-visible {
 }
 
 .live-pill {
-  border-color: #28553c;
+  border-color: var(--green-border);
   background: var(--green-muted);
   color: var(--green);
 }
@@ -1212,9 +1478,9 @@ select:focus-visible {
 }
 
 .decision-buttons button.approve {
-  border-color: #4966af;
+  border-color: var(--accent-border-strong);
   background: var(--accent-muted);
-  color: #c7d2ff;
+  color: var(--accent-text);
 }
 
 .timeline {
@@ -1397,8 +1663,8 @@ select:focus-visible {
   display: grid;
   place-items: center;
   background-image:
-    linear-gradient(rgba(124, 156, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(124, 156, 255, 0.035) 1px, transparent 1px);
+    linear-gradient(var(--graph-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--graph-grid) 1px, transparent 1px);
   background-size: 24px 24px;
 }
 
@@ -1409,17 +1675,17 @@ select:focus-visible {
 }
 
 .graph-canvas line {
-  stroke: #3f4b5e;
+  stroke: var(--graph-edge);
 }
 
 .graph-canvas circle {
-  fill: #1d2a47;
-  stroke: #6688e9;
+  fill: var(--graph-node);
+  stroke: var(--graph-node-stroke);
   stroke-width: 1.5;
 }
 
 .graph-canvas text {
-  fill: #bdc6d4;
+  fill: var(--graph-label);
   font-size: 10px;
 }
 
@@ -1507,7 +1773,7 @@ select:focus-visible {
   height: 176px;
   display: grid;
   place-items: center;
-  background: #0b0d10;
+  background: var(--sandbox-bg);
   border-bottom: 1px solid var(--border);
 }
 
@@ -1529,7 +1795,7 @@ select:focus-visible {
   display: grid;
   place-items: center;
   border: 0;
-  background: rgba(11, 13, 16, 0.62);
+  background: var(--veil);
   color: var(--text);
   font-size: 11px;
   font-weight: 600;
@@ -1717,7 +1983,7 @@ select:focus-visible {
 .data-chip.on {
   border-color: var(--accent);
   background: var(--accent-muted);
-  color: #c7d2ff;
+  color: var(--accent-text);
 }
 
 .editor-input {
@@ -1752,7 +2018,7 @@ select:focus-visible {
   border: 0;
   border-radius: 7px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
   cursor: pointer;
 }
 
@@ -1943,7 +2209,7 @@ select:focus-visible {
   inset: 0;
   display: flex;
   justify-content: flex-end;
-  background: rgba(0, 0, 0, 0.62);
+  background: var(--scrim);
 }
 
 .provenance-drawer {
@@ -1999,7 +2265,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 5px;
   background: var(--surface);
-  color: #d3d8e0;
+  color: var(--text);
   font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
@@ -2028,7 +2294,7 @@ select:focus-visible {
     inset: 0;
     display: block;
     border: 0;
-    background: rgba(0, 0, 0, 0.64);
+    background: var(--scrim);
   }
 
   .mobile-close {
@@ -2085,8 +2351,16 @@ select:focus-visible {
     padding: 30px 14px 50px;
   }
 
+  .view-tabs {
+    padding: 8px 14px;
+  }
+
   .page-heading {
     align-items: flex-start;
+  }
+
+  .memory-search input {
+    width: 108px;
   }
 
   .drop-zone {
@@ -2186,9 +2460,9 @@ select:focus-visible {
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
-  border-bottom: 1px solid #6b4a1f;
-  background: #2b2113;
-  color: #f0b866;
+  border-bottom: 1px solid var(--clay);
+  background: var(--clay-muted);
+  color: var(--amber);
   font-size: 12px;
 }
 
@@ -2199,7 +2473,7 @@ select:focus-visible {
 .api-down-banner code {
   padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--tint);
   font-size: 11px;
 }
 
@@ -2208,7 +2482,7 @@ select:focus-visible {
   align-items: center;
   gap: 5px;
   padding: 4px 10px;
-  border: 1px solid #6b4a1f;
+  border: 1px solid var(--clay);
   border-radius: 6px;
   background: transparent;
   color: inherit;
@@ -2217,11 +2491,44 @@ select:focus-visible {
 }
 
 .api-down-banner button:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--tint);
+}
+
+/* ---- Memory ---- */
+
+.memory-search {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+}
+
+.memory-search:focus-within {
+  border-color: var(--accent-border-strong);
+}
+
+.memory-search input {
+  width: clamp(120px, 22vw, 210px);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.memory-page .empty-state {
+  width: min(1060px, 100%);
+  margin: 0 auto;
 }
 
 .memory-panel {
-  margin-top: 18px;
+  width: min(1060px, 100%);
+  margin: 0 auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -2239,6 +2546,11 @@ select:focus-visible {
   margin: 3px 0 0;
   color: var(--text-dim);
   font-size: 11px;
+}
+
+.memory-panel .feature-empty {
+  border: 0;
+  background: transparent;
 }
 
 .memory-list {
@@ -2284,13 +2596,13 @@ select:focus-visible {
 }
 
 .memory-kind.summary {
-  border-color: #2b3d63;
+  border-color: var(--accent-border);
   background: var(--accent-muted);
   color: var(--accent);
 }
 
 .memory-kind.preference {
-  border-color: #59451e;
+  border-color: var(--clay);
   background: var(--amber-muted);
   color: var(--amber);
 }
@@ -2403,7 +2715,7 @@ select:focus-visible {
   min-height: 420px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #0b0d10;
+  background: var(--sandbox-bg);
 }
 
 .sandbox-frame.published {
@@ -3584,7 +3896,7 @@ select:focus-visible {
   width: 100%;
   min-height: 0;
   border: 0;
-  background: #fff;
+  background: var(--preview-bg);
 }
 
 .project-preview-empty {
@@ -3907,17 +4219,17 @@ select:focus-visible {
 
 .auth-submit {
   height: 36px;
-  border: 1px solid #4966af;
+  border: 1px solid var(--accent-border-strong);
   border-radius: 7px;
   background: var(--accent-muted);
-  color: #c7d2ff;
+  color: var(--accent-text);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
 }
 
 .auth-submit:hover:not(:disabled) {
-  background: #213156;
+  background: var(--accent-muted-hover);
 }
 
 .auth-submit:disabled {

@@ -1,24 +1,7 @@
 "use client";
 
-import {
-  Activity,
-  BarChart3,
-  Blocks,
-  Braces,
-  CircleDot,
-  Database,
-  FileText,
-  KanbanSquare,
-  Library,
-  LogOut,
-  Menu,
-  MessageSquare,
-  Network,
-  Plug,
-  Plus,
-  Trash2,
-  X,
-} from "lucide-react";
+import { CircleDot, LogOut, Menu, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
@@ -33,9 +16,17 @@ import { DocumentsView } from "./views/documents";
 import { GraphView } from "./views/graph";
 import { IntegrationsView } from "./views/integrations";
 import { McpView } from "./views/mcp";
+import { MemoryView } from "./views/memory";
+import {
+  DEFAULT_GROUP_VIEW,
+  NAV_GROUPS,
+  groupForView,
+  type GroupId,
+} from "./views/navigation";
 import { ProjectsView } from "./views/projects";
-import { PAGE_TITLES, formatRelative } from "./views/shared";
+import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
 import { SourcesView } from "./views/sources";
+import { ThemeToggle } from "./theme-toggle";
 
 export function Workspace() {
   const {
@@ -139,6 +130,41 @@ export function Workspace() {
   const activeTitle =
     conversations.find((item) => item.id === activeConversation)?.title || "New conversation";
 
+  // Per-view badge numbers. A view with no count (Chat, Graph, Activity) is
+  // absent: Graph's size is a projection of Sources, so counting it in the
+  // Knowledge badge would double-count what the user actually put in.
+  const viewCounts: Partial<Record<View, number>> = {
+    sources: sources.length,
+    memory: memories.length,
+    documents: documents.length,
+    projects: projects.length,
+    boards: boards.length,
+    dashboards: dashboards.length,
+    data: dbConnections.length,
+    mcp: mcpServers.length,
+    integrations: integrations.filter((item) => item.account).length,
+  };
+
+  const activeGroup = groupForView(view);
+  // A one-view group gets no strip: a tab bar with a single tab is noise.
+  const hasTabs = activeGroup.items.length > 1;
+
+  // Where each group reopens. Tracking `view` rather than the click means an
+  // action that navigates on its own — an upload landing on Sources, the OAuth
+  // return landing on Integrations — is remembered too.
+  const [groupHome, setGroupHome] = useState<Record<GroupId, View>>(DEFAULT_GROUP_VIEW);
+  useEffect(() => {
+    const group = groupForView(view).id;
+    setGroupHome((current) =>
+      current[group] === view ? current : { ...current, [group]: view },
+    );
+  }, [view]);
+
+  function openGroup(groupId: GroupId) {
+    setView(groupHome[groupId]);
+    setSidebarOpen(false);
+  }
+
   return (
     <div className="workspace-shell">
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
@@ -158,130 +184,29 @@ export function Workspace() {
         </button>
 
         <nav className="primary-nav" aria-label="Workspace">
-          <button
-            className={view === "chat" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("chat");
-              setSidebarOpen(false);
-            }}
-          >
-            <MessageSquare size={17} />
-            Chat
-          </button>
-          <button
-            className={view === "sources" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("sources");
-              setSidebarOpen(false);
-            }}
-          >
-            <Library size={17} />
-            Sources
-            <span className="nav-count">{sources.length}</span>
-          </button>
-          <button
-            className={view === "graph" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("graph");
-              setSidebarOpen(false);
-            }}
-          >
-            <Network size={17} />
-            Graph
-            <span className="nav-count">{graph?.entities.length || 0}</span>
-          </button>
-          <button
-            className={view === "dashboards" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("dashboards");
-              setSidebarOpen(false);
-            }}
-          >
-            <BarChart3 size={17} />
-            Dashboards
-            <span className="nav-count">{dashboards.length}</span>
-          </button>
-          <button
-            className={view === "integrations" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("integrations");
-              setSidebarOpen(false);
-            }}
-          >
-            <Plug size={17} />
-            Integrations
-            <span className="nav-count">
-              {integrations.filter((item) => item.account).length}
-            </span>
-          </button>
-          <button
-            className={view === "documents" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("documents");
-              setSidebarOpen(false);
-            }}
-          >
-            <FileText size={17} />
-            Documents
-            <span className="nav-count">{documents.length}</span>
-          </button>
-          <button
-            className={view === "boards" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("boards");
-              setSidebarOpen(false);
-            }}
-          >
-            <KanbanSquare size={17} />
-            Boards
-            <span className="nav-count">{boards.length}</span>
-          </button>
-          <button
-            className={view === "data" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("data");
-              setSidebarOpen(false);
-            }}
-          >
-            <Database size={17} />
-            Databases
-            <span className="nav-count">{dbConnections.length}</span>
-          </button>
-          <button
-            className={view === "projects" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("projects");
-              setSidebarOpen(false);
-            }}
-          >
-            <Braces size={17} />
-            Projects
-            <span className="nav-count">{projects.length}</span>
-          </button>
-          <button
-            className={view === "mcp" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("mcp");
-              setSidebarOpen(false);
-            }}
-          >
-            <Blocks size={17} />
-            MCP
-            <span className="nav-count">{mcpServers.length}</span>
-          </button>
-          <button
-            className={view === "activity" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("activity");
-              setSidebarOpen(false);
-            }}
-          >
-            <Activity size={17} />
-            Activity
-            {pendingApprovals.length > 0 && (
-              <span className="approval-count">{pendingApprovals.length}</span>
-            )}
-          </button>
+          {NAV_GROUPS.map((group) => {
+            const Icon = group.icon;
+            const total = group.items.reduce(
+              (sum, item) => sum + (viewCounts[item.view] ?? 0),
+              0,
+            );
+            const counted = group.items.some((item) => viewCounts[item.view] !== undefined);
+            return (
+              <button
+                key={group.id}
+                className={activeGroup.id === group.id ? "nav-item active" : "nav-item"}
+                aria-current={activeGroup.id === group.id ? "page" : undefined}
+                onClick={() => openGroup(group.id)}
+              >
+                <Icon size={17} />
+                {group.label}
+                {counted && <span className="nav-count">{total}</span>}
+                {group.id === "activity" && pendingApprovals.length > 0 && (
+                  <span className="approval-count">{pendingApprovals.length}</span>
+                )}
+              </button>
+            );
+          })}
         </nav>
 
         <div className="thread-heading">
@@ -345,7 +270,7 @@ export function Workspace() {
         />
       )}
 
-      <main className="main-panel">
+      <main className={hasTabs ? "main-panel has-tabs" : "main-panel"}>
         <ApiHealthBanner api={api} onRecovered={loadWorkspace} />
         <header className="topbar">
           <button
@@ -356,9 +281,11 @@ export function Workspace() {
             <Menu size={19} />
           </button>
           <div className="page-context">
+            {hasTabs && <span>{activeGroup.label}</span>}
             <strong>{view === "chat" ? activeTitle : PAGE_TITLES[view]}</strong>
           </div>
           <div className="topbar-actions">
+            <ThemeToggle />
             <div
               className="agent-pill"
               title={
@@ -371,6 +298,27 @@ export function Workspace() {
             </div>
           </div>
         </header>
+
+        {hasTabs && (
+          <nav className="view-tabs" aria-label={`${activeGroup.label} views`}>
+            {activeGroup.items.map((item) => {
+              const Icon = item.icon;
+              const count = viewCounts[item.view];
+              return (
+                <button
+                  key={item.view}
+                  className={view === item.view ? "view-tab active" : "view-tab"}
+                  aria-current={view === item.view ? "page" : undefined}
+                  onClick={() => setView(item.view)}
+                >
+                  <Icon size={14} />
+                  {item.label}
+                  {count !== undefined && <span className="tab-count">{count}</span>}
+                </button>
+              );
+            })}
+          </nav>
+        )}
 
         {error && (
           <div className="error-toast" role="alert">
@@ -413,14 +361,12 @@ export function Workspace() {
           />
         )}
 
+        {view === "memory" && (
+          <MemoryView memories={memories} forgetMemory={forgetMemory} />
+        )}
+
         {view === "graph" && (
-          <GraphView
-            graph={graph}
-            memories={memories}
-            rebuild={rebuildKnowledgeGraph}
-            openChunk={openChunk}
-            forgetMemory={forgetMemory}
-          />
+          <GraphView graph={graph} rebuild={rebuildKnowledgeGraph} openChunk={openChunk} />
         )}
 
         {view === "dashboards" && (

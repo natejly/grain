@@ -46,7 +46,7 @@ export function ResetRoute() {
   return (
     <div className="auth-shell">
       <div className="auth-stage">
-        <div className="auth-brand">Fieldnote</div>
+        <div className="auth-brand">Jasmine</div>
         <div className="auth-card">
           {done ? (
             <>
