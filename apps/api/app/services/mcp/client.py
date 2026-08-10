@@ -16,10 +16,11 @@ from __future__ import annotations
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -29,9 +30,23 @@ MAX_RESULT_CHARS = 8000
 
 T = TypeVar("T")
 
+# Called with force_refresh; returns this user's bearer token or None when they
+# have never connected. `services/mcp/oauth.token_provider` builds one. Kept as
+# a bare callable so this layer stays free of sessions and rows.
+TokenProvider = Callable[[bool], Optional[str]]
+
 
 class McpError(RuntimeError):
     """Any failure talking to an MCP server, safe to show the user."""
+
+
+class McpAuthRequired(McpError):
+    """The server refused us and no token can be obtained without the user.
+
+    Distinct from McpError because the remedy is a Connect button, not a retry:
+    a server behind OAuth that the user has not authorized must not read as
+    "unreachable", which is what it looked like before this existed.
+    """
 
 
 @dataclass(frozen=True)
@@ -100,8 +115,74 @@ async def _with_session(
     raise McpError(f"Unsupported transport “{config.transport}”")
 
 
+def _is_unauthorized(exc: BaseException, depth: int = 0) -> bool:
+    """Did this failure come back as a 401?
+
+    The SDK runs the HTTP transport inside an anyio task group, so a 401 does
+    not arrive as a bare httpx.HTTPStatusError: it arrives wrapped in an
+    ExceptionGroup, or re-raised with the original hanging off __cause__. The
+    walk is bounded because a cycle through __context__ is possible and this
+    runs on the failure path of every tool call.
+    """
+    if depth > 8:
+        return False
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 401
+    # Duck-typed rather than `isinstance(exc, BaseExceptionGroup)` so it also
+    # matches the `exceptiongroup` backport anyio raises on older interpreters.
+    members = getattr(exc, "exceptions", None)
+    if isinstance(members, (tuple, list)):
+        return any(
+            isinstance(inner, BaseException) and _is_unauthorized(inner, depth + 1)
+            for inner in members
+        )
+    for nested in (exc.__cause__, exc.__context__):
+        if nested is not None and _is_unauthorized(nested, depth + 1):
+            return True
+    return False
+
+
+def _authorized(config: ServerConfig, token: Optional[str]) -> ServerConfig:
+    if not token:
+        return config
+    return replace(config, headers={**config.headers, "Authorization": f"Bearer {token}"})
+
+
+def _run(
+    config: ServerConfig,
+    timeout: float,
+    action: Callable[[ClientSession], Awaitable[T]],
+    tokens: Optional[TokenProvider],
+) -> T:
+    """One attempt, then at most one more with a freshly acquired token.
+
+    Exactly one retry: a server that answers 401 to a token the authorization
+    server just minted is misconfigured, and looping would turn that into a
+    stall on the interactive path.
+    """
+    token = tokens(False) if tokens is not None else None
+    try:
+        return _run_sync(
+            lambda: _with_session(_authorized(config, token), timeout, action), timeout
+        )
+    except Exception as exc:
+        if tokens is None or config.transport != "http" or not _is_unauthorized(exc):
+            raise
+        retry_token = tokens(True)
+        if not retry_token:
+            raise McpAuthRequired(
+                "This server needs you to connect an account before it can be used"
+            ) from exc
+    return _run_sync(
+        lambda: _with_session(_authorized(config, retry_token), timeout, action), timeout
+    )
+
+
 def list_tools(
-    config: ServerConfig, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
+    config: ServerConfig,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    tokens: Optional[TokenProvider] = None,
 ) -> List[McpToolInfo]:
     """Connect, initialize, and enumerate the server's tools."""
 
@@ -117,7 +198,7 @@ def list_tools(
         ]
 
     try:
-        return _run_sync(lambda: _with_session(config, timeout, action), timeout)
+        return _run(config, timeout, action, tokens)
     except McpError:
         raise
     except Exception as exc:
@@ -130,6 +211,7 @@ def call_tool(
     arguments: Dict[str, Any],
     *,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    tokens: Optional[TokenProvider] = None,
 ) -> str:
     """Invoke one tool and render its content blocks as bounded text."""
 
@@ -141,7 +223,7 @@ def call_tool(
         return text
 
     try:
-        return _run_sync(lambda: _with_session(config, timeout, action), timeout)
+        return _run(config, timeout, action, tokens)
     except McpError:
         raise
     except Exception as exc:

@@ -2,25 +2,50 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
+from ..config import Settings, get_settings
 from ..database import get_db
-from ..models import McpServer, McpTool
-from ..schemas import McpServerOut, McpServerRequest, McpToolOut
+from ..models import McpOAuthClient, McpOAuthToken, McpServer, McpTool, OAuthState
+from ..schemas import ApiModel, McpServerOut, McpServerRequest, McpToolOut
 from ..services.audit import record_audit
 from ..services.crypto import EncryptionNotConfiguredError
-from ..services.mcp import McpError, pack_secrets, refresh_server_tools
+from ..services.mcp import (
+    McpAuthRequired,
+    McpError,
+    McpOAuthError,
+    pack_secrets,
+    refresh_server_tools,
+)
+from ..services.mcp import oauth as mcp_oauth
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
 # Server names namespace the tools the model sees (mcp__<name>__<tool>), so they
 # must not contain the separator or anything the model API rejects in a name.
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$")
+
+
+class McpAuthStatusOut(ApiModel):
+    """Everything the Connect button needs and nothing a token could leak."""
+
+    server_id: str
+    required: bool
+    connected: bool
+    issuer: str
+    scopes: str
+    expires_in_seconds: Optional[int]
+
+
+class McpConnectOut(BaseModel):
+    authorize_url: str
 
 
 def _server_out(server: McpServer, tools: List[McpTool]) -> McpServerOut:
@@ -164,8 +189,16 @@ def refresh_server(
     """Connect, re-enumerate tools, and record whether the server is reachable."""
     server = _load(db, actor, server_id)
     try:
-        tools = refresh_server_tools(db, server)
-    except (McpError, EncryptionNotConfiguredError) as exc:
+        # The user id is what makes a remote server use *this* caller's token
+        # rather than whichever workspace member connected it first.
+        tools = refresh_server_tools(db, server, user_id=actor.user_id)
+    except McpAuthRequired as exc:
+        # Not an error state: the row is fine and the user simply has to
+        # consent, so the status the UI sees is the one that offers Connect.
+        return _error_out(
+            server, _tools_for(db, server.id), str(exc), status="needs_auth"
+        )
+    except (McpError, McpOAuthError, EncryptionNotConfiguredError) as exc:
         # An unreachable server is an expected state, not a 500 — return the row
         # with its error so the UI can show the reason inline.
         return _error_out(server, _tools_for(db, server.id), str(exc))
@@ -183,10 +216,13 @@ def refresh_server(
 
 
 def _error_out(
-    server: McpServer, tools: List[McpTool], message: str
+    server: McpServer,
+    tools: List[McpTool],
+    message: str,
+    status: str = "error",
 ) -> McpServerOut:
     out = _server_out(server, tools)
-    return out.model_copy(update={"status": "error", "last_error": message[:1000]})
+    return out.model_copy(update={"status": status, "last_error": message[:1000]})
 
 
 @router.patch("/servers/{server_id}", response_model=McpServerOut)
@@ -235,6 +271,12 @@ def delete_server(
     server = _load(db, actor, server_id)
     for tool in _tools_for(db, server.id):
         db.delete(tool)
+    # Every user's tokens and this deployment's registration reference the
+    # server row; leaving them behind would both violate the foreign key and
+    # keep decryptable credentials for a server nobody can see any more.
+    db.execute(delete(McpOAuthToken).where(McpOAuthToken.server_id == server.id))
+    db.execute(delete(McpOAuthClient).where(McpOAuthClient.server_id == server.id))
+    db.execute(delete(OAuthState).where(OAuthState.server_id == server.id))
     db.delete(server)
     record_audit(
         db,
@@ -246,3 +288,151 @@ def delete_server(
         detail={"name": server.name},
     )
     db.commit()
+
+
+# --------------------------------------------------------------------------
+# OAuth 2.1, mirroring the connector routes in api/integrations.py.
+#
+# The one deliberate difference is the shape of the identity: a connector is
+# connected once for a workspace, while an MCP server authorizes a *person*, so
+# every route below is scoped by actor.user_id as well as workspace, and the
+# callback restores the user from the state row rather than from a cookie.
+
+
+@router.get("/servers/{server_id}/auth", response_model=McpAuthStatusOut)
+def server_auth_status(
+    server_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> McpAuthStatusOut:
+    server = _load(db, actor, server_id)
+    status = mcp_oauth.auth_status(db, server, actor.user_id)
+    return McpAuthStatusOut(
+        server_id=server.id,
+        required=status.required,
+        connected=status.connected,
+        issuer=status.issuer,
+        scopes=status.scopes,
+        expires_in_seconds=status.expires_in_seconds,
+    )
+
+
+@router.post("/servers/{server_id}/connect", response_model=McpConnectOut)
+def connect_server(
+    server_id: str,
+    actor: Actor = Depends(get_actor),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> McpConnectOut:
+    """Discover, register, and hand back the URL to send the browser to.
+
+    This is the only route that dials the network on the user's behalf, so a
+    failure here is a 400 with the discovery error verbatim — those messages are
+    written to be legible and are guaranteed to carry no URL or credential.
+    """
+    server = _load(db, actor, server_id)
+    try:
+        authorize_url = mcp_oauth.begin_authorization(
+            db, server, actor.user_id, settings
+        )
+    except (McpOAuthError, EncryptionNotConfiguredError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="mcp_server.auth_started",
+        resource_type="mcp_server",
+        resource_id=server.id,
+        detail={"name": server.name},
+    )
+    db.commit()
+    return McpConnectOut(authorize_url=authorize_url)
+
+
+@router.get("/oauth/callback")
+def oauth_callback(
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Unauthenticated by design: the state row is the credential.
+
+    The browser arrives here as a top-level navigation from the authorization
+    server, so there is no session cookie to rely on. What proves the callback
+    is ours is the single-use state row, which also carries the user it belongs
+    to — reading the identity from anything the query string says would let an
+    attacker attach their account to somebody else's server.
+    """
+    web_origin = settings.allowed_web_origins[0] if settings.allowed_web_origins else ""
+    if error:
+        # Consume the state anyway so a denied consent cannot be replayed later.
+        db.execute(
+            delete(OAuthState).where(
+                OAuthState.provider == mcp_oauth.STATE_PROVIDER,
+                OAuthState.state == state,
+            )
+        )
+        db.commit()
+        return RedirectResponse(url=f"{web_origin}/?mcp_error=denied")
+    try:
+        token = mcp_oauth.complete_authorization(db, state, code, settings)
+    except (McpOAuthError, EncryptionNotConfiguredError):
+        # The reason is not put in the URL: it would be attacker-influenced text
+        # rendered by the web app, and the user can retry from the MCP view.
+        return RedirectResponse(url=f"{web_origin}/?mcp_error=failed")
+    # Scoped to the workspace the token row belongs to; there is no actor here
+    # to scope by, and a primary-key fetch would read a row this callback has no
+    # business reading if the two ever disagreed.
+    server = db.scalar(
+        select(McpServer).where(
+            McpServer.id == token.server_id,
+            McpServer.workspace_id == token.workspace_id,
+        )
+    )
+    record_audit(
+        db,
+        workspace_id=token.workspace_id,
+        actor_id=token.user_id,
+        action="mcp_server.connected",
+        resource_type="mcp_server",
+        resource_id=token.server_id,
+        detail={"name": server.name if server is not None else ""},
+    )
+    if server is not None and server.status == "needs_auth":
+        server.status = "unknown"
+        server.last_error = ""
+    db.commit()
+    return RedirectResponse(url=f"{web_origin}/?mcp_connected={token.server_id}")
+
+
+@router.post("/servers/{server_id}/disconnect", response_model=McpAuthStatusOut)
+def disconnect_server(
+    server_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> McpAuthStatusOut:
+    """Forget this caller's token. Other members of the workspace keep theirs."""
+    server = _load(db, actor, server_id)
+    if mcp_oauth.disconnect(db, server, actor.user_id):
+        record_audit(
+            db,
+            workspace_id=actor.workspace_id,
+            actor_id=actor.user_id,
+            action="mcp_server.disconnected",
+            resource_type="mcp_server",
+            resource_id=server.id,
+            detail={"name": server.name},
+        )
+        db.commit()
+    status = mcp_oauth.auth_status(db, server, actor.user_id)
+    return McpAuthStatusOut(
+        server_id=server.id,
+        required=status.required,
+        connected=status.connected,
+        issuer=status.issuer,
+        scopes=status.scopes,
+        expires_in_seconds=status.expires_in_seconds,
+    )

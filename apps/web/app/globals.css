@@ -3436,7 +3436,8 @@ select:focus-visible {
   line-height: 1.7;
 }
 
-.document-preview .katex-display {
+.document-preview .katex-display,
+.message-body .katex-display {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 4px 0;

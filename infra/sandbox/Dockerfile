@@ -15,26 +15,32 @@ FROM python:3.12-slim-bookworm
 # Build-time only. The wheels below are manylinux, but a source build of one
 # transitive dependency should not take the whole image down, and the compiler
 # is removed in the same layer so it never reaches the runtime filesystem.
+# Every pin below was resolved against the package index and then built, rather
+# than written from memory. The first draft of this file pinned openpyxl==3.1.6,
+# a version that has never existed, and the build failed on it — which is the
+# cheap version of that mistake. The expensive version is a pin that resolves
+# today and vanishes later, so when these are bumped, bump them by querying the
+# index and rebuilding, not by editing the number.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && pip install --no-cache-dir \
-        numpy==2.3.4 \
-        pandas==2.3.3 \
-        matplotlib==3.10.7 \
-        scipy==1.16.3 \
-        scikit-learn==1.7.2 \
+        numpy==2.5.2 \
+        pandas==3.0.5 \
+        matplotlib==3.11.1 \
+        scipy==1.18.0 \
+        scikit-learn==1.9.0 \
         statsmodels==0.14.6 \
         sympy==1.14.0 \
-        pyarrow==22.0.0 \
-        openpyxl==3.1.6 \
+        pyarrow==25.0.1 \
+        openpyxl==3.1.5 \
         xlsxwriter==3.2.9 \
-        Pillow==12.0.0 \
+        Pillow==12.3.0 \
         python-dateutil==2.9.0.post0 \
-        pytz==2025.2 \
-        requests==2.32.5 \
-        beautifulsoup4==4.14.2 \
-        lxml==6.0.2 \
-        tabulate==0.9.0 \
+        pytz==2026.3.post1 \
+        requests==2.34.2 \
+        beautifulsoup4==4.15.0 \
+        lxml==6.1.1 \
+        tabulate==0.10.0 \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/*
 

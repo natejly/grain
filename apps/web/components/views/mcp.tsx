@@ -1,8 +1,9 @@
 "use client";
 
-import { Check, Plug, Plus, RefreshCw, Trash2, X } from "lucide-react";
-import type { McpServer, McpServerInput } from "@workspace/api-client";
-import { FormEvent, useState } from "react";
+import { Check, KeyRound, Plug, Plus, RefreshCw, Trash2, Unlink, X } from "lucide-react";
+import type { McpAuthStatus, McpServer, McpServerInput } from "@workspace/api-client";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { api } from "../api";
 
 export type McpViewProps = {
   servers: McpServer[];
@@ -12,6 +13,59 @@ export type McpViewProps = {
   setToolEnabled: (toolId: string, enabled: boolean) => Promise<void>;
   removeServer: (server: McpServer) => Promise<void>;
 };
+
+/**
+ * Auth state for every remote server, owned here rather than by the workspace
+ * hook.
+ *
+ * It is per user and it changes underneath the page — the browser leaves for
+ * the authorization server and comes back — so it has to be re-read when this
+ * view mounts. Folding it into the workspace bootstrap would make every page
+ * load pay for it and would still be stale on return from consent.
+ */
+function useMcpAuth(servers: McpServer[]) {
+  const [statuses, setStatuses] = useState<Record<string, McpAuthStatus>>({});
+  const remoteIds = servers
+    .filter((server) => server.transport === "http")
+    .map((server) => server.id)
+    .join(",");
+
+  const reload = useCallback(async () => {
+    const ids = remoteIds ? remoteIds.split(",") : [];
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          return await api.getMcpAuthStatus(id);
+        } catch {
+          // A status we cannot read must not blank the page; the server card
+          // simply shows no auth pill.
+          return null;
+        }
+      }),
+    );
+    const next: Record<string, McpAuthStatus> = {};
+    for (const status of results) if (status) next[status.server_id] = status;
+    setStatuses(next);
+  }, [remoteIds]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  useEffect(() => {
+    // The callback lands on "/?mcp_connected=<id>". Strip it once read, so a
+    // refresh or a shared link does not look like a fresh connection.
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("mcp_connected") && !params.has("mcp_error")) return;
+    params.delete("mcp_connected");
+    params.delete("mcp_error");
+    const query = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (query ? `?${query}` : ""));
+    void reload();
+  }, [reload]);
+
+  return { statuses, reload };
+}
 
 /** Parse "KEY=value" lines into the secrets map the API expects. */
 function parseSecrets(raw: string): Record<string, string> {
@@ -144,6 +198,79 @@ function AddServerForm({
   );
 }
 
+/**
+ * The auth control for one remote server.
+ *
+ * Deliberately not a generic "settings" affordance: a server that needs OAuth
+ * and has not got it is not broken, and the only useful thing to show is the
+ * one button that fixes it.
+ */
+function AuthControls({
+  server,
+  status,
+  onChanged,
+  setError,
+}: {
+  server: McpServer;
+  status: McpAuthStatus | undefined;
+  onChanged: () => Promise<void>;
+  setError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const needsAuth = server.status === "needs_auth";
+  if (server.transport !== "http") return null;
+  if (!status || (!status.required && !needsAuth)) return null;
+
+  async function connect() {
+    setBusy(true);
+    try {
+      const { authorize_url } = await api.connectMcpServer(server.id);
+      // A full-page navigation, not a popup: the user must be able to read the
+      // address bar and see whose consent screen they are on.
+      window.location.href = authorize_url;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not start authorization");
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    try {
+      await api.disconnectMcpServer(server.id);
+      await onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Composed from the card's existing classes rather than new ones: this row
+  // sits inside the same card and should not look like a different component.
+  if (status.connected) {
+    return (
+      <div className="mcp-card-meta">
+        <span className="status-pill ready">Account connected</span>
+        {status.issuer}
+        <button className="ghost-button" onClick={() => void disconnect()} disabled={busy}>
+          <Unlink size={14} /> Disconnect
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mcp-card-meta">
+      <span className="status-pill">Sign-in required</span>
+      <button className="primary-button" onClick={() => void connect()} disabled={busy}>
+        <KeyRound size={14} /> {busy ? "Starting…" : "Connect"}
+      </button>
+      <span className="field-hint">
+        This server signs each person in separately, so connecting your account
+        does not give the rest of the workspace access to it.
+      </span>
+    </div>
+  );
+}
+
 export function McpView({
   servers,
   addServer,
@@ -154,11 +281,14 @@ export function McpView({
 }: McpViewProps) {
   const [adding, setAdding] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [authError, setAuthError] = useState("");
+  const { statuses, reload } = useMcpAuth(servers);
 
   async function refresh(serverId: string) {
     setRefreshing(serverId);
     try {
       await refreshServer(serverId);
+      await reload();
     } finally {
       setRefreshing(null);
     }
@@ -174,6 +304,8 @@ export function McpView({
           </button>
         )}
       </div>
+
+      {authError && <div className="mcp-error">{authError}</div>}
 
       {adding && (
         <AddServerForm
@@ -233,7 +365,18 @@ export function McpView({
                 {server.has_secrets && <span className="secret-pill">secrets stored</span>}
               </div>
 
-              {server.last_error && <div className="mcp-error">{server.last_error}</div>}
+              <AuthControls
+                server={server}
+                status={statuses[server.id]}
+                onChanged={reload}
+                setError={setAuthError}
+              />
+
+              {/* A server waiting for consent is not in an error state, and
+                  repeating the 401 under the Connect button reads as one. */}
+              {server.last_error && server.status !== "needs_auth" && (
+                <div className="mcp-error">{server.last_error}</div>
+              )}
 
               {server.tools.length > 0 ? (
                 <ul className="mcp-tools">

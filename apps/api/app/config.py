@@ -49,6 +49,27 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_codegen_max_output_tokens: int = 16000
 
+    # --- Web search --------------------------------------------------------
+    # OpenAI's hosted web_search tool, which runs on the provider side and comes
+    # back with url_citation annotations. Those annotations go through the same
+    # citation validator as retrieval evidence rather than around it: a product
+    # whose central claim is an enforced citation contract cannot have one class
+    # of source that is exempt from it.
+    web_search_enabled: bool = True
+    web_search_max_results: int = 8
+    # "low" trades recall for latency. Search is on the interactive path and the
+    # stated constraint is that spend is fine and latency is not.
+    web_search_context_size: Literal["low", "medium", "high"] = "medium"
+
+    # --- MCP authentication ------------------------------------------------
+    # Remote MCP servers authenticate with OAuth 2.1 + dynamic client
+    # registration, so there is no per-server configuration to put here — the
+    # client discovers and registers itself. This only bounds it.
+    mcp_oauth_enabled: bool = True
+    # Refresh this far before expiry rather than on a 401, so a long agent turn
+    # does not fail its ninth tool call on a token that expired mid-run.
+    mcp_token_refresh_leeway_seconds: int = 120
+
     # --- Sandbox (server-side execution, ADR 0005) -------------------------
     # Execution runs in per-session microVMs at a provider, never on this host.
     # SANDBOX_PROVIDER=fake is the in-process test double; it executes nothing

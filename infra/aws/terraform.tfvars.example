@@ -1,0 +1,45 @@
+// Copy to terraform.tfvars and fill in. Nothing secret belongs in this file:
+// OPENAI_API_KEY, the Fernet integrations key and the Google client secret are
+// written straight into Secrets Manager (see secrets.tf).
+
+aws_region = "us-east-1"
+project    = "fieldnote"
+
+// Must be covered by acm_certificate_arn, and must match the Google OAuth
+// console redirect entry character for character.
+api_domain = "api.example.com"
+
+// Where the Next.js app is served from. https is enforced by a variable
+// validation: the session cookie is SameSite=None, which browsers only honour
+// alongside Secure.
+web_origin = "https://app.example.com"
+
+acm_certificate_arn = "arn:aws:acm:us-east-1:111122223333:certificate/REPLACE"
+
+// Immutable tags. A deploy is a new tag; a rollback is an older tag.
+api_image_tag     = "2026-08-10-abc1234"
+sandbox_image_tag = "2026-08-10-abc1234"
+
+// arm64 by default. Switch both of these together if you build x86_64 images:
+//   instance_type         = "m7i.large"
+//   ecs_ami_ssm_parameter = "/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id"
+instance_type = "m7g.large"
+
+// Public sign-in client id. Not a secret. Leave empty to run password-only.
+google_login_client_id = ""
+
+alarm_email = "ops@example.com"
+
+// Optional CI deploy role.
+// enable_github_oidc = true
+// github_repo        = "yourorg/dashbored"
+
+// Anything else on Settings that you want to override, upper-cased field name
+// to value. These are visible to anyone who can DescribeTaskDefinition.
+extra_environment = {
+  # EMAIL_SENDER          = "smtp"
+  # EMAIL_FROM            = "no-reply@example.com"
+  # SMTP_HOST             = "email-smtp.us-east-1.amazonaws.com"
+  # RETRIEVAL_CONTEXTUAL  = "0"
+  # WEB_SEARCH_ENABLED    = "1"
+}

@@ -133,6 +133,86 @@ dataframe to a URL.
 Nothing in this repository makes `open` safe. It is an opt-in for a workspace
 that has decided the trade is worth it, with a named reason.
 
+## Authenticating to third-party MCP servers (ADR 0006)
+
+This adds two things the rest of the system did not have: a **user-supplied URL
+that reaches an HTTP client on the server**, and **credentials for other
+people's third-party accounts at rest in our database**. Both change what an
+attacker gets, so both are stated plainly.
+
+### A URL a user typed is now fetched by us
+
+Adding an MCP server means giving us a URL. Discovery then follows that URL
+through a chain of documents the same party controls — the `WWW-Authenticate`
+challenge, RFC 9728 protected-resource metadata, RFC 8414 authorization-server
+metadata — and each names the next address we fetch. Every one of those hops is
+attacker-chosen input to an outbound request.
+
+The control is that `_validate_destination` runs on **every** hop: the
+initialize probe, both metadata documents, the registration endpoint and the
+token endpoint. It delegates to the same `validate_public_https_url` the tool
+layer uses, and relaxes exactly one thing — the `TOOL_HOST_ALLOWLIST` — because
+arbitrary remote servers are the feature. HTTPS-only, DNS resolution, and
+refusal of private, loopback, link-local, multicast, reserved and unspecified
+addresses all remain, so `169.254.169.254` and `10.0.0.0/8` are still refused.
+Redirects are not followed: a 302 is a second attacker-chosen URL arriving after
+the check. Metadata documents are read with a streamed byte cap, so a server
+that answers with an endless body is refused while it is being read rather than
+after it is in memory.
+
+The `authorization_endpoint` gets the same guard even though we never fetch it,
+because the web app assigns it to `location.href`. There it is not SSRF but XSS
+in our own origin: a metadata document is free to answer `javascript:…//`, and
+everything the flow appends after that is a comment.
+
+**Residual, and not closed:** DNS rebinding. The guard resolves and validates,
+then httpx resolves again when it connects. A name answering with TTL 0,
+alternating a public address and `169.254.169.254`, can pass the check and be
+connected to. In `services/tools.py` the host allowlist contains this — you must
+already own an allowlisted host. Relaxing the allowlist here removes exactly
+that containment, so this is a real widening and not merely an inherited gap.
+Closing it needs a transport pinned to the validated address.
+
+### Tokens for other people's accounts are now at rest
+
+A database compromise previously yielded workspace content. It now also yields
+whatever those tokens reach — a user's Linear issues, Slack messages, GitHub
+repositories — at the third party, outside anything we can revoke.
+
+- Access tokens, refresh tokens, client secrets and RFC 7592 registration
+  tokens are Fernet-encrypted through `services/crypto.py`, gated on
+  `integrations_ready`. `resource`, `scopes` and `issuer` are plaintext and
+  none is a credential.
+- The PKCE verifier is encrypted and never leaves the server. PKCE's whole
+  guarantee is that intercepting the code is not enough to redeem it, which
+  evaporates if the verifier round-trips through the browser.
+- Tokens are keyed `(server_id, user_id)`, so a workspace colleague cannot
+  reach another member's credential through any route, and the agent uses the
+  token of whoever typed the prompt (`run.created_by`).
+- No route, log line, audit detail or error message carries a code, verifier or
+  token. The callback redirect carries only `mcp_connected=<server_id>`.
+- A refresh the authorization server refuses clears the stored token material
+  rather than only flagging it, so a revoked grant stops being held at all.
+
+**Residual:** disconnecting is local. No `revocation_endpoint` is called, so a
+token stays live at the provider until it expires. And an MCP server we send a
+bearer token to is, by construction, a third party receiving a credential —
+scoped to itself by RFC 8707 resource indicators on both legs of the flow, but
+still a party that must be trusted with what that scope covers.
+
+### Confused-deputy attacks between authorization servers
+
+The remote server chooses which authorization server we talk to, and can change
+its mind between the two halves of a flow. Three bindings answer this, all
+recorded in ADR 0006: the requested `resource` is always the URL we know rather
+than the one the server's document claimed; an authorization-server metadata
+document is discarded unless its `issuer` matches the one the well-known URL was
+built from; and `oauth_states.issuer` pins each in-flight authorization to the
+registration that started it, so a server that rotates its issuer mid-flow
+cannot collect a victim's authorization code and PKCE verifier. PKCE downgrade
+is refused rather than negotiated — for a public client the code is the only
+credential in the exchange.
+
 ## Known MVP limitations
 
 - Production OIDC, encrypted connector credentials, and row-level security

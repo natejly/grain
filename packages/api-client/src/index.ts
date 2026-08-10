@@ -301,6 +301,23 @@ export type McpServer = {
   created_at: string;
 };
 
+/**
+ * Whether *this* user has authorised a remote MCP server.
+ *
+ * Per user rather than per workspace, deliberately: an MCP server authorises a
+ * person, so two people sharing a workspace each connect their own account and
+ * neither can see the other's. Carries no token, and never will.
+ */
+export type McpAuthStatus = {
+  server_id: string;
+  /** The server sits behind OAuth, so tools do nothing until it is connected. */
+  required: boolean;
+  connected: boolean;
+  issuer: string;
+  scopes: string;
+  expires_in_seconds: number | null;
+};
+
 export type McpServerInput = {
   name: string;
   transport: "stdio" | "http";
@@ -1241,6 +1258,27 @@ export class WorkspaceApi {
 
   deleteMcpServer(serverId: string): Promise<void> {
     return this.request(`/api/mcp/servers/${serverId}`, { method: "DELETE" }, true);
+  }
+
+  getMcpAuthStatus(serverId: string): Promise<McpAuthStatus> {
+    return this.request(`/api/mcp/servers/${serverId}/auth`);
+  }
+
+  /**
+   * Discover, register, and get the URL to send the browser to.
+   *
+   * The caller navigates to `authorize_url`; it must not be opened in a hidden
+   * frame, because the user has to see which authorization server they are
+   * granting access at. The API keeps the PKCE verifier, so nothing secret is
+   * in the URL this returns.
+   */
+  connectMcpServer(serverId: string): Promise<{ authorize_url: string }> {
+    return this.request(`/api/mcp/servers/${serverId}/connect`, { method: "POST" });
+  }
+
+  /** Forget this user's token. Other members of the workspace keep theirs. */
+  disconnectMcpServer(serverId: string): Promise<McpAuthStatus> {
+    return this.request(`/api/mcp/servers/${serverId}/disconnect`, { method: "POST" });
   }
 
   listAuditEvents(): Promise<AuditEvent[]> {

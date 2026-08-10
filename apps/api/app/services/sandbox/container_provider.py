@@ -31,11 +31,13 @@ silently widening egress is precisely the bug that would matter.
 """
 from __future__ import annotations
 
+import os
 import shlex
+import shutil
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import List, Mapping, Sequence
+from typing import Dict, List, Mapping, Sequence
 
 from . import local_exec
 from .types import (
@@ -49,6 +51,18 @@ from .types import (
 
 #: Where the session directory appears inside the container.
 MOUNT = "/workspace"
+
+#: The uid/gid the container runs as. `nobody`, present in every base image.
+SANDBOX_USER = "65534:65534"
+
+#: Mode for the session directory on the *host*. A bind mount carries host
+#: ownership into the container, and the API process is not uid 65534 (nor
+#: necessarily root, so chown is not available), which leaves widening the mode
+#: as the only portable way to let the sandbox write its own workspace. The
+#: exposure is to other local users on the API host, who are already able to
+#: reach the Docker socket this driver drives — root-equivalent — so this grants
+#: nothing that was not already there.
+SESSION_MODE = 0o777
 
 
 class ContainerProvider(local_exec.LocalProvider):
@@ -67,7 +81,11 @@ class ContainerProvider(local_exec.LocalProvider):
     ) -> None:
         super().__init__(workdir=workdir, env=env)
         self._image = image
-        self._docker = docker_binary
+        # Resolved against the parent's PATH once, here, so every later exec
+        # names an absolute binary. Falling back to the bare name keeps the
+        # error legible ("runtime not found: docker") instead of turning a
+        # missing Docker into a confusing None.
+        self._docker = shutil.which(docker_binary) or docker_binary
         self._memory_mb = memory_mb
         self._cpus = cpus
         self._pids = pids_limit
@@ -83,14 +101,47 @@ class ContainerProvider(local_exec.LocalProvider):
         # that gets reported as "the sandbox is broken" with no further detail.
         self._preflight()
         external_id = f"box-{uuid.uuid4().hex[:16]}"
-        local_exec.ensure_session_root(self._workdir, external_id)
+        local_exec.ensure_session_root(self._workdir, external_id, mode=SESSION_MODE)
         return SandboxHandle(provider=self.name, external_id=external_id)
+
+    def _cli_env(self) -> Dict[str, str]:
+        """Environment for the **docker CLI**, which is not the sandbox's.
+
+        Worth being unambiguous about, because it looks like the thing this
+        subsystem spends its time refusing to do: the sandbox's environment is
+        built by `policy.sandbox_env` and travels via `-e`, and nothing here
+        reaches generated code. This dict configures the client that launches
+        the container.
+
+        It has to pass through the caller's Docker configuration, and both
+        halves were learned by getting them wrong. A hardcoded
+        `/usr/local/bin:/usr/bin:/bin` cannot see Homebrew's `/opt/homebrew/bin`,
+        so every command failed with "runtime not found" on an arm64 Mac. And
+        forcing `HOME=/tmp` hides `~/.docker/config.json`, which is where the
+        active context lives — so Colima, Rancher, or any rootless setup that
+        selects a non-default socket silently falls back to
+        `/var/run/docker.sock` and fails to connect.
+        """
+        env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
+        for key in (
+            "HOME",
+            "DOCKER_HOST",
+            "DOCKER_CONTEXT",
+            "DOCKER_CONFIG",
+            "DOCKER_CERT_PATH",
+            "DOCKER_TLS_VERIFY",
+            "XDG_RUNTIME_DIR",
+        ):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+        return env
 
     def _preflight(self) -> None:
         probe = local_exec.run_process(
             [self._docker, "image", "inspect", self._image],
             cwd=self._workdir,
-            env={"PATH": "/usr/local/bin:/usr/bin:/bin"},
+            env=self._cli_env(),
             timeout=30.0,
         )
         if probe.exit_code != 0:
@@ -112,7 +163,9 @@ class ContainerProvider(local_exec.LocalProvider):
             return self.run_command(handle, code, timeout=timeout, on_output=on_output)
         if language != "python":
             raise SandboxError(f"the {self.name} driver runs python, not {language}")
-        root = local_exec.ensure_session_root(self._workdir, handle.external_id)
+        root = local_exec.ensure_session_root(
+            self._workdir, handle.external_id, mode=SESSION_MODE
+        )
         # Written to the bind mount rather than passed as `python -c`, so the
         # code is not in the process table and a traceback carries real line
         # numbers against a real file.
@@ -128,7 +181,9 @@ class ContainerProvider(local_exec.LocalProvider):
         cwd: str = "",
         on_output: OutputSink = None,
     ) -> ExecResult:
-        root = local_exec.ensure_session_root(self._workdir, handle.external_id)
+        root = local_exec.ensure_session_root(
+            self._workdir, handle.external_id, mode=SESSION_MODE
+        )
         try:
             argv = shlex.split(command)
         except ValueError as exc:
@@ -137,11 +192,18 @@ class ContainerProvider(local_exec.LocalProvider):
             raise SandboxError("empty command")
         return self._run(root, argv, timeout, on_output)
 
-    def _docker_argv(self, root: Path, inner: Sequence[str]) -> List[str]:
+    def _docker_argv(self, root: Path, inner: Sequence[str], name: str) -> List[str]:
         argv = [
             self._docker,
             "run",
             "--rm",
+            # Named so a timeout has something to kill. Killing the `docker` CLI
+            # does not stop the container: the daemon owns it, and the CLI is
+            # only a client watching it. Without this the module's "a crashed API
+            # leaks no compute" promise holds for the API but not for a run that
+            # merely overruns, which would sit there burning --cpus forever.
+            "--name",
+            name,
             "--network",
             "none",
             "--read-only",
@@ -150,7 +212,7 @@ class ContainerProvider(local_exec.LocalProvider):
             "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=256m",
             "--user",
-            "65534:65534",
+            SANDBOX_USER,
             "--cap-drop",
             "ALL",
             "--security-opt",
@@ -184,20 +246,43 @@ class ContainerProvider(local_exec.LocalProvider):
         on_output: OutputSink,
     ) -> ExecResult:
         before = local_exec.snapshot(root)
+        name = f"jasmine-{uuid.uuid4().hex[:16]}"
         result = local_exec.run_process(
-            self._docker_argv(root, inner),
+            self._docker_argv(root, inner, name),
             cwd=self._workdir,
-            # The docker CLI itself needs a PATH and nothing else. The sandbox's
-            # own environment travels via -e, so this dict is not the one
-            # generated code sees.
-            env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp"},
+            env=self._cli_env(),
             # Give docker a moment past the inner budget to tear down, so a
             # timeout is attributed to the user's code rather than to the runtime.
             timeout=timeout + 15.0,
             on_output=on_output,
         )
+        if result.error:
+            self._kill_container(name)
         artifacts, dropped = local_exec.harvest_artifacts(root, before)
         note = result.stderr
         if dropped:
             note = f"{note}\n[{dropped} more artifact(s) not returned]".strip()
         return replace(result, artifacts=artifacts, stderr=note)
+
+    def _kill_container(self, name: str) -> None:
+        """Stop a container the run did not finish with.
+
+        Best effort by design, and its failures are silent: the container has
+        usually exited on its own by the time we get here (`docker kill` then
+        reports "no such container"), and the execution already has a result to
+        return. Reporting a teardown problem as though it were the user's would
+        replace a legible "timed out" with noise about the runtime.
+
+        `_cli_env` for the same reason the run uses it: a kill sent to the
+        default socket, when the run went to a Colima or rootless context, would
+        report success against a container that is still going.
+        """
+        try:
+            local_exec.run_process(
+                [self._docker, "kill", name],
+                cwd=self._workdir,
+                env=self._cli_env(),
+                timeout=30.0,
+            )
+        except SandboxError:
+            return

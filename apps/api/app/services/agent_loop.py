@@ -21,6 +21,13 @@ from .model import (
     stream_agent_response,
 )
 from .retrieval import Evidence
+from .web_search import (
+    anchor_citations,
+    harvest,
+    revive_evidence,
+    web_numbers,
+    web_search_tool,
+)
 
 MAX_ITERATIONS = 6
 
@@ -97,7 +104,7 @@ class LoopState:
             pending_calls=data.get("pending_calls") or [],
             iteration=int(data.get("iteration") or 0),
             text_so_far=data.get("text_so_far") or "",
-            evidence=[Evidence(**item) for item in data.get("evidence") or []],
+            evidence=[revive_evidence(item) for item in data.get("evidence") or []],
         )
 
 
@@ -132,8 +139,16 @@ def _default_model_step(
     return step
 
 
-def _tool_payload(registry: Dict[str, ToolSpec]) -> List[Dict[str, Any]]:
-    return [
+def _tool_payload(
+    registry: Dict[str, ToolSpec], settings: Settings
+) -> List[Dict[str, Any]]:
+    """The `tools` array for one request: local functions, then hosted tools.
+
+    A hosted tool has no ToolSpec because there is nothing here to execute and
+    nothing to approve — the provider runs it — so it joins the wire payload
+    without joining the registry the policy and approval paths consult.
+    """
+    payload: List[Dict[str, Any]] = [
         {
             "type": "function",
             "name": spec.name,
@@ -142,6 +157,10 @@ def _tool_payload(registry: Dict[str, ToolSpec]) -> List[Dict[str, Any]]:
         }
         for spec in registry.values()
     ]
+    hosted = web_search_tool(settings)
+    if hosted is not None:
+        payload.append(hosted)
+    return payload
 
 
 def _serialize_item(item: Any) -> Any:
@@ -409,6 +428,44 @@ def _drain_pending(
     return None
 
 
+def _apply_web_search(
+    db: Session,
+    run: Run,
+    state: LoopState,
+    *,
+    response: Any,
+    text: str,
+    settings: Settings,
+) -> str:
+    """Fold this step's hosted-search results into the turn; return its answer text.
+
+    Everything happens inside the step that produced it. The sources join
+    `state.evidence`, so `_finish_run` validates and reports them with the same
+    call that handles retrieved passages; the `[n]` markers go into the text
+    before it is ever treated as an answer, so the validator sees the same string
+    the user will; and the trail event is written now — long before
+    `run.completed`, which stream consumers stop reading at.
+    """
+    outcome = harvest(
+        response,
+        text,
+        settings=settings,
+        evidence_offset=len(state.evidence),
+        known=web_numbers(state.evidence),
+    )
+    state.evidence.extend(outcome.evidence)
+    if outcome.happened:
+        append_event(
+            db,
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            event_type="web_search.completed",
+            payload=outcome.event_payload(),
+        )
+        db.commit()
+    return anchor_citations(text, outcome.anchors)
+
+
 def _advance(
     db: Session,
     run: Run,
@@ -417,8 +474,9 @@ def _advance(
     registry: Dict[str, ToolSpec],
     context: ToolContext,
     step: ModelStep,
+    settings: Settings,
 ) -> Outcome:
-    tools = _tool_payload(registry)
+    tools = _tool_payload(registry, settings)
     while True:
         blocked = _drain_pending(db, run, state, registry=registry, context=context)
         if blocked is not None:
@@ -440,10 +498,12 @@ def _advance(
             elif kind == "completed":
                 response = value
         buffer.flush()
-        state.text_so_far += buffer.text
         state.iteration += 1
         if response is None:
             raise RuntimeError("Model stream ended without a completed response")
+        state.text_so_far += _apply_web_search(
+            db, run, state, response=response, text=buffer.text, settings=settings
+        )
 
         calls = [
             item
@@ -510,6 +570,7 @@ def run_agent_turn(
         registry=registry,
         context=context,
         step=model_step or _default_model_step(settings, run, list(evidence)),
+        settings=settings,
     )
     return _finish(db, run, outcome)
 
@@ -555,5 +616,6 @@ def resume_agent_turn(
         registry=registry,
         context=context,
         step=model_step or _default_model_step(settings, run, state.evidence),
+        settings=settings,
     )
     return _finish(db, run, outcome)

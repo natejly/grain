@@ -12,7 +12,9 @@
           }
         }
       },
-      { "text": "Drafted the Launch Runbook with three steps." }
+      {
+        "text": "Drafted the Launch Runbook with three steps."
+      }
     ]
   },
   {
@@ -31,7 +33,7 @@
       },
       {
         "text": "Tightened step two of the Launch Runbook.",
-        "denied_text": "Understood — I left the Launch Runbook untouched."
+        "denied_text": "Understood \u2014 I left the Launch Runbook untouched."
       }
     ]
   },
@@ -48,7 +50,9 @@
           }
         }
       },
-      { "text": "Drafted the Rollback Playbook." }
+      {
+        "text": "Drafted the Rollback Playbook."
+      }
     ]
   },
   {
@@ -67,7 +71,15 @@
       },
       {
         "text": "Named the payments rotation in the Rollback Playbook.",
-        "denied_text": "Understood — I left the Rollback Playbook untouched."
+        "denied_text": "Understood \u2014 I left the Rollback Playbook untouched."
+      }
+    ]
+  },
+  {
+    "match": "show me the quadratic formula",
+    "steps": [
+      {
+        "text": "Inline $E = mc^2$ and display:\n\n$$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$\n"
       }
     ]
   }

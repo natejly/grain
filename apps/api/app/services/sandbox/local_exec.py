@@ -73,9 +73,25 @@ def session_root(base: Path, external_id: str) -> Path:
     return path
 
 
-def ensure_session_root(base: Path, external_id: str) -> Path:
+def ensure_session_root(base: Path, external_id: str, *, mode: int = 0) -> Path:
+    """The host directory backing one session, created if it is not there.
+
+    `mode` exists for the container driver, which bind-mounts this directory into
+    a container running as an unprivileged uid that is not the API's. A bind
+    mount keeps host ownership, so without a widened mode the sandbox can read
+    the code we stage but cannot create `chart.png` next to it — every execution
+    that writes a file fails while every print-only one passes, which is the
+    shape of bug a smoke test never catches. mkdir's own mode argument is masked
+    by the process umask, so the chmod has to be a separate call.
+
+    A caller that passes nothing gets the default umask behaviour, which is what
+    the subprocess driver wants: it runs as the API user and widening the mode
+    there would be a permission grant nobody needs.
+    """
     path = session_root(base, external_id)
     path.mkdir(parents=True, exist_ok=True)
+    if mode:
+        os.chmod(path, mode)
     return path
 
 

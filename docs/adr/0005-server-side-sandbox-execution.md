@@ -101,6 +101,16 @@ structural gate that already stops `MODEL_PROVIDER=scripted` and `DEV_AUTO_LOGIN
 reaching production. That gate is the whole safety argument; the rlimits are
 merely so a runaway loop does not take the laptop with it.
 
+**The bind mount must be on a path the container runtime can actually see.**
+Trivially true on Linux and a real trap on any VM-backed runtime: Colima,
+Rancher and Docker Desktop share only certain host directories into their VM, so
+a session directory under macOS's `/var/folders` temp space bind-mounts as an
+*empty* directory rather than failing. The symptom is
+`python3: can't open file '/workspace/.jasmine_exec.py'` on every execution,
+which reads like a driver bug and is not one. `SANDBOX_WORKDIR` defaults to
+`./data/sandboxes` under the repo, which is inside `$HOME` and therefore shared;
+point it somewhere exotic and check the runtime shares that path first.
+
 **On AWS**, `container` is the driver; the only question is where the Docker
 socket lives. ECS-on-EC2 or a plain EC2 host works directly. Fargate does not
 permit spawning containers from a task, so a Fargate deployment needs either a

@@ -488,6 +488,72 @@ class ProjectFile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class McpOAuthClient(Base):
+    """What this deployment registered itself as, at one MCP server's auth server.
+
+    MCP's auth story is OAuth 2.1 with *dynamic* client registration (RFC 7591):
+    there is no console where an operator pastes a client id, because the whole
+    point is that a user can add an arbitrary remote server and have it work. So
+    the client credentials are discovered and minted at connect time, per server,
+    and they have to be stored — which is what this table is.
+
+    Keyed on (server_id, issuer) rather than server_id alone because a server is
+    permitted to move its authorization server, and discovering a new issuer
+    should mint a new registration rather than silently reuse credentials the new
+    issuer never granted.
+    """
+
+    __tablename__ = "mcp_oauth_clients"
+    __table_args__ = (UniqueConstraint("server_id", "issuer"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    server_id: Mapped[str] = mapped_column(ForeignKey("mcp_servers.id"), index=True)
+    issuer: Mapped[str] = mapped_column(String(600))
+    authorization_endpoint: Mapped[str] = mapped_column(String(600), default="")
+    token_endpoint: Mapped[str] = mapped_column(String(600), default="")
+    registration_endpoint: Mapped[str] = mapped_column(String(600), default="")
+    client_id: Mapped[str] = mapped_column(String(400), default="")
+    # Fernet, like every other credential in this schema. Public clients (PKCE,
+    # no secret) leave this empty, which is the common case for MCP.
+    client_secret_enc: Mapped[str] = mapped_column(Text, default="")
+    # RFC 7592: lets us update or delete the registration we created.
+    registration_access_token_enc: Mapped[str] = mapped_column(Text, default="")
+    registration_client_uri: Mapped[str] = mapped_column(String(600), default="")
+    redirect_uri: Mapped[str] = mapped_column(String(600), default="")
+    scopes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class McpOAuthToken(Base):
+    """One user's tokens for one MCP server.
+
+    Per user, not per workspace, and that is the security-relevant part: an MCP
+    server authorises the human, so sharing a workspace must not share a Linear
+    account. Two people in one workspace get two rows and see their own issues.
+    """
+
+    __tablename__ = "mcp_oauth_tokens"
+    __table_args__ = (UniqueConstraint("server_id", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    server_id: Mapped[str] = mapped_column(ForeignKey("mcp_servers.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    access_token_enc: Mapped[str] = mapped_column(Text, default="")
+    refresh_token_enc: Mapped[str] = mapped_column(Text, default="")
+    token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    scopes: Mapped[str] = mapped_column(Text, default="")
+    # RFC 8707 resource indicator. Recorded because a token minted for this
+    # resource must not be replayed against another one, and the only way to
+    # check that later is to remember what it was minted for.
+    resource: Mapped[str] = mapped_column(String(600), default="")
+    status: Mapped[str] = mapped_column(String(24), default="connected")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class SandboxSession(Base):
     """A server-side execution sandbox: one microVM, owned by one workspace.
 
@@ -648,6 +714,21 @@ class OAuthState(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     provider: Mapped[str] = mapped_column(String(24))
     state: Mapped[str] = mapped_column(String(64))
+    # MCP reuses this table rather than growing a parallel one, because the
+    # CSRF-state machinery is identical and two implementations of it would be
+    # one too many. `provider` is only 24 chars and a server id is 36, so the
+    # server gets its own column instead of being packed into the provider slug.
+    server_id: Mapped[str] = mapped_column(String(36), default="")
+    # PKCE (RFC 7636) verifier, encrypted. It must live server-side: the whole
+    # point of PKCE is that whoever intercepts the authorization code cannot
+    # redeem it without this value, which fails if it round-trips via the browser.
+    pkce_verifier_enc: Mapped[str] = mapped_column(Text, default="")
+    redirect_uri: Mapped[str] = mapped_column(String(600), default="")
+    # The authorization server this flow was started against. Without it the
+    # callback has to guess which registration built the authorize URL, and a
+    # server that rotates its issuer mid-flow gets handed the code and the PKCE
+    # verifier for the issuer it replaced. See migration 0018.
+    issuer: Mapped[str] = mapped_column(String(600), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

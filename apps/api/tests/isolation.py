@@ -1013,6 +1013,31 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"tool_id": "mcp_tool"},
         query={"enabled": "false"},
     ),
+    # OAuth tokens are held per user, not per workspace, so these three are the
+    # routes where a leak would hand over a credential for someone's third-party
+    # account rather than a row of workspace data. /connect is the only route in
+    # the app that dials the network, and the 404 has to land before it does.
+    RouteCase(
+        "GET",
+        "/api/mcp/servers/{server_id}/auth",
+        DENY,
+        path_ids={"server_id": "mcp_server"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/mcp/servers/{server_id}/connect",
+        DENY,
+        path_ids={"server_id": "mcp_server"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/mcp/servers/{server_id}/disconnect",
+        DENY,
+        path_ids={"server_id": "mcp_server"},
+    ),
+    # Unauthenticated by design: the single-use state row is the credential, and
+    # it carries the user id itself. See api/mcp.py:oauth_callback.
+    RouteCase("GET", "/api/mcp/oauth/callback", PUBLIC),
     # -- sandbox -----------------------------------------------------------
     # Sessions are the one resource where "not yours" would be worth money to
     # confirm: a session id names a live machine with someone's files already

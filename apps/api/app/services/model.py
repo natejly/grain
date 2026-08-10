@@ -29,7 +29,10 @@ still answer from general knowledge when that is appropriate.
 Long-term memory notes and known entities, when supplied, are background context
 derived from earlier sessions. Use them to stay consistent, but never cite them
 with [n]; [n] markers are reserved for source passages.
-Do not invent citations. Only use [n] markers that match supplied passages."""
+Do not invent citations. Only use [n] markers that match supplied passages.
+When you search the web, the sources you used are cited automatically from the
+search tool's own annotations, so never number a web result yourself and never
+paste a bare URL as a citation."""
 
 MEMORY_EXTRACTION_INSTRUCTIONS = """You extract durable long-term memories from a chat exchange.
 Return strict JSON:
@@ -270,7 +273,16 @@ def stream_agent_response(
     """Stream one agent turn as ("delta", text) events then ("completed", response).
 
     The terminal response carries the full `.output`, including any function
-    calls, so the caller's tool handling is identical to the non-streaming path.
+    calls and any hosted `web_search` call with its `url_citation` annotations,
+    so the caller's tool handling is identical to the non-streaming path.
+
+    Annotation events (`response.output_text.annotation.added`) arrive
+    interleaved with the deltas and are deliberately dropped here. Citations are
+    read off the terminal response instead, which is what makes it structurally
+    impossible to emit one after the run has completed: by the time the caller
+    has a response object, the stream is over and the answer is not yet an
+    answer. Forwarding them live would buy a highlight during streaming and put
+    that guarantee back in the hands of whoever wrote the consumer.
     """
     stream = client.responses.create(
         model=settings.openai_model,

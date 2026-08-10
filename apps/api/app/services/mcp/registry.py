@@ -2,16 +2,25 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...clock import utcnow
+from ...config import Settings, get_settings
 from ...models import McpServer, McpTool
 from ..crypto import EncryptionNotConfiguredError, decrypt_secret, encrypt_secret
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
-from .client import McpError, ServerConfig, call_tool, list_tools
+from .client import (
+    McpAuthRequired,
+    McpError,
+    ServerConfig,
+    TokenProvider,
+    call_tool,
+    list_tools,
+)
+from .oauth import McpOAuthError, token_provider
 
 # Tool names reach the model as mcp__<server>__<tool>; the separator has to be
 # something a server name cannot contain (names are slug-validated on write).
@@ -71,10 +80,37 @@ def server_config(server: McpServer) -> ServerConfig:
     )
 
 
-def refresh_server_tools(db: Session, server: McpServer) -> List[McpTool]:
+def tokens_for(
+    db: Session,
+    server: McpServer,
+    user_id: str,
+    settings: Optional[Settings] = None,
+) -> Optional[TokenProvider]:
+    """The OAuth token source for this (server, user), or None.
+
+    None for stdio and for anonymous callers, which is what keeps a local
+    subprocess server and the existing tests on exactly the old code path.
+    """
+    if server.transport != "http" or not user_id:
+        return None
+    return token_provider(db, server, user_id, settings or get_settings())
+
+
+def refresh_server_tools(
+    db: Session, server: McpServer, *, user_id: str = ""
+) -> List[McpTool]:
     """Reconnect, re-enumerate, and reconcile the cached tool rows."""
     try:
-        discovered = list_tools(server_config(server))
+        discovered = list_tools(
+            server_config(server), tokens=tokens_for(db, server, user_id)
+        )
+    except McpAuthRequired as exc:
+        # A server behind OAuth is not a broken server. Saying so is what lets
+        # the UI offer Connect instead of a retry button that can never work.
+        server.status = "needs_auth"
+        server.last_error = str(exc)[:1000]
+        db.commit()
+        raise
     except McpError as exc:
         server.status = "error"
         server.last_error = str(exc)[:1000]
@@ -115,8 +151,22 @@ def _executor(server_id: str, tool_name: str):
         if server is None or not server.enabled:
             return ToolResult(content="Error: that MCP server is no longer available.")
         try:
-            content = call_tool(server_config(server), tool_name, args)
-        except McpError as exc:
+            content = call_tool(
+                server_config(server),
+                tool_name,
+                args,
+                tokens=tokens_for(db, server, context.user_id),
+            )
+        except McpAuthRequired:
+            # Addressed to the model, which cannot click Connect; naming the
+            # server and the remedy is what stops it retrying the same call.
+            return ToolResult(
+                content=(
+                    f"Error: the “{server.name}” MCP server needs the user to "
+                    "connect their account in Settings before its tools work."
+                )
+            )
+        except (McpError, McpOAuthError) as exc:
             return ToolResult(content=f"Error: {exc}")
         return ToolResult(content=content)
 

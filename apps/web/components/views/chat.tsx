@@ -15,6 +15,8 @@ import {
 import type { AgentToolCall, Citation, Message, Source } from "@workspace/api-client";
 import { FormEvent, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkMath from "remark-math";
 
 export type ToolDecision = (
   call: AgentToolCall,
@@ -63,6 +65,14 @@ function CopyButton({ value, label }: { value: string; label: string }) {
 function MarkdownBody({ content }: { content: string }) {
   return (
     <ReactMarkdown
+      // Chat renders maths for the same reason Documents does, and it is the
+      // surface where people actually ask for it: an assistant that answers a
+      // calculus question in a chat message was printing the TeX source. The
+      // stylesheet is imported globally in app/layout.tsx rather than here,
+      // because importing it from a view means it only loads if you have
+      // visited that view — which is how this ended up rendering unstyled.
+      remarkPlugins={[remarkMath]}
+      rehypePlugins={[rehypeKatex]}
       components={{
         pre({ children }) {
           const text = extractText(children);

@@ -1098,3 +1098,117 @@ realistic trigger is not a microVM escape - it is prompt injection through a
 document the agent was asked to analyse. `allowlist` closes it and costs
 `pip install`. `open` is the default because the feature is pointless otherwise,
 and that is a judgement call rather than a proof of safety.
+
+---
+
+# MCP OAuth, hosted web search, container proof, AWS deploy — reconciliation
+
+Four tracks landed in parallel, each with an adversarial review. This section is
+the reconciliation pass: what was left conflicting or half-done, what the
+reviewers found and nobody fixed, and — separately — what is still not proven.
+
+## Reconciled
+
+- [x] **`test_tenant_isolation.py::test_route_table_matches_the_app` was red on
+      `main`** for the four new MCP OAuth routes. Added their `RouteCase`s to
+      `apps/api/tests/isolation.py`: the three `/servers/{id}/…` routes as DENY
+      (they go through the workspace-scoped `_load`, so a foreign id 404s before
+      `/connect` can dial the network), and `/oauth/callback` as PUBLIC, which is
+      deliberate — the single-use state row is the credential and carries the
+      user id itself.
+- [x] **`container_provider.py` was left uncompilable** by two agents editing it
+      at once: a `_cli_env()` helper using `os`/`shutil`/`Dict` landed without
+      its imports (`NameError: shutil` at construction, six sandbox tests
+      erroring). Imports reconciled; my `--name`/kill work merged on top and
+      routed through the same `_cli_env()`, since a `docker kill` sent to the
+      default socket when the run went to a Colima context reports success
+      against a container that is still running.
+
+## Real defects fixed (found by reviewers, left unfixed by every track)
+
+- [x] **The sandbox could not write its own workspace.** Three reviewers
+      independently confirmed by inspection: `ensure_session_root` created the
+      session dir with the API user's umask (0755) and `_docker_argv`
+      bind-mounts it under `--user 65534:65534`. A bind mount keeps host
+      ownership, so `plt.savefig("chart.png")` — the headline user story — gets
+      EACCES while every print-only run passes, which is why no smoke test
+      caught it. `ensure_session_root` now takes an explicit `mode`, and only
+      the container driver passes it; the subprocess driver runs as the API user
+      and is deliberately left alone.
+- [x] **A timed-out run leaked a live container.** `_kill_tree` SIGKILLs the
+      `docker` CLI, but the daemon owns the container, so `while True: pass` kept
+      burning `--cpus 2.0` after the run had already returned its result —
+      directly contradicting the module docstring's "a crashed API leaks no
+      compute". Containers are now named and killed. **Reproduced against real
+      Docker before and after: 1 leaked container without the fix, 0 with it.**
+      Two regression tests, mutation-checked.
+- [x] **Authorization-server mix-up (migration 0018).** `OAuthState` recorded
+      which MCP server a flow was for but not which *issuer*, so the callback
+      resolved the registration by "most recently updated wins". A server that
+      rotates its advertised authorization server mid-flow would be handed the
+      victim's authorization code *and* PKCE verifier — everything needed to
+      redeem them at the honest issuer. Retiring old registrations does not close
+      this; it is what makes the newer row the only one. `oauth_states.issuer` is
+      now set at `begin_authorization` and matched at `complete_authorization`.
+      Regression test mutation-checked against the old recency lookup.
+- [x] **A revoked grant re-hit the token endpoint on every tool call.**
+      `_mark_expired` set `status` but `access_token` never read it, so the row
+      stayed "stale" and refreshed again — forever. It now clears the token
+      material, which also stops holding a credential the provider revoked.
+- [x] **The metadata size cap was decorative.** `_read_json` sliced
+      `response.content`, which httpx had already buffered in full — the check
+      fired after the damage it existed to prevent. All four hops now stream
+      with a chunk loop. Mutation-checked: removing the guard changes the error
+      from "oversized" to "malformed", i.e. it had read the whole thing.
+- [x] **Refresh raced itself with no row lock.** The leeway window is minutes
+      wide by design, so two turns for one (server, user) crossing is ordinary.
+      Both would spend the same refresh token; OAuth 2.1 rotates refresh tokens
+      for public clients and RFC 6819 has the server treat a replay as a breach
+      and revoke the grant family — the user is silently disconnected with
+      nothing in our logs pointing at us. Now `SELECT … FOR UPDATE` with a
+      staleness re-check inside the lock, so the loser reuses what the winner
+      wrote instead of replaying.
+
+## Docs
+
+- [x] ADR 0006 — dynamic registration as a public client, per-user tokens, the
+      host-allowlist relaxation stated as the one control given up, and the
+      three issuer/audience bindings.
+- [x] `THREAT_MODEL.md` — a new section for the two genuinely new surfaces: a
+      user-supplied URL reaching an HTTP client, and third-party account tokens
+      at rest.
+
+## NOT fixed, and why
+
+- **DNS rebinding on the discovery hops.** `_validate_destination` resolves and
+  validates, then httpx resolves again at connect. In `services/tools.py` the
+  host allowlist contains this; relaxing the allowlist here removes exactly that
+  containment, so it is a real widening rather than an inherited gap. The fix is
+  a transport pinned to the validated address — too invasive for this pass, and
+  wrong to fake.
+- **`disconnect` does not revoke upstream.** No `revocation_endpoint` is
+  captured or called. The button promises more than it delivers.
+- **`web_search`: the un-anchored fallback.** `agent_loop.py`
+  `answer = state.text_so_far or response.output_text` bypasses
+  `anchor_citations` when a step produced no deltas. It degrades toward
+  *uncited*, never toward a fabricated or misplaced marker, and the string
+  validated is still the string stored. Changing it alters what every non-web
+  multi-step turn accumulates, which is the loop owner's call, not a reviewer's.
+- **`ProtectedResource.resource` is now dead** after the authorize leg moved to
+  `canonical_resource(server.url)`. RFC 9728 §3.3 gives it a job; the exploit it
+  would guard is already closed by sending the canonical URI on both legs.
+- **`main.py` startup recovery is inside `if settings.is_dev_env:`**, so with
+  `APP_ENV=production` expired run leases are never swept. `infra/aws/ecs.tf`
+  and `ec2.tf` both justify decisions with recovery that will not run. Real, and
+  outside this pass.
+- **`infra/sandbox/Dockerfile` warms the matplotlib font cache into
+  `MPLCONFIGDIR=/tmp/mpl`**, which `_docker_argv` then mounts a tmpfs over, so
+  every container rebuilds it. **Confirmed against the real image**: without the
+  tmpfs `/tmp/mpl/fontlist-v3.11.0.json` is present; with the driver's actual
+  `--tmpfs /tmp` the directory does not exist at all. The reviewer estimated
+  "several seconds on every real user plot"; measured, it is ~0.1s (0.33s vs
+  0.22s to first savefig), so the comment is wrong but the cost is minor.
+  Fixing it means moving `MPLCONFIGDIR` somewhere the tmpfs does not shadow and
+  rebuilding a ~2 GB image to verify — not worth doing blind at this size.
+- **`aws` CLI presence on the AL2023 ECS AMI is assumed** by
+  `user_data.sh.tftpl`. Unverifiable without an account.

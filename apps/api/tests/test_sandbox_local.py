@@ -224,8 +224,13 @@ def container(workdir: Path) -> ContainerProvider:
 def test_the_container_argv_carries_every_flag_the_isolation_depends_on(
     container: ContainerProvider, workdir: Path
 ) -> None:
-    argv = container._docker_argv(workdir / "box-1", ["python3", "x.py"])
+    argv = container._docker_argv(workdir / "box-1", ["python3", "x.py"], "box-1-run")
     joined = " ".join(argv)
+
+    # Named, so a timeout can kill the container rather than only the CLI that
+    # is watching it. Without this an overrunning run outlives its own result.
+    assert "--name" in argv
+    assert argv[argv.index("--name") + 1] == "box-1-run"
 
     # No route out. This is the whole exfiltration story.
     assert "--network none" in joined
@@ -254,7 +259,7 @@ def test_the_sandbox_environment_reaches_the_container_and_the_host_env_does_not
     provider = ContainerProvider(
         workdir=workdir, env={"JASMINE_SANDBOX": "1"}, image="img"
     )
-    argv = provider._docker_argv(workdir / "box-1", ["python3"])
+    argv = provider._docker_argv(workdir / "box-1", ["python3"], "box-1-run")
     assert "JASMINE_SANDBOX=1" in argv
 
 
@@ -279,6 +284,49 @@ def test_a_missing_image_fails_at_session_creation(
     )
     with pytest.raises(SandboxError, match="not available|sandbox-image"):
         container.create(SPEC)
+
+
+def test_a_timed_out_run_kills_the_container_not_just_the_cli(
+    container: ContainerProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SIGKILLing the `docker` CLI leaves the container running: the daemon owns
+    it. Verified against a real runtime — before this, a timed-out `while True`
+    kept burning --cpus after the run had already returned its result."""
+    from app.services.sandbox.types import ExecResult
+
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        # What run_process returns when the budget expired: a result, not a raise.
+        return ExecResult(exit_code=-9, error="timed out after 20s")
+
+    monkeypatch.setattr(local_exec, "run_process", fake_run)
+    container._run(Path("/tmp/box-1"), ["python3", "x.py"], 5.0, None)
+
+    run_argv, kill_argv = calls[0], calls[-1]
+    name = run_argv[run_argv.index("--name") + 1]
+    assert kill_argv[1:] == ["kill", name], (
+        "a timed-out run must kill the container it named, not only the CLI"
+    )
+
+
+def test_a_run_that_finished_leaves_no_kill_behind(
+    container: ContainerProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The kill is for timeouts only. `docker run --rm` already reaped a run that
+    ended on its own, so a kill there would be a pointless second exec."""
+    from app.services.sandbox.types import ExecResult
+
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return ExecResult(exit_code=0, stdout="done")
+
+    monkeypatch.setattr(local_exec, "run_process", fake_run)
+    container._run(Path("/tmp/box-1"), ["python3", "x.py"], 5.0, None)
+    assert len(calls) == 1 and "kill" not in calls[0]
 
 
 def test_a_missing_docker_binary_is_a_legible_error(workdir: Path) -> None:

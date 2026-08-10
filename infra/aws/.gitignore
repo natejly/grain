@@ -1,0 +1,16 @@
+# Provider plugins and the working directory init creates. 600+ MB.
+.terraform/
+.terraform.lock.hcl
+
+# State never lives in the repo: it holds the RDS master password, which is why
+# versions.tf insists on an encrypted S3 backend.
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Real values. terraform.tfvars.example is the committed template.
+terraform.tfvars
+*.auto.tfvars
+
+crash.log
+crash.*.log

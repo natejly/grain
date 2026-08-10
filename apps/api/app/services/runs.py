@@ -19,6 +19,7 @@ from .memory import recall, render_memory_context, write_conversation_memory
 from .model import stream_words
 from .retrieval import Evidence, search_evidence
 from .tools import ToolSecurityError, execute_read_only_get, parse_tool_prompt
+from .web_search import citation_url
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,10 @@ def _citations(evidence: list[Evidence]) -> list[dict[str, object]]:
             "ordinal": item.ordinal,
             "excerpt": item.excerpt,
             "score": item.score,
+            # None for a passage from the index, whose provenance is its chunk.
+            # A web source has no chunk to open, so the URL is the only address
+            # a reader can follow back to what was cited.
+            "url": citation_url(item),
         }
         for item in evidence
     ]

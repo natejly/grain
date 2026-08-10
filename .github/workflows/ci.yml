@@ -36,3 +36,52 @@ jobs:
           cp packages/api-client/openapi.json /tmp/openapi.json
           PYTHONPATH=apps/api python scripts/export_openapi.py
           diff -u /tmp/openapi.json packages/api-client/openapi.json
+
+  # The container driver is the deployment target (ADR 0005) and its security
+  # claims — no route out, a read-only root, no capabilities, not root, bounded
+  # pids and memory — are untestable on a machine with no container runtime,
+  # which is every laptop on this project. `test_sandbox_local.py` therefore
+  # asserts only the argv, and an argv can be perfect while the image is missing
+  # a package or the bind mount is unwritable by uid 65534. This job is where
+  # the claims are actually checked: ubuntu-latest ships Docker, so every push
+  # builds the image and runs real containers against it.
+  #
+  # Separate from `verify` on purpose. The image build is several minutes of pip
+  # wheels and there is no reason lint and unit tests should wait behind it.
+  sandbox:
+    runs-on: ubuntu-latest
+    # The build dominates; the proof itself is about two minutes. A cap this
+    # generous still catches a hang, which is the failure mode that would
+    # otherwise burn an hour of runner time per push.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # The proof drives the real `ContainerProvider`, so it needs the api
+      # package importable — it is testing the driver, not a reimplementation of
+      # the docker flags.
+      - run: python -m pip install -e "apps/api[dev]"
+
+      # Not layer-cached. The image is essentially one large `pip install` layer,
+      # so a cache hit is all-or-nothing on a ~2 GB export that costs about what
+      # the rebuild does, and getting one at all would mean replacing this
+      # Makefile target with buildx. Not worth contorting the build for.
+      - name: Build the sandbox image
+        run: make sandbox-image
+
+      - name: Prove the container sandbox
+        run: python scripts/verify_sandbox_container.py
+
+      # The same probes again through pytest, which is what keeps them running
+      # for anyone who has Docker locally. Failing here while the step above
+      # passed would mean the two entry points have diverged.
+      - name: Prove it again as tests
+        # SANDBOX_PROOF_REQUIRED turns "no runtime, skip everything" — which
+        # exits 0 and would green this step having proved nothing — into a
+        # collection error. The image was built two steps ago; there is no
+        # legitimate way for it to be missing here.
+        run: SANDBOX_PROOF_REQUIRED=1 PYTHONPATH=apps/api pytest apps/api/tests/test_sandbox_container_live.py -v

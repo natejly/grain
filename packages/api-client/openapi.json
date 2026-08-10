@@ -2050,6 +2050,65 @@
         "title": "LoginIn",
         "type": "object"
       },
+      "McpAuthStatusOut": {
+        "description": "Everything the Connect button needs and nothing a token could leak.",
+        "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "expires_in_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In Seconds"
+          },
+          "issuer": {
+            "title": "Issuer",
+            "type": "string"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "scopes": {
+            "title": "Scopes",
+            "type": "string"
+          },
+          "server_id": {
+            "title": "Server Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "required",
+          "connected",
+          "issuer",
+          "scopes",
+          "expires_in_seconds"
+        ],
+        "title": "McpAuthStatusOut",
+        "type": "object"
+      },
+      "McpConnectOut": {
+        "properties": {
+          "authorize_url": {
+            "title": "Authorize Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorize_url"
+        ],
+        "title": "McpConnectOut",
+        "type": "object"
+      },
       "McpServerOut": {
         "properties": {
           "args": {
@@ -2671,6 +2730,217 @@
         "title": "RunOut",
         "type": "object"
       },
+      "RunRequest": {
+        "properties": {
+          "kind": {
+            "default": "code",
+            "enum": [
+              "code",
+              "command"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "language": {
+            "default": "python",
+            "enum": [
+              "python",
+              "javascript",
+              "bash",
+              "r",
+              "java"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "source": {
+            "maxLength": 100000,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "RunRequest",
+        "type": "object"
+      },
+      "SandboxExecutionOut": {
+        "properties": {
+          "artifact_count": {
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "stderr": {
+            "title": "Stderr",
+            "type": "string"
+          },
+          "stdout": {
+            "title": "Stdout",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "source",
+          "exit_code",
+          "stdout",
+          "stderr",
+          "error",
+          "artifact_count",
+          "duration_ms",
+          "created_at"
+        ],
+        "title": "SandboxExecutionOut",
+        "type": "object"
+      },
+      "SandboxRunOut": {
+        "description": "One execution plus the machine it changed.\n\nThe session travels back with the result so the panel can update the status\nand the exec counter without a second request \u2014 a run is the one action that\nreliably mutates both.",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/SandboxExecutionOut"
+          },
+          "session": {
+            "$ref": "#/components/schemas/SandboxSessionOut"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "execution",
+          "artifacts",
+          "truncated",
+          "session"
+        ],
+        "title": "SandboxRunOut",
+        "type": "object"
+      },
+      "SandboxSessionOut": {
+        "properties": {
+          "allow_hosts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allow Hosts",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "exec_count": {
+            "title": "Exec Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_used_at": {
+            "format": "date-time",
+            "title": "Last Used At",
+            "type": "string"
+          },
+          "network_policy": {
+            "title": "Network Policy",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "template": {
+            "title": "Template",
+            "type": "string"
+          },
+          "wall_ms_used": {
+            "title": "Wall Ms Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "label",
+          "provider",
+          "template",
+          "status",
+          "network_policy",
+          "allow_hosts",
+          "error",
+          "exec_count",
+          "wall_ms_used",
+          "created_at",
+          "last_used_at"
+        ],
+        "title": "SandboxSessionOut",
+        "type": "object"
+      },
       "SendMessageRequest": {
         "properties": {
           "agent_id": {
@@ -2716,6 +2986,22 @@
           "run"
         ],
         "title": "SendMessageResponse",
+        "type": "object"
+      },
+      "SessionRequest": {
+        "properties": {
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "project_id": {
+            "default": "",
+            "title": "Project Id",
+            "type": "string"
+          }
+        },
+        "title": "SessionRequest",
         "type": "object"
       },
       "SignupIn": {
@@ -7152,6 +7438,68 @@
         ]
       }
     },
+    "/api/mcp/oauth/callback": {
+      "get": {
+        "description": "Unauthenticated by design: the state row is the credential.\n\nThe browser arrives here as a top-level navigation from the authorization\nserver, so there is no session cookie to rely on. What proves the callback\nis ours is the single-use state row, which also carries the user it belongs\nto \u2014 reading the identity from anything the query string says would let an\nattacker attach their account to somebody else's server.",
+        "operationId": "oauth_callback_api_mcp_oauth_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Error",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Oauth Callback",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
     "/api/mcp/servers": {
       "get": {
         "operationId": "list_servers_api_mcp_servers_get",
@@ -7373,6 +7721,182 @@
           }
         },
         "summary": "Update Server",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/api/mcp/servers/{server_id}/auth": {
+      "get": {
+        "operationId": "server_auth_status_api_mcp_servers__server_id__auth_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpAuthStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Server Auth Status",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/api/mcp/servers/{server_id}/connect": {
+      "post": {
+        "description": "Discover, register, and hand back the URL to send the browser to.\n\nThis is the only route that dials the network on the user's behalf, so a\nfailure here is a 400 with the discovery error verbatim \u2014 those messages are\nwritten to be legible and are guaranteed to carry no URL or credential.",
+        "operationId": "connect_server_api_mcp_servers__server_id__connect_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpConnectOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Connect Server",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/api/mcp/servers/{server_id}/disconnect": {
+      "post": {
+        "description": "Forget this caller's token. Other members of the workspace keep theirs.",
+        "operationId": "disconnect_server_api_mcp_servers__server_id__disconnect_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpAuthStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disconnect Server",
         "tags": [
           "mcp"
         ]
@@ -8114,6 +8638,380 @@
         "summary": "Stream Run Events",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/api/sandbox": {
+      "get": {
+        "description": "Every session this workspace owns. Reads rows only \u2014 a provider outage\nmust not make the panel itself unreachable.",
+        "operationId": "list_sandbox_sessions_api_sandbox_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SandboxSessionOut"
+                  },
+                  "title": "Response List Sandbox Sessions Api Sandbox Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sandbox Sessions",
+        "tags": [
+          "sandbox"
+        ]
+      },
+      "post": {
+        "description": "Ensure a session exists for this project and hand it back.\n\n\"Ensure\", not \"create\": booting a second microVM because someone reloaded\nthe page is a bill, not a feature, so `ensure_session` reuses the newest live\none for the same project_id. 201 either way \u2014 the caller asked for a session\nto exist and now it does, and distinguishing the two would leak nothing\nuseful while making the client branch.",
+        "operationId": "create_sandbox_session_api_sandbox_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Sandbox Session",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/sandbox/{session_id}": {
+      "delete": {
+        "description": "Destroy the machine.\n\nAnswers with the killed row rather than 204 so the panel can render the\nterminal state \u2014 and its final exec count \u2014 without refetching the list.",
+        "operationId": "kill_sandbox_session_api_sandbox__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Kill Sandbox Session",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/sandbox/{session_id}/executions": {
+      "get": {
+        "description": "Recent history, newest first.\n\nThe session is resolved before the query so a foreign id never reaches the\nexecutions table; the redundant workspace filter below is defence in depth\nagainst that ordering being edited away.",
+        "operationId": "list_sandbox_executions_api_sandbox__session_id__executions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SandboxExecutionOut"
+                  },
+                  "title": "Response List Sandbox Executions Api Sandbox  Session Id  Executions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sandbox Executions",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/sandbox/{session_id}/pause": {
+      "post": {
+        "description": "Snapshot and stop. The filesystem survives; the meter does not.",
+        "operationId": "pause_sandbox_session_api_sandbox__session_id__pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause Sandbox Session",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/sandbox/{session_id}/run": {
+      "post": {
+        "description": "Run code or a shell command in an existing session.\n\nThis is the direct path \u2014 a person typing into the panel \u2014 so there is no\napproval gate here the way there is on the agent's tools. The user *is* the\napproval: they wrote the code and pressed the button. What they do not get to\nchoose is the machine, which is why the session comes from `_load`.\n\nUser-code failure is a 200 with `error` set. Only infrastructure failure is a\n5xx: conflating \"your syntax was wrong\" with \"the provider is down\" makes the\npanel unable to tell the user which one to fix.",
+        "operationId": "run_in_sandbox_api_sandbox__session_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxRunOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run In Sandbox",
+        "tags": [
+          "sandbox"
         ]
       }
     },
