@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor, require_owner
+from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import IdempotencyRecord, IntegrationAccount, OAuthState, SyncJob
@@ -100,7 +101,7 @@ def connect_integration(
     db.execute(
         delete(OAuthState).where(
             OAuthState.workspace_id == actor.workspace_id,
-            OAuthState.created_at < datetime.utcnow() - STATE_TTL,
+            OAuthState.created_at < utcnow() - STATE_TTL,
         )
     )
     db.add(
@@ -208,7 +209,7 @@ def integration_callback(
             OAuthState.state == state,
         )
     )
-    if record is None or record.created_at < datetime.utcnow() - STATE_TTL:
+    if record is None or record.created_at < utcnow() - STATE_TTL:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     db.delete(record)
     if error or not code:

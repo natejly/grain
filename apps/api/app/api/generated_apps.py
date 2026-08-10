@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import List, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -10,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor, require_owner
+from ..clock import utcnow
 from ..config import get_settings
 from ..database import get_db
 from ..models import AppRelease, GeneratedApp, IdempotencyRecord, new_id
@@ -299,7 +299,7 @@ def _activate_release(
             current.status = "superseded"
     release.status = "published"
     if release.published_at is None:
-        release.published_at = datetime.utcnow()
+        release.published_at = utcnow()
     app.current_release_id = release.id
     record_audit(
         db,

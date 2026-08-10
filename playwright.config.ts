@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { STORAGE_STATE } from "./apps/web/e2e/credentials";
 
 export default defineConfig({
   testDir: "./apps/web/e2e",
@@ -12,9 +13,13 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
+    // Signs in once and saves the cookie jar; the API fails closed now, so
+    // without this every spec would meet the login screen instead of the app.
+    { name: "setup", testMatch: /auth\.setup\.ts/ },
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: { ...devices["Desktop Chrome"], storageState: STORAGE_STATE },
+      dependencies: ["setup"],
     },
   ],
   webServer: [

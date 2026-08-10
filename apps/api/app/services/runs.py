@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+import logging
+from datetime import timedelta
 
 import httpx
 from sqlalchemy import select
 
+from ..clock import utcnow
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import Message, Run, Tool, ToolCall, ToolGrant
-from .agent_loop import run_agent_turn
+from .agent_loop import resume_agent_turn, run_agent_turn
 from .audit import record_audit
 from .events import append_event
 from .memory import recall, render_memory_context, write_conversation_memory
-from .model import generate_grounded_answer, stream_words
+from .model import stream_words
 from .retrieval import Evidence, search_evidence
 from .tools import ToolSecurityError, execute_read_only_get, parse_tool_prompt
+
+logger = logging.getLogger(__name__)
 
 TERMINAL_RUN_STATES = {"completed", "failed", "cancelled"}
 
@@ -57,7 +61,14 @@ def _complete_with_message(
     *,
     content: str,
     citations: list[dict[str, object]],
+    already_streamed: bool = False,
 ) -> None:
+    """Persist the assistant message and close the run.
+
+    `already_streamed` is set by the agent path, whose deltas were emitted by the
+    loop as the model produced them. The `/tool` paths compose their reply here
+    with no model behind it, so that text is still chunked for a live feel.
+    """
     db = SessionLocal()
     try:
         current = db.get(Run, run.id)
@@ -75,7 +86,7 @@ def _complete_with_message(
             )
             db.commit()
             return
-        for piece in stream_words(content):
+        for piece in [] if already_streamed else stream_words(content):
             db.refresh(current)
             if current.cancel_requested:
                 current.status = "cancelled"
@@ -132,6 +143,80 @@ def _complete_with_message(
         db.close()
 
 
+def _finish_run(
+    run: Run,
+    *,
+    answer: str,
+    citations: list[dict[str, object]],
+    already_streamed: bool = True,
+) -> None:
+    _complete_with_message(
+        run,
+        content=answer,
+        citations=citations,
+        already_streamed=already_streamed,
+    )
+    try:
+        write_conversation_memory(run.id)
+    except Exception:
+        # Memory persistence must never fail a completed run — but it must not
+        # vanish either. Everything inside write_conversation_memory already
+        # logs and rolls back, so reaching here means it could not even open a
+        # session; that is worth a line rather than a silent `pass`.
+        logger.warning(
+            "memory persistence raised for run %s", run.id, exc_info=True
+        )
+
+
+def _fail_run(db, run_id: str, exc: Exception) -> None:
+    db.rollback()
+    run = db.get(Run, run_id)
+    if run is None or run.status in TERMINAL_RUN_STATES:
+        return
+    run.status = "failed"
+    run.error = str(exc)[:1000]
+    run.lease_expires_at = None
+    run.agent_state_json = None
+    append_event(
+        db,
+        workspace_id=run.workspace_id,
+        run_id=run.id,
+        event_type="run.failed",
+        payload={"status": "failed", "error": run.error},
+    )
+    db.commit()
+
+
+def resume_run(run_id: str, tool_call_id: str, decision: str) -> None:
+    """Continue a run parked on a tool approval, after the user decided."""
+    db = SessionLocal()
+    try:
+        run = db.get(Run, run_id)
+        if run is None or run.status != "waiting_for_approval":
+            return
+        run.lease_expires_at = utcnow() + timedelta(
+            seconds=get_settings().run_lease_seconds
+        )
+        append_event(
+            db,
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            event_type="run.started",
+            payload={"status": "running"},
+        )
+        db.commit()
+        result = resume_agent_turn(
+            db, run, tool_call_id=tool_call_id, decision=decision
+        )
+        if result is None:
+            return
+        _finish_run(run, answer=result.answer, citations=_citations(result.evidence))
+    except Exception as exc:
+        _fail_run(db, run_id, exc)
+    finally:
+        db.close()
+
+
 def process_run(run_id: str) -> None:
     db = SessionLocal()
     try:
@@ -151,7 +236,7 @@ def process_run(run_id: str) -> None:
             db.commit()
             return
         run.status = "running"
-        run.lease_expires_at = datetime.utcnow() + timedelta(
+        run.lease_expires_at = utcnow() + timedelta(
             seconds=get_settings().run_lease_seconds
         )
         append_event(
@@ -281,46 +366,21 @@ def process_run(run_id: str) -> None:
                 },
             )
             db.commit()
-        if settings.active_model_provider == "openai":
-            result = run_agent_turn(
-                db,
-                run,
-                evidence=evidence,
-                transcript=transcript,
-                memory_context=memory_context,
-                settings=settings,
-            )
-            answer = result.answer
-            citations = _citations(result.evidence)
-        else:
-            answer = generate_grounded_answer(
-                run.prompt,
-                evidence,
-                user_id=run.created_by,
-                transcript=transcript,
-                memory_context=memory_context,
-            )
-        _complete_with_message(run, content=answer, citations=citations)
-        try:
-            write_conversation_memory(run.id)
-        except Exception:
-            # Memory persistence must never fail a completed run.
-            pass
+        result = run_agent_turn(
+            db,
+            run,
+            evidence=evidence,
+            transcript=transcript,
+            memory_context=memory_context,
+            settings=settings,
+        )
+        # None means the loop parked for a tool approval or was cancelled;
+        # either way the run is not ours to complete right now.
+        if result is None:
+            return
+        _finish_run(run, answer=result.answer, citations=_citations(result.evidence))
     except Exception as exc:
-        db.rollback()
-        run = db.get(Run, run_id)
-        if run is not None and run.status not in TERMINAL_RUN_STATES:
-            run.status = "failed"
-            run.error = str(exc)[:1000]
-            run.lease_expires_at = None
-            append_event(
-                db,
-                workspace_id=run.workspace_id,
-                run_id=run.id,
-                event_type="run.failed",
-                payload={"status": "failed", "error": run.error},
-            )
-            db.commit()
+        _fail_run(db, run_id, exc)
     finally:
         db.close()
 
@@ -336,7 +396,7 @@ def execute_tool_call(tool_call_id: str) -> None:
             return
         call.status = "executing"
         run.status = "running"
-        run.lease_expires_at = datetime.utcnow() + timedelta(
+        run.lease_expires_at = utcnow() + timedelta(
             seconds=get_settings().run_lease_seconds
         )
         append_event(

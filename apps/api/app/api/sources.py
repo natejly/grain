@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -10,6 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
+from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import Chunk, IdempotencyRecord, Source, new_id
@@ -22,6 +22,7 @@ from ..services.ingestion import (
     sanitize_filename,
     validate_filename,
 )
+from ..services.retrieval import clear_source_postings
 from .dependencies import idempotency_key
 
 router = APIRouter(prefix="/api", tags=["sources"])
@@ -172,8 +173,10 @@ def delete_source(
     )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    source.deleted_at = datetime.utcnow()
+    source.deleted_at = utcnow()
     source.status = "deleted"
+    # Postings reference chunks, so they go first — see clear_source_postings.
+    clear_source_postings(db, source.id)
     db.execute(delete(Chunk).where(Chunk.source_id == source.id))
     mark_graph_stale(db, actor.workspace_id)
     db.add(

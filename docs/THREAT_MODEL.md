@@ -71,7 +71,8 @@ trusted to enforce workspace ownership or tool grants.
   Production egress should run through a policy-enforcing proxy to eliminate the
   DNS-rebinding time-of-check/time-of-use gap.
 - SQLite and in-process tasks are not multi-process production transports.
-- The deterministic answer adapter quotes evidence; a production model requires
-  prompt-injection evaluation and unsupported-answer monitoring.
+- Every chat turn runs a real model over untrusted passage text, so the product
+  requires prompt-injection evaluation and unsupported-answer monitoring. The
+  scripted test double is not a substitute for either.
 - Public app slugs are globally unique. Published snapshots may still contain
   sensitive aggregate values, so owners must review a draft before publication.

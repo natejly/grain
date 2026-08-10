@@ -1,6 +1,92 @@
 {
   "components": {
     "schemas": {
+      "AgentApprovalRequest": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "approved",
+              "denied"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "remember": {
+            "default": false,
+            "title": "Remember",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "AgentApprovalRequest",
+        "type": "object"
+      },
+      "AgentToolCallOut": {
+        "properties": {
+          "arguments_json": {
+            "title": "Arguments Json",
+            "type": "string"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "latency_ms": {
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "proposal_preview": {
+            "title": "Proposal Preview",
+            "type": "string"
+          },
+          "result_preview": {
+            "title": "Result Preview",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "conversation_id",
+          "name",
+          "arguments_json",
+          "proposal_preview",
+          "status",
+          "result_preview",
+          "error",
+          "latency_ms",
+          "created_at"
+        ],
+        "title": "AgentToolCallOut",
+        "type": "object"
+      },
       "AppGenerateRequest": {
         "properties": {
           "dataset_ids": {
@@ -191,10 +277,216 @@
         "title": "AuditEventOut",
         "type": "object"
       },
+      "AuthAcknowledgement": {
+        "description": "The deliberately uninformative answer to signup and reset requests.\n\nByte-identical whether or not the address has an account: any difference \u2014\nbody, status, or a materially different response time \u2014 turns the endpoint\ninto an account-enumeration oracle.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": "ok",
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "AuthAcknowledgement",
+        "type": "object"
+      },
+      "AuthSessionOut": {
+        "properties": {
+          "csrf_token": {
+            "title": "Csrf Token",
+            "type": "string"
+          },
+          "email_verified": {
+            "title": "Email Verified",
+            "type": "boolean"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_email": {
+            "title": "User Email",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          },
+          "user_name": {
+            "title": "User Name",
+            "type": "string"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          },
+          "workspace_name": {
+            "title": "Workspace Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "user_name",
+          "user_email",
+          "email_verified",
+          "workspace_id",
+          "workspace_name",
+          "role",
+          "csrf_token"
+        ],
+        "title": "AuthSessionOut",
+        "type": "object"
+      },
+      "BoardCardOut": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body",
+          "labels"
+        ],
+        "title": "BoardCardOut",
+        "type": "object"
+      },
+      "BoardCardRequest": {
+        "properties": {
+          "body": {
+            "default": "",
+            "title": "Body",
+            "type": "string"
+          },
+          "column": {
+            "minLength": 1,
+            "title": "Column",
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "column",
+          "title"
+        ],
+        "title": "BoardCardRequest",
+        "type": "object"
+      },
+      "BoardColumnOut": {
+        "properties": {
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/BoardCardOut"
+            },
+            "title": "Cards",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "cards"
+        ],
+        "title": "BoardColumnOut",
+        "type": "object"
+      },
+      "BoardOut": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/BoardColumnOut"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "columns"
+        ],
+        "title": "BoardOut",
+        "type": "object"
+      },
+      "BoardRequest": {
+        "properties": {
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "BoardRequest",
+        "type": "object"
+      },
       "Body_upload_source_api_sources_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -232,6 +524,25 @@
           "model_provider"
         ],
         "title": "BootstrapResponse",
+        "type": "object"
+      },
+      "CardOrderRequest": {
+        "properties": {
+          "column_id": {
+            "default": "",
+            "title": "Column Id",
+            "type": "string"
+          },
+          "index": {
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "title": "CardOrderRequest",
         "type": "object"
       },
       "ChunkOut": {
@@ -313,6 +624,64 @@
           "score"
         ],
         "title": "Citation",
+        "type": "object"
+      },
+      "ColumnOrderRequest": {
+        "properties": {
+          "order": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Order",
+            "type": "array"
+          }
+        },
+        "required": [
+          "order"
+        ],
+        "title": "ColumnOrderRequest",
+        "type": "object"
+      },
+      "ColumnRenameRequest": {
+        "properties": {
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ColumnRenameRequest",
+        "type": "object"
+      },
+      "ColumnRequest": {
+        "properties": {
+          "index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ColumnRequest",
         "type": "object"
       },
       "ConversationCreate": {
@@ -804,6 +1173,386 @@
         "title": "DatasetVersionCreate",
         "type": "object"
       },
+      "DbColumnOut": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "nullable": {
+            "default": true,
+            "title": "Nullable",
+            "type": "boolean"
+          },
+          "primary_key": {
+            "default": false,
+            "title": "Primary Key",
+            "type": "boolean"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "DbColumnOut",
+        "type": "object"
+      },
+      "DbConnectionOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dsn_summary": {
+            "title": "Dsn Summary",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error": {
+            "title": "Last Error",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "read_only": {
+            "title": "Read Only",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "engine",
+          "read_only",
+          "status",
+          "last_error",
+          "dsn_summary",
+          "created_at"
+        ],
+        "title": "DbConnectionOut",
+        "type": "object"
+      },
+      "DbConnectionRequest": {
+        "properties": {
+          "dsn": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Dsn",
+            "type": "string"
+          },
+          "engine": {
+            "default": "postgres",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "duckdb"
+            ],
+            "title": "Engine",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "read_only": {
+            "default": true,
+            "title": "Read Only",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "dsn"
+        ],
+        "title": "DbConnectionRequest",
+        "type": "object"
+      },
+      "DbForeignKeyOut": {
+        "properties": {
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "references": {
+            "default": "",
+            "title": "References",
+            "type": "string"
+          },
+          "referred_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Referred Columns",
+            "type": "array"
+          }
+        },
+        "title": "DbForeignKeyOut",
+        "type": "object"
+      },
+      "DbSchemaOut": {
+        "properties": {
+          "connection": {
+            "title": "Connection",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "table_count": {
+            "title": "Table Count",
+            "type": "integer"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/DbTableOut"
+            },
+            "title": "Tables",
+            "type": "array"
+          },
+          "tables_omitted": {
+            "default": 0,
+            "title": "Tables Omitted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "connection_id",
+          "connection",
+          "engine",
+          "table_count"
+        ],
+        "title": "DbSchemaOut",
+        "type": "object"
+      },
+      "DbTableOut": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/DbColumnOut"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "columns_loaded": {
+            "default": false,
+            "title": "Columns Loaded",
+            "type": "boolean"
+          },
+          "columns_omitted": {
+            "default": 0,
+            "title": "Columns Omitted",
+            "type": "integer"
+          },
+          "foreign_keys": {
+            "items": {
+              "$ref": "#/components/schemas/DbForeignKeyOut"
+            },
+            "title": "Foreign Keys",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "schema_name": {
+            "default": "",
+            "title": "Schema Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DbTableOut",
+        "type": "object"
+      },
+      "DevOverrideOut": {
+        "description": "Whether the local one-click sign-in override is available.\n\nPublic and unauthenticated on purpose: the login screen has to know whether\nto render the button before any session exists. Outside development/test,\nor when DEV_USER is unset, `enabled` is always false.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "handle": {
+            "default": "",
+            "title": "Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "DevOverrideOut",
+        "type": "object"
+      },
+      "DocumentContentRequest": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "DocumentContentRequest",
+        "type": "object"
+      },
+      "DocumentOut": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "content",
+          "updated_at"
+        ],
+        "title": "DocumentOut",
+        "type": "object"
+      },
+      "DocumentRequest": {
+        "properties": {
+          "content": {
+            "default": "",
+            "title": "Content",
+            "type": "string"
+          },
+          "kind": {
+            "default": "markdown",
+            "enum": [
+              "markdown",
+              "latex"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "DocumentRequest",
+        "type": "object"
+      },
+      "DocumentSummaryOut": {
+        "properties": {
+          "characters": {
+            "title": "Characters",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "characters",
+          "updated_at"
+        ],
+        "title": "DocumentSummaryOut",
+        "type": "object"
+      },
+      "DocumentVersionOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "summary",
+          "created_at"
+        ],
+        "title": "DocumentVersionOut",
+        "type": "object"
+      },
       "GarminCredentialsIn": {
         "properties": {
           "email": {
@@ -963,6 +1712,11 @@
             },
             "title": "Chunk Ids",
             "type": "array"
+          },
+          "confidence": {
+            "default": 0.0,
+            "title": "Confidence",
+            "type": "number"
           },
           "from_entity_id": {
             "title": "From Entity Id",
@@ -1274,6 +2028,181 @@
         "title": "IntegrationProviderOut",
         "type": "object"
       },
+      "LoginIn": {
+        "properties": {
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginIn",
+        "type": "object"
+      },
+      "McpServerOut": {
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "has_secrets": {
+            "title": "Has Secrets",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error": {
+            "title": "Last Error",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/McpToolOut"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "transport": {
+            "title": "Transport",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "transport",
+          "command",
+          "args",
+          "url",
+          "enabled",
+          "status",
+          "last_error",
+          "has_secrets",
+          "tools",
+          "created_at"
+        ],
+        "title": "McpServerOut",
+        "type": "object"
+      },
+      "McpServerRequest": {
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "command": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Command",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "secrets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Secrets",
+            "type": "object"
+          },
+          "transport": {
+            "default": "stdio",
+            "enum": [
+              "stdio",
+              "http"
+            ],
+            "title": "Transport",
+            "type": "string"
+          },
+          "url": {
+            "default": "",
+            "maxLength": 600,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "McpServerRequest",
+        "type": "object"
+      },
+      "McpToolOut": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "enabled"
+        ],
+        "title": "McpToolOut",
+        "type": "object"
+      },
       "MemoryItemOut": {
         "properties": {
           "content": {
@@ -1385,6 +2314,7 @@
         "type": "object"
       },
       "ModelProviderStatus": {
+        "description": "What is answering. `scripted` is the offline test double, never production.\n\n`configured` no longer distinguishes a working install from a degraded one \u2014\nthe app refuses to start without a key \u2014 so it stays only because clients\nread it, and is now simply \"a real provider is behind this\".",
         "properties": {
           "configured": {
             "title": "Configured",
@@ -1396,8 +2326,8 @@
           },
           "provider": {
             "enum": [
-              "deterministic",
-              "openai"
+              "openai",
+              "scripted"
             ],
             "title": "Provider",
             "type": "string"
@@ -1409,6 +2339,262 @@
           "model"
         ],
         "title": "ModelProviderStatus",
+        "type": "object"
+      },
+      "PasswordResetConfirmIn": {
+        "properties": {
+          "password": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ],
+        "title": "PasswordResetConfirmIn",
+        "type": "object"
+      },
+      "PasswordResetRequestIn": {
+        "properties": {
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "PasswordResetRequestIn",
+        "type": "object"
+      },
+      "PendingDocumentEditOut": {
+        "description": "One proposed document write awaiting a decision.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "proposal_preview": {
+            "title": "Proposal Preview",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "name",
+          "document_id",
+          "title",
+          "proposal_preview",
+          "created_at"
+        ],
+        "title": "PendingDocumentEditOut",
+        "type": "object"
+      },
+      "ProjectFileOut": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content",
+          "bytes"
+        ],
+        "title": "ProjectFileOut",
+        "type": "object"
+      },
+      "ProjectFileRequest": {
+        "properties": {
+          "content": {
+            "default": "",
+            "title": "Content",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "ProjectFileRequest",
+        "type": "object"
+      },
+      "ProjectOut": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "entry_path": {
+            "title": "Entry Path",
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectFileOut"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "total_bytes": {
+            "title": "Total Bytes",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "kind",
+          "entry_path",
+          "files",
+          "total_bytes",
+          "updated_at"
+        ],
+        "title": "ProjectOut",
+        "type": "object"
+      },
+      "ProjectRequest": {
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "entry_path": {
+            "default": "",
+            "title": "Entry Path",
+            "type": "string"
+          },
+          "kind": {
+            "default": "web",
+            "enum": [
+              "web",
+              "latex"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProjectRequest",
+        "type": "object"
+      },
+      "ProjectSummaryOut": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "entry_path": {
+            "title": "Entry Path",
+            "type": "string"
+          },
+          "file_count": {
+            "title": "File Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "total_bytes": {
+            "title": "Total Bytes",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "kind",
+          "entry_path",
+          "file_count",
+          "total_bytes",
+          "updated_at"
+        ],
+        "title": "ProjectSummaryOut",
         "type": "object"
       },
       "PublishedAppOut": {
@@ -1530,6 +2716,34 @@
           "run"
         ],
         "title": "SendMessageResponse",
+        "type": "object"
+      },
+      "SignupIn": {
+        "properties": {
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "maxLength": 120,
+            "title": "Name",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "SignupIn",
         "type": "object"
       },
       "SourceOut": {
@@ -1720,6 +2934,49 @@
         "title": "ToolCallOut",
         "type": "object"
       },
+      "ToolPolicyOut": {
+        "properties": {
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "policy"
+        ],
+        "title": "ToolPolicyOut",
+        "type": "object"
+      },
+      "ToolPolicyRequest": {
+        "properties": {
+          "policy": {
+            "enum": [
+              "ask",
+              "allow",
+              "deny"
+            ],
+            "title": "Policy",
+            "type": "string"
+          },
+          "tool_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "policy"
+        ],
+        "title": "ToolPolicyRequest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1759,6 +3016,21 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VerifyEmailIn": {
+        "properties": {
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "VerifyEmailIn",
+        "type": "object"
       }
     }
   },
@@ -1769,17 +3041,81 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api/apps": {
+    "/api/agent-tool-calls": {
       "get": {
-        "operationId": "list_apps_api_apps_get",
+        "operationId": "list_agent_tool_calls_api_agent_tool_calls_get",
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
+            "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentToolCallOut"
+                  },
+                  "title": "Response List Agent Tool Calls Api Agent Tool Calls Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Agent Tool Calls",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
+    "/api/agent-tool-calls/{tool_call_id}/decision": {
+      "post": {
+        "description": "Approve or deny a tool call the agent loop parked on, then resume the run.",
+        "operationId": "decide_agent_tool_call_api_agent_tool_calls__tool_call_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_call_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
               "type": "string"
             }
           },
@@ -1788,9 +3124,74 @@
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentToolCallOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Agent Tool Call",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
+    "/api/apps": {
+      "get": {
+        "operationId": "list_apps_api_apps_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -1841,22 +3242,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -1924,22 +3321,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -1996,22 +3389,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2069,22 +3458,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2150,22 +3535,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2232,22 +3613,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2314,22 +3691,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2367,22 +3740,18 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2418,17 +3787,445 @@
         ]
       }
     },
-    "/api/bootstrap": {
+    "/api/auth/dev-login": {
+      "post": {
+        "description": "One-click local sign-in for DEV_USER. Unreachable outside development.",
+        "operationId": "dev_login_api_auth_dev_login_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dev Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/dev-override": {
       "get": {
-        "operationId": "bootstrap_api_bootstrap_get",
+        "operationId": "dev_override_status_api_auth_dev_override_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevOverrideOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dev Override Status",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/google/callback": {
+      "get": {
+        "operationId": "google_callback_api_auth_google_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Error",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Callback",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/google/start": {
+      "get": {
+        "operationId": "google_start_api_auth_google_start_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Google Start",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "operationId": "login_api_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "operationId": "logout_api_auth_logout_post",
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
+            "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "description": "The current identity, plus the CSRF token for this session.\n\nThe session cookie is HttpOnly, so this is how a freshly loaded page learns\nthe double-submit value it must echo. CORS keeps the response readable only\nfrom the configured web origins.",
+        "operationId": "me_api_auth_me_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/password/reset/confirm": {
+      "post": {
+        "operationId": "confirm_password_reset_api_auth_password_reset_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetConfirmIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Password Reset",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/password/reset/request": {
+      "post": {
+        "operationId": "request_password_reset_api_auth_password_reset_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetRequestIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Password Reset",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/signup": {
+      "post": {
+        "operationId": "signup_api_auth_signup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Signup",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/verify-email": {
+      "post": {
+        "operationId": "verify_email_api_auth_verify_email_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Email",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/board-ops/{board_id}/cards/{card_id}/reorder": {
+      "post": {
+        "operationId": "reorder_card_api_board_ops__board_id__cards__card_id__reorder_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "card_id",
+            "required": true,
+            "schema": {
+              "title": "Card Id",
               "type": "string"
             }
           },
@@ -2437,9 +4234,734 @@
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reorder Card",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/board-ops/{board_id}/columns": {
+      "post": {
+        "operationId": "add_column_api_board_ops__board_id__columns_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ColumnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Column",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/board-ops/{board_id}/columns/reorder": {
+      "post": {
+        "operationId": "reorder_columns_api_board_ops__board_id__columns_reorder_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ColumnOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reorder Columns",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/board-ops/{board_id}/columns/{column_id}": {
+      "delete": {
+        "operationId": "delete_column_api_board_ops__board_id__columns__column_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "column_id",
+            "required": true,
+            "schema": {
+              "title": "Column Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "move_cards_to",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Move Cards To",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Column",
+        "tags": [
+          "boards"
+        ]
+      },
+      "patch": {
+        "operationId": "rename_column_api_board_ops__board_id__columns__column_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "column_id",
+            "required": true,
+            "schema": {
+              "title": "Column Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ColumnRenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Column",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/boards": {
+      "get": {
+        "operationId": "list_boards_api_boards_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BoardOut"
+                  },
+                  "title": "Response List Boards Api Boards Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Boards",
+        "tags": [
+          "artifacts"
+        ]
+      },
+      "post": {
+        "operationId": "create_board_api_boards_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BoardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Board",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/boards/{board_id}": {
+      "delete": {
+        "operationId": "delete_board_api_boards__board_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Board",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/boards/{board_id}/cards": {
+      "post": {
+        "operationId": "add_card_api_boards__board_id__cards_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BoardCardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Card",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/boards/{board_id}/cards/{card_id}": {
+      "delete": {
+        "operationId": "delete_card_api_boards__board_id__cards__card_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "card_id",
+            "required": true,
+            "schema": {
+              "title": "Card Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Card",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/boards/{board_id}/cards/{card_id}/move": {
+      "post": {
+        "operationId": "move_card_api_boards__board_id__cards__card_id__move_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "card_id",
+            "required": true,
+            "schema": {
+              "title": "Card Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "column",
+            "required": true,
+            "schema": {
+              "title": "Column",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Move Card",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/bootstrap": {
+      "get": {
+        "operationId": "bootstrap_api_bootstrap_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2486,22 +5008,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2539,22 +5057,18 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2605,22 +5119,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2688,22 +5198,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2743,22 +5249,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2818,22 +5320,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2881,22 +5379,18 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -2947,22 +5441,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3019,22 +5509,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3072,22 +5558,18 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3138,22 +5620,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3210,22 +5688,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3293,22 +5767,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3350,6 +5820,762 @@
         ]
       }
     },
+    "/api/db/connections": {
+      "get": {
+        "operationId": "list_connections_api_db_connections_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DbConnectionOut"
+                  },
+                  "title": "Response List Connections Api Db Connections Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Connections",
+        "tags": [
+          "database"
+        ]
+      },
+      "post": {
+        "operationId": "create_connection_api_db_connections_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DbConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DbConnectionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Connection",
+        "tags": [
+          "database"
+        ]
+      }
+    },
+    "/api/db/connections/{connection_id}": {
+      "delete": {
+        "operationId": "delete_connection_api_db_connections__connection_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Connection",
+        "tags": [
+          "database"
+        ]
+      }
+    },
+    "/api/db/connections/{connection_id}/schema": {
+      "get": {
+        "description": "Tables for a connection, or one table's columns when `table` is given.\n\nDatabases past a dozen tables come back as names only; ask again with\n`table=` for the columns of the one the user opened.",
+        "operationId": "get_schema_api_db_connections__connection_id__schema_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "table",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 200,
+              "title": "Table",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DbSchemaOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Schema",
+        "tags": [
+          "database"
+        ]
+      }
+    },
+    "/api/db/connections/{connection_id}/test": {
+      "post": {
+        "description": "Dial the database and record the outcome on the row.\n\nAn unreachable database is an expected state, not a 500 \u2014 the row comes back\nwith status \"error\" and the reason, so the UI can show it inline.",
+        "operationId": "test_connection_api_db_connections__connection_id__test_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DbConnectionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Connection",
+        "tags": [
+          "database"
+        ]
+      }
+    },
+    "/api/documents": {
+      "get": {
+        "operationId": "list_documents_api_documents_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentSummaryOut"
+                  },
+                  "title": "Response List Documents Api Documents Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Documents",
+        "tags": [
+          "artifacts"
+        ]
+      },
+      "post": {
+        "operationId": "create_document_api_documents_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Document",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/documents-pending": {
+      "get": {
+        "description": "Proposed create/edit calls whose run is still parked on the decision.\n\nRuns that were cancelled leave their proposal rows behind; those can no\nlonger be approved, so they are filtered out rather than offered as a\nbutton that would 409.",
+        "operationId": "list_pending_document_edits_api_documents_pending_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PendingDocumentEditOut"
+                  },
+                  "title": "Response List Pending Document Edits Api Documents Pending Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pending Document Edits",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/documents/{document_id}": {
+      "delete": {
+        "operationId": "delete_document_api_documents__document_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Document",
+        "tags": [
+          "artifacts"
+        ]
+      },
+      "get": {
+        "operationId": "get_document_api_documents__document_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Document",
+        "tags": [
+          "artifacts"
+        ]
+      },
+      "put": {
+        "operationId": "update_document_api_documents__document_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentContentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Document",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/documents/{document_id}/versions": {
+      "get": {
+        "operationId": "list_versions_api_documents__document_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentVersionOut"
+                  },
+                  "title": "Response List Versions Api Documents  Document Id  Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Versions",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/documents/{document_id}/versions/{version_id}/restore": {
+      "post": {
+        "operationId": "restore_version_api_documents__document_id__versions__version_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Version",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/api/graph": {
       "get": {
         "operationId": "get_graph_api_graph_get",
@@ -3368,22 +6594,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3432,22 +6654,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3485,22 +6703,18 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3553,22 +6767,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3636,22 +6846,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3691,22 +6897,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3768,22 +6970,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3911,22 +7109,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -3958,17 +7152,126 @@
         ]
       }
     },
-    "/api/memory": {
+    "/api/mcp/servers": {
       "get": {
-        "operationId": "list_memory_api_memory_get",
+        "operationId": "list_servers_api_mcp_servers_get",
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
+            "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/McpServerOut"
+                  },
+                  "title": "Response List Servers Api Mcp Servers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Servers",
+        "tags": [
+          "mcp"
+        ]
+      },
+      "post": {
+        "operationId": "create_server_api_mcp_servers_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Server",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/api/mcp/servers/{server_id}": {
+      "delete": {
+        "operationId": "delete_server_api_mcp_servers__server_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
               "type": "string"
             }
           },
@@ -3977,9 +7280,248 @@
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Server",
+        "tags": [
+          "mcp"
+        ]
+      },
+      "patch": {
+        "operationId": "update_server_api_mcp_servers__server_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "enabled",
+            "required": true,
+            "schema": {
+              "title": "Enabled",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Server",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/api/mcp/servers/{server_id}/refresh": {
+      "post": {
+        "description": "Connect, re-enumerate tools, and record whether the server is reachable.",
+        "operationId": "refresh_server_api_mcp_servers__server_id__refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Server",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/api/mcp/tools/{tool_id}": {
+      "patch": {
+        "operationId": "update_tool_api_mcp_tools__tool_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "enabled",
+            "required": true,
+            "schema": {
+              "title": "Enabled",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpToolOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Tool",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/api/memory": {
+      "get": {
+        "operationId": "list_memory_api_memory_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4041,22 +7583,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4078,6 +7616,352 @@
         "summary": "Forget Memory",
         "tags": [
           "memory"
+        ]
+      }
+    },
+    "/api/projects": {
+      "get": {
+        "operationId": "list_projects_api_projects_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectSummaryOut"
+                  },
+                  "title": "Response List Projects Api Projects Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Projects",
+        "tags": [
+          "projects"
+        ]
+      },
+      "post": {
+        "operationId": "create_project_api_projects_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Project",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/projects/{project_id}": {
+      "delete": {
+        "operationId": "delete_project_api_projects__project_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Project",
+        "tags": [
+          "projects"
+        ]
+      },
+      "get": {
+        "operationId": "get_project_api_projects__project_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/files": {
+      "delete": {
+        "operationId": "delete_project_file_api_projects__project_id__files_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Project-relative file path",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Project-relative file path",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Project File",
+        "tags": [
+          "projects"
+        ]
+      },
+      "put": {
+        "description": "Create or overwrite one file. Paths carry slashes, so they ride in the body.",
+        "operationId": "write_project_file_api_projects__project_id__files_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectFileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectFileOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write Project File",
+        "tags": [
+          "projects"
         ]
       }
     },
@@ -4107,22 +7991,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4196,22 +8076,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4247,22 +8123,18 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4313,22 +8185,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4396,22 +8264,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4442,22 +8306,18 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4519,22 +8379,18 @@
           },
           {
             "in": "header",
-            "name": "x-user-id",
-            "required": false,
-            "schema": {
-              "default": "00000000-0000-4000-8000-000000000002",
-              "title": "X-User-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
-              "default": "00000000-0000-4000-8000-000000000001",
-              "title": "X-Workspace-Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -4571,6 +8427,116 @@
           }
         },
         "summary": "Decide Tool Call",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
+    "/api/tool-policies": {
+      "get": {
+        "operationId": "list_tool_policies_api_tool_policies_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ToolPolicyOut"
+                  },
+                  "title": "Response List Tool Policies Api Tool Policies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Tool Policies",
+        "tags": [
+          "tools"
+        ]
+      },
+      "put": {
+        "operationId": "set_tool_policy_api_tool_policies_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolPolicyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Tool Policy",
         "tags": [
           "tools"
         ]

@@ -31,6 +31,13 @@ echo "[dev] applying migrations"
 (cd apps/api && ../../.venv/bin/alembic upgrade head) 2>&1 | sed -u 's/^/[db] /'
 [ "${PIPESTATUS[0]}" -eq 0 ] || fail "alembic upgrade failed — see [db] logs above"
 
+# Off by default now that the web app has a sign-in screen: local development
+# should exercise the same cookie-and-CSRF path a deployment does, and an
+# auto-login door left open is how "works on my machine" hides a broken login.
+# Sign up at http://localhost:3000 to get a workspace. `DEV_AUTO_LOGIN=true make
+# dev` still resolves a cookie-less request to the seeded demo workspace, which
+# Settings only allow when APP_ENV is development or test.
+DEV_AUTO_LOGIN="${DEV_AUTO_LOGIN:-false}" \
 .venv/bin/uvicorn app.main:app --app-dir apps/api --reload --host 127.0.0.1 --port "$API_PORT" 2>&1 \
   | sed -u 's/^/[api] /' &
 

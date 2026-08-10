@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.auth import DEFAULT_USER_ID, DEFAULT_WORKSPACE_ID, ensure_development_identity
+from app.auth import DEV_SEED_USER_ID, DEV_SEED_WORKSPACE_ID, seed_dev_workspace
 from app.database import Base, SessionLocal, engine
 from app.models import Source, new_id
 from app.services.ingestion import ingest_source, object_path
@@ -27,10 +27,10 @@ def main() -> None:
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
-        ensure_development_identity(db)
+        seed_dev_workspace(db)
         existing = db.scalar(
             select(Source).where(
-                Source.workspace_id == DEFAULT_WORKSPACE_ID,
+                Source.workspace_id == DEV_SEED_WORKSPACE_ID,
                 Source.filename == "atlas-product-brief.md",
                 Source.deleted_at.is_(None),
             )
@@ -39,12 +39,12 @@ def main() -> None:
             print("Demo source already exists:", existing.id)
             return
         source_id = new_id()
-        path = object_path(DEFAULT_WORKSPACE_ID, source_id, "atlas-product-brief.md")
+        path = object_path(DEV_SEED_WORKSPACE_ID, source_id, "atlas-product-brief.md")
         path.write_text(DEMO_TEXT, encoding="utf-8")
         source = Source(
             id=source_id,
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            created_by=DEFAULT_USER_ID,
+            workspace_id=DEV_SEED_WORKSPACE_ID,
+            created_by=DEV_SEED_USER_ID,
             filename="atlas-product-brief.md",
             media_type="text/markdown",
             object_key=str(path),
@@ -53,7 +53,7 @@ def main() -> None:
         )
         db.add(source)
         db.commit()
-        ingest_source(source.id, DEFAULT_USER_ID)
+        ingest_source(source.id, DEV_SEED_USER_ID)
         print("Seeded demo source:", source.id)
     finally:
         db.close()

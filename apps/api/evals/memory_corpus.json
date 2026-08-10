@@ -1,0 +1,193 @@
+{
+  "readme": "Memory evaluation corpus. Categories mirror LongMemEval so results are comparable to the published literature. The load-bearing category is `knowledge_update`: each item seeds a fact, then a later fact that supersedes it, and asks a question whose only correct answer is the newer one. A memory system that cannot represent supersession will return both, and the `stale` field is what detects that — the published failure rate for naive retrieval is 15-40%, and cosine similarity cannot distinguish a contradiction from a duplicate (AUROC 0.59, i.e. chance). `seed` entries are written in order, so a later entry genuinely arrives after an earlier one. `keys` is the `subject|relation` claim key MEMORY_EXTRACTION_INSTRUCTIONS asks the model to return for each seed, and it is the one thing this harness has to supply in the model's place. Two seeds share a key exactly when they are two values of one claim; seeds that state different claims about the same subject (a holiday and a return date) carry different keys, which is what makes an over-eager supersession show up here as a recall drop rather than passing unnoticed.",
+  "items": [
+    {
+      "category": "preference",
+      "seed": [
+        "Nate prefers dark mode in every editor."
+      ],
+      "keys": [
+        "nate|editor_theme"
+      ],
+      "question": "What colour scheme should I use for the editor?",
+      "expect": "dark mode"
+    },
+    {
+      "category": "preference",
+      "seed": [
+        "Nate wants charts rendered with muted colours rather than saturated ones."
+      ],
+      "keys": [
+        "nate|chart_colours"
+      ],
+      "question": "How should I colour a new chart?",
+      "expect": "muted"
+    },
+    {
+      "category": "preference",
+      "seed": [
+        "Nate reads code reviews in the morning and does not want them after 6pm."
+      ],
+      "keys": [
+        "nate|review_time"
+      ],
+      "question": "When should I send Nate a review request?",
+      "expect": "morning"
+    },
+    {
+      "category": "single_session",
+      "seed": [
+        "The Northstar launch is owned by Maya Chen."
+      ],
+      "keys": [
+        "northstar_launch|owner"
+      ],
+      "question": "Who owns the Northstar launch?",
+      "expect": "Maya Chen"
+    },
+    {
+      "category": "single_session",
+      "seed": [
+        "The payments reconciliation job runs nightly at 2am UTC."
+      ],
+      "keys": [
+        "reconciliation_job|schedule"
+      ],
+      "question": "When does the reconciliation job run?",
+      "expect": "2am"
+    },
+    {
+      "category": "single_session",
+      "seed": [
+        "Priya Shah owns the payments reconciliation service."
+      ],
+      "keys": [
+        "payments_reconciliation|owner"
+      ],
+      "question": "Who owns payments reconciliation?",
+      "expect": "Priya Shah"
+    },
+    {
+      "category": "multi_session",
+      "seed": [
+        "Nate started a project called Juniper in March.",
+        "Juniper uses a violet deployment ring.",
+        "Juniper's rollback window is fifteen minutes."
+      ],
+      "keys": [
+        "juniper|started",
+        "juniper|deploy_ring",
+        "juniper|rollback_window"
+      ],
+      "question": "Tell me about the Juniper deployment setup.",
+      "expect": "violet"
+    },
+    {
+      "category": "multi_session",
+      "seed": [
+        "The Atlas migration moves account records off MySQL.",
+        "Atlas migration cutover is the point of no return."
+      ],
+      "keys": [
+        "atlas_migration|scope",
+        "atlas_migration|point_of_no_return"
+      ],
+      "question": "When can we no longer roll back the Atlas migration?",
+      "expect": "cutover"
+    },
+    {
+      "category": "temporal",
+      "seed": [
+        "Nate was on holiday for the first two weeks of July.",
+        "Nate returned to work on the fifteenth of July."
+      ],
+      "keys": [
+        "nate|holiday_dates",
+        "nate|return_date"
+      ],
+      "question": "When did Nate come back from leave?",
+      "expect": "fifteenth"
+    },
+    {
+      "category": "temporal",
+      "seed": [
+        "The security review for cross-tenant features expires after a year."
+      ],
+      "keys": [
+        "security_review|validity"
+      ],
+      "question": "How long is a security review valid?",
+      "expect": "a year"
+    },
+    {
+      "category": "knowledge_update",
+      "seed": [
+        "Nate deploys the API on Fly.io.",
+        "Nate moved the API deployment from Fly.io to Railway."
+      ],
+      "keys": [
+        "api|deploy_host",
+        "api|deploy_host"
+      ],
+      "question": "Where is the API deployed?",
+      "expect": "Railway",
+      "stale": "Fly.io"
+    },
+    {
+      "category": "knowledge_update",
+      "seed": [
+        "The team ships releases on Mondays.",
+        "The team changed its release day from Monday to Thursday."
+      ],
+      "keys": [
+        "team|release_day",
+        "team|release_day"
+      ],
+      "question": "Which day do releases go out?",
+      "expect": "Thursday",
+      "stale": "Mondays"
+    },
+    {
+      "category": "knowledge_update",
+      "seed": [
+        "Priya Shah is the on-call lead for payments.",
+        "Daniel Okonkwo took over as on-call lead for payments from Priya Shah."
+      ],
+      "keys": [
+        "payments|on_call_lead",
+        "payments|on_call_lead"
+      ],
+      "question": "Who is the on-call lead for payments?",
+      "expect": "Daniel Okonkwo",
+      "stale": "Priya Shah is the on-call lead"
+    },
+    {
+      "category": "knowledge_update",
+      "seed": [
+        "Nate's preferred chart library is Recharts.",
+        "Nate switched his preferred chart library from Recharts to visx."
+      ],
+      "keys": [
+        "nate|chart_library",
+        "nate|chart_library"
+      ],
+      "question": "Which chart library should I use?",
+      "expect": "visx",
+      "stale": "preferred chart library is Recharts"
+    },
+    {
+      "category": "knowledge_update",
+      "seed": [
+        "The staging database runs Postgres 15.",
+        "Staging was upgraded from Postgres 15 to Postgres 17."
+      ],
+      "keys": [
+        "staging_database|postgres_version",
+        "staging_database|postgres_version"
+      ],
+      "question": "What Postgres version is staging on?",
+      "expect": "Postgres 17",
+      "stale": "staging database runs Postgres 15"
+    }
+  ]
+}

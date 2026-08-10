@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test("upload, cited answer, provenance, graph, approval, and deletion", async ({
   page,
@@ -90,4 +90,119 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "E2E revenue app" })).toBeVisible();
   const published = page.frameLocator(".published-code-app iframe");
   await expect(published.getByText("North").first()).toBeVisible();
+});
+
+function chatComposer(page: Page) {
+  // The placeholder tracks whether the workspace has an indexed source, which
+  // earlier tests change; either wording is the same box.
+  return page.getByPlaceholder(/Ask your workspace|Upload a source/);
+}
+
+/**
+ * The two tests below cover the approval flow, driven by the scripted model
+ * provider the e2e API server runs (apps/web/e2e/agent-script.json). Only the
+ * model is faked: the loop parks the run, the card renders the tool's own
+ * preview, and the decision goes through POST
+ * /api/agent-tool-calls/{id}/decision with its normal guards.
+ */
+test("an agent write is proposed with a diff, applied on approve, dropped on deny", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New thread" }).click();
+  const composer = chatComposer(page);
+
+  await composer.fill("Draft the launch runbook.");
+  await composer.press("Enter");
+
+  const createCard = page.locator(".tool-card", { hasText: "create_document" });
+  await expect(createCard).toBeVisible({ timeout: 20_000 });
+  await expect(createCard.getByText("Needs approval")).toBeVisible();
+  await expect(
+    createCard.locator(".diff-line.add", { hasText: "Step two: run the migrations." }),
+  ).toBeVisible();
+
+  await createCard.getByRole("button", { name: "Approve" }).click();
+  await expect(
+    page.getByText("Drafted the Launch Runbook with three steps."),
+  ).toBeVisible({ timeout: 20_000 });
+
+  await composer.fill("Tighten step two of the runbook.");
+  await composer.press("Enter");
+
+  const editCard = page.locator(".tool-card", { hasText: "edit_document" });
+  await expect(editCard).toBeVisible({ timeout: 20_000 });
+  const added = editCard.locator(".diff-line.add");
+  const removed = editCard.locator(".diff-line.del");
+  await expect(removed).toHaveText("-Step two: run the migrations.");
+  await expect(added).toHaveText(
+    "+Step two: run the migrations, then smoke-test checkout.",
+  );
+  // Colour is the only thing separating the two halves of a diff, so measure it.
+  const [addFill, removeFill] = await Promise.all([
+    added.evaluate((node) => getComputedStyle(node).backgroundColor),
+    removed.evaluate((node) => getComputedStyle(node).backgroundColor),
+  ]);
+  expect(addFill).not.toBe(removeFill);
+
+  await editCard.getByRole("button", { name: "Deny" }).click();
+  await expect(page.getByText("I left the Launch Runbook untouched.")).toBeVisible({
+    timeout: 20_000,
+  });
+
+  await page.getByRole("button", { name: /Documents/ }).click();
+  await page.getByRole("button", { name: /Launch Runbook/ }).click();
+  const body = page.locator(".document-source");
+  await expect(body).toHaveValue(/Step two: run the migrations\./);
+  await expect(body).not.toHaveValue(/smoke-test/);
+});
+
+async function openPlaybook(page: Page) {
+  await page.getByRole("button", { name: /Documents/ }).click();
+  await page.getByRole("button", { name: /Rollback Playbook/ }).click();
+}
+
+test("a parked write is decidable from the Documents view", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New thread" }).click();
+  const composer = chatComposer(page);
+
+  await composer.fill("Draft the rollback playbook.");
+  await composer.press("Enter");
+  const createCard = page.locator(".tool-card", { hasText: "create_document" });
+  await expect(createCard).toBeVisible({ timeout: 20_000 });
+  await createCard.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByText("Drafted the Rollback Playbook.")).toBeVisible({
+    timeout: 20_000,
+  });
+
+  await composer.fill("Name the on-call rotation in the playbook.");
+  await composer.press("Enter");
+  await expect(page.locator(".tool-card", { hasText: "edit_document" })).toBeVisible({
+    timeout: 20_000,
+  });
+
+  // Walk away from chat with the run still parked: the diff has to find the
+  // user again beside the document it would change.
+  await page.reload();
+  await openPlaybook(page);
+  const panel = page.locator(".document-pending .tool-card");
+  await expect(panel).toContainText("The assistant wants to edit");
+  await expect(panel).toContainText("Rollback Playbook");
+  await expect(panel.locator(".diff-line.del")).toHaveText(
+    "-Page the on-call engineer.",
+  );
+  await expect(panel.locator(".diff-line.add")).toHaveText(
+    "+Page the on-call engineer in the payments rotation.",
+  );
+
+  await panel.getByRole("button", { name: "Approve" }).click();
+  await expect(page.locator(".document-pending")).toHaveCount(0);
+
+  // No reload: the handler follows the run's event stream and refetches once the
+  // tool reports completion, so the open editor picks the write up on its own.
+  // The value can only come from the server, so this also proves the write landed.
+  await expect(page.locator(".document-source")).toHaveValue(/payments rotation/, {
+    timeout: 20_000,
+  });
 });

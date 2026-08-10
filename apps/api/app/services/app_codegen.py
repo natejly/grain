@@ -3,15 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..schemas import DatasetQuery
 from .analytics import AnalyticsValidationError, current_dataset_version, execute_dataset_query
 from .model import generate_code
+from .scripted_model import scripted_app_html
 
 MAX_HTML_BYTES = 256 * 1024
 SNAPSHOT_ROW_LIMIT = 200
@@ -96,56 +97,6 @@ def lint_generated_html(html: str) -> None:
         raise AppCodegenError("Generated app must not reference external URLs")
 
 
-def _deterministic_html(app_name: str, binding_names: List[str]) -> str:
-    names = json.dumps(binding_names)
-    return f"""<style>
-  body {{ margin: 0; padding: 24px; background: #0b0d10; color: #e7eaf0;
-         font-family: ui-sans-serif, system-ui, sans-serif; }}
-  h1 {{ font-size: 18px; margin: 0 0 16px; }}
-  h2 {{ font-size: 13px; color: #929ba8; margin: 20px 0 8px; }}
-  table {{ border-collapse: collapse; width: 100%; font-size: 12px; }}
-  th, td {{ border: 1px solid #282f39; padding: 6px 9px; text-align: left; }}
-  th {{ background: #12161c; }}
-  p {{ color: #69727e; font-size: 12px; }}
-</style>
-<h1>{app_name}</h1>
-<div id="root"><p>Waiting for data…</p></div>
-<script>
-  var BOUND = {names};
-  window.fieldnote.onData = function (snapshots) {{
-    var root = document.getElementById("root");
-    root.innerHTML = "";
-    BOUND.forEach(function (name) {{
-      var snap = snapshots[name];
-      var title = document.createElement("h2");
-      title.textContent = name;
-      root.appendChild(title);
-      if (!snap || !snap.rows || !snap.rows.length) {{
-        var empty = document.createElement("p");
-        empty.textContent = "No rows.";
-        root.appendChild(empty);
-        return;
-      }}
-      var table = document.createElement("table");
-      var head = table.insertRow();
-      snap.columns.forEach(function (column) {{
-        var cell = document.createElement("th");
-        cell.textContent = column;
-        head.appendChild(cell);
-      }});
-      snap.rows.slice(0, 50).forEach(function (row) {{
-        var tr = table.insertRow();
-        snap.columns.forEach(function (column) {{
-          var td = tr.insertCell();
-          td.textContent = row[column] == null ? "—" : String(row[column]);
-        }});
-      }});
-      root.appendChild(table);
-    }});
-  }};
-</script>"""
-
-
 def build_code_manifest(
     db: Session,
     *,
@@ -186,7 +137,12 @@ def build_code_manifest(
             + json.dumps(samples, default=str)
         )
 
-    if settings.active_model_provider == "openai":
+    if settings.active_model_provider == "scripted":
+        # The test double is handed the bindings rather than the prompt: what a
+        # generated app is judged on is the frame it renders, so it stands in
+        # with a page that reads the same runtime real generated code must use.
+        body = scripted_app_html(app_name, [binding["name"] for binding in bindings])
+    else:
         parts = [f"App name: {app_name}", f"Request: {prompt}"]
         if schema_notes:
             parts.append("Available datasets (via window.fieldnote):\n" + "\n".join(schema_notes))
@@ -202,15 +158,13 @@ def build_code_manifest(
             user_id=user_id,
             settings=settings,
         )
-    else:
-        body = _deterministic_html(app_name, [binding["name"] for binding in bindings])
 
     lint_generated_html(body)
     html = FIELDNOTE_RUNTIME + "\n" + body
     manifest = {
         "schema_version": 2,
         "kind": "code",
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": utcnow().isoformat() + "Z",
         "prompt": prompt[:4000],
         "html": html,
         "data_bindings": bindings,

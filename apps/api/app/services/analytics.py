@@ -71,7 +71,8 @@ def _parse_csv(data: bytes) -> List[Dict[str, Any]]:
         rows.append(
             {
                 header: _validate_cell(row.get(original))
-                for header, original in zip(headers, reader.fieldnames)
+                # headers is built from fieldnames above, so lengths always match.
+                for header, original in zip(headers, reader.fieldnames, strict=True)
             }
         )
     return rows
@@ -406,7 +407,7 @@ def execute_dataset_query(
                 if isinstance(value, (date, datetime))
                 else value
             )
-            for column, value in zip(columns, row)
+            for column, value in zip(columns, row, strict=True)
         }
         for row in raw_rows
     ]

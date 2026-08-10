@@ -19,9 +19,21 @@ const contentSecurityPolicy = [
   "img-src 'self' data:",
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
+  // 'wasm-unsafe-eval' is required by esbuild-wasm, which bundles project files
+  // in this page so the sandbox never needs a server or a network fetch. It
+  // permits WebAssembly compilation only — not eval() or new Function() — and it
+  // applies to the host page alone. The generated preview still runs in an
+  // iframe under default-src 'none' with connect-src 'none', so the sandbox's
+  // own guarantees are unchanged.
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
   `connect-src 'self' ${apiOrigins}`,
-  `frame-src ${apiOrigins}`,
+  // `blob:` is what the LaTeX preview frames: the compiled PDF never leaves the
+  // browser, so it is handed to the <iframe> as a same-origin blob: URL this
+  // page created itself. Without it the compile succeeds, the status reads
+  // "Compiled", and the frame is silently blocked — a working editor that shows
+  // nothing. It grants no network reach: a blob: URL can only name bytes this
+  // document already holds.
+  `frame-src 'self' blob: ${apiOrigins}`,
 ].join("; ");
 
 const nextConfig: NextConfig = {

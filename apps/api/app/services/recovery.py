@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import List, Tuple
 
 from sqlalchemy import or_, select
 
+from ..clock import utcnow
 from ..database import SessionLocal
 from ..models import Run, Source, ToolCall
 from .events import append_event
@@ -24,7 +24,7 @@ def recover_durable_work() -> Tuple[int, int, int]:
     source_jobs: List[Tuple[str, str]] = []
     tool_call_ids: List[str] = []
     try:
-        now = datetime.utcnow()
+        now = utcnow()
         runs = list(
             db.scalars(
                 select(Run).where(

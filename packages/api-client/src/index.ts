@@ -6,12 +6,45 @@ export type Identity = {
   role: string;
 };
 
+/** Who the session cookie resolves to, plus the CSRF value to echo back. */
+export type AuthSession = {
+  user_id: string;
+  user_name: string;
+  user_email: string;
+  email_verified: boolean;
+  workspace_id: string;
+  workspace_name: string;
+  role: string;
+  /**
+   * Double-submit token for unsafe methods. Held in memory only — it is
+   * per-session and re-read from `GET /api/auth/me` after every page load.
+   */
+  csrf_token: string;
+};
+
+/**
+ * The deliberately uninformative answer to signup and password-reset requests:
+ * identical whether or not the address has an account, so the UI must never try
+ * to read an outcome out of it.
+ */
+export type AuthAcknowledgement = {
+  status: "ok";
+  detail: string;
+};
+
+export type DevOverride = {
+  enabled: boolean;
+  handle: string;
+};
+
 export type Bootstrap = {
   identity: Identity;
   default_agent_id: string;
   feature_flags: Record<string, boolean>;
   model_provider: {
-    provider: "deterministic" | "openai";
+    /** "scripted" is the test double; it never reaches a provider. */
+    provider: "openai" | "scripted";
+    /** True only when a real provider is answering. */
     configured: boolean;
     model: string;
   };
@@ -91,6 +124,193 @@ export type ToolCall = {
   created_at: string;
 };
 
+/** A function call issued by the agent loop, as opposed to the legacy HTTP tool. */
+export type AgentToolCall = {
+  id: string;
+  run_id: string;
+  conversation_id: string;
+  name: string;
+  arguments_json: string;
+  /** What the call will do if approved: a unified diff, or a one-line summary. */
+  proposal_preview: string;
+  status: string;
+  result_preview: string;
+  error: string;
+  latency_ms: number;
+  created_at: string;
+};
+
+export type ToolPolicy = {
+  tool_name: string;
+  policy: "ask" | "allow" | "deny";
+};
+
+export type DocumentKind = "markdown" | "latex";
+
+export type DocumentSummary = {
+  id: string;
+  title: string;
+  kind: DocumentKind;
+  characters: number;
+  updated_at: string;
+};
+
+export type WorkspaceDocument = {
+  id: string;
+  title: string;
+  kind: DocumentKind;
+  content: string;
+  updated_at: string;
+};
+
+export type DocumentVersion = {
+  id: string;
+  summary: string;
+  created_at: string;
+};
+
+export type BoardCard = {
+  id: string;
+  title: string;
+  body: string;
+  labels: string[];
+};
+
+export type BoardColumn = {
+  id: string;
+  name: string;
+  cards: BoardCard[];
+};
+
+export type Board = {
+  id: string;
+  name: string;
+  columns: BoardColumn[];
+};
+
+export type DbEngine = "postgres" | "mysql" | "sqlite" | "duckdb";
+
+export type DbConnection = {
+  id: string;
+  name: string;
+  engine: string;
+  read_only: boolean;
+  status: string;
+  last_error: string;
+  /** The DSN with its password replaced — the real one is never returned. */
+  dsn_summary: string;
+  created_at: string;
+};
+
+export type DbConnectionInput = {
+  name: string;
+  engine: DbEngine;
+  dsn: string;
+  read_only: boolean;
+};
+
+export type DbColumn = {
+  name: string;
+  type: string;
+  nullable: boolean;
+  primary_key: boolean;
+};
+
+export type DbForeignKey = {
+  columns: string[];
+  references: string;
+  referred_columns: string[];
+};
+
+export type DbTable = {
+  name: string;
+  schema_name: string;
+  /** False on large databases, where columns arrive only when asked for by name. */
+  columns_loaded: boolean;
+  columns: DbColumn[];
+  columns_omitted: number;
+  foreign_keys: DbForeignKey[];
+};
+
+export type DbSchema = {
+  connection_id: string;
+  connection: string;
+  engine: string;
+  table_count: number;
+  tables: DbTable[];
+  tables_omitted: number;
+  note: string;
+};
+
+export type ProjectFile = { path: string; content: string; bytes: number };
+
+export type ProjectKind = "web" | "latex";
+
+export type ProjectSummary = {
+  id: string;
+  name: string;
+  description: string;
+  kind: ProjectKind;
+  entry_path: string;
+  file_count: number;
+  total_bytes: number;
+  updated_at: string;
+};
+
+export type WorkspaceProject = {
+  id: string;
+  name: string;
+  description: string;
+  kind: ProjectKind;
+  entry_path: string;
+  files: ProjectFile[];
+  total_bytes: number;
+  updated_at: string;
+};
+
+/** A document write the agent proposed and the user has not decided yet. */
+export type PendingDocumentEdit = {
+  id: string;
+  run_id: string;
+  name: string;
+  document_id: string;
+  title: string;
+  proposal_preview: string;
+  created_at: string;
+};
+
+export type McpTool = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+};
+
+export type McpServer = {
+  id: string;
+  name: string;
+  transport: "stdio" | "http";
+  command: string;
+  args: string[];
+  url: string;
+  enabled: boolean;
+  status: string;
+  last_error: string;
+  has_secrets: boolean;
+  tools: McpTool[];
+  created_at: string;
+};
+
+export type McpServerInput = {
+  name: string;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  /** stdio env vars or HTTP headers; write-only, never returned by the API. */
+  secrets?: Record<string, string>;
+};
+
 export type AuditEvent = {
   id: string;
   action: string;
@@ -115,6 +335,8 @@ export type GraphEdge = {
   from_entity_id: string;
   to_entity_id: string;
   relation: string;
+  /** Trust in `relation`: co-occurrence carries a low floor, a named relation its own score. */
+  confidence: number;
   weight: number;
   source_ids: string[];
   chunk_ids: string[];
@@ -333,19 +555,63 @@ export class ApiError extends Error {
   get offline(): boolean {
     return this.status === 0;
   }
+
+  /** True when the API says nobody is signed in. */
+  get unauthenticated(): boolean {
+    return this.status === 401;
+  }
+}
+
+/** Must match Settings.csrf_header_name. */
+const CSRF_HEADER = "X-CSRF-Token";
+/** Optional workspace *selection*; membership is still verified server-side. */
+const WORKSPACE_HEADER = "X-Workspace-Id";
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+
+/**
+ * The auth routes report their own 401 to whoever called them: a wrong password
+ * is an answer, not an expired session, and routing it through the global
+ * "you have been signed out" hook would fight the login form for the screen.
+ */
+function ownsItsOwn401(path: string): boolean {
+  return path.startsWith("/api/auth/");
 }
 
 export class WorkspaceApi {
+  /**
+   * Session state lives here and nowhere else: views call methods, and the
+   * cookie, the CSRF header and the workspace selection are this class's job.
+   */
+  private csrfToken = "";
+  private workspaceId = "";
+  private unauthorizedHandlers = new Set<() => void>();
+
   constructor(
     public readonly baseUrl = "http://localhost:8000",
     private readonly headers: Record<string, string> = {},
   ) {}
 
-  private async request<T>(
-    path: string,
-    init: RequestInit = {},
-    mutation = false,
-  ): Promise<T> {
+  /**
+   * Called whenever the API answers 401 to anything outside /api/auth. Returns
+   * an unsubscribe so a React effect can clean up after itself.
+   */
+  onUnauthorized(handler: () => void): () => void {
+    this.unauthorizedHandlers.add(handler);
+    return () => {
+      this.unauthorizedHandlers.delete(handler);
+    };
+  }
+
+  /** Which workspace subsequent requests are about. "" means "the first one". */
+  setWorkspaceId(workspaceId: string): void {
+    this.workspaceId = workspaceId;
+  }
+
+  get csrf(): string {
+    return this.csrfToken;
+  }
+
+  private buildHeaders(init: RequestInit, mutation: boolean): Headers {
     const headers = new Headers(this.headers);
     if (init.body && !(init.body instanceof FormData)) {
       headers.set("Content-Type", "application/json");
@@ -353,11 +619,24 @@ export class WorkspaceApi {
     if (mutation && !headers.has("Idempotency-Key")) {
       headers.set("Idempotency-Key", makeKey());
     }
-    let response: Response;
+    if (this.workspaceId) headers.set(WORKSPACE_HEADER, this.workspaceId);
+    return headers;
+  }
+
+  private async dispatch(
+    path: string,
+    init: RequestInit,
+    headers: Headers,
+    unsafe: boolean,
+  ): Promise<Response> {
+    // Copied per attempt so a retry picks up a freshly fetched CSRF token while
+    // reusing the same Idempotency-Key — the retry is the same operation.
+    const attemptHeaders = new Headers(headers);
+    if (unsafe && this.csrfToken) attemptHeaders.set(CSRF_HEADER, this.csrfToken);
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      return await fetch(`${this.baseUrl}${path}`, {
         ...init,
-        headers,
+        headers: attemptHeaders,
         credentials: "include",
       });
     } catch {
@@ -365,20 +644,170 @@ export class WorkspaceApi {
       // only needs to know the API was unreachable.
       throw new ApiError(`Cannot reach the API at ${this.baseUrl}`, 0);
     }
-    if (!response.ok) {
-      let message = `Request failed (${response.status})`;
+  }
+
+  private static async detailOf(response: Response): Promise<string> {
+    try {
+      const body = (await response.clone().json()) as { detail?: unknown };
+      // Validation errors put a list here; only a string is meant for a human.
+      return typeof body.detail === "string" ? body.detail : "";
+    } catch {
+      return "";
+    }
+  }
+
+  private signalUnauthorized(): void {
+    for (const handler of [...this.unauthorizedHandlers]) handler();
+  }
+
+  private async request<T>(
+    path: string,
+    init: RequestInit = {},
+    mutation = false,
+  ): Promise<T> {
+    const headers = this.buildHeaders(init, mutation);
+    const unsafe = !SAFE_METHODS.has((init.method || "GET").toUpperCase());
+
+    let response = await this.dispatch(path, init, headers, unsafe);
+    let detail = response.ok ? "" : await WorkspaceApi.detailOf(response);
+
+    if (unsafe && response.status === 403 && /csrf/i.test(detail)) {
+      // The token is per-session and rotates on login, so a stale one means the
+      // page is holding a value from before a rotation. Re-read it and retry
+      // exactly once; a second failure is a real refusal.
       try {
-        const body = (await response.json()) as { detail?: string };
-        message = body.detail || message;
+        await this.me();
       } catch {
-        // Keep the status-based message.
+        // Leave the retry to produce the authoritative error.
       }
-      throw new ApiError(message, response.status);
+      response = await this.dispatch(path, init, headers, unsafe);
+      detail = response.ok ? "" : await WorkspaceApi.detailOf(response);
+    }
+
+    if (response.status === 401 && !ownsItsOwn401(path)) this.signalUnauthorized();
+
+    if (!response.ok) {
+      throw new ApiError(detail || `Request failed (${response.status})`, response.status);
     }
     if (response.status === 204) {
       return undefined as T;
     }
     return (await response.json()) as T;
+  }
+
+  // --- Authentication -------------------------------------------------------
+  // Every method that returns a session also adopts its CSRF token, so no view
+  // ever handles one.
+
+  private adopt(session: AuthSession): AuthSession {
+    this.csrfToken = session.csrf_token;
+    // Name the workspace the session resolved to rather than leaning on "the
+    // first one"; the API still checks the header against memberships.
+    this.workspaceId = session.workspace_id;
+    return session;
+  }
+
+  /** The current session, or a 401 ApiError when signed out. */
+  async me(): Promise<AuthSession> {
+    return this.adopt(await this.request<AuthSession>("/api/auth/me"));
+  }
+
+  async login(email: string, password: string): Promise<AuthSession> {
+    return this.adopt(
+      await this.request<AuthSession>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      }),
+    );
+  }
+
+  /** Local one-click override when the API has DEV_USER configured. */
+  async devLogin(): Promise<AuthSession> {
+    return this.adopt(
+      await this.request<AuthSession>("/api/auth/dev-login", {
+        method: "POST",
+      }),
+    );
+  }
+
+  async devOverride(): Promise<DevOverride> {
+    try {
+      return await this.request<DevOverride>("/api/auth/dev-override");
+    } catch {
+      return { enabled: false, handle: "" };
+    }
+  }
+
+  /** Does not sign the caller in — the account still has to confirm by email. */
+  signup(
+    email: string,
+    password: string,
+    name = "",
+  ): Promise<AuthAcknowledgement> {
+    return this.request("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ email, password, name }),
+    });
+  }
+
+  async logout(): Promise<void> {
+    try {
+      await this.request<void>("/api/auth/logout", { method: "POST" });
+    } finally {
+      // Local state goes either way: a logout the server refused still means
+      // this tab should stop acting signed in.
+      this.csrfToken = "";
+      this.workspaceId = "";
+    }
+  }
+
+  requestPasswordReset(email: string): Promise<AuthAcknowledgement> {
+    return this.request("/api/auth/password/reset/request", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  confirmPasswordReset(
+    token: string,
+    password: string,
+  ): Promise<AuthAcknowledgement> {
+    return this.request("/api/auth/password/reset/confirm", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    });
+  }
+
+  verifyEmail(token: string): Promise<AuthAcknowledgement> {
+    return this.request("/api/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  /**
+   * Must be assigned to `window.location.href`: the endpoint sets the OAuth
+   * state cookie and Google refuses to render inside an iframe or an XHR.
+   */
+  googleLoginUrl(): string {
+    return `${this.baseUrl}/api/auth/google/start`;
+  }
+
+  /**
+   * True when the API has a Google login client configured. `redirect: "manual"`
+   * turns the configured case into an unreadable opaque redirect (which is the
+   * answer) and leaves the unconfigured 503 readable.
+   */
+  async googleLoginAvailable(): Promise<boolean> {
+    try {
+      const response = await fetch(this.googleLoginUrl(), {
+        redirect: "manual",
+        credentials: "include",
+      });
+      return response.status !== 503;
+    } catch {
+      return false;
+    }
   }
 
   health(): Promise<{ status: string }> {
@@ -420,7 +849,13 @@ export class WorkspaceApi {
   ): Promise<SendMessageResponse> {
     return this.request(
       `/api/conversations/${conversationId}/messages`,
-      { method: "POST", body: JSON.stringify({ content, agent_id: agentId }) },
+      {
+        method: "POST",
+        // A workspace with no agent bootstraps as "", and an empty agent_id is
+        // not a valid selection — omitting the field lets the API pick the
+        // workspace's own agent instead of failing the turn.
+        body: JSON.stringify({ content, ...(agentId ? { agent_id: agentId } : {}) }),
+      },
       true,
     );
   }
@@ -460,6 +895,281 @@ export class WorkspaceApi {
       { method: "POST", body: JSON.stringify({ decision }) },
       true,
     );
+  }
+
+  listAgentToolCalls(): Promise<AgentToolCall[]> {
+    return this.request("/api/agent-tool-calls");
+  }
+
+  /** Approve or deny a parked agent tool call; `remember` stores it as a policy. */
+  decideAgentToolCall(
+    toolCallId: string,
+    decision: "approved" | "denied",
+    remember = false,
+  ): Promise<AgentToolCall> {
+    return this.request(
+      `/api/agent-tool-calls/${toolCallId}/decision`,
+      { method: "POST", body: JSON.stringify({ decision, remember }) },
+      true,
+    );
+  }
+
+  listToolPolicies(): Promise<ToolPolicy[]> {
+    return this.request("/api/tool-policies");
+  }
+
+  setToolPolicy(
+    toolName: string,
+    policy: "ask" | "allow" | "deny",
+  ): Promise<ToolPolicy> {
+    return this.request("/api/tool-policies", {
+      method: "PUT",
+      body: JSON.stringify({ tool_name: toolName, policy }),
+    });
+  }
+
+  listDocuments(): Promise<DocumentSummary[]> {
+    return this.request("/api/documents");
+  }
+
+  getDocument(documentId: string): Promise<WorkspaceDocument> {
+    return this.request(`/api/documents/${documentId}`);
+  }
+
+  createDocument(
+    title: string,
+    content = "",
+    kind: DocumentKind = "markdown",
+  ): Promise<WorkspaceDocument> {
+    return this.request("/api/documents", {
+      method: "POST",
+      body: JSON.stringify({ title, content, kind }),
+    });
+  }
+
+  saveDocument(documentId: string, content: string): Promise<WorkspaceDocument> {
+    return this.request(`/api/documents/${documentId}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  listDocumentVersions(documentId: string): Promise<DocumentVersion[]> {
+    return this.request(`/api/documents/${documentId}/versions`);
+  }
+
+  restoreDocumentVersion(
+    documentId: string,
+    versionId: string,
+  ): Promise<WorkspaceDocument> {
+    return this.request(
+      `/api/documents/${documentId}/versions/${versionId}/restore`,
+      { method: "POST" },
+    );
+  }
+
+  deleteDocument(documentId: string): Promise<void> {
+    return this.request(`/api/documents/${documentId}`, { method: "DELETE" }, true);
+  }
+
+  listBoards(): Promise<Board[]> {
+    return this.request("/api/boards");
+  }
+
+  createBoard(name: string, columns: string[] = []): Promise<Board> {
+    return this.request("/api/boards", {
+      method: "POST",
+      body: JSON.stringify({ name, columns }),
+    });
+  }
+
+  addBoardCard(
+    boardId: string,
+    column: string,
+    title: string,
+    body = "",
+  ): Promise<Board> {
+    return this.request(`/api/boards/${boardId}/cards`, {
+      method: "POST",
+      body: JSON.stringify({ column, title, body, labels: [] }),
+    });
+  }
+
+  moveBoardCard(boardId: string, cardId: string, column: string): Promise<Board> {
+    return this.request(
+      `/api/boards/${boardId}/cards/${cardId}/move?column=${encodeURIComponent(column)}`,
+      { method: "POST" },
+    );
+  }
+
+  deleteBoardCard(boardId: string, cardId: string): Promise<Board> {
+    return this.request(`/api/boards/${boardId}/cards/${cardId}`, {
+      method: "DELETE",
+    });
+  }
+
+  deleteBoard(boardId: string): Promise<void> {
+    return this.request(`/api/boards/${boardId}`, { method: "DELETE" }, true);
+  }
+
+  listDbConnections(): Promise<DbConnection[]> {
+    return this.request("/api/db/connections");
+  }
+
+  createDbConnection(input: DbConnectionInput): Promise<DbConnection> {
+    return this.request("/api/db/connections", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** Dial the database; an unreachable one comes back with status "error". */
+  testDbConnection(connectionId: string): Promise<DbConnection> {
+    return this.request(`/api/db/connections/${connectionId}/test`, {
+      method: "POST",
+    });
+  }
+
+  /** Omit `table` for the table list; pass one for its columns and foreign keys. */
+  getDbSchema(connectionId: string, table?: string): Promise<DbSchema> {
+    const query = table ? `?table=${encodeURIComponent(table)}` : "";
+    return this.request(`/api/db/connections/${connectionId}/schema${query}`);
+  }
+
+  deleteDbConnection(connectionId: string): Promise<void> {
+    return this.request(
+      `/api/db/connections/${connectionId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  listProjects(): Promise<ProjectSummary[]> {
+    return this.request("/api/projects");
+  }
+
+  getProject(projectId: string): Promise<WorkspaceProject> {
+    return this.request(`/api/projects/${projectId}`);
+  }
+
+  createProject(
+    name: string,
+    description = "",
+    kind: ProjectKind = "web",
+  ): Promise<WorkspaceProject> {
+    // entry_path is omitted so the server picks the default for the kind
+    // (index.tsx for web, main.tex for latex).
+    return this.request("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name, description, kind }),
+    });
+  }
+
+  /** Returns the stored file, whose `path` is normalized and may differ from `path`. */
+  saveProjectFile(
+    projectId: string,
+    path: string,
+    content: string,
+  ): Promise<ProjectFile> {
+    return this.request(`/api/projects/${projectId}/files`, {
+      method: "PUT",
+      body: JSON.stringify({ path, content }),
+    });
+  }
+
+  deleteProjectFile(projectId: string, path: string): Promise<void> {
+    return this.request(
+      `/api/projects/${projectId}/files?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  deleteProject(projectId: string): Promise<void> {
+    return this.request(`/api/projects/${projectId}`, { method: "DELETE" }, true);
+  }
+
+  addBoardColumn(boardId: string, name: string, index?: number): Promise<Board> {
+    return this.request(`/api/board-ops/${boardId}/columns`, {
+      method: "POST",
+      body: JSON.stringify({ name, index: index ?? null }),
+    });
+  }
+
+  renameBoardColumn(boardId: string, columnId: string, name: string): Promise<Board> {
+    return this.request(`/api/board-ops/${boardId}/columns/${columnId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  /** `moveCardsTo` rehomes the column's cards; without it a non-empty column is refused. */
+  deleteBoardColumn(
+    boardId: string,
+    columnId: string,
+    moveCardsTo?: string,
+  ): Promise<Board> {
+    const query = moveCardsTo ? `?move_cards_to=${encodeURIComponent(moveCardsTo)}` : "";
+    return this.request(`/api/board-ops/${boardId}/columns/${columnId}${query}`, {
+      method: "DELETE",
+    });
+  }
+
+  /** `order` must be a permutation of the board's column ids. */
+  reorderBoardColumns(boardId: string, order: string[]): Promise<Board> {
+    return this.request(`/api/board-ops/${boardId}/columns/reorder`, {
+      method: "POST",
+      body: JSON.stringify({ order }),
+    });
+  }
+
+  reorderBoardCard(
+    boardId: string,
+    cardId: string,
+    index: number,
+    columnId = "",
+  ): Promise<Board> {
+    return this.request(`/api/board-ops/${boardId}/cards/${cardId}/reorder`, {
+      method: "POST",
+      body: JSON.stringify({ index, column_id: columnId }),
+    });
+  }
+
+  listPendingDocumentEdits(): Promise<PendingDocumentEdit[]> {
+    return this.request("/api/documents-pending");
+  }
+
+  listMcpServers(): Promise<McpServer[]> {
+    return this.request("/api/mcp/servers");
+  }
+
+  createMcpServer(input: McpServerInput): Promise<McpServer> {
+    return this.request("/api/mcp/servers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** Reconnect and re-enumerate tools; an unreachable server returns status "error". */
+  refreshMcpServer(serverId: string): Promise<McpServer> {
+    return this.request(`/api/mcp/servers/${serverId}/refresh`, { method: "POST" });
+  }
+
+  setMcpServerEnabled(serverId: string, enabled: boolean): Promise<McpServer> {
+    return this.request(
+      `/api/mcp/servers/${serverId}?enabled=${enabled}`,
+      { method: "PATCH" },
+    );
+  }
+
+  setMcpToolEnabled(toolId: string, enabled: boolean): Promise<McpTool> {
+    return this.request(`/api/mcp/tools/${toolId}?enabled=${enabled}`, {
+      method: "PATCH",
+    });
+  }
+
+  deleteMcpServer(serverId: string): Promise<void> {
+    return this.request(`/api/mcp/servers/${serverId}`, { method: "DELETE" }, true);
   }
 
   listAuditEvents(): Promise<AuditEvent[]> {
@@ -656,18 +1366,21 @@ export class WorkspaceApi {
   }
 
   async *streamRun(runId: string, after = 0): AsyncGenerator<RunEvent> {
+    // A long-lived cross-origin GET still needs the cookie, or chat goes quiet
+    // the moment authentication lands. GET is CSRF-exempt, so no header here.
+    const headers = new Headers(this.headers);
+    headers.set("Accept", "text/event-stream");
+    if (this.workspaceId) headers.set(WORKSPACE_HEADER, this.workspaceId);
     let response: Response;
     try {
       response = await fetch(
         `${this.baseUrl}/api/runs/${runId}/events?after=${after}`,
-        {
-          headers: { ...this.headers, Accept: "text/event-stream" },
-          credentials: "include",
-        },
+        { headers, credentials: "include" },
       );
     } catch {
       throw new ApiError(`Cannot reach the API at ${this.baseUrl}`, 0);
     }
+    if (response.status === 401) this.signalUnauthorized();
     if (!response.ok || !response.body) {
       throw new ApiError("Could not open the run event stream", response.status);
     }

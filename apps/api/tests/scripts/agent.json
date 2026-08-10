@@ -1,0 +1,42 @@
+[
+  {
+    "match": "project atlas is led by dana reyes",
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "Project Atlas is led by Dana Reyes at Acme Labs.",
+        "entities": ["Project Atlas", "Dana Reyes", "Acme Labs"]
+      }
+    ]
+  },
+  {
+    "match": "orion initiative belongs to the platform team",
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "Orion Initiative belongs to the platform team.",
+        "entities": ["Orion Initiative"]
+      }
+    ]
+  },
+  {
+    "match": "zephyr program launches in march",
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "Zephyr Program launches in March.",
+        "entities": ["Zephyr Program"]
+      }
+    ]
+  },
+  {
+    "match": "nimbus platform pairs with quasar engine",
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "Nimbus Platform pairs with Quasar Engine for deployments.",
+        "entities": ["Nimbus Platform", "Quasar Engine"]
+      }
+    ]
+  }
+]

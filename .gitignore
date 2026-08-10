@@ -12,9 +12,13 @@ __pycache__/
 *.sqlite3
 data/
 node_modules/
+# Regenerated from node_modules by apps/web/scripts/sync-sandbox-assets.mjs.
+apps/web/public/sandbox/
 .next/
 .next-e2e/
 dist/
 coverage/
 playwright-report/
 test-results/
+# Playwright storage state: a live session cookie, minted per run.
+apps/web/e2e/.auth/

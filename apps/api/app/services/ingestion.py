@@ -3,21 +3,33 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import re
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from pypdf import PdfReader
-from sqlalchemy import delete
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
-from ..config import get_settings
+from ..config import Settings, get_settings
 from ..database import SessionLocal
 from ..models import Chunk, Source
 from .audit import record_audit
 from .graph import rebuild_graph
+from .model import situate_chunk
+from .retrieval import clear_source_postings, embed_chunks, index_chunks
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".json", ".pdf"}
+
+# The blurb is one small independent call per chunk, and a 60-chunk document
+# serialised would add minutes to an ingest. Modest width because this shares the
+# ingest worker with the graph extractor.
+CONTEXT_WORKERS = 8
 
 
 def sanitize_filename(filename: str) -> str:
@@ -91,6 +103,130 @@ def make_chunks(
     return chunks
 
 
+def contextualize_chunks(
+    chunks: Sequence[Chunk], document: str, settings: Optional[Settings] = None
+) -> List[Chunk]:
+    """Write a situating blurb onto each chunk. Returns the ones that got one.
+
+    Best-effort per chunk, not per document: `situate_chunk` answers "" for a
+    failure, so a provider hiccup costs one chunk its context rather than costing
+    the document its ingest. The chunks that did gain a blurb come back because
+    they — and only they — now need re-indexing and re-embedding.
+    """
+    settings = settings or get_settings()
+    if not settings.retrieval_contextual or not chunks:
+        return []
+    with ThreadPoolExecutor(max_workers=CONTEXT_WORKERS) as pool:
+        blurbs = list(
+            pool.map(
+                lambda chunk: situate_chunk(document, chunk.content, settings=settings),
+                chunks,
+            )
+        )
+    written: List[Chunk] = []
+    for chunk, blurb in zip(chunks, blurbs, strict=True):
+        if blurb:
+            chunk.context_prefix = blurb
+            written.append(chunk)
+    return written
+
+
+def prepare_for_search(
+    db: Session,
+    chunks: Sequence[Chunk],
+    *,
+    document: str,
+    settings: Optional[Settings] = None,
+) -> None:
+    """Make chunks retrievable: context blurb, then term index, then vectors.
+
+    Order matters. Both the term index and the embedding cover
+    `context_prefix + content`, so the blurb has to exist before either runs or
+    the two halves of hybrid retrieval would describe different text.
+
+    The optional stage is isolated from the two that are not. `situate_chunk`
+    answers "" for every failure it can see, but "every failure it can see" is not
+    all of them — a pool that cannot start a thread raises straight through
+    `contextualize_chunks` — and running first means anything that escapes it
+    takes the index and the vectors down with it. The index would be rebuilt by
+    `reconcile_index` on the next search; the vector would not be rebuilt by
+    anything, so a blurb the corpus is configured not to need would have silently
+    emptied the dense arm until someone ran the backfill.
+    """
+    settings = settings or get_settings()
+    try:
+        contextualize_chunks(chunks, document, settings)
+    except Exception:
+        logger.warning(
+            "situating blurbs failed; indexing the author's text alone", exc_info=True
+        )
+    index_chunks(db, chunks)
+    embed_chunks(db, chunks, settings)
+
+
+def backfill_workspace(workspace_id: str, settings: Optional[Settings] = None) -> dict[str, int]:
+    """Bring pre-existing chunks up to the current index. Idempotent.
+
+    Chunks written before hybrid retrieval have no postings, no vectors and no
+    blurb, and nothing on the read path can create the last two — an embedding is
+    a network call and belongs nowhere near a user waiting for an answer. This is
+    that path, for one workspace, safe to re-run.
+    """
+    settings = settings or get_settings()
+    db = SessionLocal()
+    counts = {"contextualized": 0, "indexed": 0, "embedded": 0}
+    try:
+        rows = list(
+            db.execute(
+                select(Chunk, Source)
+                .join(Source, Source.id == Chunk.source_id)
+                .where(
+                    Chunk.workspace_id == workspace_id,
+                    Source.workspace_id == workspace_id,
+                    Source.deleted_at.is_(None),
+                    Source.status == "ready",
+                )
+                .order_by(Chunk.source_id, Chunk.ordinal)
+            ).all()
+        )
+        by_source: dict[str, List[Chunk]] = {}
+        for chunk, source in rows:
+            by_source.setdefault(source.id, []).append(chunk)
+        for chunks in by_source.values():
+            # The parent document, reassembled from the chunks themselves rather
+            # than re-read from disk: the object may be gone, and overlapping
+            # chunks still carry every sentence the blurb needs.
+            document = "\n\n".join(chunk.content for chunk in chunks)
+            contextualized = contextualize_chunks(
+                [chunk for chunk in chunks if not chunk.context_prefix], document, settings
+            )
+            counts["contextualized"] += len(contextualized)
+            # Only what actually changed: a chunk that gained a blurb now indexes
+            # and embeds different text, and a chunk that never had either needs
+            # both. Everything else is already current, which is what makes a
+            # re-run cost nothing rather than re-billing the whole corpus.
+            gained = {chunk.id for chunk in contextualized}
+            stale = [
+                chunk
+                for chunk in chunks
+                if chunk.lexical_length is None or chunk.id in gained
+            ]
+            index_chunks(db, stale)
+            counts["indexed"] += len(stale)
+            pending_vectors = [
+                chunk
+                for chunk in chunks
+                if chunk.embedding is None
+                or chunk.embedding_model != settings.openai_embedding_model
+                or chunk.id in gained
+            ]
+            counts["embedded"] += embed_chunks(db, pending_vectors, settings)
+            db.commit()
+    finally:
+        db.close()
+    return counts
+
+
 def ingest_source(source_id: str, actor_id: str) -> None:
     db = SessionLocal()
     try:
@@ -105,19 +241,32 @@ def ingest_source(source_id: str, actor_id: str) -> None:
             chunks = list(make_chunks(text))
             if not chunks:
                 raise ValueError("No readable text was found in this source")
+            # Postings first: they hang off chunk ids, and re-ingest replaces the
+            # chunks those ids belong to.
+            clear_source_postings(db, source.id)
             db.execute(delete(Chunk).where(Chunk.source_id == source.id))
+            records: List[Chunk] = []
             for ordinal, (char_start, char_end, content) in enumerate(chunks):
-                db.add(
-                    Chunk(
-                        workspace_id=source.workspace_id,
-                        source_id=source.id,
-                        ordinal=ordinal,
-                        content=content,
-                        char_start=char_start,
-                        char_end=char_end,
-                        token_count=max(1, len(content.split())),
-                    )
+                record = Chunk(
+                    workspace_id=source.workspace_id,
+                    source_id=source.id,
+                    ordinal=ordinal,
+                    content=content,
+                    char_start=char_start,
+                    char_end=char_end,
+                    token_count=max(1, len(content.split())),
                 )
+                db.add(record)
+                records.append(record)
+            try:
+                prepare_for_search(db, records, document=text)
+            except Exception:
+                # Search preparation is derived data. A chunk with no postings is
+                # picked up by `reconcile_index` on the next search and a chunk
+                # with no vector is still lexically retrievable, so none of it is
+                # worth failing an ingest — and failing one would lose the
+                # document itself, which is not derived from anything.
+                logger.warning("search preparation failed for %s", source.id, exc_info=True)
             source.status = "ready"
             source.chunk_count = len(chunks)
             record_audit(

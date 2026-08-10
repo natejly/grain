@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from ..auth import DEFAULT_AGENT_ID, Actor, get_actor
+from ..auth import Actor, get_actor
 from ..config import Settings, get_settings
 from ..database import get_db
+from ..models import Agent
 from ..schemas import BootstrapResponse, HealthResponse, Identity, ModelProviderStatus
 
 router = APIRouter(tags=["system"])
@@ -22,7 +23,17 @@ def health(db: Session = Depends(get_db)) -> HealthResponse:
 def bootstrap(
     actor: Actor = Depends(get_actor),
     settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
 ) -> BootstrapResponse:
+    # Every workspace now owns its agent — signup creates one — so this can no
+    # longer be a constant. Handing out a fixed id would point a new tenant's
+    # chat at another tenant's agent.
+    default_agent_id = db.scalar(
+        select(Agent.id)
+        .where(Agent.workspace_id == actor.workspace_id, Agent.enabled.is_(True))
+        .order_by(Agent.created_at, Agent.id)
+        .limit(1)
+    )
     return BootstrapResponse(
         identity=Identity(
             user_id=actor.user_id,
@@ -31,18 +42,17 @@ def bootstrap(
             workspace_name=actor.workspace_name,
             role=actor.role,
         ),
-        default_agent_id=DEFAULT_AGENT_ID,
+        default_agent_id=default_agent_id or "",
         model_provider=ModelProviderStatus(
             provider=settings.active_model_provider,
-            configured=(
-                settings.has_openai_key
-                if settings.active_model_provider == "openai"
-                else True
-            ),
+            # True whenever a real provider is answering. Startup already refuses
+            # an openai process with no key, so this is False only for the
+            # scripted test double.
+            configured=settings.active_model_provider == "openai",
             model=(
                 settings.openai_model
                 if settings.active_model_provider == "openai"
-                else "deterministic-local"
+                else "scripted-double"
             ),
         ),
         feature_flags={

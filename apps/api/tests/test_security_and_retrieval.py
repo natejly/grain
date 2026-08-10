@@ -33,14 +33,14 @@ def test_tool_url_rejects_private_resolution(monkeypatch):
 
 
 def test_retrieval_is_workspace_scoped(client):
-    from app.auth import DEFAULT_USER_ID, DEFAULT_WORKSPACE_ID
+    from app.auth import DEV_SEED_USER_ID, DEV_SEED_WORKSPACE_ID
     from app.database import SessionLocal
 
     db: Session = SessionLocal()
     try:
         source = Source(
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            created_by=DEFAULT_USER_ID,
+            workspace_id=DEV_SEED_WORKSPACE_ID,
+            created_by=DEV_SEED_USER_ID,
             filename="retrieval-fixture.md",
             media_type="text/markdown",
             object_key="/tmp/not-used",
@@ -52,7 +52,7 @@ def test_retrieval_is_workspace_scoped(client):
         db.flush()
         db.add(
             Chunk(
-                workspace_id=DEFAULT_WORKSPACE_ID,
+                workspace_id=DEV_SEED_WORKSPACE_ID,
                 source_id=source.id,
                 ordinal=0,
                 content="Project Juniper uses a violet deployment ring for canary releases.",
@@ -64,7 +64,7 @@ def test_retrieval_is_workspace_scoped(client):
         db.commit()
         results = search_evidence(
             db,
-            workspace_id=DEFAULT_WORKSPACE_ID,
+            workspace_id=DEV_SEED_WORKSPACE_ID,
             query="What color is the Juniper deployment ring?",
         )
         assert results

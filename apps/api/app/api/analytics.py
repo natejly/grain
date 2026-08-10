@@ -199,11 +199,18 @@ def create_version(
             IdempotencyRecord.key == key,
         )
     )
-    dataset, current = current_dataset_version(
-        db,
-        workspace_id=actor.workspace_id,
-        dataset_id=dataset_id,
-    )
+    # A dataset id from another workspace — or one that never existed — has to
+    # come back as 404. Left unhandled this raised out of the route as a 500,
+    # which is an attacker-controlled path to an unhandled error.
+    try:
+        dataset, current = current_dataset_version(
+            db,
+            workspace_id=actor.workspace_id,
+            dataset_id=dataset_id,
+        )
+    except AnalyticsValidationError as exc:
+        status = 404 if str(exc) == "Dataset not found" else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
     if replay:
         return _dataset_out(dataset, current)
     source = _source_for_dataset(db, actor, payload.source_id)

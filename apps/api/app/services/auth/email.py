@@ -1,0 +1,213 @@
+"""Single-use email tokens and the sender that delivers them.
+
+The sender is a two-implementation seam, not a framework: the console sender
+prints the link while you develop, and the SMTP sender is what a deployment
+configures. The console sender refuses to print a raw link outside
+development/test — a verification URL in a log aggregator is a password reset
+anybody with log access can perform.
+"""
+from __future__ import annotations
+
+import hashlib
+import logging
+import secrets
+import smtplib
+from dataclasses import dataclass
+from datetime import timedelta
+from email.message import EmailMessage as MimeMessage
+from typing import Optional, Protocol
+
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
+
+from ...clock import utcnow
+from ...config import Settings
+from ...models import EmailToken
+
+logger = logging.getLogger("app.auth.email")
+
+PURPOSE_VERIFY_EMAIL = "verify_email"
+PURPOSE_PASSWORD_RESET = "password_reset"
+
+VERIFY_TOKEN_TTL = timedelta(hours=24)
+# Deliberately shorter than verification: a reset link is a live credential for
+# as long as it is valid.
+RESET_TOKEN_TTL = timedelta(minutes=30)
+
+
+@dataclass(frozen=True)
+class OutboundEmail:
+    to: str
+    subject: str
+    body: str
+
+
+class EmailSender(Protocol):
+    def send(self, message: OutboundEmail) -> None: ...
+
+
+class ConsoleEmailSender:
+    """Development delivery: the link goes to stdout so you can click it."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def send(self, message: OutboundEmail) -> None:
+        if not self._settings.is_dev_env:
+            # Reachable only if a deployment forgets to configure SMTP. Say what
+            # was dropped and to whom, never the token itself.
+            logger.warning(
+                "email suppressed: EMAIL_SENDER=console outside development "
+                "(to=%s subject=%s)",
+                message.to,
+                message.subject,
+            )
+            return
+        logger.info("email to %s: %s\n%s", message.to, message.subject, message.body)
+        print(f"\n--- email to {message.to} ---\n{message.subject}\n{message.body}\n")
+
+
+class SmtpEmailSender:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def send(self, message: OutboundEmail) -> None:
+        settings = self._settings
+        mime = MimeMessage()
+        mime["From"] = settings.email_from
+        mime["To"] = message.to
+        mime["Subject"] = message.subject
+        mime.set_content(message.body)
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
+            if settings.smtp_starttls:
+                smtp.starttls()
+            if settings.smtp_username and settings.smtp_password:
+                smtp.login(
+                    settings.smtp_username,
+                    settings.smtp_password.get_secret_value(),
+                )
+            smtp.send_message(mime)
+
+
+def get_email_sender(settings: Settings) -> EmailSender:
+    if settings.email_sender == "smtp":
+        return SmtpEmailSender(settings)
+    return ConsoleEmailSender(settings)
+
+
+def hash_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def issue_email_token(
+    db: Session, *, user_id: str, purpose: str, ttl: timedelta
+) -> str:
+    """Create a single-use token and return its raw value once.
+
+    Any outstanding token for the same purpose is consumed first: two live reset
+    links mean two chances for an old, possibly-leaked one to be used.
+    """
+    now = utcnow()
+    db.execute(
+        update(EmailToken)
+        .where(
+            EmailToken.user_id == user_id,
+            EmailToken.purpose == purpose,
+            EmailToken.consumed_at.is_(None),
+        )
+        .values(consumed_at=now)
+    )
+    raw_token = secrets.token_urlsafe(32)
+    db.add(
+        EmailToken(
+            user_id=user_id,
+            purpose=purpose,
+            token_hash=hash_token(raw_token),
+            expires_at=now + ttl,
+            created_at=now,
+        )
+    )
+    return raw_token
+
+
+def consume_email_token(
+    db: Session, *, raw_token: str, purpose: str
+) -> Optional[EmailToken]:
+    """Redeem a token, or return None. Redemption is a one-way door."""
+    if not raw_token:
+        return None
+    now = utcnow()
+    token = db.scalar(
+        select(EmailToken).where(
+            EmailToken.token_hash == hash_token(raw_token),
+            EmailToken.purpose == purpose,
+            EmailToken.consumed_at.is_(None),
+            EmailToken.expires_at > now,
+        )
+    )
+    if token is None:
+        return None
+    token.consumed_at = now
+    return token
+
+
+def verification_email(settings: Settings, *, to: str, raw_token: str) -> OutboundEmail:
+    link = f"{settings.primary_web_origin}/auth/verify?token={raw_token}"
+    return OutboundEmail(
+        to=to,
+        subject="Confirm your email",
+        body=f"Confirm your address to finish setting up your workspace:\n{link}\n",
+    )
+
+
+def password_reset_email(
+    settings: Settings, *, to: str, raw_token: str
+) -> OutboundEmail:
+    link = f"{settings.primary_web_origin}/auth/reset?token={raw_token}"
+    minutes = int(RESET_TOKEN_TTL.total_seconds() // 60)
+    return OutboundEmail(
+        to=to,
+        subject="Reset your password",
+        body=f"Reset your password (link expires in {minutes} minutes):\n{link}\n",
+    )
+
+
+def no_account_email(settings: Settings, *, to: str) -> OutboundEmail:
+    """Sent when a password reset is requested for an address with no account.
+
+    The mirror image of :func:`account_exists_email`, and it exists for the same
+    reason: the reset endpoint used to send mail only when the address was
+    registered, so the *response time* said which it was — one SMTP round trip
+    (measured at ~29x the unknown-address path) is a louder oracle than any
+    difference in the body ever was. Sending on both branches makes the work
+    identical, and the recipient learns something they can act on rather than
+    something an attacker can.
+    """
+    return OutboundEmail(
+        to=to,
+        subject="Password reset requested",
+        body=(
+            "Someone asked to reset the password for this address, but it has "
+            "no account here. If that was you, you can create one: "
+            f"{settings.primary_web_origin}/auth/login\n"
+            "If it was not you, no action is needed.\n"
+        ),
+    )
+
+
+def account_exists_email(settings: Settings, *, to: str) -> OutboundEmail:
+    """Sent when someone signs up with an address that already has an account.
+
+    The HTTP response cannot say the address is taken without becoming an
+    account-enumeration oracle, so the truth goes to the mailbox instead — where
+    only the actual owner can read it.
+    """
+    return OutboundEmail(
+        to=to,
+        subject="You already have an account",
+        body=(
+            "Someone tried to sign up with this address, which already has an "
+            f"account. Sign in instead: {settings.primary_web_origin}/auth/login\n"
+            "If that was not you, no action is needed.\n"
+        ),
+    )

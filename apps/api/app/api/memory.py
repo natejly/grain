@@ -12,6 +12,7 @@ from ..database import get_db
 from ..models import IdempotencyRecord, MemoryItem
 from ..schemas import MemoryItemOut
 from ..services.audit import record_audit
+from ..services.memory import tombstone_key
 from .dependencies import idempotency_key
 
 router = APIRouter(prefix="/api", tags=["memory"])
@@ -72,7 +73,10 @@ def forget_memory(
     )
     if item is None or item.status == "deleted":
         raise HTTPException(status_code=404, detail="Memory not found")
+    # Same tombstone as the agent's `forget` tool, so this endpoint cannot leave
+    # a deleted row parked on a claim key and make that claim unlearnable.
     item.status = "deleted"
+    item.normalized_key = tombstone_key(db, item)
     db.add(
         IdempotencyRecord(
             workspace_id=actor.workspace_id,

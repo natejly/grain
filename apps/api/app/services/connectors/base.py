@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Dict, Optional
 
 import httpx
 from sqlalchemy.orm import Session
 
+from ...clock import utc_from_timestamp, utcnow
 from ...config import Settings, get_settings
 from ...models import IntegrationAccount
 from ..crypto import decrypt_secret, encrypt_secret
@@ -79,9 +80,9 @@ def store_tokens(
     expires_in = payload.get("expires_in")
     expires_at = payload.get("expires_at")
     if expires_at:
-        account.token_expires_at = datetime.utcfromtimestamp(int(expires_at))
+        account.token_expires_at = utc_from_timestamp(int(expires_at))
     elif expires_in:
-        account.token_expires_at = datetime.utcnow() + timedelta(seconds=int(expires_in))
+        account.token_expires_at = utcnow() + timedelta(seconds=int(expires_in))
     account.status = "connected"
 
 
@@ -94,7 +95,7 @@ def ensure_access_token(
     settings = settings or get_settings()
     fresh = (
         account.token_expires_at is None
-        or account.token_expires_at > datetime.utcnow() + timedelta(seconds=60)
+        or account.token_expires_at > utcnow() + timedelta(seconds=60)
     )
     if fresh and account.access_token_enc:
         return decrypt_secret(account.access_token_enc, settings)

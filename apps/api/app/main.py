@@ -10,17 +10,24 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import (
     analytics,
+    artifacts,
     audit,
+    board_ops,
     chat,
+    dbconnect,
+    doc_pending,
     generated_apps,
     graph,
     integrations,
+    mcp,
     memory,
+    projects,
     sources,
     system,
     tools,
 )
-from .auth import ensure_development_identity
+from .api.auth import router as auth_router
+from .auth import seed_dev_workspace
 from .config import get_settings
 from .database import Base, SessionLocal, engine
 from .services.recovery import recover_durable_work
@@ -30,11 +37,14 @@ REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if get_settings().app_env == "development":
+    settings = get_settings()
+    if settings.is_dev_env:
         Base.metadata.create_all(bind=engine)
         db = SessionLocal()
         try:
-            ensure_development_identity(db)
+            # Seed rows only. Nothing here authenticates: the seeded user has no
+            # password hash, and reaching it still needs a real session.
+            seed_dev_workspace(db, settings)
         finally:
             db.close()
         asyncio.create_task(asyncio.to_thread(recover_durable_work))
@@ -74,6 +84,7 @@ async def request_headers(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
     return response
 
+app.include_router(auth_router)
 app.include_router(system.router)
 app.include_router(chat.router)
 app.include_router(sources.router)
@@ -82,5 +93,11 @@ app.include_router(audit.router)
 app.include_router(graph.router)
 app.include_router(memory.router)
 app.include_router(integrations.router)
+app.include_router(mcp.router)
+app.include_router(dbconnect.router)
+app.include_router(artifacts.router)
+app.include_router(board_ops.router)
+app.include_router(doc_pending.router)
+app.include_router(projects.router)
 app.include_router(analytics.router)
 app.include_router(generated_apps.router)

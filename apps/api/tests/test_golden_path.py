@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select
 
+from app.clock import utcnow
 from app.services import runs
 
 
@@ -20,10 +21,11 @@ def test_health_and_bootstrap(client):
     assert payload["feature_flags"]["graph_memory"] is True
     assert payload["feature_flags"]["dashboards"] is True
     assert payload["feature_flags"]["generated_apps"] is True
+    # The suite runs the test double, which is the only non-openai provider left.
     assert payload["model_provider"] == {
-        "provider": "deterministic",
-        "configured": True,
-        "model": "deterministic-local",
+        "provider": "scripted",
+        "configured": False,
+        "model": "scripted-double",
     }
 
     request_id = client.get(
@@ -233,7 +235,7 @@ def test_conversation_can_be_deleted(client, headers):
 
 
 def test_expired_run_lease_is_recovered(client):
-    from app.auth import DEFAULT_AGENT_ID, DEFAULT_USER_ID, DEFAULT_WORKSPACE_ID
+    from app.auth import DEV_SEED_AGENT_ID, DEV_SEED_USER_ID, DEV_SEED_WORKSPACE_ID
     from app.database import SessionLocal
     from app.models import Conversation, Run, RunEvent
     from app.services.recovery import recover_durable_work
@@ -241,20 +243,20 @@ def test_expired_run_lease_is_recovered(client):
     db = SessionLocal()
     try:
         conversation = Conversation(
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            created_by=DEFAULT_USER_ID,
+            workspace_id=DEV_SEED_WORKSPACE_ID,
+            created_by=DEV_SEED_USER_ID,
             title="Recovery gate",
         )
         db.add(conversation)
         db.flush()
         run = Run(
-            workspace_id=DEFAULT_WORKSPACE_ID,
+            workspace_id=DEV_SEED_WORKSPACE_ID,
             conversation_id=conversation.id,
-            agent_id=DEFAULT_AGENT_ID,
-            created_by=DEFAULT_USER_ID,
+            agent_id=DEV_SEED_AGENT_ID,
+            created_by=DEV_SEED_USER_ID,
             status="running",
             prompt="No indexed answer is required for this recovery test.",
-            lease_expires_at=datetime.utcnow() - timedelta(seconds=5),
+            lease_expires_at=utcnow() - timedelta(seconds=5),
         )
         db.add(run)
         db.commit()

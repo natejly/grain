@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..clock import utcnow
 from ..models import Dashboard
 from ..schemas import DashboardSpec
 from .analytics import AnalyticsValidationError, execute_dataset_query
@@ -70,7 +70,7 @@ def build_release_manifest(
         )
     manifest = {
         "schema_version": 1,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": utcnow().isoformat() + "Z",
         "dashboards": snapshots,
     }
     canonical = json.dumps(

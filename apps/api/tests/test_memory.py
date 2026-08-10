@@ -38,7 +38,7 @@ def test_completed_run_writes_memory_with_provenance(client):
         (item for item in items if "Project Atlas" in item["content"]), None
     )
     assert atlas is not None
-    assert atlas["kind"] == "entity_note"
+    assert atlas["kind"] == "fact"
     assert atlas["conversation_id"] == conversation["id"]
     assert atlas["message_ids"], "memory must carry message provenance"
 

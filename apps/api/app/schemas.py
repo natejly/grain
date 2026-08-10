@@ -19,7 +19,14 @@ class Identity(ApiModel):
 
 
 class ModelProviderStatus(BaseModel):
-    provider: Literal["deterministic", "openai"]
+    """What is answering. `scripted` is the offline test double, never production.
+
+    `configured` no longer distinguishes a working install from a degraded one —
+    the app refuses to start without a key — so it stays only because clients
+    read it, and is now simply "a real provider is behind this".
+    """
+
+    provider: Literal["openai", "scripted"]
     configured: bool
     model: str
 
@@ -29,6 +36,70 @@ class BootstrapResponse(ApiModel):
     feature_flags: Dict[str, bool]
     default_agent_id: str
     model_provider: ModelProviderStatus
+
+
+class SignupIn(ApiModel):
+    email: str = Field(min_length=3, max_length=320)
+    # Bounds only; the real policy lives in services/auth/passwords.py so the
+    # signup and reset paths cannot drift apart.
+    password: str = Field(min_length=1, max_length=4096)
+    name: str = Field(default="", max_length=120)
+
+
+class LoginIn(ApiModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=4096)
+
+
+class PasswordResetRequestIn(ApiModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetConfirmIn(ApiModel):
+    token: str = Field(min_length=1, max_length=512)
+    password: str = Field(min_length=1, max_length=4096)
+
+
+class VerifyEmailIn(ApiModel):
+    token: str = Field(min_length=1, max_length=512)
+
+
+class AuthAcknowledgement(ApiModel):
+    """The deliberately uninformative answer to signup and reset requests.
+
+    Byte-identical whether or not the address has an account: any difference —
+    body, status, or a materially different response time — turns the endpoint
+    into an account-enumeration oracle.
+    """
+
+    status: Literal["ok"] = "ok"
+    detail: str
+
+
+class AuthSessionOut(ApiModel):
+    user_id: str
+    user_name: str
+    user_email: str
+    email_verified: bool
+    workspace_id: str
+    workspace_name: str
+    role: str
+    # The double-submit value the client must echo in the CSRF header on every
+    # unsafe request. Readable only by our own origin's JavaScript (CORS), which
+    # is exactly what makes it unavailable to a cross-site attacker.
+    csrf_token: str
+
+
+class DevOverrideOut(ApiModel):
+    """Whether the local one-click sign-in override is available.
+
+    Public and unauthenticated on purpose: the login screen has to know whether
+    to render the button before any session exists. Outside development/test,
+    or when DEV_USER is unset, `enabled` is always false.
+    """
+
+    enabled: bool
+    handle: str = ""
 
 
 class AgentOut(ApiModel):
@@ -124,6 +195,133 @@ class ToolCallOut(ApiModel):
     created_at: datetime
 
 
+class AgentApprovalRequest(BaseModel):
+    decision: Literal["approved", "denied"]
+    # "Always allow this tool" — persists the decision as a workspace policy so
+    # future calls to the same tool skip the prompt.
+    remember: bool = False
+
+
+class AgentToolCallOut(ApiModel):
+    id: str
+    run_id: str
+    conversation_id: str
+    name: str
+    arguments_json: str
+    proposal_preview: str
+    status: str
+    result_preview: str
+    error: str
+    latency_ms: int
+    created_at: datetime
+
+
+class ToolPolicyOut(ApiModel):
+    tool_name: str
+    policy: str
+
+
+class ToolPolicyRequest(BaseModel):
+    tool_name: str = Field(min_length=1, max_length=120)
+    policy: Literal["ask", "allow", "deny"]
+
+
+class DocumentSummaryOut(ApiModel):
+    id: str
+    title: str
+    kind: str
+    characters: int
+    updated_at: datetime
+
+
+class DocumentOut(ApiModel):
+    id: str
+    title: str
+    kind: str
+    content: str
+    updated_at: datetime
+
+
+class DocumentRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = ""
+    kind: Literal["markdown", "latex"] = "markdown"
+
+
+class DocumentContentRequest(BaseModel):
+    content: str
+
+
+class DocumentVersionOut(ApiModel):
+    id: str
+    summary: str
+    created_at: datetime
+
+
+class BoardCardOut(ApiModel):
+    id: str
+    title: str
+    body: str
+    labels: List[str]
+
+
+class BoardColumnOut(ApiModel):
+    id: str
+    name: str
+    cards: List[BoardCardOut]
+
+
+class BoardOut(ApiModel):
+    id: str
+    name: str
+    columns: List[BoardColumnOut]
+
+
+class BoardRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    columns: List[str] = Field(default_factory=list)
+
+
+class BoardCardRequest(BaseModel):
+    column: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=300)
+    body: str = ""
+    labels: List[str] = Field(default_factory=list)
+
+
+class McpToolOut(ApiModel):
+    id: str
+    name: str
+    description: str
+    enabled: bool
+
+
+class McpServerOut(ApiModel):
+    id: str
+    name: str
+    transport: str
+    command: str
+    args: List[str]
+    url: str
+    enabled: bool
+    status: str
+    last_error: str
+    # Whether env/headers are stored, never the values themselves.
+    has_secrets: bool
+    tools: List[McpToolOut]
+    created_at: datetime
+
+
+class McpServerRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    transport: Literal["stdio", "http"] = "stdio"
+    command: str = Field(default="", max_length=400)
+    args: List[str] = Field(default_factory=list)
+    url: str = Field(default="", max_length=600)
+    # stdio env vars or HTTP headers; encrypted at rest and never read back.
+    secrets: Dict[str, str] = Field(default_factory=dict)
+
+
 class AuditEventOut(ApiModel):
     id: str
     action: str
@@ -154,6 +352,10 @@ class GraphEdgeOut(ApiModel):
     from_entity_id: str
     to_entity_id: str
     relation: str
+    # How much to trust `relation`. Co-occurrence edges carry a low floor; a
+    # named relation from the extractor carries its own score. Without this a
+    # client cannot tell "these words co-occur" from "A reports to B".
+    confidence: float = 0.0
     weight: int
     source_ids: List[str]
     chunk_ids: List[str]

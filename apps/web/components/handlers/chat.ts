@@ -1,0 +1,400 @@
+"use client";
+
+import type {
+  AgentToolCall,
+  Bootstrap,
+  Citation,
+  Conversation,
+  DocumentVersion,
+  Message,
+  ToolCall,
+  WorkspaceDocument,
+  WorkspaceProject,
+} from "@workspace/api-client";
+import type {
+  Dispatch,
+  FormEvent,
+  MouseEvent,
+  RefObject,
+  SetStateAction,
+} from "react";
+import { api } from "../api";
+import { describeError, type View } from "../views/shared";
+
+export type ChatHandlerDeps = {
+  bootstrap: Bootstrap | null;
+  conversations: Conversation[];
+  messages: Message[];
+  draft: string;
+  activeConversation: string | null;
+  activeRun: string | null;
+  setError: Dispatch<SetStateAction<string>>;
+  setView: Dispatch<SetStateAction<View>>;
+  setSidebarOpen: Dispatch<SetStateAction<boolean>>;
+  setConversations: Dispatch<SetStateAction<Conversation[]>>;
+  setActiveConversation: Dispatch<SetStateAction<string | null>>;
+  setMessages: Dispatch<SetStateAction<Message[]>>;
+  setAgentCalls: Dispatch<SetStateAction<AgentToolCall[]>>;
+  setActiveRun: Dispatch<SetStateAction<string | null>>;
+  setRunStatus: Dispatch<SetStateAction<string>>;
+  setDraft: Dispatch<SetStateAction<string>>;
+  setActiveProject: Dispatch<SetStateAction<WorkspaceProject | null>>;
+  setActiveDocument: Dispatch<SetStateAction<WorkspaceDocument | null>>;
+  setDocumentVersions: Dispatch<SetStateAction<DocumentVersion[]>>;
+  refreshSecondary: () => Promise<void>;
+  refreshArtifacts: () => Promise<void>;
+  refreshInfra: () => Promise<void>;
+  refreshPendingEdits: () => Promise<void>;
+  activeConversationRef: RefObject<string | null>;
+  activeProjectRef: RefObject<string | null>;
+  activeDocumentRef: RefObject<string | null>;
+};
+
+export function createChatHandlers({
+  bootstrap,
+  conversations,
+  messages,
+  draft,
+  activeConversation,
+  activeRun,
+  setError,
+  setView,
+  setSidebarOpen,
+  setConversations,
+  setActiveConversation,
+  setMessages,
+  setAgentCalls,
+  setActiveRun,
+  setRunStatus,
+  setDraft,
+  setActiveProject,
+  setActiveDocument,
+  setDocumentVersions,
+  refreshSecondary,
+  refreshArtifacts,
+  refreshInfra,
+  refreshPendingEdits,
+  activeConversationRef,
+  activeProjectRef,
+  activeDocumentRef,
+}: ChatHandlerDeps) {
+  async function selectConversation(id: string) {
+    setActiveConversation(id);
+    activeConversationRef.current = id;
+    setSidebarOpen(false);
+    setView("chat");
+    setError("");
+    try {
+      setMessages(await api.listMessages(id));
+    } catch (caught) {
+      setError(describeError(caught, "Could not open conversation"));
+    }
+  }
+
+  async function newConversation() {
+    try {
+      const conversation = await api.createConversation();
+      setConversations((items) => [conversation, ...items]);
+      setActiveConversation(conversation.id);
+      activeConversationRef.current = conversation.id;
+      setMessages([]);
+      setView("chat");
+      setSidebarOpen(false);
+    } catch (caught) {
+      setError(describeError(caught, "Could not create conversation"));
+    }
+  }
+
+  async function removeConversation(
+    conversation: Conversation,
+    event?: MouseEvent,
+  ) {
+    event?.stopPropagation();
+    if (!window.confirm(`Delete “${conversation.title}”?`)) return;
+    setError("");
+    try {
+      if (activeConversation === conversation.id && activeRun) {
+        try {
+          await api.cancelRun(activeRun);
+        } catch {
+          // Continue deleting even if cancel fails for a finished run.
+        }
+      }
+      await api.deleteConversation(conversation.id);
+      const remaining = conversations.filter((item) => item.id !== conversation.id);
+      setConversations(remaining);
+      if (activeConversation === conversation.id) {
+        setActiveRun(null);
+        setRunStatus("");
+        if (remaining[0]) {
+          await selectConversation(remaining[0].id);
+        } else {
+          setActiveConversation(null);
+          activeConversationRef.current = null;
+          setMessages([]);
+        }
+      }
+      await refreshSecondary();
+    } catch (caught) {
+      setError(describeError(caught, "Could not delete chat"));
+    }
+  }
+
+  /**
+   * Merge a tool event into the card list. Events arrive in stages (proposed →
+   * running → completed) and each carries only its own fields, so later stages
+   * patch the existing row rather than replacing it.
+   */
+  function upsertAgentCall(
+    runId: string,
+    data: Record<string, unknown>,
+    status: string,
+  ) {
+    const id = String(data.tool_call_id || "");
+    if (!id) return;
+    setAgentCalls((items) => {
+      const index = items.findIndex((item) => item.id === id);
+      const patch = {
+        status,
+        ...(data.tool_name ? { name: String(data.tool_name) } : {}),
+        ...(data.arguments ? { arguments_json: String(data.arguments) } : {}),
+        ...(data.preview && status !== "proposed"
+          ? { result_preview: String(data.preview) }
+          : {}),
+        ...(data.preview && status === "proposed"
+          ? { proposal_preview: String(data.preview) }
+          : {}),
+      };
+      if (index >= 0) {
+        return items.map((item, position) =>
+          position === index ? { ...item, ...patch } : item,
+        );
+      }
+      return [
+        ...items,
+        {
+          id,
+          run_id: runId,
+          conversation_id: activeConversationRef.current || "",
+          name: String(data.tool_name || ""),
+          arguments_json: String(data.arguments || "{}"),
+          proposal_preview:
+            status === "proposed" ? String(data.preview || "") : "",
+          status,
+          result_preview: String(data.preview || ""),
+          error: "",
+          latency_ms: 0,
+          created_at: new Date().toISOString(),
+        },
+      ];
+    });
+  }
+
+  async function decideAgentCall(
+    call: AgentToolCall,
+    decision: "approved" | "denied",
+    remember: boolean,
+  ) {
+    setError("");
+    try {
+      await api.decideAgentToolCall(call.id, decision, remember);
+      setAgentCalls((items) =>
+        items.map((item) => (item.id === call.id ? { ...item, status: decision } : item)),
+      );
+      setRunStatus(decision === "approved" ? "Resuming" : "Continuing without the tool");
+    } catch (caught) {
+      setError(describeError(caught, "Could not record that decision"));
+    }
+  }
+
+  async function cancelActiveRun() {
+    if (!activeRun) return;
+    try {
+      await api.cancelRun(activeRun);
+      setRunStatus("Stopping");
+    } catch (caught) {
+      setError(describeError(caught, "Could not stop the run"));
+    }
+  }
+
+  /** Re-ask the most recent user prompt as a fresh turn. */
+  async function regenerate() {
+    const lastUser = [...messages].reverse().find((item) => item.role === "user");
+    if (!lastUser || activeRun || !activeConversation) return;
+    setError("");
+    try {
+      const response = await api.sendMessage(
+        activeConversation,
+        lastUser.content,
+        bootstrap?.default_agent_id,
+      );
+      setMessages((items) =>
+        items.some((item) => item.id === response.message.id)
+          ? items
+          : [...items, response.message],
+      );
+      void followRun(response.run.id, activeConversation);
+    } catch (caught) {
+      setError(describeError(caught, "Could not regenerate"));
+    }
+  }
+
+  async function followRun(runId: string, conversationId: string) {
+    const temporaryId = `streaming-${runId}`;
+    setActiveRun(runId);
+    setRunStatus("Starting");
+    try {
+      for await (const event of api.streamRun(runId)) {
+        if (event.event === "run.started") setRunStatus("Searching sources");
+        if (event.event === "retrieval.completed") {
+          const count = Number(event.data.count || 0);
+          setRunStatus(count ? `Using ${count} source passages` : "No matching source");
+        }
+        if (event.event === "memory.recalled") {
+          const count = Number(event.data.count || 0);
+          if (count > 0) {
+            setRunStatus(`Recalling ${count} ${count === 1 ? "memory" : "memories"}`);
+          }
+        }
+        if (event.event === "message.delta") {
+          const delta = String(event.data.delta || "");
+          setMessages((items) => {
+            const existing = items.findIndex((item) => item.id === temporaryId);
+            if (existing >= 0) {
+              return items.map((item, index) =>
+                index === existing ? { ...item, content: item.content + delta } : item,
+              );
+            }
+            return [
+              ...items,
+              {
+                id: temporaryId,
+                run_id: runId,
+                role: "assistant",
+                content: delta,
+                citations: [],
+                created_at: new Date().toISOString(),
+              },
+            ];
+          });
+        }
+        if (event.event === "tool.proposed") {
+          setRunStatus("Waiting for your approval");
+          // The legacy HTTP tool carries request_url and is decided through a
+          // different endpoint; the agent loop's calls have no URL.
+          if (event.data.request_url === undefined) {
+            upsertAgentCall(runId, event.data, "proposed");
+          }
+          await refreshSecondary();
+        }
+        if (event.event === "tool.started") {
+          const name = String(event.data.tool_name || "");
+          setRunStatus(name ? `Running ${name}` : "Running approved read-only tool");
+          upsertAgentCall(runId, event.data, "running");
+        }
+        if (event.event === "tool.completed") {
+          upsertAgentCall(runId, event.data, String(event.data.status || "succeeded"));
+        }
+        if (event.event === "message.completed") {
+          const completed: Message = {
+            id: String(event.data.message_id),
+            run_id: runId,
+            role: "assistant",
+            content: String(event.data.content || ""),
+            citations: (event.data.citations || []) as Citation[],
+            created_at: new Date().toISOString(),
+          };
+          setMessages((items) => {
+            const withoutTemporary = items.filter((item) => item.id !== temporaryId);
+            if (withoutTemporary.some((item) => item.id === completed.id)) {
+              return withoutTemporary;
+            }
+            return [...withoutTemporary, completed];
+          });
+        }
+        if (event.event === "run.failed") {
+          setError(String(event.data.error || "The run failed"));
+        }
+      }
+      if (activeConversationRef.current === conversationId) {
+        setMessages(await api.listMessages(conversationId));
+      }
+      setConversations(await api.listConversations());
+      await refreshSecondary();
+      await refreshArtifacts().catch(() => undefined);
+      await refreshInfra().catch(() => undefined);
+      await refreshPendingEdits().catch(() => undefined);
+      const openProjectId = activeProjectRef.current;
+      if (openProjectId) {
+        setActiveProject(await api.getProject(openProjectId).catch(() => null));
+      }
+      const open = activeDocumentRef.current;
+      if (open) {
+        setActiveDocument(await api.getDocument(open).catch(() => null));
+        setDocumentVersions(await api.listDocumentVersions(open).catch(() => []));
+      }
+    } catch (caught) {
+      setError(describeError(caught, "The event stream disconnected"));
+    } finally {
+      setActiveRun((current) => (current === runId ? null : current));
+      setRunStatus("");
+    }
+  }
+
+  async function submitPrompt(event?: FormEvent) {
+    event?.preventDefault();
+    const content = draft.trim();
+    if (!content || activeRun) return;
+    setDraft("");
+    setError("");
+    try {
+      let conversationId = activeConversation;
+      if (!conversationId) {
+        const created = await api.createConversation();
+        conversationId = created.id;
+        setActiveConversation(created.id);
+        activeConversationRef.current = created.id;
+        setConversations((items) => [created, ...items]);
+      }
+      const response = await api.sendMessage(
+        conversationId,
+        content,
+        bootstrap?.default_agent_id,
+      );
+      setMessages((items) => {
+        const existing = items.some((item) => item.id === response.message.id);
+        return existing ? items : [...items, response.message];
+      });
+      void followRun(response.run.id, conversationId);
+    } catch (caught) {
+      setDraft(content);
+      setError(describeError(caught, "Could not send message"));
+    }
+  }
+
+  async function decide(call: ToolCall, decision: "approved" | "denied") {
+    setError("");
+    try {
+      await api.decideToolCall(call.id, decision);
+      await refreshSecondary();
+      if (!activeRun && call.conversation_id === activeConversation) {
+        // Resume streaming the run we just unblocked; runs in other
+        // conversations continue server-side and load on next open.
+        void followRun(call.run_id, call.conversation_id);
+      }
+    } catch (caught) {
+      setError(describeError(caught, "Could not record decision"));
+    }
+  }
+
+  return {
+    selectConversation,
+    newConversation,
+    removeConversation,
+    decideAgentCall,
+    cancelActiveRun,
+    regenerate,
+    submitPrompt,
+    decide,
+  };
+}

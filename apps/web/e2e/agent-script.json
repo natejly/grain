@@ -1,0 +1,74 @@
+[
+  {
+    "match": "draft the launch runbook",
+    "steps": [
+      {
+        "call": {
+          "name": "create_document",
+          "arguments": {
+            "title": "Launch Runbook",
+            "kind": "markdown",
+            "content": "# Launch Runbook\n\nStep one: freeze the release branch.\nStep two: run the migrations.\nStep three: flip the feature flag.\n"
+          }
+        }
+      },
+      { "text": "Drafted the Launch Runbook with three steps." }
+    ]
+  },
+  {
+    "match": "tighten step two of the runbook",
+    "steps": [
+      {
+        "call": {
+          "name": "edit_document",
+          "arguments": {
+            "title": "Launch Runbook",
+            "find": "Step two: run the migrations.",
+            "replace": "Step two: run the migrations, then smoke-test checkout.",
+            "summary": "Add a smoke test to step two"
+          }
+        }
+      },
+      {
+        "text": "Tightened step two of the Launch Runbook.",
+        "denied_text": "Understood — I left the Launch Runbook untouched."
+      }
+    ]
+  },
+  {
+    "match": "draft the rollback playbook",
+    "steps": [
+      {
+        "call": {
+          "name": "create_document",
+          "arguments": {
+            "title": "Rollback Playbook",
+            "kind": "markdown",
+            "content": "# Rollback Playbook\n\nRevert the deploy.\nPage the on-call engineer.\n"
+          }
+        }
+      },
+      { "text": "Drafted the Rollback Playbook." }
+    ]
+  },
+  {
+    "match": "name the on-call rotation in the playbook",
+    "steps": [
+      {
+        "call": {
+          "name": "edit_document",
+          "arguments": {
+            "title": "Rollback Playbook",
+            "find": "Page the on-call engineer.",
+            "replace": "Page the on-call engineer in the payments rotation.",
+            "summary": "Name the rotation"
+          }
+        }
+      },
+      {
+        "text": "Named the payments rotation in the Rollback Playbook.",
+        "denied_text": "Understood — I left the Rollback Playbook untouched."
+      }
+    ]
+  }
+]

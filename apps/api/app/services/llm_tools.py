@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..models import Dataset, GraphEdge, GraphEntity
 from ..schemas import DatasetQuery
 from .analytics import AnalyticsValidationError, current_dataset_version, execute_dataset_query
-from .graph import _normalized
+from .graph import _normalized, name_candidates
 from .memory import recall
 from .retrieval import Evidence, search_evidence
 
@@ -35,6 +35,9 @@ class ToolResult:
 
 
 ToolExecutor = Callable[[Session, ToolContext, Dict[str, Any]], ToolResult]
+# Renders what a call *would* do, without doing it. Runs at approval time so the
+# user sees the change (a unified diff, a sentence) instead of raw arguments.
+ToolPreview = Callable[[Session, ToolContext, Dict[str, Any]], str]
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class ToolSpec:
     parameters: Dict[str, Any]
     executor: ToolExecutor
     read_only: bool = True
+    preview: Optional[ToolPreview] = None
 
 
 def _search_sources(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
@@ -116,10 +120,14 @@ def _graph_lookup(db: Session, context: ToolContext, args: Dict[str, Any]) -> To
     if not name:
         return ToolResult(content="Error: entity is required.")
     entity = db.scalar(
-        select(GraphEntity).where(
+        select(GraphEntity)
+        .where(
             GraphEntity.workspace_id == context.workspace_id,
-            GraphEntity.normalized_name == name,
+            # 'the atlas' and 'atlas' may be one merged node; try both spellings
+            # and prefer the exact one when both survived separately.
+            GraphEntity.normalized_name.in_(name_candidates(name)),
         )
+        .order_by((GraphEntity.normalized_name == name).desc())
     )
     if entity is None:
         return ToolResult(content=f"No graph entity named “{args.get('entity')}”.")
@@ -138,10 +146,19 @@ def _graph_lookup(db: Session, context: ToolContext, args: Dict[str, Any]) -> To
     neighbor_ids = {edge.from_entity_id for edge in edges} | {
         edge.to_entity_id for edge in edges
     }
+    # The workspace filter is not redundant. `neighbor_ids` comes from
+    # workspace-scoped edges, so today both endpoints are in this workspace —
+    # but nothing in the schema enforces that (the FK points at graph_entities,
+    # not at (workspace_id, id)), and this query is what would turn one
+    # cross-workspace edge into another tenant's entity name in the model's
+    # context. graph._entities_by_id already filters; this now matches it.
     names = {
         row.id: row.name
         for row in db.scalars(
-            select(GraphEntity).where(GraphEntity.id.in_(neighbor_ids))
+            select(GraphEntity).where(
+                GraphEntity.workspace_id == context.workspace_id,
+                GraphEntity.id.in_(neighbor_ids),
+            )
         )
     }
     relations = [
@@ -246,12 +263,61 @@ def build_registry(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             executor=_recall_memory,
         ),
     }
+    registry.update(agentic_memory_tools(db, context))
+    registry.update(graph_walk_tools(db, context))
+    registry.update(artifact_tools(db, context))
+    registry.update(project_tools(db, context))
     registry.update(integration_tools(db, context))
+    registry.update(database_tools(db, context))
+    registry.update(mcp_tools(db, context))
     return registry
+
+
+def agentic_memory_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """Deliberate memory writes (remember/forget) and deep search, next to the
+    read-only recall_memory above."""
+    from .memory_tools import registry_tools
+
+    return registry_tools(db, context)
+
+
+def graph_walk_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """Multi-hop walks over the knowledge graph, next to the one-hop graph_lookup."""
+    from .graph_tools import registry_tools
+
+    return registry_tools(db, context)
+
+
+def artifact_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """Documents and kanban boards the agent can author and revise."""
+    from .artifacts import registry_tools
+
+    return registry_tools(db, context)
+
+
+def project_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """The virtual filesystem behind multi-file code projects."""
+    from .projects import registry_tools
+
+    return registry_tools(db, context)
 
 
 def integration_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
     """Tools for connected external accounts (Gmail, Strava). Extended in 3B."""
     from .connectors import registry_tools
+
+    return registry_tools(db, context)
+
+
+def database_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """SQL over the workspace's connected databases. Empty when none are configured."""
+    from .dbconnect import registry_tools
+
+    return registry_tools(db, context)
+
+
+def mcp_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """Tools discovered on the workspace's configured MCP servers."""
+    from .mcp import registry_tools
 
     return registry_tools(db, context)

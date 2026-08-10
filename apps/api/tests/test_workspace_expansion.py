@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import uuid
 
-from sqlalchemy.orm import Session
-
 
 def key() -> dict[str, str]:
     return {"Idempotency-Key": "expansion-" + uuid.uuid4().hex}
@@ -196,43 +194,21 @@ def test_dataset_dashboard_and_generated_app_release_flow(client):
     assert rolled_back.json()["current_release_id"] == release["id"]
 
 
-def test_expansion_endpoints_enforce_workspace_scope(client):
-    from app.auth import DEFAULT_USER_ID
-    from app.database import SessionLocal
-    from app.models import Membership, User, Workspace
+def test_expansion_endpoints_enforce_workspace_scope(client, identity_client):
+    # The isolated tenant is a real signed-in user with their own session, not a
+    # pair of headers: identity comes from the session cookie now, so claiming
+    # someone else's user id is no longer something a request can even express.
+    isolated = identity_client(name="Isolated user", workspace_name="Isolated workspace")
+    workspace_id = isolated.identity.workspace_id
 
-    workspace_id = str(uuid.uuid4())
-    user_id = str(uuid.uuid4())
-    db: Session = SessionLocal()
-    try:
-        db.add(Workspace(id=workspace_id, name="Isolated workspace"))
-        db.add(User(id=user_id, email=f"{user_id}@example.com", name="Isolated user"))
-        db.add(
-            Membership(
-                workspace_id=workspace_id,
-                user_id=user_id,
-                role="owner",
-            )
-        )
-        db.commit()
-    finally:
-        db.close()
+    assert isolated.get("/api/graph").json()["entities"] == []
+    assert isolated.get("/api/datasets").json() == []
+    assert isolated.get("/api/dashboards").json() == []
+    assert isolated.get("/api/apps").json() == []
 
-    isolated_headers = {
-        "X-Workspace-ID": workspace_id,
-        "X-User-ID": user_id,
-    }
-    assert client.get("/api/graph", headers=isolated_headers).json()["entities"] == []
-    assert client.get("/api/datasets", headers=isolated_headers).json() == []
-    assert client.get("/api/dashboards", headers=isolated_headers).json() == []
-    assert client.get("/api/apps", headers=isolated_headers).json() == []
-
-    default_graph = client.get(
-        "/api/graph",
-        headers={"X-User-ID": DEFAULT_USER_ID},
-    )
-    assert default_graph.status_code == 200
+    seed_graph = client.get("/api/graph")
+    assert seed_graph.status_code == 200
     assert all(
         workspace_id not in json.dumps(entity)
-        for entity in default_graph.json()["entities"]
+        for entity in seed_graph.json()["entities"]
     )

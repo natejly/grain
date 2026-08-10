@@ -10,8 +10,9 @@ contract rather than arbitrary SQL, and generated apps render declarative static
 snapshots rather than executing generated dependencies or server code. See the
 [implementation plan](.cursor/plans/agentic_knowledge_workspace_619562a2.plan.md).
 
-The API uses OpenAI when `OPENAI_API_KEY` is present and otherwise falls back to
-the deterministic local adapter. The key is read by the Python API only and is
+The API requires an OpenAI key: `OPENAI_API_KEY` must be set or the API refuses
+to start. There is no offline mode — chat, memory extraction, graph typing, and
+app generation are all model work. The key is read by the Python API only and is
 never exposed through `NEXT_PUBLIC_*`, the bootstrap response, or browser storage.
 
 ## What works
@@ -23,21 +24,24 @@ never exposed through `NEXT_PUBLIC_*`, the bootstrap response, or browser storag
 - Tombstone-first source deletion and derived-chunk cleanup
 - Per-agent grants for an allowlisted HTTPS GET tool
 - Durable approval/denial, SSRF checks, response limits, and audit history
-- Rebuildable workspace-scoped entity graph with passage provenance
+- Rebuildable workspace-scoped entity graph with passage provenance, typed
+  relations, and bounded multi-hop walks
 - Immutable CSV/JSON dataset versions and bounded DuckDB aggregations
 - Declarative table, bar, line, and donut dashboards
 - Private or public app releases with immutable snapshots and rollback
-- Deterministic local model and storage adapters; no API key is required
+- An agent loop with tool approval behind every chat turn, backed by OpenAI
 - Responsive dark Next.js workspace across chat, sources, graph, dashboards, apps,
   approvals, and activity
 
 ## Quick start
 
-Requirements: Python 3.9+, Node 20+, and npm. Docker is optional.
+Requirements: Python 3.10+, Node 20+, and npm. Docker is optional.
 
 ```bash
 make install
 cp .env.example .env
+# Add your OpenAI key to .env before going further; the API will not start
+# without it. See "Connect OpenAI" below.
 make seed
 ```
 
@@ -59,19 +63,27 @@ send `/tool github-zen`, open **Activity**, and approve or deny the request.
 
 ## Connect OpenAI
 
-Create an API key in the OpenAI platform. Open the root `.env` file in an editor
-and add:
+This is required, not optional. Create an API key in the OpenAI platform, then
+open the root `.env` file in an editor and add:
 
 ```dotenv
+MODEL_PROVIDER=openai
 OPENAI_API_KEY=your-key
-MODEL_PROVIDER=auto
 OPENAI_MODEL=gpt-5.5
 OPENAI_REASONING_EFFORT=low
 ```
 
+Starting the API without a key fails immediately with a message naming
+`OPENAI_API_KEY`, rather than booting and erroring on the first message.
+
 Restart `make dev-api` after changing `.env`. Do not prefix the key with
 `NEXT_PUBLIC_`, commit `.env`, paste the key into chat, or place it in the web
-application. Set `MODEL_PROVIDER=deterministic` to force offline responses.
+application.
+
+The one exception is `MODEL_PROVIDER=scripted`, a test double that replays a JSON
+script instead of calling a provider (`apps/api/app/services/scripted_model.py`).
+It is what the test suite and the browser suite run on, and the API refuses to
+boot it outside `APP_ENV=development` or `test`.
 
 ## Verification
 

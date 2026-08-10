@@ -1,19 +1,263 @@
-[
-  {
-    "source": "northstar.md",
-    "text": "The Northstar project launches in October. Maya Chen owns the launch. Its goal is to reduce customer onboarding time by forty percent.",
-    "questions": [
-      "Who owns the Northstar launch?",
-      "What onboarding improvement is Northstar targeting?"
-    ]
-  },
-  {
-    "source": "juniper.md",
-    "text": "Project Juniper uses a violet deployment ring for canary releases. The rollback window is fifteen minutes.",
-    "questions": [
-      "What color is the Juniper deployment ring?",
-      "How long is the Juniper rollback window?"
-    ]
-  }
-]
-
+{
+  "readme": "Retrieval evaluation corpus. Documents describe one fictional company so that vocabulary genuinely overlaps between them — a corpus of unrelated documents makes every question trivially separable and cannot discriminate between retrieval strategies. Each question carries a `kind` so results can be read per category: `lexical` questions repeat the document's own words and any keyword matcher should win them, while `paraphrase` and `indirect` questions deliberately avoid the document's vocabulary and are the ones a dense or hybrid retriever is supposed to rescue. `must_contain` pins the answer to a passage rather than a filename, so retrieving the right document for the wrong reason still counts as a miss.",
+  "documents": [
+    {
+      "source": "northstar.md",
+      "text": "The Northstar project launches in October. Maya Chen owns the launch. Its goal is to reduce customer onboarding time by forty percent."
+    },
+    {
+      "source": "juniper.md",
+      "text": "Project Juniper uses a violet deployment ring for canary releases. The rollback window is fifteen minutes."
+    },
+    {
+      "source": "payments-service.md",
+      "text": "The payments reconciliation service matches settlement files from our processors against ledger entries every night. Priya Shah is the service owner. When a nightly run reports a mismatch above five thousand dollars it pages the on-call engineer instead of retrying, because a silent retry can double-post a refund."
+    },
+    {
+      "source": "billing-runbook.md",
+      "text": "If a customer reports that they were charged twice, do not issue a refund from the admin console. Open the settlement report for the day in question, confirm the duplicate at the ledger level, and file a correction ticket. Refunds issued directly bypass reconciliation and will reappear as a mismatch the following night."
+    },
+    {
+      "source": "ingest-pipeline.md",
+      "text": "The ingestion pipeline splits uploaded documents into passages of roughly eight hundred tokens with a hundred token overlap. Overlap exists so that a sentence spanning a boundary is still retrievable from at least one passage. Daniel Okonkwo maintains the pipeline."
+    },
+    {
+      "source": "search-service.md",
+      "text": "Workspace search scores passages by term frequency against the query and returns the highest scoring five. It does not consider meaning, so a question phrased differently from the source text will often return nothing useful. Replacing it is tracked under the retrieval quality epic."
+    },
+    {
+      "source": "oncall-policy.md",
+      "text": "The primary on-call rotation runs Monday to Monday and hands over at ten in the morning. Anyone paged more than three times in a single night is automatically excused from the following rotation. Escalation goes to the service owner first and the platform lead second."
+    },
+    {
+      "source": "platform-team.md",
+      "text": "The platform team owns shared infrastructure: the message queue, the object store, and the deployment tooling. May Lin leads the team. The team does not own application databases, which stay with the service that writes to them."
+    },
+    {
+      "source": "vector-team.md",
+      "text": "The vector team builds the embedding and indexing services used by search and recommendations. Daniel Okonkwo and Priya Shah both sit on this team part time. Its charter explicitly excludes ranking, which belongs to the search service."
+    },
+    {
+      "source": "atlas-overview.md",
+      "text": "Atlas is the internal name for the customer data platform. It stores account records, subscription state, and entitlement flags. Every other service reads entitlements from Atlas rather than caching them, because a stale entitlement is how a cancelled customer keeps access."
+    },
+    {
+      "source": "atlas-migration.md",
+      "text": "The Atlas migration moves account records from the legacy MySQL cluster onto Postgres. It runs in three phases: dual write, backfill verification, and cutover. Rollback is only possible before cutover, so the verification phase requires sign off from both the service owner and the platform lead."
+    },
+    {
+      "source": "beacon-analytics.md",
+      "text": "Beacon is the analytics warehouse. It ingests event streams nightly and exposes them for reporting. Beacon is explicitly not a source of truth: numbers there can lag production by up to twelve hours and should never be quoted to a customer."
+    },
+    {
+      "source": "incident-2026-03.md",
+      "text": "On the third of March a deployment removed an index from the subscriptions table. Query latency rose from twelve milliseconds to four seconds and checkout began timing out. The index was restored within forty minutes. The postmortem action was to require an explicit review for any migration that drops an index."
+    },
+    {
+      "source": "incident-2026-05.md",
+      "text": "In May a misconfigured cache returned another tenant's entitlement flags for approximately nine minutes. No customer data was displayed, but the blast radius review concluded that the cache key must always include the workspace identifier. All caches were audited the same week."
+    },
+    {
+      "source": "security-review.md",
+      "text": "Any feature that reads data belonging to more than one customer requires a written isolation review before it ships. The review must name the query paths involved and demonstrate that each one filters on the tenant identifier. Reviews are filed in the security folder and expire after a year."
+    },
+    {
+      "source": "hiring-process.md",
+      "text": "Engineering interviews are four stages: a screen, a practical exercise, a systems conversation, and a values interview. The practical exercise is untimed and candidates may use any documentation they like. Offers require two strong yes votes and no strong no."
+    },
+    {
+      "source": "expense-policy.md",
+      "text": "Expenses under two hundred dollars need no pre approval but must be filed within thirty days. Travel booked outside the corporate tool is reimbursed at the lower of actual cost and the tool's quoted fare on the day of booking."
+    },
+    {
+      "source": "release-cadence.md",
+      "text": "We ship on Tuesdays and Thursdays. Friday deploys require the platform lead's approval, and the week before a major launch is a freeze during which only fixes for customer facing breakage go out."
+    },
+    {
+      "source": "support-tiers.md",
+      "text": "Enterprise customers have a one hour first response target during business hours and four hours overnight. Growth customers have same day response. Free accounts are best effort and are answered from the community queue."
+    },
+    {
+      "source": "data-retention.md",
+      "text": "Uploaded documents are retained for as long as the workspace exists. Deleting a workspace removes its documents and derived passages within thirty days. Audit records are kept for seven years regardless of workspace deletion, because they are the record of who did what."
+    },
+    {
+      "source": "model-costs.md",
+      "text": "Embedding a document costs far less than answering a question about it, so we embed everything at upload rather than at query time. The dominant per question cost is the answer generation, not retrieval."
+    },
+    {
+      "source": "glossary.md",
+      "text": "A passage is a contiguous slice of an uploaded document. A citation is a passage attached to an answer. Provenance means every claim in an answer can be traced to the passage that supports it."
+    }
+  ],
+  "questions": [
+    {
+      "kind": "lexical",
+      "question": "Who owns the Northstar launch?",
+      "source": "northstar.md",
+      "must_contain": "Maya Chen"
+    },
+    {
+      "kind": "lexical",
+      "question": "What onboarding improvement is Northstar targeting?",
+      "source": "northstar.md",
+      "must_contain": "forty percent"
+    },
+    {
+      "kind": "lexical",
+      "question": "What color is the Juniper deployment ring?",
+      "source": "juniper.md",
+      "must_contain": "violet"
+    },
+    {
+      "kind": "lexical",
+      "question": "How long is the Juniper rollback window?",
+      "source": "juniper.md",
+      "must_contain": "fifteen minutes"
+    },
+    {
+      "kind": "lexical",
+      "question": "Who maintains the ingestion pipeline?",
+      "source": "ingest-pipeline.md",
+      "must_contain": "Daniel Okonkwo"
+    },
+    {
+      "kind": "lexical",
+      "question": "When does the on-call rotation hand over?",
+      "source": "oncall-policy.md",
+      "must_contain": "ten in the morning"
+    },
+    {
+      "kind": "lexical",
+      "question": "How long are audit records kept?",
+      "source": "data-retention.md",
+      "must_contain": "seven years"
+    },
+    {
+      "kind": "lexical",
+      "question": "What is the first response target for enterprise customers?",
+      "source": "support-tiers.md",
+      "must_contain": "one hour"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Who should I talk to about invoices not matching what the bank sent us?",
+      "source": "payments-service.md",
+      "must_contain": "Priya Shah"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "A subscriber says money left their account twice. What is the correct procedure?",
+      "source": "billing-runbook.md",
+      "must_contain": "correction ticket"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "How big are the text fragments we store, and why do they overlap?",
+      "source": "ingest-pipeline.md",
+      "must_contain": "overlap"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Why does asking a question in my own words often return nothing useful?",
+      "source": "search-service.md",
+      "must_contain": "does not consider meaning"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Can I quote figures from the reporting warehouse to a client?",
+      "source": "beacon-analytics.md",
+      "must_contain": "never be quoted"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "What happened when checkout got slow in early March?",
+      "source": "incident-2026-03.md",
+      "must_contain": "index"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Has one customer ever seen another customer's settings?",
+      "source": "incident-2026-05.md",
+      "must_contain": "nine minutes"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Are candidates allowed to look things up during the coding stage?",
+      "source": "hiring-process.md",
+      "must_contain": "any documentation"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Do I need permission before buying something small for work?",
+      "source": "expense-policy.md",
+      "must_contain": "no pre approval"
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Can we push to production at the end of the week?",
+      "source": "release-cadence.md",
+      "must_contain": "Friday"
+    },
+    {
+      "kind": "indirect",
+      "question": "A cancelled account still has access to a paid feature. Which system is authoritative for that?",
+      "source": "atlas-overview.md",
+      "must_contain": "stale entitlement"
+    },
+    {
+      "kind": "indirect",
+      "question": "We are moving off MySQL. At what point can we no longer turn back?",
+      "source": "atlas-migration.md",
+      "must_contain": "cutover"
+    },
+    {
+      "kind": "indirect",
+      "question": "I am building a feature that reads across tenants. What do I have to do first?",
+      "source": "security-review.md",
+      "must_contain": "isolation review"
+    },
+    {
+      "kind": "indirect",
+      "question": "Someone got woken up four times last night. Are they on the rota next week?",
+      "source": "oncall-policy.md",
+      "must_contain": "excused"
+    },
+    {
+      "kind": "indirect",
+      "question": "Who looks after the message queue and object storage?",
+      "source": "platform-team.md",
+      "must_contain": "May Lin"
+    },
+    {
+      "kind": "indirect",
+      "question": "Which group decides how results are ordered?",
+      "source": "vector-team.md",
+      "must_contain": "excludes ranking"
+    },
+    {
+      "kind": "indirect",
+      "question": "Is it cheaper to compute representations upfront or when someone asks?",
+      "source": "model-costs.md",
+      "must_contain": "at upload"
+    },
+    {
+      "kind": "indirect",
+      "question": "What word do we use for being able to trace a claim back to its evidence?",
+      "source": "glossary.md",
+      "must_contain": "Provenance"
+    },
+    {
+      "kind": "indirect",
+      "question": "If a workspace is deleted, does the record of who deleted it go too?",
+      "source": "data-retention.md",
+      "must_contain": "seven years"
+    },
+    {
+      "kind": "indirect",
+      "question": "Why does a duplicate charge come back the next day if I just refund it?",
+      "source": "billing-runbook.md",
+      "must_contain": "bypass reconciliation"
+    }
+  ]
+}

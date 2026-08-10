@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from ..auth import DEFAULT_AGENT_ID, Actor, get_actor
+from ..auth import Actor, get_actor
 from ..database import SessionLocal, get_db
 from ..models import (
     Agent,
@@ -248,14 +248,17 @@ def send_message(
                 run=RunOut.model_validate(run),
                 replayed=True,
             )
-    agent_id = payload.agent_id or DEFAULT_AGENT_ID
-    agent = db.scalar(
-        select(Agent).where(
-            Agent.id == agent_id,
-            Agent.workspace_id == actor.workspace_id,
-            Agent.enabled.is_(True),
-        )
+    # "The default agent" is now per workspace — every account gets one at
+    # signup — because a global id would point a new tenant at the dev seed's
+    # agent, or at nothing at all.
+    agent_query = select(Agent).where(
+        Agent.workspace_id == actor.workspace_id, Agent.enabled.is_(True)
     )
+    if payload.agent_id:
+        agent_query = agent_query.where(Agent.id == payload.agent_id)
+    else:
+        agent_query = agent_query.order_by(Agent.created_at, Agent.id)
+    agent = db.scalar(agent_query)
     if agent is None:
         raise HTTPException(status_code=400, detail="Agent is not available")
     run = Run(

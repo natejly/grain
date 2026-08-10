@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 
+from ...clock import utcnow
 from ...database import SessionLocal
 from ...models import IntegrationAccount, SyncJob
 from ..audit import record_audit
@@ -26,11 +26,11 @@ def run_sync_job(job_id: str) -> None:
         if account is None:
             job.status = "failed"
             job.error = "Integration account no longer exists"
-            job.finished_at = datetime.utcnow()
+            job.finished_at = utcnow()
             db.commit()
             return
         job.status = "running"
-        job.started_at = datetime.utcnow()
+        job.started_at = utcnow()
         db.commit()
         try:
             if job.connector == "gmail":
@@ -45,7 +45,7 @@ def run_sync_job(job_id: str) -> None:
             job.status = "succeeded"
             job.stats_json = json.dumps(stats)
             account = db.get(IntegrationAccount, job.account_id) or account
-            account.last_sync_at = datetime.utcnow()
+            account.last_sync_at = utcnow()
             record_audit(
                 db,
                 workspace_id=job.workspace_id,
@@ -62,7 +62,7 @@ def run_sync_job(job_id: str) -> None:
                 return
             job.status = "failed"
             job.error = str(exc)[:1000]
-        job.finished_at = datetime.utcnow()
+        job.finished_at = utcnow()
         db.commit()
     finally:
         db.close()

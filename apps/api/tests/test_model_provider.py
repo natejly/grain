@@ -3,11 +3,16 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
 from app.services import model
-from app.services.model import ModelConfigurationError, generate_grounded_answer
+from app.services.model import (
+    ModelConfigurationError,
+    _openai_client,
+    _openai_input,
+    stream_agent_response,
+)
 from app.services.retrieval import Evidence
 
 
@@ -24,43 +29,61 @@ def evidence() -> list[Evidence]:
     ]
 
 
-def test_auto_provider_uses_openai_only_when_key_exists():
-    offline = Settings(_env_file=None, model_provider="auto", openai_api_key=None)
-    online = Settings(
+def test_openai_provider_refuses_to_boot_without_a_key():
+    """The key is a startup requirement, not a per-turn failure.
+
+    There is no offline mode to fall through to, so an app that booted without a
+    key could only 500 on every message it accepted.
+    """
+    with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
+        Settings(_env_file=None, model_provider="openai", openai_api_key=None)
+    with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
+        Settings(_env_file=None, model_provider="openai", openai_api_key=SecretStr("  "))
+
+
+def test_configured_openai_settings_select_openai_and_hide_the_key():
+    settings = Settings(
         _env_file=None,
-        model_provider="auto",
+        model_provider="openai",
         openai_api_key=SecretStr("test-key"),
     )
-    assert offline.active_model_provider == "deterministic"
-    assert online.active_model_provider == "openai"
-    assert "test-key" not in repr(online)
+    assert settings.active_model_provider == "openai"
+    assert "test-key" not in repr(settings)
 
 
-def test_explicit_openai_requires_a_key():
-    settings = Settings(_env_file=None, model_provider="openai", openai_api_key=None)
+def test_client_construction_still_guards_a_keyless_settings():
+    """model_copy bypasses validation, so the client keeps its own check."""
+    settings = Settings(
+        _env_file=None, model_provider="openai", openai_api_key=SecretStr("test-key")
+    ).model_copy(update={"openai_api_key": None})
     with pytest.raises(ModelConfigurationError, match="OPENAI_API_KEY"):
-        generate_grounded_answer(
-            "Who owns the launch?",
-            evidence(),
-            user_id="user-1",
-            settings=settings,
-        )
+        _openai_client(settings)
 
 
-def test_openai_response_is_grounded_and_not_stored(monkeypatch):
+class _FakeStream:
+    """One agent turn's worth of Responses API stream events."""
+
+    def __init__(self, text: str):
+        self._events = [
+            SimpleNamespace(type="response.output_text.delta", delta=text),
+            SimpleNamespace(
+                type="response.completed",
+                response=SimpleNamespace(output=[], output_text=text),
+            ),
+        ]
+
+    def __iter__(self):
+        return iter(self._events)
+
+
+def test_agent_turn_is_grounded_and_not_stored():
     captured: dict[str, object] = {}
 
     class FakeResponses:
         def create(self, **kwargs):
             captured.update(kwargs)
-            return SimpleNamespace(output_text="Maya owns the launch. [1]")
+            return _FakeStream("Maya owns the launch. [1]")
 
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            captured["client"] = kwargs
-            self.responses = FakeResponses()
-
-    monkeypatch.setattr(model, "OpenAI", FakeOpenAI)
     settings = Settings(
         _env_file=None,
         model_provider="openai",
@@ -68,73 +91,63 @@ def test_openai_response_is_grounded_and_not_stored(monkeypatch):
         openai_model="test-model",
         openai_reasoning_effort="low",
     )
-    answer = generate_grounded_answer(
-        "Who owns the launch?",
-        evidence(),
-        user_id="user-1",
-        settings=settings,
+    events = list(
+        stream_agent_response(
+            SimpleNamespace(responses=FakeResponses()),  # type: ignore[arg-type]
+            settings,
+            user_id="user-1",
+            input_items=[
+                {
+                    "role": "user",
+                    "content": _openai_input("Who owns the launch?", evidence()),
+                }
+            ],
+            tools=[],
+            instructions=model.CHAT_INSTRUCTIONS,
+        )
     )
 
-    assert answer == "Maya owns the launch. [1]"
+    assert events[0] == ("delta", "Maya owns the launch. [1]")
+    assert events[-1][0] == "completed"
     assert captured["model"] == "test-model"
     assert captured["store"] is False
+    assert captured["stream"] is True
     assert captured["reasoning"] == {"effort": "low"}
     assert captured["text"] == {"verbosity": "low"}
     assert "Maya owns" in str(captured["input"])
     assert "user-1" not in str(captured["safety_identifier"])
     assert "helpful assistant" in str(captured["instructions"])
-    assert captured["client"] == {
-        "api_key": "test-key",
-        "timeout": 60.0,
-        "max_retries": 1,
-    }
 
 
-def test_openai_answers_without_sources(monkeypatch):
-    captured: dict[str, object] = {}
-
-    class FakeResponses:
-        def create(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(output_text="Hello! How can I help?")
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            self.responses = FakeResponses()
-
-    monkeypatch.setattr(model, "OpenAI", FakeOpenAI)
+def test_openai_client_is_built_from_settings():
     settings = Settings(
         _env_file=None,
         model_provider="openai",
         openai_api_key=SecretStr("test-key"),
-        openai_model="test-model",
+        openai_timeout_seconds=60.0,
     )
-    answer = generate_grounded_answer(
-        "hi",
-        [],
-        user_id="user-1",
-        settings=settings,
-    )
-
-    assert answer == "Hello! How can I help?"
-    assert "Question:\nhi" in str(captured["input"])
-    assert "Optional source passages" not in str(captured["input"])
+    client = _openai_client(settings)
+    assert client.api_key == "test-key"
+    assert client.timeout == 60.0
+    assert client.max_retries == 1
 
 
-def test_deterministic_without_sources_explains_offline_mode():
-    settings = Settings(_env_file=None, model_provider="deterministic")
-    answer = generate_grounded_answer(
-        "hi",
-        [],
-        user_id="user-1",
-        settings=settings,
-    )
-    assert "offline mode" in answer
-    assert "OPENAI_API_KEY" in answer
+def test_prompt_carries_sources_only_when_there_is_evidence():
+    with_sources = _openai_input("Who owns the launch?", evidence())
+    assert "Optional source passages" in with_sources
+    assert "brief.md, passage 1" in with_sources
+
+    without = _openai_input("hi", [])
+    assert "Question:\nhi" in without
+    assert "Optional source passages" not in without
 
 
 def test_local_web_origin_accepts_both_loopback_names():
-    settings = Settings(_env_file=None, web_origin="http://localhost:3000")
+    settings = Settings(
+        _env_file=None,
+        web_origin="http://localhost:3000",
+        openai_api_key=SecretStr("test-key"),
+    )
     assert settings.allowed_web_origins == [
         "http://127.0.0.1:3000",
         "http://localhost:3000",

@@ -1,4 +1,7 @@
 PNPM := npx --yes pnpm@9.15.9
+# The API needs Python 3.10+ (MCP SDK floor). Override if your 3.10+ binary
+# has a different name: make install PYTHON=python3.11
+PYTHON ?= python3.12
 
 .PHONY: install dev dev-api dev-web test test-e2e lint build eval migrate seed verify
 
@@ -6,7 +9,7 @@ dev:
 	./scripts/dev.sh
 
 install:
-	python3 -m venv .venv
+	$(PYTHON) -m venv .venv
 	.venv/bin/python -m pip install --upgrade pip
 	.venv/bin/pip install -e "apps/api[dev]"
 	$(PNPM) install
