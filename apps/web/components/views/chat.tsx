@@ -357,7 +357,12 @@ export function ChatView({
             disabled={Boolean(activeRun)}
           />
           <div className="composer-tools">
-            <button type="button" onClick={onAttach} title="Add a source">
+            <button
+              type="button"
+              onClick={onAttach}
+              title="Add a source"
+              aria-label="Add a source"
+            >
               <Paperclip size={17} />
             </button>
             <span className="composer-spacer" />

@@ -40,6 +40,33 @@ describe("WorkspaceApi", () => {
     expect(health.status).toBe("ok");
   });
 
+  it("lists the caller's workspaces and sends the selection on later requests", async () => {
+    // A fresh Response per call: a body can only be read once.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify([
+            { id: "ws-1", name: "Acme Knowledge Lab", role: "owner", is_current: true },
+            { id: "ws-2", name: "Field notes", role: "member", is_current: false },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const api = new WorkspaceApi("http://example.test");
+
+    const workspaces = await api.listWorkspaces();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://example.test/api/auth/workspaces");
+    expect(workspaces.map((item) => item.id)).toEqual(["ws-1", "ws-2"]);
+
+    // Selecting one is what makes the switcher work: everything after it must
+    // carry the header the API checks against memberships.
+    api.setWorkspaceId("ws-2");
+    await api.listSources();
+    const headers = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
+    expect(headers.get("X-Workspace-Id")).toBe("ws-2");
+  });
+
   it("turns an unreachable API into a typed offline error", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new TypeError("Failed to fetch"),

@@ -28,6 +28,7 @@ import { SandboxView } from "./views/sandbox";
 import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
 import { SourcesView } from "./views/sources";
 import { ThemeToggle } from "./theme-toggle";
+import { WorkspaceSwitcher } from "./workspace-selection";
 
 export function Workspace() {
   const {
@@ -178,6 +179,9 @@ export function Workspace() {
             <X size={18} />
           </button>
         </div>
+
+        {/* Above everything else because everything else is scoped to it. */}
+        <WorkspaceSwitcher />
 
         <button className="new-thread-button" onClick={newConversation}>
           <Plus size={16} />

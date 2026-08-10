@@ -43,8 +43,16 @@ sys.path.insert(0, str(API_DIR))
 
 from app.auth import DEV_SEED_USER_ID, seed_dev_workspace  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
-from app.models import User  # noqa: E402
+from app.models import Agent, Conversation, Membership, User, Workspace  # noqa: E402
 from app.services.auth.passwords import hash_password  # noqa: E402
+
+# A second workspace for the same user, so the browser suite can prove the
+# switcher actually switches. Its one conversation is the tell: a title that
+# exists in exactly one of the two workspaces makes "the views refetched" an
+# assertion rather than a hope. Created after the seed, so the demo workspace
+# still holds the oldest membership and stays the default landing.
+E2E_SECOND_WORKSPACE = "Field notes"
+E2E_SECOND_CONVERSATION = "Radio silence"
 
 # Give the seeded demo user a password so the suite can log in as it. The specs
 # share one workspace on purpose — the github-zen tool grant, the agent, the
@@ -60,6 +68,28 @@ try:
     if _user is not None:
         _user.password_hash = hash_password(E2E_DEMO_PASSWORD)
         _db.commit()
+
+    _second = Workspace(name=E2E_SECOND_WORKSPACE)
+    _db.add(_second)
+    _db.flush()
+    _db.add(
+        Membership(workspace_id=_second.id, user_id=DEV_SEED_USER_ID, role="owner")
+    )
+    _db.add(
+        Agent(
+            workspace_id=_second.id,
+            name="Research partner",
+            instructions="Answer from workspace evidence.",
+        )
+    )
+    _db.add(
+        Conversation(
+            workspace_id=_second.id,
+            created_by=DEV_SEED_USER_ID,
+            title=E2E_SECOND_CONVERSATION,
+        )
+    )
+    _db.commit()
 finally:
     _db.close()
 

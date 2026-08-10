@@ -205,10 +205,15 @@ export function ColumnHeader({
               setName(column.name);
               setRenaming(false);
             }}
+            aria-label={`Cancel renaming ${column.name}`}
           >
             <X size={13} />
           </button>
-          <button type="submit" className="primary-button">
+          <button
+            type="submit"
+            className="primary-button"
+            aria-label={`Save name for ${column.name}`}
+          >
             <Check size={13} />
           </button>
         </div>

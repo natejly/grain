@@ -19,7 +19,7 @@ from app.clock import utcnow
 from app.config import Settings, get_settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import UserSession
+from app.models import Membership, UserSession, Workspace
 from app.services.auth.sessions import hash_token
 
 # Unauthenticated by design: these either start a session or are redeemed with a
@@ -103,6 +103,73 @@ def test_a_workspace_header_cannot_reach_a_workspace_you_are_not_in(identity_cli
     )
     assert own.status_code == 200
     assert own.json()["identity"]["workspace_id"] == outsider.identity.workspace_id
+
+
+def join_workspace(user_id: str, name: str, role: str = "member") -> str:
+    """Put `user_id` in a second, brand new workspace; return its id."""
+    db = SessionLocal()
+    try:
+        workspace = Workspace(name=name)
+        db.add(workspace)
+        db.flush()
+        db.add(Membership(workspace_id=workspace.id, user_id=user_id, role=role))
+        db.commit()
+        return workspace.id
+    finally:
+        db.close()
+
+
+def test_the_workspace_list_offers_every_workspace_the_caller_is_in(identity_client):
+    caller = identity_client(workspace_name="First")
+    second = join_workspace(caller.identity.user_id, "Second", role="member")
+
+    listed = caller.get("/api/auth/workspaces").json()
+    assert [item["id"] for item in listed] == [caller.identity.workspace_id, second]
+    assert [item["name"] for item in listed] == ["First", "Second"]
+    assert [item["role"] for item in listed] == ["owner", "member"]
+    # No selection was sent, so the current one is the same workspace
+    # `_resolve_workspace` picks by default: the oldest membership.
+    assert [item["is_current"] for item in listed] == [True, False]
+
+
+def test_the_workspace_list_follows_the_selection_header(identity_client):
+    caller = identity_client()
+    second = join_workspace(caller.identity.user_id, "Second")
+
+    listed = caller.get(
+        "/api/auth/workspaces", headers={"X-Workspace-Id": second}
+    ).json()
+    assert {item["id"]: item["is_current"] for item in listed} == {
+        caller.identity.workspace_id: False,
+        second: True,
+    }
+
+
+def test_the_workspace_list_never_shows_another_users_workspaces(identity_client):
+    """The whole point of the switcher's discovery endpoint failing closed.
+
+    It hands out ids that `X-Workspace-Id` will be believed for, so a list that
+    leaked a stranger's workspace would be handing out the one thing the header
+    check cannot: a workspace id the caller has no membership row for.
+    """
+    stranger = identity_client(workspace_name="Stranger's workspace")
+    join_workspace(stranger.identity.user_id, "Stranger's second")
+    caller = identity_client(workspace_name="Caller's workspace")
+
+    listed = caller.get("/api/auth/workspaces").json()
+    assert [item["id"] for item in listed] == [caller.identity.workspace_id]
+    assert stranger.identity.workspace_id not in {item["id"] for item in listed}
+    # And naming the stranger's workspace outright is still a 403, so the list
+    # is the only way to learn an id and it only ever tells the truth.
+    denied = caller.get(
+        "/api/auth/workspaces",
+        headers={"X-Workspace-Id": stranger.identity.workspace_id},
+    )
+    assert denied.status_code == 403
+
+
+def test_the_workspace_list_requires_a_session(anonymous_client):
+    assert anonymous_client.get("/api/auth/workspaces").status_code == 401
 
 
 def test_an_unknown_cookie_is_refused(anonymous_client):

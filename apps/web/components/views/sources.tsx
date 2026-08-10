@@ -120,6 +120,7 @@ export function SourcesView({
                 className="delete-button"
                 onClick={() => void removeSource(source)}
                 title="Delete source"
+                aria-label={`Delete ${source.filename}`}
               >
                 <Trash2 size={15} />
               </button>

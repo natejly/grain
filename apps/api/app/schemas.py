@@ -90,6 +90,21 @@ class AuthSessionOut(ApiModel):
     csrf_token: str
 
 
+class WorkspaceMembershipOut(ApiModel):
+    """One workspace the caller may select with ``X-Workspace-Id``.
+
+    A membership, not a workspace: the list is what the caller belongs to, so
+    it doubles as the set of ids the header will be believed for.
+    """
+
+    id: str
+    name: str
+    role: str
+    # True for the workspace this very request resolved to, so a client can
+    # render the current selection without repeating the API's tie-break.
+    is_current: bool
+
+
 class DevOverrideOut(ApiModel):
     """Whether the local one-click sign-in override is available.
 

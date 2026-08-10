@@ -32,6 +32,19 @@ export type AuthAcknowledgement = {
   detail: string;
 };
 
+/**
+ * One workspace the signed-in user belongs to. The id is safe to put in
+ * `X-Workspace-Id`: the API returns memberships, and it re-checks the header
+ * against those same rows on every request regardless.
+ */
+export type WorkspaceMembership = {
+  id: string;
+  name: string;
+  role: string;
+  /** True for the workspace the listing request itself resolved to. */
+  is_current: boolean;
+};
+
 export type DevOverride = {
   enabled: boolean;
   handle: string;
@@ -816,6 +829,11 @@ export class WorkspaceApi {
         method: "POST",
       }),
     );
+  }
+
+  /** Every workspace the signed-in user may select, oldest membership first. */
+  listWorkspaces(): Promise<WorkspaceMembership[]> {
+    return this.request<WorkspaceMembership[]>("/api/auth/workspaces");
   }
 
   async devOverride(): Promise<DevOverride> {

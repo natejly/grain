@@ -707,6 +707,7 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase("GET", "/api/bootstrap", SCOPED),
     # -- auth --------------------------------------------------------------
     RouteCase("GET", "/api/auth/me", SCOPED),
+    RouteCase("GET", "/api/auth/workspaces", SCOPED),
     RouteCase("POST", "/api/auth/logout", SCOPED),
     RouteCase("POST", "/api/auth/login", PUBLIC),
     RouteCase("POST", "/api/auth/signup", PUBLIC),

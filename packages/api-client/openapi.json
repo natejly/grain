@@ -3317,6 +3317,35 @@
         ],
         "title": "VerifyEmailIn",
         "type": "object"
+      },
+      "WorkspaceMembershipOut": {
+        "description": "One workspace the caller may select with ``X-Workspace-Id``.\n\nA membership, not a workspace: the list is what the caller belongs to, so\nit doubles as the set of ids the header will be believed for.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "is_current"
+        ],
+        "title": "WorkspaceMembershipOut",
+        "type": "object"
       }
     }
   },
@@ -4488,6 +4517,60 @@
           }
         },
         "summary": "Verify Email",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/workspaces": {
+      "get": {
+        "description": "The workspaces the caller belongs to, for the switcher to offer.\n\nDiscovery only. ``X-Workspace-Id`` was already checked against `memberships`\nbefore it was believed, so this endpoint grants nothing new \u2014 it just stops\na user with three workspaces from having to guess two of the ids. The query\nis keyed on the caller's own user id, so it cannot list a workspace they are\nnot in; `tests/test_auth_boundaries.py` pins that a second user sees none of\nthe first's.\n\nOrdered by membership age, exactly as `_resolve_workspace` orders its\ndefault pick, so \"the first one\" names the same row in both places.",
+        "operationId": "list_workspaces_api_auth_workspaces_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceMembershipOut"
+                  },
+                  "title": "Response List Workspaces Api Auth Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Workspaces",
         "tags": [
           "auth"
         ]

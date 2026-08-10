@@ -13,7 +13,7 @@ Two rules shape almost every response in this file:
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -35,6 +35,7 @@ from ..schemas import (
     PasswordResetRequestIn,
     SignupIn,
     VerifyEmailIn,
+    WorkspaceMembershipOut,
 )
 from ..services.audit import record_audit
 from ..services.auth import email as email_service
@@ -454,6 +455,40 @@ def me(
         session = db.get(UserSession, actor.session_id)
         csrf_token = session.csrf_secret if session is not None else ""
     return _session_out(db, actor, csrf_token)
+
+
+@router.get("/workspaces", response_model=List[WorkspaceMembershipOut])
+def list_workspaces(
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> List[WorkspaceMembershipOut]:
+    """The workspaces the caller belongs to, for the switcher to offer.
+
+    Discovery only. ``X-Workspace-Id`` was already checked against `memberships`
+    before it was believed, so this endpoint grants nothing new — it just stops
+    a user with three workspaces from having to guess two of the ids. The query
+    is keyed on the caller's own user id, so it cannot list a workspace they are
+    not in; `tests/test_auth_boundaries.py` pins that a second user sees none of
+    the first's.
+
+    Ordered by membership age, exactly as `_resolve_workspace` orders its
+    default pick, so "the first one" names the same row in both places.
+    """
+    rows = db.execute(
+        select(Workspace, Membership)
+        .join(Membership, Membership.workspace_id == Workspace.id)
+        .where(Membership.user_id == actor.user_id)
+        .order_by(Membership.created_at, Membership.id)
+    ).all()
+    return [
+        WorkspaceMembershipOut(
+            id=workspace.id,
+            name=workspace.name,
+            role=membership.role,
+            is_current=workspace.id == actor.workspace_id,
+        )
+        for workspace, membership in rows
+    ]
 
 
 @router.post(

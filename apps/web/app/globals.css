@@ -280,6 +280,131 @@ select:focus-visible {
   font-weight: 700;
 }
 
+/* Workspace switcher. Sits above "New thread" because the thread, the sources
+   and the graph under it all belong to whichever workspace this names. */
+.workspace-switcher {
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-switcher-trigger {
+  width: 100%;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-switcher-trigger:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.workspace-switcher-mark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 5px;
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.workspace-switcher-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-switcher-trigger > svg {
+  flex: none;
+  color: var(--text-dim);
+}
+
+/* Catches the click that closes the menu. Transparent on purpose: this is not
+   a modal, and dimming the app for a five-item list would say it is. */
+.workspace-switcher-scrim {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  border: 0;
+  background: transparent;
+}
+
+.workspace-switcher-menu {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  max-height: 244px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+
+.workspace-option {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-option:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.workspace-option.active {
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.workspace-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-option-role {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .new-thread-button {
   height: 38px;
   margin: 16px 0 14px;
