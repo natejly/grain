@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openSettings, openView } from "./shell";
 
 /**
  * A sweep across the views that had no browser coverage: Documents, Boards,
@@ -20,30 +21,10 @@ function watchForErrors(page: Page): string[] {
   return failures;
 }
 
-/**
- * The sidebar holds five groups; a view is reached by opening its group and
- * then its tab in the group's sub-navigation. Both navs are addressed by their
- * accessible name, because group labels such as "Create" also appear on form
- * buttons inside the views.
- */
-async function openView(page: Page, group: string, tab?: RegExp | string) {
-  // The group badge is part of the button's accessible name ("Create 4"), so
-  // anchor on the label rather than asking for an exact match.
-  await page
-    .getByRole("navigation", { name: "Workspace" })
-    .getByRole("button", { name: new RegExp(`^${group}`) })
-    .click();
-  if (!tab) return;
-  await page
-    .getByRole("navigation", { name: `${group} views` })
-    .getByRole("button", { name: tab })
-    .click();
-}
-
 test("documents: create, edit, live preview, and version history", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Create", /Documents/);
+  await openView(page, "Documents", /Documents/);
 
   await page.getByRole("button", { name: "New document" }).click();
   await page.getByPlaceholder("Title").fill("Feature Sweep Notes");
@@ -77,7 +58,7 @@ test("documents: create, edit, live preview, and version history", async ({ page
 test("boards: create a board, add cards, and manage columns", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Create", /Boards/);
+  await openView(page, "Documents", /Boards/);
 
   await page.getByPlaceholder("New board name").fill("Sweep Board");
   await page.locator(".board-new").getByRole("button", { name: /Create/ }).click();
@@ -105,7 +86,7 @@ test("boards: create a board, add cards, and manage columns", async ({ page }) =
 test("projects: a web project seeds files and bundles a live preview", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Create", /Projects/);
+  await openView(page, "Documents", /Projects/);
 
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByPlaceholder("Project name").fill("Sweep App");
@@ -138,7 +119,7 @@ test("projects: a web project seeds files and bundles a live preview", async ({ 
 test("databases: add a sqlite connection and browse its schema", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Connections", /Databases/);
+  await openSettings(page, "Connections", /Databases/);
 
   await page.getByRole("button", { name: /Add connection|Add database|Add/ }).first().click();
   await page.locator(".content-page").screenshot({
@@ -150,7 +131,7 @@ test("databases: add a sqlite connection and browse its schema", async ({ page }
 test("mcp: the server form renders and validates", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Connections", /MCP/);
+  await openSettings(page, "Connections", /MCP/);
 
   await page.getByRole("button", { name: /Add server/ }).click();
   await expect(page.getByRole("textbox", { name: /^Name/ })).toBeVisible();
@@ -170,13 +151,13 @@ test("integrations and activity views render", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
 
-  await openView(page, "Connections", /Integrations/);
+  await openSettings(page, "Connections", /Integrations/);
   await expect(page.locator(".content-page")).toBeVisible();
   await page.locator(".content-page").screenshot({
     path: "test-results/feature-integrations.png",
   });
 
-  await openView(page, "Activity");
+  await openSettings(page, "Activity");
   await expect(page.locator(".content-page")).toBeVisible();
 
   expect(errors).toEqual([]);

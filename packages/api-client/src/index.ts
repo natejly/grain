@@ -636,6 +636,117 @@ export type SandboxRun = {
   session: SandboxSession;
 };
 
+/* --- Workspace administration ---------------------------------------------
+ *
+ * Every shape below mirrors a response model in apps/api/app/api/admin.py, and
+ * every route behind them is owner-only (403 otherwise) and scoped to the
+ * caller's workspace. None of them carries a credential: an MCP server reports
+ * `has_secrets`, never a secret, and a sandbox never reports the provider-side
+ * id that names its live machine.
+ */
+
+export type AdminMember = {
+  user_id: string;
+  membership_id: string;
+  name: string;
+  email: string;
+  role: string;
+  status: string;
+  joined_at: string;
+  /** True for the caller's own row — an owner cannot act on themselves. */
+  is_self: boolean;
+};
+
+export type AdminAuditEntry = {
+  id: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+  actor_id: string;
+  /** Empty when a background worker wrote the row, or the user is gone. */
+  actor_name: string;
+  actor_email: string;
+};
+
+export type AdminAuditPage = {
+  entries: AdminAuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+};
+
+export type AdminRun = {
+  id: string;
+  conversation_id: string;
+  agent_id: string;
+  created_by: string;
+  status: string;
+  prompt_preview: string;
+  error: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AdminApproval = {
+  id: string;
+  run_id: string;
+  name: string;
+  status: string;
+  proposal_preview: string;
+  created_at: string;
+};
+
+export type AdminActivity = {
+  run_status_counts: Record<string, number>;
+  tool_call_status_counts: Record<string, number>;
+  recent_runs: AdminRun[];
+  /** Only the calls actually parked on a human decision. */
+  pending_approvals: AdminApproval[];
+};
+
+export type AdminSandboxSession = {
+  id: string;
+  project_id: string;
+  label: string;
+  provider: string;
+  status: string;
+  network_policy: SandboxNetworkPolicy;
+  exec_count: number;
+  wall_ms_used: number;
+  error: string;
+  created_at: string;
+  last_used_at: string;
+  killed_at: string | null;
+};
+
+export type AdminMcpServer = {
+  id: string;
+  name: string;
+  transport: string;
+  enabled: boolean;
+  status: string;
+  last_error: string;
+  last_connected_at: string | null;
+  /** Whether env/headers are stored — never the values. */
+  has_secrets: boolean;
+  tool_count: number;
+  created_at: string;
+};
+
+export type AdminStorage = {
+  sources_by_status: Record<string, number>;
+  source_count: number;
+  source_bytes: number;
+  chunk_count: number;
+  memory_by_status: Record<string, number>;
+  memory_item_count: number;
+  graph_entity_count: number;
+  graph_edge_count: number;
+};
+
 function makeKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -660,6 +771,11 @@ export class ApiError extends Error {
   /** True when the API says nobody is signed in. */
   get unauthenticated(): boolean {
     return this.status === 401;
+  }
+
+  /** True when the caller is signed in but lacks the role for this route. */
+  get forbidden(): boolean {
+    return this.status === 403;
   }
 }
 
@@ -1490,6 +1606,43 @@ export class WorkspaceApi {
 
   previewApp(appId: string): Promise<AppPreview> {
     return this.request(`/api/apps/${appId}/preview`);
+  }
+
+  // --- Workspace administration ---------------------------------------------
+  // Owner-only, workspace-scoped. There is no listAdminWorkspaces(): the
+  // workspaces panel reads `listWorkspaces()` above, because a second endpoint
+  // over the same memberships would be a second place for the filter to be
+  // wrong.
+
+  listAdminMembers(limit = 100): Promise<AdminMember[]> {
+    return this.request(`/api/admin/members?limit=${limit}`);
+  }
+
+  listAdminAuditEvents(limit = 50, offset = 0): Promise<AdminAuditPage> {
+    return this.request(`/api/admin/audit-events?limit=${limit}&offset=${offset}`);
+  }
+
+  getAdminActivity(limit = 20): Promise<AdminActivity> {
+    return this.request(`/api/admin/activity?limit=${limit}`);
+  }
+
+  listAdminSandboxSessions(limit = 50): Promise<AdminSandboxSession[]> {
+    return this.request(`/api/admin/sandbox-sessions?limit=${limit}`);
+  }
+
+  /** Destroy a machine. Answers with the killed row, not 204. */
+  killAdminSandboxSession(sessionId: string): Promise<AdminSandboxSession> {
+    return this.request(`/api/admin/sandbox-sessions/${sessionId}`, {
+      method: "DELETE",
+    }, true);
+  }
+
+  listAdminMcpServers(limit = 50): Promise<AdminMcpServer[]> {
+    return this.request(`/api/admin/mcp-servers?limit=${limit}`);
+  }
+
+  getAdminStorage(): Promise<AdminStorage> {
+    return this.request("/api/admin/storage");
   }
 
   // --- Sandbox (server-side execution) --------------------------------------

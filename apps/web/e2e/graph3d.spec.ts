@@ -1,23 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
-
-/**
- * Navigation is grouped: the sidebar has five groups and a group's siblings sit
- * in a tab strip above the view. Both navs are addressed by accessible name so
- * a group label ("Create") never collides with a form button of the same name.
- */
-async function openView(page: Page, group: string, tab?: RegExp | string) {
-  // The group badge is part of the button's accessible name ("Create 4"), so
-  // anchor on the label rather than asking for an exact match.
-  await page
-    .getByRole("navigation", { name: "Workspace" })
-    .getByRole("button", { name: new RegExp(`^${group}`) })
-    .click();
-  if (!tab) return;
-  await page
-    .getByRole("navigation", { name: `${group} views` })
-    .getByRole("button", { name: tab })
-    .click();
-}
+import { expect, test } from "@playwright/test";
+import { openView } from "./shell";
 
 /**
  * Temporary verification that the 3D graph actually paints, not just that the

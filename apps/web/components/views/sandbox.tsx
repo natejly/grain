@@ -19,12 +19,20 @@ import type {
   SandboxNetworkPolicy,
   SandboxSession,
 } from "@workspace/api-client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { describeError, formatRelative } from "./shared";
 
 export type SandboxViewProps = {
   setError: (message: string) => void;
+  /**
+   * Set when the user picked "Sandbox" from the Create menu, which creates
+   * rather than navigates. It is a request the panel *consumes* — it calls
+   * `onStartHandled` before starting anything — because a plain boolean would
+   * boot a second machine every time this view remounted while it was still up.
+   */
+  startRequested?: boolean;
+  onStartHandled?: () => void;
 };
 
 /**
@@ -155,7 +163,11 @@ function ExecutionBlock({
   );
 }
 
-export function SandboxView({ setError }: SandboxViewProps) {
+export function SandboxView({
+  setError,
+  startRequested = false,
+  onStartHandled,
+}: SandboxViewProps) {
   const [sessions, setSessions] = useState<SandboxSession[]>([]);
   const [activeId, setActiveId] = useState("");
   const [history, setHistory] = useState<SandboxExecution[]>([]);
@@ -184,9 +196,15 @@ export function SandboxView({ setError }: SandboxViewProps) {
     }
   }, [setError]);
 
+  // Constant for this mount: did the panel open *because* Create asked for a
+  // sandbox? If so the listing is left to the start effect below, so the POST
+  // can never be overtaken by a GET that was issued before it.
+  const bootWithStart = useRef(startRequested).current;
+
   useEffect(() => {
+    if (bootWithStart) return;
     void loadSessions();
-  }, [loadSessions]);
+  }, [loadSessions, bootWithStart]);
 
   useEffect(() => {
     if (!activeId) {
@@ -228,6 +246,17 @@ export function SandboxView({ setError }: SandboxViewProps) {
       setBusy(false);
     }
   }
+
+  // "Sandbox" in the Create menu creates one. The request is consumed before
+  // the machine is asked for, so a failed start is not retried forever, and
+  // returning to this view later does not start another.
+  useEffect(() => {
+    if (!startRequested) return;
+    onStartHandled?.();
+    void loadSessions().then(startSession);
+    // startSession is redefined every render; the request flag is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startRequested]);
 
   async function run() {
     if (!active || !source.trim() || busy) return;

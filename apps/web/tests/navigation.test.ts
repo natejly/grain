@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  CREATE_ACTIONS,
   DEFAULT_GROUP_VIEW,
   NAV_GROUPS,
+  RAIL_GROUPS,
+  SETTINGS_GROUPS,
   groupForView,
 } from "../components/views/navigation";
 import { PAGE_TITLES, type View } from "../components/views/shared";
 
 /**
- * The sidebar is generated from NAV_GROUPS, so a view that is missing from it
- * is a view with no way to reach it — and the shell would still render, which
- * is exactly the kind of silence this pins down. `groupForView` also falls back
- * to the first group rather than throwing, so an orphan would only show up as
- * Chat looking oddly highlighted.
+ * Both surfaces — the rail and the Settings menu — and every tab strip are
+ * generated from NAV_GROUPS, so a view missing from it is a view with no way to
+ * reach it, and the shell would still render. That silence is what these pin
+ * down. `groupForView` also falls back to the first group rather than throwing,
+ * so an orphan would only show up as Chat looking oddly highlighted.
  */
 const ALL_VIEWS = Object.keys(PAGE_TITLES) as View[];
 
@@ -22,14 +25,40 @@ describe("navigation model", () => {
     expect(new Set(placements).size).toBe(placements.length);
   });
 
-  it("keeps the sidebar to five groups", () => {
-    // The whole point of the change: eleven top-level entries became five.
-    expect(NAV_GROUPS.map((group) => group.label)).toEqual([
+  it("puts the places you work on the rail", () => {
+    // Create left the rail because creating is an action, not a destination.
+    // Documents took its place — and its siblings' tab strip with it.
+    expect(RAIL_GROUPS.map((group) => group.label)).toEqual([
       "Chat",
-      "Create",
+      "Documents",
       "Knowledge",
+    ]);
+  });
+
+  it("puts the places you configure behind Settings", () => {
+    expect(SETTINGS_GROUPS.map((group) => group.label)).toEqual([
       "Connections",
       "Activity",
+      "Admin",
+    ]);
+  });
+
+  it("shows every group on exactly one surface", () => {
+    expect([...RAIL_GROUPS, ...SETTINGS_GROUPS].map((group) => group.id).sort())
+      .toEqual(NAV_GROUPS.map((group) => group.id).sort());
+    const rail = new Set(RAIL_GROUPS.map((group) => group.id));
+    expect(SETTINGS_GROUPS.some((group) => rail.has(group.id))).toBe(false);
+  });
+
+  it("keeps Documents' siblings reachable from its tab strip", () => {
+    // Moving Documents up must not strand the four views that shared its group.
+    const documents = NAV_GROUPS.find((group) => group.id === "documents");
+    expect(documents?.items.map((item) => item.view)).toEqual([
+      "documents",
+      "projects",
+      "sandbox",
+      "boards",
+      "dashboards",
     ]);
   });
 
@@ -47,7 +76,54 @@ describe("navigation model", () => {
     }
   });
 
-  it("gives memory a home under Knowledge", () => {
+  it("gives memory a home under Knowledge, on the rail", () => {
+    // The reason Knowledge did not follow Connections into Settings: a user who
+    // could not find their memories is not helped by burying them deeper.
     expect(groupForView("memory").id).toBe("knowledge");
+    expect(groupForView("memory").surface).toBe("rail");
+  });
+});
+
+describe("create actions", () => {
+  it("offers the five things a user can make", () => {
+    expect(CREATE_ACTIONS.map((action) => action.label)).toEqual([
+      "Document",
+      "Project",
+      "Sandbox",
+      "Board",
+      "Dashboard",
+    ]);
+  });
+
+  it("targets only views the navigation can reach", () => {
+    const placed = new Set(
+      NAV_GROUPS.flatMap((group) => group.items.map((item) => item.view)),
+    );
+    for (const action of CREATE_ACTIONS) {
+      expect(placed.has(action.view)).toBe(true);
+    }
+  });
+
+  it("borrows each icon from the nav item it opens", () => {
+    // One definition per thing, so the menu and the tab strip cannot disagree
+    // about what a Board looks like.
+    for (const action of CREATE_ACTIONS) {
+      const item = groupForView(action.view).items.find(
+        (candidate) => candidate.view === action.view,
+      );
+      expect(action.icon).toBe(item?.icon);
+    }
+  });
+
+  it("asks for a name only where one cannot be supplied later", () => {
+    const prompts = Object.fromEntries(
+      CREATE_ACTIONS.map((action) => [action.id, action.prompt]),
+    );
+    expect(prompts.document).toBeTruthy();
+    expect(prompts.project).toBeTruthy();
+    expect(prompts.board).toBeTruthy();
+    // A sandbox is a machine, and a dashboard is named inside its own editor.
+    expect(prompts.sandbox).toBe("");
+    expect(prompts.dashboard).toBe("");
   });
 });

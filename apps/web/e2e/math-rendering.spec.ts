@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openView } from "./shell";
 
 // Chat rendered TeX source as literal text: views/chat.tsx wired ReactMarkdown
 // with no remark-math/rehype-katex, while views/documents.tsx had both. The
@@ -10,14 +11,7 @@ test("chat renders LaTeX maths, not TeX source", async ({ page }) => {
   await page.goto("/");
 
   // The composer stays disabled until the workspace has a source, so seed one.
-  await page
-    .getByRole("navigation", { name: "Workspace" })
-    .getByRole("button", { name: /^Knowledge/ })
-    .click();
-  await page
-    .getByRole("navigation", { name: "Knowledge views" })
-    .getByRole("button", { name: /Sources/ })
-    .click();
+  await openView(page, "Knowledge", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "math-e2e.md",
     mimeType: "text/markdown",
@@ -46,14 +40,7 @@ test("chat renders LaTeX maths, not TeX source", async ({ page }) => {
   // a strict-mode violation — which is a failure in *that* spec, reported
   // against code it does not own. Scoped to this row by filename rather than
   // .first(), so it stays correct whatever else the workspace holds.
-  await page
-    .getByRole("navigation", { name: "Workspace" })
-    .getByRole("button", { name: /^Knowledge/ })
-    .click();
-  await page
-    .getByRole("navigation", { name: "Knowledge views" })
-    .getByRole("button", { name: /Sources/ })
-    .click();
+  await openView(page, "Knowledge", /Sources/);
   // Deletion is confirm()-gated, so the handler has to be armed before the
   // click or the click never resolves.
   page.once("dialog", (dialog) => dialog.accept());

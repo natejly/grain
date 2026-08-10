@@ -1212,3 +1212,44 @@ reviewers found and nobody fixed, and — separately — what is still not prove
   rebuilding a ~2 GB image to verify — not worth doing blind at this size.
 - **`aws` CLI presence on the AL2023 ECS AMI is assumed** by
   `user_data.sh.tftpl`. Unverifiable without an account.
+
+## Phase 9 — Navigation shell: rail + Create/Settings menus + Admin
+- [x] navigation.ts: groups gain a `surface` (rail | settings); Create group becomes Documents; add Admin group; derive CREATE_ACTIONS from the same table
+- [x] shared.ts: add `admin` view + page title
+- [x] disclosure-menu.tsx: one popover (buttons in a named group, Esc closes + refocuses trigger, outside click closes); workspace switcher adopts it
+- [x] create-menu.tsx: + Create ▾ that CREATES (document/project/sandbox/board/dashboard) and opens the result
+- [x] settings-menu.tsx: ⚙ Settings ▾ → Connections / Activity / Admin
+- [x] workspace.tsx: rail renders RAIL_GROUPS; topbar renders the two menus; tab strip unchanged (still from NAV_GROUPS)
+- [x] admin.tsx: members & roles, workspaces, audit log, runs & approvals, sandbox sessions (kill), MCP health, storage & indexing
+- [x] api-client: admin types + methods (additions only)
+- [x] globals.css: shared chrome-button + disclosure rules, no new colours
+- [x] tests/navigation.test.ts to the new shape; every affected e2e spec restructured without weakening assertions
+- [x] Gates: tsc, lint, vitest, build, playwright + screenshots at each destination
+
+### Review — Phase 9
+
+**Shape.** `NAV_GROUPS` stays the single source of truth and gained a `surface`
+field (`rail` | `settings`); `RAIL_GROUPS` and `SETTINGS_GROUPS` are filters over
+it, the tab strip is unchanged, and `CREATE_ACTIONS` borrows its icons from the
+nav item each action opens (and throws at module load if one targets a view no
+group lists). So no second list was hand-rolled and nothing became unreachable.
+
+**Create is an action.** Picking Document/Project/Board asks for the one thing
+that cannot be supplied later — none of them can be renamed — then creates and
+opens it. Sandbox starts a machine on the first click. Dashboard opens the editor
+that names, binds and generates it. The view is set *synchronously* before the
+await, per the lesson about post-await `setView`.
+
+**Chrome.** One `DisclosureMenu` behind the switcher, Create and Settings
+(buttons in a named group, Escape closes and refocuses the trigger, scrim closes
+on outside click), and one `.chrome-button` recipe shared by the switcher, New
+thread and both topbar triggers, so the sidebar and topbar read as one design.
+
+**Admin.** Built against the real `apps/api/app/api/admin.py`: members, the
+memberships the switcher already loaded (the API deliberately has no second
+workspaces endpoint), runs + approvals, sandbox sessions with a Stop button,
+MCP health, storage/indexing, and a paged audit log. 403 renders as a sentence,
+not a toast.
+
+**Counts.** Group badges moved with their groups; the pending-approval count
+rides on the Settings trigger so a parked run is visible from anywhere.

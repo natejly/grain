@@ -13,7 +13,8 @@ export type View =
   | "projects"
   | "sandbox"
   | "mcp"
-  | "activity";
+  | "activity"
+  | "admin";
 
 /**
  * An unreachable API already has a dedicated banner with a retry, so it returns
@@ -55,6 +56,7 @@ export const PAGE_TITLES: Record<View, string> = {
   integrations: "Integrations",
   mcp: "MCP servers",
   activity: "Activity",
+  admin: "Admin",
 };
 
 export function formatBytes(bytes: number): string {

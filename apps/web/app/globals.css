@@ -280,20 +280,17 @@ select:focus-visible {
   font-weight: 700;
 }
 
-/* Workspace switcher. Sits above "New thread" because the thread, the sources
-   and the graph under it all belong to whichever workspace this names. */
-.workspace-switcher {
-  position: relative;
-  z-index: 1;
-}
-
-.workspace-switcher-trigger {
-  width: 100%;
-  height: 38px;
+/* ---- Shell chrome ----
+   The workspace switcher, "New thread", and the topbar's Create and Settings
+   triggers are the same control at different sizes and in two places. One rule
+   describes it, so the sidebar and the topbar cannot drift into looking like
+   two designs bolted together. */
+.chrome-button {
+  height: 32px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px;
+  gap: 7px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
@@ -301,28 +298,23 @@ select:focus-visible {
   font-size: 12px;
   font-weight: 600;
   text-align: left;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.workspace-switcher-trigger:hover {
+.chrome-button:hover {
   border-color: var(--border-strong);
   background: var(--surface-hover);
 }
 
-.workspace-switcher-mark {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
+.chrome-button > svg {
   flex: none;
-  border-radius: 5px;
-  background: var(--accent-muted);
-  color: var(--accent-text);
-  font-size: 11px;
-  font-weight: 700;
+  color: var(--text-dim);
 }
 
-.workspace-switcher-name {
+/* The label collapses before the icon does, so a narrow topbar loses words
+   rather than controls. */
+.chrome-button-label {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -330,14 +322,43 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.workspace-switcher-trigger > svg {
-  flex: none;
-  color: var(--text-dim);
+/* Create is the one action on this bar, so it carries the accent. */
+.chrome-button.accent {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent-text);
 }
 
-/* Catches the click that closes the menu. Transparent on purpose: this is not
+.chrome-button.accent:hover {
+  background: var(--accent-muted-hover);
+}
+
+.chrome-button.accent > svg {
+  color: var(--accent);
+}
+
+/* Settings, while you are inside one of the destinations it holds. */
+.chrome-button.active {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent-text);
+}
+
+.chrome-button.active > svg {
+  color: var(--accent);
+}
+
+/* ---- Disclosure popovers ----
+   One mechanism behind the workspace switcher, Create and Settings: a group of
+   plain buttons, not role="menu". See disclosure-menu.tsx for why. */
+.disclosure {
+  position: relative;
+  z-index: 1;
+}
+
+/* Catches the click that closes the panel. Transparent on purpose: this is not
    a modal, and dimming the app for a five-item list would say it is. */
-.workspace-switcher-scrim {
+.disclosure-scrim {
   position: fixed;
   z-index: 1;
   inset: 0;
@@ -345,13 +366,13 @@ select:focus-visible {
   background: transparent;
 }
 
-.workspace-switcher-menu {
+.disclosure-menu {
   position: absolute;
   z-index: 2;
   top: calc(100% + 4px);
   right: 0;
-  left: 0;
-  max-height: 244px;
+  min-width: max(100%, 208px);
+  max-height: 60vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -362,6 +383,14 @@ select:focus-visible {
   background: var(--surface-raised);
 }
 
+/* The switcher's panel matches its trigger's width; the topbar's hang from
+   their right edge so they never run off the screen. */
+.disclosure.stretch .disclosure-menu {
+  left: 0;
+  max-height: 244px;
+}
+
+.disclosure-option,
 .workspace-option {
   width: 100%;
   min-height: 32px;
@@ -378,15 +407,99 @@ select:focus-visible {
   cursor: pointer;
 }
 
+.disclosure-option:hover,
 .workspace-option:hover {
   background: var(--surface-hover);
   color: var(--text);
 }
 
+.disclosure-option.active,
 .workspace-option.active {
   background: var(--accent-muted);
   color: var(--accent-text);
   font-weight: 600;
+}
+
+.disclosure-option:disabled {
+  color: var(--control-disabled-text);
+  cursor: default;
+}
+
+.disclosure-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Step two of Create: the one thing about the new object that cannot be
+   filled in afterwards, because none of these can be renamed later. */
+.create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px;
+}
+
+.create-form-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.create-back {
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.create-back:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.create-form input,
+.create-form select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.create-form .primary-button {
+  justify-content: center;
+}
+
+/* Workspace switcher. Sits above "New thread" because the thread, the sources
+   and the graph under it all belong to whichever workspace this names. */
+.workspace-switcher-trigger {
+  width: 100%;
+  height: 38px;
+  padding: 0 8px;
+}
+
+.workspace-switcher-mark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 5px;
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .workspace-option-name {
@@ -408,22 +521,7 @@ select:focus-visible {
 .new-thread-button {
   height: 38px;
   margin: 16px 0 14px;
-  padding: 0 10px;
-  display: flex;
-  align-items: center;
   gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.new-thread-button:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-hover);
 }
 
 .new-thread-button span {
@@ -647,7 +745,12 @@ select:focus-visible {
   background: var(--bg);
 }
 
+/* Stacked above the view and the tab strip so the Create and Settings panels
+   are not clipped by whatever the page happens to be rendering. Below the
+   sidebar (20) and the error toast (30), both of which outrank it. */
 .topbar {
+  position: relative;
+  z-index: 10;
   min-height: 58px;
   flex: none;
   display: flex;
@@ -752,7 +855,19 @@ select:focus-visible {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+}
+
+/* Named for a screen reader, absent for everyone else — a table header that
+   labels a column of buttons has nothing to show but still has to say what the
+   column is. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .agent-pill {
@@ -2457,6 +2572,13 @@ select:focus-visible {
   }
 
   .agent-pill {
+    display: none;
+  }
+
+  /* Words go before controls do: the triggers keep their icons and their
+     accessible names, and lose only the visible label. Scoped to the topbar so
+     the sidebar switcher still says which workspace you are in. */
+  .topbar-actions .chrome-button-label {
     display: none;
   }
 
@@ -4780,4 +4902,208 @@ select:focus-visible {
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
+}
+
+/* ---- Admin ----
+   Seven panels of counts and short lists, so the page is a masonry of cards
+   rather than one long table: an owner scanning for "is anything on fire" is
+   reading headline numbers, not rows. */
+.admin-page {
+  overflow-y: auto;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.admin-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.admin-empty {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.admin-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-count {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.admin-count strong {
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.admin-table th {
+  padding: 0 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.admin-table td {
+  max-width: 220px;
+  padding: 8px 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  vertical-align: top;
+}
+
+.admin-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.admin-table td strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-table td span:not(.admin-tag) {
+  display: block;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-tag {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.admin-error {
+  display: block;
+  margin-top: 3px;
+  color: var(--red);
+  font-size: 9px;
+}
+
+.admin-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-list li {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-list li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.admin-list strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-list span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.admin-list small {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 10px;
+}
+
+.admin-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-stats strong {
+  color: var(--text);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-stats span {
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.admin-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 10px;
 }

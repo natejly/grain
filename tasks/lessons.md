@@ -224,3 +224,20 @@
   independently claimed "FULL GATE green, exit 0" while the tree had ruff, mypy and
   pytest failures, and neither noticed the work was entirely uncommitted. Re-run the
   gate yourself on the actual tree before believing a green report.
+
+- Playwright's `getByRole(..., { name })` matches a *substring* by default, so
+  "Boards" also matches "Dashboards" and a tab-strip assertion becomes a
+  strict-mode violation the moment a sibling's label contains another's. Anchor
+  with `new RegExp(`^${label}`)` rather than reaching for `.first()`, which would
+  have silently asserted the wrong tab. (Two failures in the nav restructure.)
+- Run `npx playwright test` from the repo root. Run it from `apps/web` and
+  Playwright never finds the root config, defaults `testDir` to the cwd, and
+  tries to execute the *vitest* files — the error ("Vitest cannot be imported in
+  a CommonJS module") reads like a broken test, not a wrong cwd.
+- When a popover's panel holds a multi-step form, put the step state in a
+  component that only renders *inside* the panel. State in the parent survives
+  the close and greets the next open half-filled; state in the panel is reset by
+  the unmount for free.
+- A "create it and take me there" action that hands the work to a self-fetching
+  panel has to be a request the panel *consumes*, not a boolean it reads. A
+  plain flag boots another machine every time the view remounts while it is set.

@@ -1,12 +1,16 @@
 "use client";
 
+import type { DocumentKind } from "@workspace/api-client";
 import { CircleDot, LogOut, Menu, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
+import { CreateMenu } from "./create-menu";
+import { SettingsMenu } from "./settings-menu";
 import { useWorkspace } from "./use-workspace";
 import { ActivityView } from "./views/activity";
+import { AdminView } from "./views/admin";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
 import { DashboardEditor } from "./views/dashboard-editor";
@@ -20,7 +24,9 @@ import { MemoryView } from "./views/memory";
 import {
   DEFAULT_GROUP_VIEW,
   NAV_GROUPS,
+  RAIL_GROUPS,
   groupForView,
+  type CreateAction,
   type GroupId,
 } from "./views/navigation";
 import { ProjectsView } from "./views/projects";
@@ -167,6 +173,39 @@ export function Workspace() {
     setSidebarOpen(false);
   }
 
+  /** Totals for the groups the Settings menu hides; badges must not hide too. */
+  const groupCounts: Partial<Record<GroupId, number>> = Object.fromEntries(
+    NAV_GROUPS.filter((group) =>
+      group.items.some((item) => viewCounts[item.view] !== undefined),
+    ).map((group) => [
+      group.id,
+      group.items.reduce((sum, item) => sum + (viewCounts[item.view] ?? 0), 0),
+    ]),
+  );
+
+  // A sandbox is a machine on a meter, so the Create menu cannot start one on
+  // the way past: it asks the panel that owns them to, once, on its next
+  // render. The flag is lowered by the panel, so remounting it by navigating
+  // back to Sandbox does not silently boot a second machine.
+  const [sandboxRequested, setSandboxRequested] = useState(false);
+
+  /**
+   * Make the thing, then show it — the whole point of moving Create off the
+   * rail. The view is set *first*, synchronously: a `setView` after an awaited
+   * create lands wherever the user has wandered to by the time it resolves.
+   */
+  async function create(action: CreateAction, name: string, kind: DocumentKind) {
+    setView(action.view);
+    setSidebarOpen(false);
+    if (action.id === "document") return createDocument(name, kind);
+    if (action.id === "project") return createProject(name, "");
+    if (action.id === "board") return createBoard(name);
+    if (action.id === "sandbox") return setSandboxRequested(true);
+    // A dashboard is named, bound to data and generated in one editor; opening
+    // it *is* the creation step, and it lands on the gallery when closed.
+    return setEditing("new");
+  }
+
   return (
     <div className="workspace-shell">
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
@@ -183,19 +222,17 @@ export function Workspace() {
         {/* Above everything else because everything else is scoped to it. */}
         <WorkspaceSwitcher />
 
-        <button className="new-thread-button" onClick={newConversation}>
+        <button className="chrome-button new-thread-button" onClick={newConversation}>
           <Plus size={16} />
           New thread
         </button>
 
+        {/* The rail is the places you work. Creating is not one of them, and
+            neither is administering — both moved to the top right. */}
         <nav className="primary-nav" aria-label="Workspace">
-          {NAV_GROUPS.map((group) => {
+          {RAIL_GROUPS.map((group) => {
             const Icon = group.icon;
-            const total = group.items.reduce(
-              (sum, item) => sum + (viewCounts[item.view] ?? 0),
-              0,
-            );
-            const counted = group.items.some((item) => viewCounts[item.view] !== undefined);
+            const total = groupCounts[group.id];
             return (
               <button
                 key={group.id}
@@ -205,10 +242,7 @@ export function Workspace() {
               >
                 <Icon size={17} />
                 {group.label}
-                {counted && <span className="nav-count">{total}</span>}
-                {group.id === "activity" && pendingApprovals.length > 0 && (
-                  <span className="approval-count">{pendingApprovals.length}</span>
-                )}
+                {total !== undefined && <span className="nav-count">{total}</span>}
               </button>
             );
           })}
@@ -290,6 +324,13 @@ export function Workspace() {
             <strong>{view === "chat" ? activeTitle : PAGE_TITLES[view]}</strong>
           </div>
           <div className="topbar-actions">
+            <CreateMenu create={create} />
+            <SettingsMenu
+              activeGroup={activeGroup.id}
+              counts={groupCounts}
+              approvals={pendingApprovals.length}
+              open={openGroup}
+            />
             <ThemeToggle />
             <div
               className="agent-pill"
@@ -445,7 +486,13 @@ export function Workspace() {
 
         {/* Self-contained: sandboxes are metered by the minute, so they are
             fetched when this view opens rather than with the workspace. */}
-        {view === "sandbox" && <SandboxView setError={setError} />}
+        {view === "sandbox" && (
+          <SandboxView
+            setError={setError}
+            startRequested={sandboxRequested}
+            onStartHandled={() => setSandboxRequested(false)}
+          />
+        )}
 
         {view === "mcp" && (
           <McpView
@@ -466,6 +513,10 @@ export function Workspace() {
             activeRun={activeRun}
           />
         )}
+
+        {/* Owner-only and workspace-wide, so it is fetched on open like the
+            sandbox panel rather than riding along with every page load. */}
+        {view === "admin" && <AdminView setError={setError} />}
       </main>
 
       {editing && (

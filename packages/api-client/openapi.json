@@ -1,6 +1,482 @@
 {
   "components": {
     "schemas": {
+      "AdminActivityOut": {
+        "properties": {
+          "pending_approvals": {
+            "items": {
+              "$ref": "#/components/schemas/AdminApprovalOut"
+            },
+            "title": "Pending Approvals",
+            "type": "array"
+          },
+          "recent_runs": {
+            "items": {
+              "$ref": "#/components/schemas/AdminRunOut"
+            },
+            "title": "Recent Runs",
+            "type": "array"
+          },
+          "run_status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Run Status Counts",
+            "type": "object"
+          },
+          "tool_call_status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Tool Call Status Counts",
+            "type": "object"
+          }
+        },
+        "required": [
+          "run_status_counts",
+          "tool_call_status_counts",
+          "recent_runs",
+          "pending_approvals"
+        ],
+        "title": "AdminActivityOut",
+        "type": "object"
+      },
+      "AdminApprovalOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "proposal_preview": {
+            "title": "Proposal Preview",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "name",
+          "status",
+          "proposal_preview",
+          "created_at"
+        ],
+        "title": "AdminApprovalOut",
+        "type": "object"
+      },
+      "AdminAuditEntryOut": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_email": {
+            "title": "Actor Email",
+            "type": "string"
+          },
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_name": {
+            "title": "Actor Name",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "resource_type": {
+            "title": "Resource Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "resource_type",
+          "resource_id",
+          "detail",
+          "created_at",
+          "actor_id",
+          "actor_name",
+          "actor_email"
+        ],
+        "title": "AdminAuditEntryOut",
+        "type": "object"
+      },
+      "AdminAuditPage": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AdminAuditEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "total",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "title": "AdminAuditPage",
+        "type": "object"
+      },
+      "AdminMcpServerOut": {
+        "description": "Health of a configured MCP server. Carries no part of its credentials:\n`secrets_encrypted` is never selected and `mcp_oauth_tokens` is never read.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "has_secrets": {
+            "title": "Has Secrets",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_connected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Connected At"
+          },
+          "last_error": {
+            "title": "Last Error",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_count": {
+            "title": "Tool Count",
+            "type": "integer"
+          },
+          "transport": {
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "transport",
+          "enabled",
+          "status",
+          "last_error",
+          "last_connected_at",
+          "has_secrets",
+          "tool_count",
+          "created_at"
+        ],
+        "title": "AdminMcpServerOut",
+        "type": "object"
+      },
+      "AdminMemberOut": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "is_self": {
+            "title": "Is Self",
+            "type": "boolean"
+          },
+          "joined_at": {
+            "format": "date-time",
+            "title": "Joined At",
+            "type": "string"
+          },
+          "membership_id": {
+            "title": "Membership Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "membership_id",
+          "name",
+          "email",
+          "role",
+          "status",
+          "joined_at",
+          "is_self"
+        ],
+        "title": "AdminMemberOut",
+        "type": "object"
+      },
+      "AdminRunOut": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "prompt_preview": {
+            "title": "Prompt Preview",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "conversation_id",
+          "agent_id",
+          "created_by",
+          "status",
+          "prompt_preview",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AdminRunOut",
+        "type": "object"
+      },
+      "AdminSandboxSessionOut": {
+        "description": "A sandbox as an administrator sees it.\n\n`external_id` is absent by construction, not by filtering. It is the\nprovider's own name for a live machine, and ADR 0005's threat model is that\nit never appears in an API response \u2014 a leaked body would otherwise be enough to\naddress someone's sandbox directly, bypassing this server entirely.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "exec_count": {
+            "title": "Exec Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "killed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Killed At"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_used_at": {
+            "format": "date-time",
+            "title": "Last Used At",
+            "type": "string"
+          },
+          "network_policy": {
+            "title": "Network Policy",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "wall_ms_used": {
+            "title": "Wall Ms Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "label",
+          "provider",
+          "status",
+          "network_policy",
+          "exec_count",
+          "wall_ms_used",
+          "error",
+          "created_at",
+          "last_used_at",
+          "killed_at"
+        ],
+        "title": "AdminSandboxSessionOut",
+        "type": "object"
+      },
+      "AdminStorageOut": {
+        "description": "Counts only. Every figure is an aggregate over the caller's workspace, so\nthis route's cost does not grow with the size of the workspace.",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "graph_edge_count": {
+            "title": "Graph Edge Count",
+            "type": "integer"
+          },
+          "graph_entity_count": {
+            "title": "Graph Entity Count",
+            "type": "integer"
+          },
+          "memory_by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Memory By Status",
+            "type": "object"
+          },
+          "memory_item_count": {
+            "title": "Memory Item Count",
+            "type": "integer"
+          },
+          "source_bytes": {
+            "title": "Source Bytes",
+            "type": "integer"
+          },
+          "source_count": {
+            "title": "Source Count",
+            "type": "integer"
+          },
+          "sources_by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Sources By Status",
+            "type": "object"
+          }
+        },
+        "required": [
+          "sources_by_status",
+          "source_count",
+          "source_bytes",
+          "chunk_count",
+          "memory_by_status",
+          "memory_item_count",
+          "graph_entity_count",
+          "graph_edge_count"
+        ],
+        "title": "AdminStorageOut",
+        "type": "object"
+      },
       "AgentApprovalRequest": {
         "properties": {
           "decision": {
@@ -3356,6 +3832,449 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/admin/activity": {
+      "get": {
+        "description": "What the agents are doing: the status breakdown, plus the head of each list.\n\nOne route rather than three because the panel renders them together and the\ncounts are meaningless next to a stale list of runs.",
+        "operationId": "get_activity_api_admin_activity_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminActivityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Activity",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/audit-events": {
+      "get": {
+        "description": "The workspace's audit trail, newest first.\n\nRicher than `GET /api/audit-events`, which is the activity feed: this one\npages and resolves the actor to a person. The join is an outer join on\npurpose \u2014 `audit_events.actor_id` is a plain column, not a foreign key,\nbecause a worker writes rows with no user behind them.",
+        "operationId": "list_audit_log_api_admin_audit_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 10000,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAuditPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Audit Log",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/mcp-servers": {
+      "get": {
+        "description": "Configured servers and whether they are actually connecting.\n\nTool counts come from one grouped query rather than a per-server COUNT, so\nthe route stays two statements regardless of how many servers exist.",
+        "operationId": "list_mcp_servers_api_admin_mcp_servers_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminMcpServerOut"
+                  },
+                  "title": "Response List Mcp Servers Api Admin Mcp Servers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Mcp Servers",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/members": {
+      "get": {
+        "description": "Everyone in this workspace, oldest membership first.\n\nOrdered by join date to match `_resolve_workspace` and\n`GET /api/auth/workspaces`, so \"the first member\" means the same thing\neverywhere \u2014 in practice the owner who created the workspace.",
+        "operationId": "list_members_api_admin_members_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminMemberOut"
+                  },
+                  "title": "Response List Members Api Admin Members Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Members",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/sandbox-sessions": {
+      "get": {
+        "description": "Every sandbox this workspace has opened, most recently used first.\n\nA bounded select rather than `sessions.list_sessions`, which returns the\nwhole table: that is right for the quota accounting it serves and wrong for\na page. Reading rows is not the tenancy boundary \u2014 turning an *id* into a row\nis, and that only happens in `resolve_session` (see the DELETE below).",
+        "operationId": "list_sandbox_sessions_api_admin_sandbox_sessions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminSandboxSessionOut"
+                  },
+                  "title": "Response List Sandbox Sessions Api Admin Sandbox Sessions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sandbox Sessions",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/sandbox-sessions/{session_id}": {
+      "delete": {
+        "description": "Destroy a machine an owner does not want running.\n\nThe id is resolved by `sessions.resolve_session` and by nothing else, which\nis what makes a foreign id indistinguishable from a missing one: both raise\n`SandboxError` and both answer 404. Resolving here *before* calling\n`kill_session` \u2014 which resolves again \u2014 is not redundant; without it the\nservice layer's error would be mapped by the generic handler below and a\nstranger's probe would come back 502, which is an oracle.",
+        "operationId": "kill_sandbox_session_api_admin_sandbox_sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSandboxSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Kill Sandbox Session",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/storage": {
+      "get": {
+        "description": "How much this workspace is holding, and how much of it is indexed.",
+        "operationId": "get_storage_api_admin_storage_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Storage",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/agent-tool-calls": {
       "get": {
         "operationId": "list_agent_tool_calls_api_agent_tool_calls_get",

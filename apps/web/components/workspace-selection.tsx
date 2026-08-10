@@ -13,6 +13,7 @@ import {
 } from "react";
 import { api } from "./api";
 import { AuthSplash } from "./auth/auth-screen";
+import { DisclosureMenu } from "./disclosure-menu";
 
 /**
  * Which of the user's workspaces the app is about, and the control that changes
@@ -136,7 +137,6 @@ export function useWorkspaceSelection(): WorkspaceSelectionValue {
  */
 export function WorkspaceSwitcher() {
   const { workspaces, currentId, select } = useWorkspaceSelection();
-  const [open, setOpen] = useState(false);
 
   // Nothing loaded means nothing to switch between; the identity chip at the
   // bottom of the sidebar already says who is signed in.
@@ -145,66 +145,44 @@ export function WorkspaceSwitcher() {
   const current = workspaces.find((item) => item.id === currentId) ?? workspaces[0];
 
   return (
-    <div
-      className="workspace-switcher"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") setOpen(false);
-      }}
-    >
-      <button
-        className="workspace-switcher-trigger"
-        aria-expanded={open}
-        aria-controls="workspace-switcher-list"
-        // The visible text is the workspace name, which alone would not say
-        // what the control does; this names the purpose and the current value.
-        aria-label={`Switch workspace (current: ${current.name})`}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className="workspace-switcher-mark">
-          {current.name.slice(0, 1).toUpperCase()}
-        </span>
-        <span className="workspace-switcher-name">{current.name}</span>
-        <ChevronsUpDown size={13} />
-      </button>
-
-      {open && (
+    <DisclosureMenu
+      id="workspace-switcher-list"
+      className="stretch"
+      // The visible text is the workspace name, which alone would not say what
+      // the control does; this names the purpose and the current value.
+      triggerLabel={`Switch workspace (current: ${current.name})`}
+      triggerClassName="chrome-button workspace-switcher-trigger"
+      trigger={
         <>
-          <button
-            className="workspace-switcher-scrim"
-            aria-label="Close workspace list"
-            onClick={() => setOpen(false)}
-          />
-          {/* A disclosure of real buttons rather than role="menu": a menu owes
-              its users arrow-key navigation and a roving tabindex, and plain
-              buttons in a named group get Tab and Enter for nothing. */}
-          <div
-            className="workspace-switcher-menu"
-            id="workspace-switcher-list"
-            role="group"
-            aria-label="Your workspaces"
-          >
-            {workspaces.map((item) => (
-              <button
-                key={item.id}
-                className={
-                  item.id === current.id
-                    ? "workspace-option active"
-                    : "workspace-option"
-                }
-                aria-current={item.id === current.id ? "true" : undefined}
-                onClick={() => {
-                  setOpen(false);
-                  select(item.id);
-                }}
-              >
-                <span className="workspace-option-name">{item.name}</span>
-                <span className="workspace-option-role">{item.role}</span>
-                {item.id === current.id && <Check size={13} />}
-              </button>
-            ))}
-          </div>
+          <span className="workspace-switcher-mark">
+            {current.name.slice(0, 1).toUpperCase()}
+          </span>
+          <span className="chrome-button-label">{current.name}</span>
+          <ChevronsUpDown size={13} />
         </>
-      )}
-    </div>
+      }
+      menuLabel="Your workspaces"
+      closeLabel="Close workspace list"
+    >
+      {(close) =>
+        workspaces.map((item) => (
+          <button
+            key={item.id}
+            className={
+              item.id === current.id ? "workspace-option active" : "workspace-option"
+            }
+            aria-current={item.id === current.id ? "true" : undefined}
+            onClick={() => {
+              close();
+              select(item.id);
+            }}
+          >
+            <span className="workspace-option-name">{item.name}</span>
+            <span className="workspace-option-role">{item.role}</span>
+            {item.id === current.id && <Check size={13} />}
+          </button>
+        ))
+      }
+    </DisclosureMenu>
   );
 }

@@ -1,0 +1,449 @@
+"use client";
+
+import type {
+  AdminActivity,
+  AdminAuditPage,
+  AdminMcpServer,
+  AdminMember,
+  AdminSandboxSession,
+  AdminStorage,
+} from "@workspace/api-client";
+import { ApiError } from "@workspace/api-client";
+import { RefreshCw, ShieldCheck, Square } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { api } from "../api";
+import { useWorkspaceSelection } from "../workspace-selection";
+import { describeError, formatBytes, formatRelative } from "./shared";
+
+/**
+ * Workspace administration: who is in it, what it is doing, what it holds.
+ *
+ * Like the sandbox panel, this owns its own data rather than joining the
+ * workspace hook — every route behind it is owner-only and aggregates the whole
+ * workspace, so it is fetched when someone opens this view and never on a page
+ * load that was only going to show chat.
+ *
+ * A member who is not an owner gets 403 from all of them. That is not an error
+ * to shout about; it is the answer, so it renders as a sentence rather than a
+ * red toast.
+ */
+export type AdminViewProps = {
+  setError: (message: string) => void;
+};
+
+const AUDIT_PAGE = 25;
+
+type AdminData = {
+  members: AdminMember[];
+  activity: AdminActivity;
+  sandboxes: AdminSandboxSession[];
+  mcpServers: AdminMcpServer[];
+  storage: AdminStorage;
+};
+
+/** A status → count map as a row of pills, in a stable order. */
+function CountRow({ counts, empty }: { counts: Record<string, number>; empty: string }) {
+  const entries = Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) return <p className="admin-empty">{empty}</p>;
+  return (
+    <div className="admin-counts">
+      {entries.map(([status, count]) => (
+        <span key={status} className="admin-count">
+          <strong>{count}</strong>
+          {status}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function Panel({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count?: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="admin-panel">
+      <div className="panel-title">
+        <div>
+          <strong>{title}</strong>
+        </div>
+        {count !== undefined && <span className="panel-count">{count}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export function AdminView({ setError }: AdminViewProps) {
+  const { workspaces, currentId } = useWorkspaceSelection();
+  const [data, setData] = useState<AdminData | null>(null);
+  const [audit, setAudit] = useState<AdminAuditPage | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [forbidden, setForbidden] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const [members, activity, sandboxes, mcpServers, storage] = await Promise.all([
+        api.listAdminMembers(),
+        api.getAdminActivity(),
+        api.listAdminSandboxSessions(),
+        api.listAdminMcpServers(),
+        api.getAdminStorage(),
+      ]);
+      setData({ members, activity, sandboxes, mcpServers, storage });
+      setForbidden(false);
+    } catch (caught) {
+      // 403 is the API answering, not failing: this member is not an owner.
+      if (caught instanceof ApiError && caught.forbidden) setForbidden(true);
+      else setError(describeError(caught, "Could not load the admin panels"));
+    } finally {
+      setLoaded(true);
+    }
+  }, [setError]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const page = await api.listAdminAuditEvents(AUDIT_PAGE, offset);
+        if (!cancelled) setAudit(page);
+      } catch (caught) {
+        // The owner check already has a home above; a paging failure here would
+        // otherwise replace the whole screen with an error it did not cause.
+        if (!cancelled && !(caught instanceof ApiError && caught.forbidden)) {
+          setError(describeError(caught, "Could not load the audit log"));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [offset, setError]);
+
+  async function kill(session: AdminSandboxSession) {
+    if (!window.confirm("Stop this sandbox? Anything running inside it is lost.")) {
+      return;
+    }
+    setBusy(session.id);
+    try {
+      const killed = await api.killAdminSandboxSession(session.id);
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              sandboxes: current.sandboxes.map((row) =>
+                row.id === killed.id ? killed : row,
+              ),
+            }
+          : current,
+      );
+    } catch (caught) {
+      setError(describeError(caught, "Could not stop that sandbox"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  if (forbidden) {
+    return (
+      <section className="content-page">
+        <div className="empty-state">
+          <ShieldCheck size={22} />
+          <p>
+            Admin is owner-only. Ask an owner of this workspace if you need a
+            member removed, a run investigated, or a sandbox stopped.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  if (!data) {
+    return (
+      <section className="content-page">
+        <div className="empty-state">
+          <ShieldCheck size={22} />
+          <p>{loaded ? "Nothing to administer yet." : "Loading the workspace…"}</p>
+        </div>
+      </section>
+    );
+  }
+
+  const { members, activity, sandboxes, mcpServers, storage } = data;
+  const live = sandboxes.filter((row) => ["running", "paused"].includes(row.status));
+
+  return (
+    <section className="content-page admin-page">
+      <div className="page-heading">
+        <div>
+          <h1>Admin</h1>
+          <p>Members, runs, machines and storage for this workspace.</p>
+        </div>
+        <button className="ghost-button" onClick={() => void load()}>
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+
+      <div className="admin-grid">
+        <Panel title="Members and roles" count={members.length}>
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th scope="col">Member</th>
+                <th scope="col">Role</th>
+                <th scope="col">Joined</th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((member) => (
+                <tr key={member.membership_id}>
+                  <td>
+                    <strong>{member.name || member.email}</strong>
+                    <span>{member.email}</span>
+                  </td>
+                  <td>
+                    <span className="admin-tag">{member.role}</span>
+                    {member.is_self && <span className="admin-tag">you</span>}
+                  </td>
+                  <td>{formatRelative(member.joined_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+
+        {/* The memberships the switcher already loaded — the API deliberately
+            has no second endpoint over the same rows. */}
+        <Panel title="Workspaces" count={workspaces.length}>
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th scope="col">Workspace</th>
+                <th scope="col">Your role</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workspaces.map((workspace) => (
+                <tr key={workspace.id}>
+                  <td>
+                    <strong>{workspace.name}</strong>
+                    {workspace.id === currentId && <span>open now</span>}
+                  </td>
+                  <td>
+                    <span className="admin-tag">{workspace.role}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+
+        <Panel title="Runs" count={activity.recent_runs.length}>
+          <CountRow counts={activity.run_status_counts} empty="No runs yet." />
+          <ul className="admin-list">
+            {activity.recent_runs.map((run) => (
+              <li key={run.id}>
+                <div>
+                  <strong>{run.prompt_preview || "(no prompt)"}</strong>
+                  <span>
+                    {run.status} · {formatRelative(run.created_at)}
+                  </span>
+                  {run.error && <small className="admin-error">{run.error}</small>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+
+        <Panel title="Awaiting approval" count={activity.pending_approvals.length}>
+          <CountRow
+            counts={activity.tool_call_status_counts}
+            empty="No tool calls yet."
+          />
+          {activity.pending_approvals.length === 0 ? (
+            <p className="admin-empty">Nothing is parked on a decision.</p>
+          ) : (
+            <ul className="admin-list">
+              {activity.pending_approvals.map((approval) => (
+                <li key={approval.id}>
+                  <div>
+                    <strong>{approval.name}</strong>
+                    <span>{formatRelative(approval.created_at)}</span>
+                    <small>{approval.proposal_preview}</small>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel title="Sandbox sessions" count={live.length}>
+          {sandboxes.length === 0 ? (
+            <p className="admin-empty">No sandbox has ever been opened here.</p>
+          ) : (
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th scope="col">Session</th>
+                  <th scope="col">Network</th>
+                  <th scope="col">Used</th>
+                  <th scope="col">
+                    <span className="visually-hidden">Stop</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {sandboxes.map((session) => (
+                  <tr key={session.id}>
+                    <td>
+                      <strong>{session.label || session.provider}</strong>
+                      <span>
+                        {session.status} · {session.exec_count} runs
+                      </span>
+                    </td>
+                    <td>
+                      <span className="admin-tag">{session.network_policy}</span>
+                    </td>
+                    <td>{formatRelative(session.last_used_at)}</td>
+                    <td>
+                      {["running", "paused"].includes(session.status) && (
+                        <button
+                          className="ghost-button"
+                          disabled={busy === session.id}
+                          aria-label={`Stop sandbox ${session.label || session.id}`}
+                          onClick={() => void kill(session)}
+                        >
+                          <Square size={12} /> Stop
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+
+        <Panel title="MCP servers" count={mcpServers.length}>
+          {mcpServers.length === 0 ? (
+            <p className="admin-empty">No MCP server is configured.</p>
+          ) : (
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th scope="col">Server</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Tools</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mcpServers.map((server) => (
+                  <tr key={server.id}>
+                    <td>
+                      <strong>{server.name}</strong>
+                      <span>
+                        {server.transport}
+                        {server.has_secrets ? " · secrets stored" : ""}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="admin-tag">
+                        {server.enabled ? server.status : "disabled"}
+                      </span>
+                      {server.last_error && (
+                        <small className="admin-error">{server.last_error}</small>
+                      )}
+                    </td>
+                    <td>{server.tool_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+
+        <Panel title="Storage and indexing">
+          <div className="admin-stats">
+            <div>
+              <strong>{storage.source_count}</strong>
+              <span>sources</span>
+            </div>
+            <div>
+              <strong>{formatBytes(storage.source_bytes)}</strong>
+              <span>stored</span>
+            </div>
+            <div>
+              <strong>{storage.chunk_count}</strong>
+              <span>chunks</span>
+            </div>
+            <div>
+              <strong>{storage.memory_item_count}</strong>
+              <span>memories</span>
+            </div>
+            <div>
+              <strong>{storage.graph_entity_count}</strong>
+              <span>entities</span>
+            </div>
+            <div>
+              <strong>{storage.graph_edge_count}</strong>
+              <span>edges</span>
+            </div>
+          </div>
+          <CountRow counts={storage.sources_by_status} empty="Nothing indexed yet." />
+        </Panel>
+
+        <Panel title="Audit log" count={audit?.total}>
+          {!audit || audit.entries.length === 0 ? (
+            <p className="admin-empty">Nothing recorded yet.</p>
+          ) : (
+            <>
+              <ul className="admin-list">
+                {audit.entries.map((entry) => (
+                  <li key={entry.id}>
+                    <div>
+                      <strong>{entry.action.replaceAll(".", " ")}</strong>
+                      <span>
+                        {entry.actor_name || entry.actor_email || "system"} ·{" "}
+                        {entry.resource_type} · {formatRelative(entry.created_at)}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="admin-pager">
+                <button
+                  className="ghost-button"
+                  disabled={offset === 0}
+                  onClick={() => setOffset(Math.max(0, offset - AUDIT_PAGE))}
+                >
+                  Newer
+                </button>
+                <span>
+                  {offset + 1}–{offset + audit.entries.length} of {audit.total}
+                </span>
+                <button
+                  className="ghost-button"
+                  disabled={!audit.has_more}
+                  onClick={() => setOffset(offset + AUDIT_PAGE)}
+                >
+                  Older
+                </button>
+              </div>
+            </>
+          )}
+        </Panel>
+      </div>
+    </section>
+  );
+}

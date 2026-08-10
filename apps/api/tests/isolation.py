@@ -1178,6 +1178,25 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"slug": "app_slug"},
         note="private app must 404 here; asserted in the targeted test",
     ),
+    # -- admin -------------------------------------------------------------
+    # Owner-only reads over the caller's own workspace. Both tenants here are
+    # owners of their own workspace, so these exercise the scope filter rather
+    # than the role gate — the 403 for a plain member is pinned in
+    # tests/test_admin.py, which is also where the no-secrets assertions live.
+    RouteCase("GET", "/api/admin/members", SCOPED),
+    RouteCase("GET", "/api/admin/audit-events", SCOPED),
+    RouteCase("GET", "/api/admin/activity", SCOPED),
+    RouteCase("GET", "/api/admin/storage", SCOPED),
+    RouteCase("GET", "/api/admin/mcp-servers", SCOPED),
+    RouteCase("GET", "/api/admin/sandbox-sessions", SCOPED),
+    # The one admin route that takes an id, and it names a live machine — same
+    # verdict as DELETE /api/sandbox/{session_id} for the same reason.
+    RouteCase(
+        "DELETE",
+        "/api/admin/sandbox-sessions/{session_id}",
+        DENY,
+        path_ids={"session_id": "sandbox_session"},
+    ),
 ]
 
 CASES_BY_KEY = {case.key: case for case in ROUTE_CASES}

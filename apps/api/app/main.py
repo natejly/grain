@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import (
+    admin,
     analytics,
     artifacts,
     audit,
@@ -103,3 +104,4 @@ app.include_router(projects.router)
 app.include_router(sandbox.router)
 app.include_router(analytics.router)
 app.include_router(generated_apps.router)
+app.include_router(admin.router)

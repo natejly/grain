@@ -1,23 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-
-/**
- * Navigation is grouped: the sidebar has five groups and a group's siblings sit
- * in a tab strip above the view. Both navs are addressed by accessible name so
- * a group label ("Create") never collides with a form button of the same name.
- */
-async function openView(page: Page, group: string, tab?: RegExp | string) {
-  // The group badge is part of the button's accessible name ("Create 4"), so
-  // anchor on the label rather than asking for an exact match.
-  await page
-    .getByRole("navigation", { name: "Workspace" })
-    .getByRole("button", { name: new RegExp(`^${group}`) })
-    .click();
-  if (!tab) return;
-  await page
-    .getByRole("navigation", { name: `${group} views` })
-    .getByRole("button", { name: tab })
-    .click();
-}
+import { openSettings, openView } from "./shell";
 
 test("upload, cited answer, provenance, graph, approval, and deletion", async ({
   page,
@@ -53,7 +35,7 @@ test("upload, cited answer, provenance, graph, approval, and deletion", async ({
   await page.getByRole("button", { name: "Chat", exact: true }).click();
   await composer.fill("/tool github-zen");
   await composer.press("Enter");
-  await openView(page, "Activity");
+  await openSettings(page, "Activity");
   await expect(page.getByText("github-zen", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Deny" }).click();
   await expect(page.getByText("No pending requests")).toBeVisible();
@@ -76,7 +58,7 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
   });
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
-  await openView(page, "Create", /Dashboards/);
+  await openView(page, "Documents", /Dashboards/);
   await page.getByRole("button", { name: "Add dashboard" }).first().click();
 
   await page.getByLabel("Dashboard name").fill("E2E revenue app");
@@ -169,7 +151,7 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
     timeout: 20_000,
   });
 
-  await openView(page, "Create", /Documents/);
+  await openView(page, "Documents", /Documents/);
   await page.getByRole("button", { name: /Launch Runbook/ }).click();
   const body = page.locator(".document-source");
   await expect(body).toHaveValue(/Step two: run the migrations\./);
@@ -177,7 +159,7 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
 });
 
 async function openPlaybook(page: Page) {
-  await openView(page, "Create", /Documents/);
+  await openView(page, "Documents", /Documents/);
   await page.getByRole("button", { name: /Rollback Playbook/ }).click();
 }
 
