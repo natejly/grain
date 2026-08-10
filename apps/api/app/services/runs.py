@@ -13,6 +13,7 @@ from ..database import SessionLocal
 from ..models import Message, Run, Tool, ToolCall, ToolGrant
 from .agent_loop import resume_agent_turn, run_agent_turn
 from .audit import record_audit
+from .citations import summarize_citations, validate_citations
 from .events import append_event
 from .memory import recall, render_memory_context, write_conversation_memory
 from .model import stream_words
@@ -147,13 +148,21 @@ def _finish_run(
     run: Run,
     *,
     answer: str,
-    citations: list[dict[str, object]],
+    evidence: list[Evidence],
     already_streamed: bool = True,
 ) -> None:
+    # Takes the evidence list rather than pre-serialized citations so the
+    # validator counts from the same object the message is built from. Passing
+    # the dicts separately would let the two drift, which is exactly the drift
+    # the validator exists to catch.
+    # Before _complete_with_message, deliberately: that call emits run.completed,
+    # which consumers treat as terminal and stop reading on. An event appended
+    # after it is an event nobody sees.
+    _record_citation_report(run, answer, evidence)
     _complete_with_message(
         run,
         content=answer,
-        citations=citations,
+        citations=_citations(evidence),
         already_streamed=already_streamed,
     )
     try:
@@ -165,6 +174,46 @@ def _finish_run(
         # session; that is worth a line rather than a silent `pass`.
         logger.warning(
             "memory persistence raised for run %s", run.id, exc_info=True
+        )
+
+
+def _record_citation_report(run: Run, answer: str, evidence: list[Evidence]) -> None:
+    """Check the answer honoured the citation contract, and record the outcome.
+
+    Recorded on every completed run, not only on violations: a hallucinated-citation
+    *rate* needs a denominator, and "runs where evidence was supplied" only exists
+    if the clean ones are logged too.
+
+    This observes; it never rewrites the answer and never fails the run. A
+    validator that can break the thing it is watching is worse than no validator.
+    """
+    try:
+        report = validate_citations(answer, evidence)
+        payload = {**report.to_dict(), "summary": summarize_citations(report)}
+        db = SessionLocal()
+        try:
+            append_event(
+                db,
+                workspace_id=run.workspace_id,
+                run_id=run.id,
+                event_type="run.citations",
+                payload=payload,
+            )
+            record_audit(
+                db,
+                workspace_id=run.workspace_id,
+                actor_id=run.created_by,
+                action="run.citations_validated",
+                resource_type="run",
+                resource_id=run.id,
+                detail=payload,
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.warning(
+            "citation validation raised for run %s", run.id, exc_info=True
         )
 
 
@@ -210,7 +259,7 @@ def resume_run(run_id: str, tool_call_id: str, decision: str) -> None:
         )
         if result is None:
             return
-        _finish_run(run, answer=result.answer, citations=_citations(result.evidence))
+        _finish_run(run, answer=result.answer, evidence=result.evidence)
     except Exception as exc:
         _fail_run(db, run_id, exc)
     finally:
@@ -378,7 +427,7 @@ def process_run(run_id: str) -> None:
         # either way the run is not ours to complete right now.
         if result is None:
             return
-        _finish_run(run, answer=result.answer, citations=_citations(result.evidence))
+        _finish_run(run, answer=result.answer, evidence=result.evidence)
     except Exception as exc:
         _fail_run(db, run_id, exc)
     finally:
