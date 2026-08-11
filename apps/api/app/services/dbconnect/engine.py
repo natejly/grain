@@ -18,11 +18,14 @@ it means a confused model cannot damage a database that a careless one could.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
+import socket
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import create_engine, inspect
@@ -30,6 +33,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.engine.url import URL, make_url
 from sqlalchemy.exc import NoSuchModuleError, SQLAlchemyError
 
+from ...config import Settings, get_settings
 from ...models import DbConnection
 from ..crypto import EncryptionNotConfiguredError, decrypt_secret
 
@@ -107,6 +111,83 @@ def build_url(engine: str, dsn: str) -> URL:
     return url if driver else url.set(drivername=preferred)
 
 
+_DEFAULT_PORTS = {"postgres": 5432, "mysql": 3306}
+
+
+def _protected_paths(settings: Settings) -> List[Path]:
+    """Files and directories a user connection must never be allowed to open.
+
+    The application's own SQLite database is the sharp one: it holds every
+    workspace's rows, sessions and encrypted secrets, so a `sqlite:///` DSN that
+    named it would let one tenant `SELECT` the whole deployment out. Its object
+    store and sandbox scratch go in for the same reason.
+    """
+    paths: List[Path] = []
+    db_url = str(getattr(settings, "database_url", "") or "")
+    prefix = "sqlite:///"
+    if db_url.startswith(prefix):
+        raw = db_url[len(prefix) :]
+        if raw and raw != ":memory:":
+            paths.append(Path(raw).resolve())
+    for attr in ("objects_dir", "sandbox_workdir"):
+        value = getattr(settings, attr, None)
+        if value:
+            try:
+                paths.append(Path(value).resolve())
+            except (TypeError, ValueError):
+                continue
+    return paths
+
+
+def _guard_target(kind: str, url: URL, settings: Settings) -> None:
+    """Refuse a connection aimed at the application's own host or files.
+
+    dbconnect is *meant* to reach production databases — including private ones in
+    an operator's own network — so this deliberately does not block RFC1918. What
+    it blocks is the target that is never a tenant's database and always the
+    application's own box: the loopback and link-local addresses a network DSN can
+    name (cloud metadata answers on 169.254.169.254), and, for the file-backed
+    engines, a path inside the app's own data — most sharply its own SQLite
+    database, which a plain SELECT would otherwise read every tenant out of.
+
+    The network check resolves the host once here; a DSN could rebind afterwards,
+    but the driver speaks SQL rather than HTTP, so the value is closing the plain
+    "point it at localhost or the metadata service" case, not defeating an
+    attacker who controls the target's own DNS. An address that will not resolve
+    is left for `create_engine` to report as the connection error it is.
+    """
+    if kind in ("postgres", "mysql"):
+        host = (url.host or "").strip().rstrip(".")
+        if not host:
+            return
+        try:
+            infos = socket.getaddrinfo(
+                host, url.port or _DEFAULT_PORTS.get(kind), type=socket.SOCK_STREAM
+            )
+        except socket.gaierror:
+            return
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+                raise DbConnectError(
+                    f"“{host}” resolves to {ip}, an address on this server's own "
+                    "network. A connection may not point at the API host or the "
+                    "cloud metadata service; use the database's real address."
+                )
+        return
+    if kind in ("sqlite", "duckdb"):
+        raw = (url.database or "").strip()
+        if not raw or raw == ":memory:":
+            return
+        target = Path(raw).resolve()
+        for protected in _protected_paths(settings):
+            if target == protected or target.is_relative_to(protected):
+                raise DbConnectError(
+                    "This connection would open a file that belongs to the "
+                    "application itself. Point it at your own database file."
+                )
+
+
 def _fingerprint(url: URL, read_only: bool) -> str:
     return f"{url.render_as_string(hide_password=False)}|{read_only}"
 
@@ -154,6 +235,18 @@ def get_engine(connection: DbConnection) -> Engine:
         raise DbConnectError(f"No SQLAlchemy dialect for “{url.drivername}”.") from exc
     except SQLAlchemyError as exc:
         raise DbConnectError(f"Could not build a connection: {_clean_error(exc, url)}") from exc
+
+    # Refuse a target that is the application's own host or files — before the
+    # engine is cached or handed back, and so before any caller opens it. This
+    # runs after create_engine on purpose: create_engine opens no connection (it
+    # is lazy), so a missing driver still reports as a missing driver, while a
+    # target on this server's own network never gets dialed. Every caller — query,
+    # describe, the Test button — reaches a live database through this one door.
+    try:
+        _guard_target(kind, url, get_settings())
+    except DbConnectError:
+        engine.dispose()
+        raise
 
     _ENGINES[connection.id] = (stamp, engine)
     return engine
