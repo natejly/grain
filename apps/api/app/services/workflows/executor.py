@@ -431,8 +431,18 @@ def _prepare(
     # ADR 0007: a graph is validated against a registry that changes underneath
     # it. An MCP server disconnected since the compile takes its tools with it,
     # and the honest failure is loud and *before* the first node runs — half an
-    # automation is worse than none of it.
-    report = validate_graph(graph, tools)
+    # automation is worse than none of it. The workspace's enabled agents are
+    # part of the same moving ground: a node's authored agent deleted or
+    # disabled since save fails here, not at node six.
+    enabled_agents = set(
+        db.scalars(
+            select(Agent.id).where(
+                Agent.workspace_id == workflow_run.workspace_id,
+                Agent.enabled.is_(True),
+            )
+        )
+    )
+    report = validate_graph(graph, tools, agents=enabled_agents)
     if not report.ok:
         raise _Halt(
             "failed",
@@ -911,9 +921,36 @@ def _execute_agent_node(
     except refs.ReferenceResolutionError as exc:
         raise _Halt("failed", "reference_unresolved", str(exc), node.id) from exc
 
-    row.arguments_json = json.dumps({"prompt": prompt}, default=str)[:MAX_OUTPUT_CHARS]
+    # Which agent answers is decided per node and *persisted* before the turn
+    # starts, because `resolve_directives` reads `run.agent_id` on the resume
+    # paths too — a node that parks on an approval must resume with the same
+    # instructions and the same provisioned registry it started with. Set
+    # unconditionally: `""` means the workspace default even after an earlier
+    # node wrote a different agent onto this shared backing run.
+    if node.agent:
+        agent = db.scalar(
+            select(Agent).where(
+                Agent.id == node.agent,
+                Agent.workspace_id == workflow_run.workspace_id,
+                Agent.enabled.is_(True),
+            )
+        )
+        if agent is None:
+            raise _Halt(
+                "failed",
+                "agent_unavailable",
+                f"the agent behind this step (“{node.agent}”) is missing or disabled",
+                node.id,
+            )
+    else:
+        agent = _default_agent(db, workflow_run.workspace_id)
+
+    row.arguments_json = json.dumps(
+        {"prompt": prompt, "agent": agent.name}, default=str
+    )[:MAX_OUTPUT_CHARS]
     row.policy = "agent"
     state.run.prompt = str(prompt)
+    state.run.agent_id = agent.id
     db.commit()
 
     result = run_agent_turn(
@@ -1414,6 +1451,27 @@ def _mark_skipped(db: Session, workflow_run: WorkflowRun, halt: _Halt) -> None:
 # --------------------------------------------------------------------------
 
 
+def _default_agent(db: Session, workspace_id: str) -> Agent:
+    """The workspace's oldest enabled agent — what `agent: ""` nodes run as,
+    and what the backing run starts as. Raising rather than returning None
+    keeps "a workspace must have an enabled agent" a single loud failure."""
+    agent = db.scalar(
+        select(Agent)
+        .where(
+            Agent.workspace_id == workspace_id,
+            Agent.enabled.is_(True),
+        )
+        .order_by(Agent.created_at, Agent.id)
+    )
+    if agent is None:
+        raise _Halt(
+            "failed",
+            "no_agent",
+            "this workspace has no enabled agent to execute the workflow with",
+        )
+    return agent
+
+
 def _ensure_backing_run(
     db: Session, workflow_run: WorkflowRun, graph: WorkflowGraph
 ) -> Run:
@@ -1430,20 +1488,7 @@ def _ensure_backing_run(
         if run is not None:
             return run
 
-    agent = db.scalar(
-        select(Agent)
-        .where(
-            Agent.workspace_id == workflow_run.workspace_id,
-            Agent.enabled.is_(True),
-        )
-        .order_by(Agent.created_at, Agent.id)
-    )
-    if agent is None:
-        raise _Halt(
-            "failed",
-            "no_agent",
-            "this workspace has no enabled agent to execute the workflow with",
-        )
+    agent = _default_agent(db, workflow_run.workspace_id)
     conversation = Conversation(
         workspace_id=workflow_run.workspace_id,
         created_by=workflow_run.created_by,

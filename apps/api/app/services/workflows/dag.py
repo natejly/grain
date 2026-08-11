@@ -196,6 +196,13 @@ class NodeSpec(BaseModel):
     #: which is how a `when` on one node prunes a whole branch. See
     #: `validate._check_guard` and `executor._walk`.
     when: Optional[GuardSpec] = None
+    #: The authored agent an `agent` node runs as, by id. "" means the workspace
+    #: default (its oldest enabled agent) — which is what every graph compiled
+    #: before this field existed ran as, so stored graphs keep their meaning.
+    #: Set by the workflow editor's picker, never by the compiler: the model is
+    #: not taught agent ids. See `validate._check_agents` and
+    #: `executor._execute_agent_node`.
+    agent: str = ""
 
 
 class EdgeSpec(BaseModel):

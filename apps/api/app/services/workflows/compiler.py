@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Collection, Dict, List, Mapping, Optional
 
 from sqlalchemy.orm import Session
 
@@ -248,18 +248,23 @@ def parse_model_json(raw: str) -> Any:
 
 
 def compile_document(
-    document: Any, registry: Mapping[str, ToolSpec]
+    document: Any,
+    registry: Mapping[str, ToolSpec],
+    *,
+    agents: Optional[Collection[str]] = None,
 ) -> CompiledWorkflow:
     """Validate an already-formed graph document. Raises WorkflowCompileError.
 
     The entry point for a hand-edited graph, and the one the compiler below uses
     for every attempt — so a graph typed by a person and a graph written by a
-    model are held to exactly the same standard.
+    model are held to exactly the same standard. `agents` is the enabled-agent
+    ids for `validate_graph`'s existence check; the LLM compile path leaves it
+    None because the model is never taught ids, so its graphs cannot name one.
     """
     graph, errors = parse_graph(document)
     if graph is None:
         raise WorkflowCompileError(CompileReport(errors=errors))
-    report = validate_graph(graph, registry)
+    report = validate_graph(graph, registry, agents=agents)
     if not report.ok:
         raise WorkflowCompileError(report)
     return CompiledWorkflow(graph=graph, warnings=report.warnings, attempts=0)

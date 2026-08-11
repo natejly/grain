@@ -37,7 +37,7 @@ from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
-from ..models import Workflow, WorkflowNodeRun, WorkflowRun
+from ..models import Agent, Workflow, WorkflowNodeRun, WorkflowRun
 from ..schemas import ApiModel
 from ..services.audit import record_audit
 from ..services.llm_tools import ToolContext, build_registry
@@ -183,6 +183,21 @@ def _graph_document(workflow: Workflow) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _enabled_agent_ids(db: Session, actor: Actor) -> set[str]:
+    """The agents an `agent` node may name, for `validate_graph`'s check.
+
+    Enabled only: a disabled agent is retired from every picker, and a graph
+    that still names one should fail at save the same way it will at run.
+    """
+    return set(
+        db.scalars(
+            select(Agent.id).where(
+                Agent.workspace_id == actor.workspace_id, Agent.enabled.is_(True)
+            )
+        )
+    )
+
+
 def _requires_approval(workflow: Workflow, db: Session, actor: Actor) -> bool:
     """Would this workflow park? Answered against the *live* registry.
 
@@ -197,7 +212,9 @@ def _requires_approval(workflow: Workflow, db: Session, actor: Actor) -> bool:
         conversation_id="",
     )
     try:
-        compiled = compile_document(document, build_registry(db, context))
+        compiled = compile_document(
+            document, build_registry(db, context), agents=_enabled_agent_ids(db, actor)
+        )
     except WorkflowCompileError:
         # A graph that no longer validates cannot be characterised; the run
         # detail is where that gets reported, loudly, at run start.
@@ -391,7 +408,9 @@ def create_workflow(
     registry = build_registry(db, context)
     try:
         compiled = (
-            compile_document(payload.graph, registry)
+            compile_document(
+                payload.graph, registry, agents=_enabled_agent_ids(db, actor)
+            )
             if payload.graph is not None
             else compile_workflow(
                 db,
@@ -468,7 +487,9 @@ def update_workflow(
         registry = build_registry(db, context)
         try:
             compiled = (
-                compile_document(payload.graph, registry)
+                compile_document(
+                    payload.graph, registry, agents=_enabled_agent_ids(db, actor)
+                )
                 if payload.graph is not None
                 else compile_workflow(
                     db,

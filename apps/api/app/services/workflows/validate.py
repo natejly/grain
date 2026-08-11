@@ -37,7 +37,7 @@ import difflib
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Any, Collection, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import jsonschema
 from jsonschema import Draft202012Validator
@@ -340,9 +340,19 @@ def parse_graph(document: Any) -> Tuple[Optional[WorkflowGraph], List[CompileErr
 
 
 def validate_graph(
-    graph: WorkflowGraph, registry: Mapping[str, ToolSpec]
+    graph: WorkflowGraph,
+    registry: Mapping[str, ToolSpec],
+    *,
+    agents: Optional[Collection[str]] = None,
 ) -> CompileReport:
-    """Every check, all of them, in one pass. See the module docstring."""
+    """Every check, all of them, in one pass. See the module docstring.
+
+    `agents` is the set of agent ids an `agent` node may name, passed the same
+    way the registry is: by the callers that have a database to ask (save, run)
+    and omitted by the ones that do not (the compiler's repair loop, tests).
+    None skips only the existence check — a node putting `agent` where it does
+    not belong is refused regardless.
+    """
     report = CompileReport()
     ids = _check_identity(graph, report)
     _check_size(graph, report)
@@ -352,6 +362,7 @@ def validate_graph(
     declared = _check_inputs(graph, report)
     for node in graph.nodes:
         _check_node_kind(node, registry, report)
+        _check_agents(node, agents, report)
     ancestors = {} if cyclic else _ancestors(ids, edges)
     for node in graph.nodes:
         _check_guard(node, report)
@@ -359,6 +370,37 @@ def validate_graph(
             node, ids, ancestors, cyclic=cyclic, declared=declared, report=report
         )
     return report
+
+
+def _check_agents(
+    node: NodeSpec, agents: Optional[Collection[str]], report: CompileReport
+) -> None:
+    """A node's `agent` sits on an `agent` node and names one that exists.
+
+    The existence check runs only when the caller supplied the workspace's
+    enabled ids — a deleted or disabled agent then fails the graph at save and
+    again at run (`executor._prepare`), which is what turns "the agent behind
+    step three vanished" into a readable error instead of a mid-run surprise.
+    """
+    if not node.agent:
+        return
+    if node.kind != "agent":
+        report.errors.append(
+            CompileError(
+                "agent_misplaced",
+                f"only `agent` nodes run as an agent; this is a `{node.kind}` node",
+                node.id,
+            )
+        )
+        return
+    if agents is not None and node.agent not in agents:
+        report.errors.append(
+            CompileError(
+                "agent_unknown",
+                f"agent “{node.agent}” does not exist or is disabled",
+                node.id,
+            )
+        )
 
 
 def _check_identity(graph: WorkflowGraph, report: CompileReport) -> List[str]:
