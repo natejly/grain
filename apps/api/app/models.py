@@ -165,9 +165,19 @@ class Agent(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     name: Mapped[str] = mapped_column(String(100))
+    #: The system prompt every turn run as this agent is given. Blank falls back
+    #: to the stock `CHAT_INSTRUCTIONS` — an empty system prompt is never sent.
     instructions: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text, default="")
+    #: The provisioned tool subset, as a JSON list of registry names. "" means
+    #: unset — the agent sees the whole registry — while a stored list ("[]"
+    #: included) is an explicit grant. The subset only ever *narrows* what
+    #: `build_registry` offers; workspace `ToolPolicy` still applies on top.
+    allowed_tools_json: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class Message(Base):

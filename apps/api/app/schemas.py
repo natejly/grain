@@ -120,7 +120,47 @@ class DevOverrideOut(ApiModel):
 class AgentOut(ApiModel):
     id: str
     name: str
+    description: str = ""
+    #: The system prompt. Blank means the stock instructions are used.
     instructions: str
+    enabled: bool = True
+    #: The provisioned tool subset. None means every registry tool; a list —
+    #: empty included — is an explicit grant. Serialized from
+    #: `Agent.allowed_tools_json`, where "" spells None.
+    allowed_tools: Optional[List[str]] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=2000)
+    instructions: str = Field(min_length=1, max_length=20000)
+    allowed_tools: Optional[List[str]] = None
+
+
+class AgentUpdate(BaseModel):
+    """A partial edit. None means "leave alone" on every field, which is why
+    resetting the tool subset to "all tools" needs its own flag: a None
+    `allowed_tools` cannot mean both."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    instructions: Optional[str] = Field(default=None, min_length=1, max_length=20000)
+    enabled: Optional[bool] = None
+    allowed_tools: Optional[List[str]] = None
+    clear_allowed_tools: bool = False
+
+
+class ToolInfoOut(ApiModel):
+    """One registry tool, for the provisioning checklist."""
+
+    name: str
+    description: str
+    read_only: bool
+    #: The registry family the tool ships with ("core", "mcp", "sandbox", …),
+    #: so the checklist can group rather than dump sixty checkboxes.
+    family: str
 
 
 class ConversationCreate(BaseModel):

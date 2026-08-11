@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Collection, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -215,8 +215,14 @@ def _recall_memory(db: Session, context: ToolContext, args: Dict[str, Any]) -> T
     return ToolResult(content=json.dumps(payload))
 
 
-def build_registry(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
-    registry = {
+def registry_families(
+    db: Session, context: ToolContext
+) -> List[Tuple[str, Dict[str, ToolSpec]]]:
+    """Every tool the registry would offer, grouped under the family it ships
+    with. The names are UI-facing: the provisioning checklist groups by them
+    rather than dumping sixty flat checkboxes. `build_registry` flattens this
+    same list, so the catalogue and the live registry cannot disagree."""
+    core = {
         "search_sources": ToolSpec(
             name="search_sources",
             description=(
@@ -274,15 +280,34 @@ def build_registry(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             executor=_recall_memory,
         ),
     }
-    registry.update(agentic_memory_tools(db, context))
-    registry.update(graph_walk_tools(db, context))
-    registry.update(artifact_tools(db, context))
-    registry.update(project_tools(db, context))
-    registry.update(dashboard_tools(db, context))
-    registry.update(integration_tools(db, context))
-    registry.update(database_tools(db, context))
-    registry.update(mcp_tools(db, context))
-    registry.update(sandbox_tools(db, context))
+    return [
+        ("core", core),
+        ("memory", agentic_memory_tools(db, context)),
+        ("graph", graph_walk_tools(db, context)),
+        ("artifacts", artifact_tools(db, context)),
+        ("projects", project_tools(db, context)),
+        ("dashboards", dashboard_tools(db, context)),
+        ("integrations", integration_tools(db, context)),
+        ("databases", database_tools(db, context)),
+        ("mcp", mcp_tools(db, context)),
+        ("sandbox", sandbox_tools(db, context)),
+    ]
+
+
+def build_registry(
+    db: Session, context: ToolContext, allowed: Optional[Collection[str]] = None
+) -> Dict[str, ToolSpec]:
+    """The tools this turn may be offered. `allowed` is an agent's provisioned
+    subset: a pure intersection, so it can only narrow what the registry holds —
+    a name it grants that no family ships resolves to nothing. Workspace
+    `ToolPolicy` (`resolve_policy`) still applies to every surviving tool; the
+    subset decides what the model *sees*, never what it is *permitted*."""
+    registry: Dict[str, ToolSpec] = {}
+    for _family, tools in registry_families(db, context):
+        registry.update(tools)
+    if allowed is not None:
+        names = set(allowed)
+        registry = {name: spec for name, spec in registry.items() if name in names}
     return registry
 
 
