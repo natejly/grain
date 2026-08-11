@@ -961,6 +961,14 @@
             "title": "Arguments Json",
             "type": "string"
           },
+          "artifacts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ToolArtifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
           "conversation_id": {
             "title": "Conversation Id",
             "type": "string"
@@ -1645,6 +1653,67 @@
           "score"
         ],
         "title": "Citation",
+        "type": "object"
+      },
+      "CitationCheck": {
+        "description": "The citation validator's verdict on one answer.\n\nExactly `services.citations.CitationReport.to_dict()` plus its one-line\nsummary. Nothing is added here: the validator is deliberately a pure\nfunction with its own tests, and a field invented at the API boundary would\nbe a claim no test covers.",
+        "properties": {
+          "cited": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Cited",
+            "type": "array"
+          },
+          "evidence_count": {
+            "title": "Evidence Count",
+            "type": "integer"
+          },
+          "malformed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Malformed",
+            "type": "array"
+          },
+          "marker_count": {
+            "title": "Marker Count",
+            "type": "integer"
+          },
+          "out_of_range": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Out Of Range",
+            "type": "array"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "uncited": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Uncited",
+            "type": "array"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "evidence_count",
+          "marker_count",
+          "cited",
+          "out_of_range",
+          "uncited",
+          "malformed",
+          "valid",
+          "summary"
+        ],
+        "title": "CitationCheck",
         "type": "object"
       },
       "ColumnOrderRequest": {
@@ -3428,6 +3497,16 @@
       },
       "MessageOut": {
         "properties": {
+          "citation_report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CitationCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "citations": {
             "default": [],
             "items": {
@@ -3873,6 +3952,13 @@
             "title": "Artifact Count",
             "type": "integer"
           },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ToolArtifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -3927,6 +4013,7 @@
           "stderr",
           "error",
           "artifact_count",
+          "artifacts",
           "duration_ms",
           "created_at"
         ],
@@ -3938,8 +4025,7 @@
         "properties": {
           "artifacts": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/ToolArtifact"
             },
             "title": "Artifacts",
             "type": "array"
@@ -4248,6 +4334,71 @@
           "created_at"
         ],
         "title": "SyncJobOut",
+        "type": "object"
+      },
+      "ToolArtifact": {
+        "description": "A file a tool call produced, saved as a workspace `Source`.\n\nOne descriptor from `services/sandbox/outputs.persist_artifacts`. Typed here\nrather than passed through as a free dict now that a client *renders* it: an\nuntyped blob is a contract nobody can check, and the field that went missing\nfor a year was `url`.",
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "chart": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "mime": {
+            "title": "Mime",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "mime",
+          "bytes",
+          "url"
+        ],
+        "title": "ToolArtifact",
         "type": "object"
       },
       "ToolCallOut": {

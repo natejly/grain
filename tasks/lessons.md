@@ -325,3 +325,43 @@
   only visible by injecting a deliberate failure into the spec and watching
   which of the three leaked things came back. Make the mess on purpose before
   believing the tidy-up.
+- Three separate things had to be true before any chart the sandbox drew could
+  be seen, and each was invisible on its own. The descriptor carried no address;
+  the web `SandboxArtifact` type still described an inline-base64 contract the
+  server had stopped honouring, so `artifact.data` was `undefined` and the panel
+  rendered `null`; and our own `img-src 'self' data:` CSP blocked the blob: URL,
+  logging to a console nobody was reading. Fixing the first two produced a
+  broken-image icon that `toBeVisible()` passes on. Rule: for anything visual,
+  assert a property only a *working* render has — `naturalWidth > 0`, a non-zero
+  canvas, a computed colour — and look at the screenshot.
+- A type that describes a contract nobody validates drifts silently and takes a
+  feature with it. `SandboxArtifact` declared `url?` and `data?` as optional, so
+  when the server switched to object-store descriptors, every consumer's "do I
+  have bytes?" check answered no and nothing failed anywhere. The fix was to
+  type the response model server-side (`ToolArtifact`) so it lands in the
+  OpenAPI, and to make `url` required on both sides — an optional field is a
+  place for two systems to disagree forever.
+- `<img src>` to an authenticated API on another origin does not work and cannot
+  be made to work by widening CORS. It carries no `X-Workspace-Id`, so the API
+  falls back to the caller's oldest membership and 404s for anyone in two
+  workspaces; and it is a third-party subresource whose cookie Safari blocks and
+  Chrome is withdrawing, `SameSite=None` notwithstanding. Fetch through the API
+  client and hand the `<img>` a blob: URL. Note the local e2e stack cannot
+  detect either problem — `127.0.0.1:3010` and `127.0.0.1:8010` are the same
+  *site* — so this is a case where a passing browser test proves nothing about
+  production and the reasoning has to carry it.
+- A truncated summary is not a place to keep structured facts. `result_preview`
+  is clipped to 500 characters and the sandbox renderer puts the artifact ids
+  *last*, so on any chatty run the ids were the first thing cut — parsing them
+  back out would have worked in every test and failed in the field. Give the
+  structured thing its own column.
+- Do not render a verdict the checker declined to make. `CitationReport.is_valid`
+  is true when passages go uncited — the model is told to cite claims, not to use
+  everything — so the first cut, which painted "cites nothing" in warning amber
+  with `role="alert"`, was the UI inventing a violation. Read the validator's own
+  notion of failure and let the styling follow it exactly.
+- The e2e cleanup check has a second half worth doing: inject a failure that
+  skips cleanup and confirm *only* your specs fail. It confirmed these three are
+  self-contained, and it also surfaced a latent flake — a reload assertion that
+  silently depended on which conversation the shell happens to open. Assert
+  through an explicit selection, not through someone else's default.

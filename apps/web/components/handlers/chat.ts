@@ -4,9 +4,11 @@ import type {
   AgentToolCall,
   Bootstrap,
   Citation,
+  CitationCheck,
   Conversation,
   DocumentVersion,
   Message,
+  ToolArtifact,
   ToolCall,
   WorkspaceDocument,
   WorkspaceProject,
@@ -20,7 +22,22 @@ import type {
 } from "react";
 import { api } from "../api";
 import { readBudgetPark, type BudgetPark } from "../views/budget-format";
+import { readCitationCheck } from "../views/citation-format";
 import { describeError, type View } from "../views/shared";
+
+/**
+ * A tool failure, named.
+ *
+ * The API reports the same sentence twice — once on `tool.failed` with the
+ * tool's name and once on `run.failed` without it — so the name is prepended
+ * here rather than being lost to whichever event happened to land last. An
+ * unnamed tool failure tells a user nothing they can act on: the whole question
+ * is *which* of the things they approved went wrong.
+ */
+function toolFailure(tool: string, error: string): string {
+  const detail = error || "the call failed";
+  return tool ? `${tool} failed: ${detail}` : detail;
+}
 
 export type ChatHandlerDeps = {
   bootstrap: Bootstrap | null;
@@ -167,6 +184,12 @@ export function createChatHandlers({
         ...(data.preview && status === "proposed"
           ? { proposal_preview: String(data.preview) }
           : {}),
+        // Only tool.completed carries these, and only for a tool that produced
+        // files. An absent key must leave what is already on the card alone —
+        // patching it to [] would erase a chart on the next event.
+        ...(Array.isArray(data.artifacts)
+          ? { artifacts: data.artifacts as ToolArtifact[] }
+          : {}),
       };
       if (index >= 0) {
         return items.map((item, position) =>
@@ -187,6 +210,9 @@ export function createChatHandlers({
           result_preview: String(data.preview || ""),
           error: "",
           latency_ms: 0,
+          artifacts: Array.isArray(data.artifacts)
+            ? (data.artifacts as ToolArtifact[])
+            : [],
           created_at: new Date().toISOString(),
         },
       ];
@@ -247,6 +273,21 @@ export function createChatHandlers({
     setActiveRun(runId);
     setRunStatus("Starting");
     setBudgetPark(null);
+    /**
+     * The citation validator's verdict, which arrives just before the message
+     * it judges. Held in a local rather than in state because it belongs to one
+     * message and one run: `message.completed` reads it a few lines later and
+     * builds the message with it, so the badge is on screen from the moment the
+     * answer is, and the refetch that follows carries the same field from the
+     * server. One field, two arrival paths, no reconciliation.
+     */
+    let citationReport: CitationCheck | null = null;
+    /**
+     * Which tool blew up, if one did. `run.failed` follows `tool.failed` with
+     * the same error and no name, so the last-writer-wins ordering would throw
+     * away the only useful half of the message.
+     */
+    let failedTool = "";
     try {
       for await (const event of api.streamRun(runId)) {
         if (event.event === "run.started") {
@@ -300,6 +341,9 @@ export function createChatHandlers({
                 role: "assistant",
                 content: delta,
                 citations: [],
+                // Not yet checked: the validator runs on the finished answer,
+                // and a verdict on half a sentence would be a lie either way.
+                citation_report: null,
                 created_at: new Date().toISOString(),
               },
             ];
@@ -322,6 +366,25 @@ export function createChatHandlers({
         if (event.event === "tool.completed") {
           upsertAgentCall(runId, event.data, String(event.data.status || "succeeded"));
         }
+        /**
+         * A tool threw. The approval-gated HTTP tool fails here rather than
+         * returning a result, and this is the only event that says *which* tool
+         * — `run.failed` arrives next carrying the same message with the name
+         * stripped out, which is how "the run failed" became the entire report
+         * on a tool the user had approved by name a second earlier.
+         */
+        if (event.event === "tool.failed") {
+          failedTool = String(event.data.tool_name || "");
+          upsertAgentCall(runId, event.data, "failed");
+          setError(toolFailure(failedTool, String(event.data.error || "")));
+        }
+        /**
+         * The citation contract, checked. This is the product's central
+         * technical claim and it was reported to an audit row nobody reads.
+         */
+        if (event.event === "run.citations") {
+          citationReport = readCitationCheck(event.data);
+        }
         if (event.event === "message.completed") {
           const completed: Message = {
             id: String(event.data.message_id),
@@ -329,6 +392,7 @@ export function createChatHandlers({
             role: "assistant",
             content: String(event.data.content || ""),
             citations: (event.data.citations || []) as Citation[],
+            citation_report: citationReport,
             created_at: new Date().toISOString(),
           };
           setMessages((items) => {
@@ -340,7 +404,8 @@ export function createChatHandlers({
           });
         }
         if (event.event === "run.failed") {
-          setError(String(event.data.error || "The run failed"));
+          const error = String(event.data.error || "The run failed");
+          setError(failedTool ? toolFailure(failedTool, error) : error);
         }
       }
       if (activeConversationRef.current === conversationId) {

@@ -29,6 +29,12 @@ class ToolContext:
 class ToolResult:
     content: str
     evidence: List[Evidence] = field(default_factory=list)
+    #: Files the call produced, as the JSON-safe descriptors
+    #: `sandbox.outputs.persist_artifacts` returns. Separate from `content`
+    #: because they are for the *reader*, not the model: `content` names them in
+    #: a sentence a language model can act on, and is clipped to a character
+    #: budget that would silently drop the last chart from a chatty run.
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
 
     def bounded_content(self) -> str:
         return self.content[:MAX_RESULT_CHARS]

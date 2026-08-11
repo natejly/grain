@@ -6,6 +6,52 @@ afterEach(() => {
 });
 
 describe("WorkspaceApi", () => {
+  /**
+   * `sourceContent` exists because `<img src>` to this route cannot work, and
+   * the two reasons are both invisible in a same-site test environment: an
+   * `<img>` sends no workspace header, and a cross-site subresource cookie is
+   * blocked by Safari and being withdrawn by Chrome. So what is asserted here
+   * is precisely what an `<img>` would not do — send the credential and name
+   * the workspace — because that is the whole justification for the method.
+   */
+  it("fetches source bytes with the session and the workspace selection", async () => {
+    // A body that is deliberately not JSON: `request` would have parsed it and
+    // thrown, which is why this method exists beside it rather than through it.
+    const body = "PNG-bytes-not-json";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(body, { status: 200, headers: { "Content-Type": "image/png" } }),
+    );
+    const api = new WorkspaceApi("http://example.test");
+    api.setWorkspaceId("ws-2");
+
+    const blob = await api.sourceContent("source-9");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://example.test/api/sources/source-9/content",
+    );
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init?.credentials).toBe("include");
+    expect(new Headers(init?.headers).get("X-Workspace-Id")).toBe("ws-2");
+    // A GET must not carry an idempotency key; it is not a mutation.
+    expect(new Headers(init?.headers).get("Idempotency-Key")).toBeNull();
+    expect(blob.size).toBe(body.length);
+  });
+
+  it("raises rather than returning an empty blob when the fetch is refused", async () => {
+    // A silent empty blob becomes a broken <img> with no explanation, which is
+    // the exact failure mode this whole change exists to end.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Source not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      new WorkspaceApi("http://example.test").sourceContent("missing"),
+    ).rejects.toThrow("Source not found");
+  });
+
   it("adds an idempotency key to mutations", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

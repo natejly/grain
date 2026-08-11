@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, List, Literal, Type, TypeVar, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -15,6 +16,7 @@ from ..schemas import (
     AgentApprovalRequest,
     AgentToolCallOut,
     ApprovalRequest,
+    ToolArtifact,
     ToolCallOut,
     ToolPolicyOut,
     ToolPolicyRequest,
@@ -49,6 +51,15 @@ def _tool_call_out(call: ToolCall, tool: Tool, conversation_id: str) -> ToolCall
     )
 
 
+def _artifacts(raw: str) -> List[ToolArtifact]:
+    """Descriptors off the row. A row written before the column existed holds
+    "", which is not JSON and is also not an error."""
+    try:
+        return ToolArtifact.collect(json.loads(raw or "[]"))
+    except ValueError:
+        return []
+
+
 def _agent_tool_call_out(call: AgentToolCall, conversation_id: str) -> AgentToolCallOut:
     return AgentToolCallOut(
         id=call.id,
@@ -61,6 +72,7 @@ def _agent_tool_call_out(call: AgentToolCall, conversation_id: str) -> AgentTool
         result_preview=call.result_preview,
         error=call.error,
         latency_ms=call.latency_ms,
+        artifacts=_artifacts(call.artifacts_json),
         created_at=call.created_at,
     )
 

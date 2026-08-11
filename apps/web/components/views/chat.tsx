@@ -8,17 +8,27 @@ import {
   FileText,
   Paperclip,
   RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
   Square,
   Wrench,
   X,
 } from "lucide-react";
-import type { AgentToolCall, Citation, Message, Source } from "@workspace/api-client";
+import type {
+  AgentToolCall,
+  Citation,
+  CitationCheck,
+  Message,
+  Source,
+} from "@workspace/api-client";
 import { FormEvent, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { ArtifactImages } from "../source-image";
 import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
+import { describeCitationCheck } from "./citation-format";
 
 export type ToolDecision = (
   call: AgentToolCall,
@@ -138,6 +148,37 @@ function ProposalPreview({ preview }: { preview: string }) {
   );
 }
 
+/**
+ * The citation validator's verdict on an answer, where the answer is.
+ *
+ * Not a decoration. `services/citations.py` is what backs the product's claim
+ * that a `[n]` in an answer names a passage that really was retrieved, and its
+ * report went to an audit row for a year — so a fabricated `[4]` in an answer
+ * built from three passages reached the reader looking exactly like a real
+ * citation, with the checker's objection filed where nobody looks.
+ */
+function CitationVerdictNote({ report }: { report: CitationCheck }) {
+  const verdict = describeCitationCheck(report);
+  if (!verdict) return null;
+  const Icon = verdict.tone === "clean" ? ShieldCheck : ShieldAlert;
+  return (
+    <div
+      className={`citation-check ${verdict.tone}`}
+      // Announced only for the one tone that is a defect. An uncited passage
+      // is not a contract violation — the validator says so — and interrupting
+      // a screen reader for every tool-driven turn is how a real alert gets
+      // tuned out before it ever fires.
+      role={verdict.tone === "fabricated" ? "alert" : undefined}
+    >
+      <Icon size={14} aria-hidden="true" />
+      <div>
+        <strong>{verdict.title}</strong>
+        <span>{verdict.detail}</span>
+      </div>
+    </div>
+  );
+}
+
 function prettyArguments(raw: string): string {
   if (!raw || raw === "{}") return "";
   try {
@@ -188,6 +229,10 @@ function ToolCallCard({
         </span>
       </button>
       {preview && <ProposalPreview preview={preview} />}
+      {/* Outside the disclosure, deliberately. A chart behind a closed triangle
+          is as invisible as a chart that was never rendered — which is the bug
+          this is fixing, arriving one click later. */}
+      <ArtifactImages artifacts={call.artifacts} label={call.name} />
       {expanded && (
         <div className="tool-card-body">
           {args && (
@@ -308,6 +353,9 @@ export function ChatView({
                     <p>{message.content}</p>
                   )}
                 </div>
+                {message.citation_report && (
+                  <CitationVerdictNote report={message.citation_report} />
+                )}
                 {message.citations.length > 0 && (
                   <div className="citations">
                     {message.citations.map((citation, index) => (

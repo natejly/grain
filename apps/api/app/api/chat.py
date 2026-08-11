@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,7 @@ from ..models import (
     new_id,
 )
 from ..schemas import (
+    CitationCheck,
     ConversationCreate,
     ConversationOut,
     MessageOut,
@@ -38,6 +40,22 @@ from .idempotency import find_replay, record_key, replayed_resource_gone
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
+def _citation_report(raw: str) -> Optional[CitationCheck]:
+    """The stored verdict, or None when there is not a usable one.
+
+    Never raises. An answer predating the column, or one whose validator run
+    crashed, has no verdict — and a chat that 500s because a *diagnostic* could
+    not be parsed would be a strictly worse product than one that shows no
+    badge.
+    """
+    if not raw:
+        return None
+    try:
+        return CitationCheck.model_validate(json.loads(raw))
+    except (ValueError, ValidationError):
+        return None
+
+
 def _message_out(message: Message) -> MessageOut:
     return MessageOut(
         id=message.id,
@@ -45,6 +63,7 @@ def _message_out(message: Message) -> MessageOut:
         role=message.role,
         content=message.content,
         citations=json.loads(message.citations_json),
+        citation_report=_citation_report(message.citation_report_json),
         created_at=message.created_at,
     )
 

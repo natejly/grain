@@ -1,11 +1,59 @@
 "use client";
 
-import { File, Library, Plus, Trash2, UploadCloud } from "lucide-react";
+import { ExternalLink, File, Library, Plus, Trash2, UploadCloud } from "lucide-react";
 import type { Source } from "@workspace/api-client";
-import { formatBytes, formatRelative, statusLabel } from "./shared";
+import { useState } from "react";
+import { api } from "../api";
+import { describeError, formatBytes, formatRelative, statusLabel } from "./shared";
+
+/**
+ * Open a stored original in a new tab.
+ *
+ * A plain `<a href>` to the API cannot work: the route is authenticated, the
+ * API is a different site from this app, and a top-level navigation carries no
+ * `X-Workspace-Id` — so the browser would either be refused or handed whichever
+ * workspace the user joined first. The bytes are fetched through the client and
+ * opened as an object URL instead, which is same-origin and always the file the
+ * row names.
+ */
+function OpenSourceButton({
+  source,
+  setError,
+}: {
+  source: Source;
+  setError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      className="open-button"
+      disabled={busy}
+      title="Open original"
+      aria-label={`Open ${source.filename}`}
+      onClick={() => {
+        setBusy(true);
+        void api
+          .sourceContent(source.id)
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            window.open(url, "_blank", "noopener");
+            // The tab has to have read it first; revoking immediately hands it
+            // a dead URL. A minute is far longer than any load and still bounds
+            // the leak to one click.
+            window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+          })
+          .catch((caught) => setError(describeError(caught, "Could not open that file")))
+          .finally(() => setBusy(false));
+      }}
+    >
+      <ExternalLink size={14} />
+    </button>
+  );
+}
 
 export type SourcesViewProps = {
   sources: Source[];
+  setError: (message: string) => void;
   uploading: boolean;
   dragging: boolean;
   setDragging: (value: boolean) => void;
@@ -16,6 +64,7 @@ export type SourcesViewProps = {
 
 export function SourcesView({
   sources,
+  setError,
   uploading,
   dragging,
   setDragging,
@@ -116,14 +165,17 @@ export function SourcesView({
               </div>
               <span className="muted-cell">{source.chunk_count || "—"}</span>
               <span className="muted-cell">{formatRelative(source.created_at)}</span>
-              <button
-                className="delete-button"
-                onClick={() => void removeSource(source)}
-                title="Delete source"
-                aria-label={`Delete ${source.filename}`}
-              >
-                <Trash2 size={15} />
-              </button>
+              <div className="source-row-actions">
+                <OpenSourceButton source={source} setError={setError} />
+                <button
+                  className="delete-button"
+                  onClick={() => void removeSource(source)}
+                  title="Delete source"
+                  aria-label={`Delete ${source.filename}`}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
             </div>
           ))
         )}

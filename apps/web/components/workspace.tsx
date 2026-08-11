@@ -414,6 +414,7 @@ export function Workspace() {
         {view === "sources" && (
           <SourcesView
             sources={sources}
+            setError={setError}
             uploading={uploading}
             dragging={dragging}
             setDragging={setDragging}

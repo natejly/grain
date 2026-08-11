@@ -7,7 +7,12 @@ import pytest
 
 from app.database import SessionLocal
 from app.models import AgentToolCall, Run, RunEvent, ToolPolicy
-from app.services.agent_loop import resume_agent_turn, run_agent_turn
+from app.services.agent_loop import (
+    execute_agent_tool_call,
+    resume_agent_turn,
+    run_agent_turn,
+)
+from app.services.llm_tools import ToolContext, ToolResult, ToolSpec
 
 
 class FakeResponse:
@@ -339,3 +344,66 @@ def _cleanup_policy(run_id: str) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def test_a_tools_artifacts_survive_the_loop_and_reach_the_client(client):
+    """A figure a tool drew has to arrive somewhere a person can look at it.
+
+    The loop clips `result_preview` to 500 characters, and `sandbox/tools.py`
+    renders the artifact list *last* — after stdout — so on any run that printed
+    a paragraph the ids were the first thing cut. Carrying the descriptors as
+    their own field is what makes "the chat shows the chart" independent of how
+    chatty the run was.
+    """
+    run_id = _make_run(client)
+    figure = {
+        "id": "artifact-source-id",
+        "kind": "png",
+        "mime": "image/png",
+        "bytes": 12,
+        "url": "/api/sources/artifact-source-id/content",
+        "width": 480,
+        "height": 320,
+    }
+
+    def _drawing(db, context, arguments):
+        return ToolResult(content="stdout:\n" + "x" * 900, artifacts=[figure])
+
+    registry = {
+        "draw": ToolSpec(
+            name="draw",
+            description="draws",
+            parameters={"type": "object", "properties": {}},
+            executor=_drawing,
+        )
+    }
+    db = SessionLocal()
+    try:
+        run = db.get(Run, run_id)
+        context = ToolContext(
+            workspace_id=run.workspace_id,
+            user_id=run.created_by,
+            conversation_id=run.conversation_id,
+        )
+        execute_agent_tool_call(db, run, registry, context, "draw", "{}")
+
+        call = db.query(AgentToolCall).filter(AgentToolCall.run_id == run_id).one()
+        assert json.loads(call.artifacts_json) == [figure]
+        # The clip that used to swallow them is still there — that is the point.
+        assert figure["id"] not in call.result_preview
+
+        completed = next(
+            event
+            for event in db.query(RunEvent).filter(RunEvent.run_id == run_id).all()
+            if event.event_type == "tool.completed"
+        )
+        assert json.loads(completed.payload_json)["artifacts"] == [figure]
+    finally:
+        db.close()
+
+    listed = next(
+        item
+        for item in client.get("/api/agent-tool-calls").json()
+        if item["run_id"] == run_id
+    )
+    assert listed["artifacts"] == [{**figure, "chart": None}]

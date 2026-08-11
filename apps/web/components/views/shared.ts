@@ -100,5 +100,8 @@ export function statusLabel(status: Source["status"]): string {
   if (status === "processing") return "Reading";
   if (status === "queued") return "Queued";
   if (status === "failed") return "Needs attention";
+  // Held, never ingested: a chart a sandbox run drew. It was rendering as the
+  // raw word "stored" because the union did not know the state existed.
+  if (status === "stored") return "Saved";
   return status;
 }

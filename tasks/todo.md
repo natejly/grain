@@ -1,95 +1,98 @@
-# Surface the spend ceiling (ADR 0008's open consequence)
+# Reachability: sandbox charts, and the citation verdict
 
-The API parks a run on the ceiling and says so on `RunOut.paused_reason`,
-`WorkflowRunOut.paused_reason` and a `run.waiting_for_budget` event. The web
-reads none of it, so a parked run renders as parked with no card.
+Two capabilities exist server-side and cannot be reached from the app.
 
-## 1. Contracts (packages/api-client, additions only)
+## 1. No chart the agent draws is visible anywhere
 
-- [x] `Run.paused_reason`, `WorkflowRun.paused_reason` — both already on the wire.
-- [x] `AdminBudget*` types mirroring `AdminBudgetOut` / `AdminBudgetRequest`.
-- [x] `getAdminBudget()` / `setAdminBudget()` — the PUT also releases parked runs.
+`services/sandbox/outputs.py` stores every figure as a workspace `Source` and
+returns `{id, kind, mime, bytes, width, height}` — no `data`, no `url`. The web
+`SandboxArtifact` type still describes the *old* inline-base64 contract, so
+`artifactSource()` returns `""` and `Artifacts` renders `null`. Commit 04aa7b8
+added `GET /api/sources/{id}/content`; nothing calls it.
 
-## 2. Formatting rules, where a test can hold them still
+- [x] Descriptor carries `url` (the API path), so the client has an address.
+- [x] `SandboxArtifact` in api-client matches what the server actually sends.
+- [x] `api.sourceContent(id)` fetches the bytes **through the API client**, not
+      through `<img src>`: see "Why not `<img src>`" below.
+- [x] `SourceImage` component: blob -> object URL -> `<img alt>`; revokes on
+      unmount; says so out loud when the fetch fails.
+- [x] Sandbox panel renders it.
+- [x] Chat renders it: `ToolResult.artifacts` -> `agent_tool_calls.artifacts_json`
+      -> `AgentToolCallOut.artifacts` -> `tool.completed` payload -> tool card.
+- [x] Sources view can open a stored file (`sandbox-png-1.png` is a `Source` with
+      `status="stored"`, which the web union did not even have a label for).
+- [x] `views/projects.tsx`: checked, no change. A `ProjectFile.content` is a
+      `Text` column of `str` end to end and no tool writes a sandbox output back
+      into a project; the preview pane is fed only `{path, content}` strings.
 
-- [x] `views/budget-format.ts` — parse the event payload (network data, so
-      validate), and say the numbers through `usage-format`'s `readSpend`, never
-      a second money formatter. Unpriced spend must not claim a precise figure.
-- [x] `views/workflow-format.ts` — `runStatusLabel(status, pausedReason)` labels
-      a budget park distinctly from an approval.
+### Why not `<img src="https://api…/api/sources/{id}/content">`
+Two reasons, one of them deterministic:
+1. An `<img>` request carries no `X-Workspace-Id`. `auth._resolve_workspace`
+   then falls back to the caller's *oldest* membership, so for a user in two
+   workspaces every image in the newer one 404s. Not a maybe — a bug.
+2. The cookie is `SameSite=None`, but a cross-**site** subresource cookie is
+   blocked outright by Safari and being removed by Chrome. Nothing in the app
+   would tell the user why the picture vanished.
+The e2e suite cannot detect either: `127.0.0.1:3010` and `127.0.0.1:8010` are
+the same *site*, so the cookie is same-site there whatever production does.
+Fetching through the client (`credentials: "include"` + `X-Workspace-Id`, which
+already works for every other call) has neither problem and widens no CORS.
 
-## 3. The surfaces
+## 2. `run.citations` is emitted and nobody listens
 
-- [x] Chat: a `BudgetHold` panel, not a tool card — a budget park writes no
-      `AgentToolCall`, so there is nothing to approve.
-- [x] The way forward, reachable from the wall: raise the ceiling in a
-      disclosure popover. Owner → the form; 403 → "ask an owner".
-- [x] Workflows: budget label in the inbox, the run banner and the parked node,
-      and the hold panel instead of an approval card with no call in it.
-- [x] Admin: the ceiling beside the usage panel, editable, with what it holds.
+- [x] Persist the report on the message it is about (`messages.citation_report_json`),
+      so the verdict survives a reload. Fields are exactly `CitationReport.to_dict()`
+      plus `summary` — nothing invented.
+- [x] Handle `run.citations` in the stream so the verdict lands with the answer.
+- [x] Render it under the assistant message: fabricated `[n]` and malformed
+      markers are loud, a clean check is quiet, and nothing is shown when no
+      passages were supplied.
+- [x] `tool.failed` (runs.py:553) is handled, and both it and `tool.started`
+      now name the tool, so a throwing tool is no longer a bare `run.failed`.
 
-## 4. Gates
-
-- [x] vitest, tsc, lint, build, playwright — all pasted in the report.
-- [x] Screenshots looked at, including day one: no ceiling, no usage.
+## Verification
+- [x] ruff / mypy / pytest / openapi export
+- [x] tsc / lint / vitest / build
+- [x] playwright twice, consecutively
+- [x] screenshots looked at, and `naturalWidth` asserted rather than presence
 
 ## Review
 
-Green: tsc, lint, vitest 233 (was 206), build, playwright 39 (was 36).
+### There were three locks on the door, not one
+The audit named the missing `url`. Fixing that produced an `<img>` with an alt
+string and no picture, because the web `SandboxArtifact` type still described an
+inline-base64 contract the server had abandoned — `data` and `url` both optional,
+both absent, `artifactSource()` returning `""`, nothing failing anywhere. Fixing
+*that* produced a broken-image icon, because `apps/web/next.config.ts` carried
+`img-src 'self' data:` and blocked the blob: URL, with the only complaint in the
+browser console. The same file already had `frame-src 'self' blob:` added for the
+identical bug in the LaTeX preview. Note that `img-src 'self'` would not have
+permitted the API origin either, so the naive `<img src>` was never going to work
+even setting the cookie and header problems aside.
 
-Three things worth carrying forward.
+### What was added beyond the brief, and why
+- **`sandbox_executions.artifacts_json`.** Without it the console could only show
+  a figure in the seconds after it was drawn; a reload emptied the panel. That is
+  the same invisibility arriving a minute later. It also *removed* state — the
+  panel's per-execution artifact map is gone, because the row carries them.
+- **An open affordance in Sources, and a label for `status="stored"`.** Every
+  sandbox figure lands there and the status rendered as the raw word "stored".
+- **`tool.started` also names its tool**, since the same lookup answered both and
+  the chat's status line was already reaching for `tool_name`.
 
-**The workflow half of this seam was blocked by an API bug, not by the web.**
-`_run_out` in `apps/api/app/api/workflows.py` builds `WorkflowRunOut` field by
-field and never copies `paused_reason`, so every workflow run on the wire
-reports `""` — the schema declares the field with a default of `""`, which is
-exactly why nothing noticed. Proven against the running API: the DB row says
-`budget`, `GET /api/workflows/runs/{id}` says `""`. The web reads the field
-first and falls back to `GET /api/admin/budget`'s `runs_parked_on_budget`,
-which reports the truth. One line in the API retires the fallback.
+### Deferred, deliberately
+- **`views/projects.tsx` needs no change.** A `ProjectFile.content` is a `Text`
+  column of `str` end to end, no tool writes a sandbox output back into a
+  project, and the preview pane is fed only `{path, content}` strings. A binary
+  artifact cannot reach it without a new storage decision that this task is not.
+- **`SandboxRunOut.artifacts` is now redundant** with `execution.artifacts`. Left
+  in place: it is a published API field, and a test asserts the two agree.
+- **The `chart` descriptor field is carried but not rendered.** Re-drawing a
+  structured chart in the app's own theme is a feature, not a reachability fix.
 
-**A cached "held" answer goes stale in the one moment that matters.** The first
-fallback memoised per run id; a released run re-parks on an approval between
-two 1.2s polls, so the memo never expired and the graph claimed to be held
-forever. The fix is evidence, not caching: a budget park writes no
-`AgentToolCall`, so a run *with* a proposed one is parked on a person, whatever
-a list fetched a moment ago said.
-
-**Known limit, deliberately not papered over.** The chat hold card lives as long
-as the run's event stream. A reload loses it — there is no non-owner endpoint
-that lists a conversation's parked runs, and inventing one is an API change this
-task does not own. Admin lists them for owners.
-
-## Follow-up: the three e2e failures the `_run_out` fix uncovered
-
-Populating `paused_reason` on the wire ran the primary path for the first time
-and exposed a real bug behind it. One root cause, three failures.
-
-- [x] **Product bug.** `WorkflowRun.paused_reason` mirrors the backing run's,
-      and `executor.resume_after_agent_turn` returned early on `Paused` without
-      re-mirroring — true of the `Run`, false of the mirror. A graph released
-      from the ceiling that walked on to a write kept `budget`, so the surface
-      rendered the spend panel *instead of* the approval card and the proposal
-      was on screen with no way to decide it. Taken from the outcome type, which
-      already distinguishes the two pauses. Covered by
-      `test_a_released_graph_that_parks_on_a_write_stops_saying_it_is_held_by_money`,
-      mutation-checked: reverting the fix fails it with `'budget' == 'approval'`.
-- [x] **The UI rule now outranks the field.** `resolvePausedReason` moved into
-      `workflow-format.ts` with its precedence pinned by four unit tests: a
-      proposed `AgentToolCall` is decisive, because a budget park writes none
-      and a mirrored column can lag. Previously that check sat *below* the
-      field, so it guarded only against a stale list.
-- [x] **The other two failures were debris, not bugs.** budget.spec's third test
-      failed before its inline cleanup, leaving a duplicate workflow
-      (workflows.spec:136) and a workspace-wide `create_document` proposal
-      (workspace.spec:191). `sweep` in an `afterAll` now undoes the ceiling, the
-      proposal, the workflow and the conversation. Proven by injecting a
-      deliberate failure: only budget.spec fails, 38 others pass. That injection
-      also caught the sweep half-working — `DELETE /api/conversations` requires
-      an `Idempotency-Key` the other two routes do not.
-
-Gates: ruff clean, mypy 108 files, pytest `1395 passed, 1 skipped, 3 xfailed`,
-vitest 237, eslint/tsc/build green, playwright `39 passed` three runs consecutively.
-Screenshots read, not just captured: the released workflow now says "Waiting for
-approval" on all four surfaces with a real Approve/Deny, and the Documents
-pending panel holds exactly one card.
+### Honest note on what the browser suite can and cannot prove
+It proves the images decode, that the verdict renders and survives a reload, and
+that both work in dark. It **cannot** prove the cross-site cookie story either
+way: `127.0.0.1:3010` and `127.0.0.1:8010` are the same *site*, so the local
+stack would have passed a naive `<img src>` that fails in Safari today. That part
+rests on the reasoning above, not on a green run.

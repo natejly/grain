@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openSettings, openView } from "./shell";
+import { createFromMenu, openSettings, openView } from "./shell";
 
 test("upload, cited answer, provenance, graph, approval, and deletion", async ({
   page,
@@ -211,4 +211,207 @@ test("a parked write is decidable from the Documents view", async ({ page }) => 
   await expect(page.locator(".document-source")).toHaveValue(/payments rotation/, {
     timeout: 20_000,
   });
+});
+
+/**
+ * The two capabilities below existed server-side and could not be reached from
+ * the app: the citation validator reported to an audit row nobody reads, and
+ * every chart the sandbox drew was stored, described, counted — and rendered
+ * nowhere. Both are the kind of bug a passing test does not see, so these
+ * assert on pixels and on rendered text rather than on element presence.
+ *
+ * They live at the end of this file because the browser suite shares one
+ * workspace in file order; everything they create is deleted before they
+ * return, and each screenshots what it claims so the claim can be checked.
+ */
+
+/**
+ * Reopen a thread by name after a reload.
+ *
+ * Which conversation the shell lands on after a refresh is its own decision and
+ * not what these tests are about; asserting through it made a test about
+ * artifact durability fail because an empty thread happened to sort first.
+ */
+async function openThread(page: Page, title: string) {
+  await page.getByRole("button", { name: title, exact: false }).first().click();
+}
+
+/** True only for an <img> the browser actually decoded. */
+async function decoded(image: import("@playwright/test").Locator): Promise<boolean> {
+  return image.evaluate(
+    (node) =>
+      node instanceof HTMLImageElement && node.complete && node.naturalWidth > 0,
+  );
+}
+
+test("a fabricated citation is flagged under the answer that made it", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await openView(page, "Knowledge", /Sources/);
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "rollout-e2e.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from(
+      "# Rollout\n\nThe rollout reduces onboarding time by forty percent. " +
+        "It is owned by the platform team.",
+    ),
+  });
+  await expect(page.getByText("rollout-e2e.md")).toBeVisible();
+  await expect(page.getByText("Indexed").last()).toBeVisible();
+
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await page.getByRole("button", { name: "New thread" }).click();
+  const composer = chatComposer(page);
+  await composer.fill("Check the rollout date for me.");
+  await composer.press("Enter");
+
+  // The model cited [42] against a handful of passages. The validator has
+  // always caught this; the product has never shown it.
+  const flagged = page.locator(".citation-check.fabricated");
+  await expect(flagged).toBeVisible({ timeout: 20_000 });
+  await expect(flagged).toContainText("[42]");
+  await expect(flagged).toContainText("does not match a supplied passage");
+  // A correctness warning about the text above it, so it is announced.
+  await expect(flagged).toHaveAttribute("role", "alert");
+  // Red, not decoration: the warning must not read as the clean variant.
+  const fill = await flagged.evaluate((node) => getComputedStyle(node).backgroundColor);
+  await page.screenshot({ path: "test-results/citation-fabricated.png", fullPage: true });
+
+  // And the clean verdict is a different thing to look at, so "checked and
+  // clean" cannot be confused with "never checked".
+  await composer.fill("What does the rollout reduce?");
+  await composer.press("Enter");
+  const clean = page.locator(".citation-check.clean");
+  await expect(clean).toBeVisible({ timeout: 20_000 });
+  await expect(clean).toContainText("Citations check out");
+  expect(await clean.evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(
+    fill,
+  );
+
+  // It survives a reload, because it is stored on the message rather than only
+  // streamed. A warning that vanishes on refresh is barely a warning.
+  await page.reload();
+  await openThread(page, "Check the rollout date for me.");
+  await expect(page.locator(".citation-check.fabricated")).toContainText("[42]");
+
+  await openView(page, "Knowledge", /Sources/);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete rollout-e2e.md" }).click();
+  await expect(page.getByText("rollout-e2e.md")).toHaveCount(0);
+});
+
+test("a chart the agent draws is visible in the conversation", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New thread" }).click();
+  const composer = chatComposer(page);
+  await composer.fill("Plot the rollout for me.");
+  await composer.press("Enter");
+
+  const card = page.locator(".tool-card", { hasText: "run_python" });
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await card.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByText("Plotted it.")).toBeVisible({ timeout: 30_000 });
+
+  // The whole point. `toBeVisible` passes on a broken image, so the browser is
+  // asked whether it actually decoded pixels — the failure this is guarding
+  // against rendered an <img> with an empty src and told nobody.
+  const figure = card.locator("img.artifact-image");
+  await expect(figure).toBeVisible({ timeout: 20_000 });
+  await expect
+    .poll(() => decoded(figure), { timeout: 15_000 })
+    .toBe(true);
+  expect(await figure.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBe(
+    240,
+  );
+  // Real alt text, not "" and not the filename.
+  await expect(figure).toHaveAttribute("alt", /Figure 1 of 1 produced by run_python/);
+  await page.screenshot({ path: "test-results/chat-artifact.png", fullPage: true });
+
+  // Still there after a reload: the descriptors are on the tool call row, not
+  // only on the event that streamed past.
+  await page.reload();
+  await openThread(page, "Plot the rollout for me.");
+  const reloaded = page.locator(".tool-card", { hasText: "run_python" }).locator("img");
+  await expect(reloaded).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => decoded(reloaded), { timeout: 15_000 }).toBe(true);
+
+  // The figure is also a workspace source, and can be opened from there.
+  await openView(page, "Knowledge", /Sources/);
+  const row = page.locator(".source-row", { hasText: "sandbox-png-1.png" });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Saved");
+  page.once("dialog", (dialog) => dialog.accept());
+  await row.getByRole("button", { name: /^Delete sandbox-png-1\.png$/ }).click();
+  await expect(page.getByText("sandbox-png-1.png")).toHaveCount(0);
+});
+
+test("the sandbox console shows the figure the code drew", async ({ page }) => {
+  await page.goto("/");
+  await createFromMenu(page, "Sandbox");
+  await expect(page.locator(".sandbox-items li").first()).toBeVisible({
+    timeout: 30_000,
+  });
+
+  await page.locator("textarea.sandbox-source").fill(
+    [
+      "import struct, zlib",
+      "w, h = 120, 90",
+      'row = b"\\x00" + bytes((200, 90, 60)) * w',
+      "def chunk(kind, body):",
+      '    return (struct.pack(">I", len(body)) + kind + body',
+      '            + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff))',
+      'png = (b"\\x89PNG\\r\\n\\x1a\\n"',
+      '       + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))',
+      '       + chunk(b"IDAT", zlib.compress(row * h))',
+      '       + chunk(b"IEND", b""))',
+      'open("panel.png", "wb").write(png)',
+      'print("drew a", w, "x", h, "figure")',
+    ].join("\n"),
+  );
+  await page.locator(".sandbox-editor").getByRole("button", { name: "Run" }).click();
+
+  // `.last()` throughout: the panel reuses this workspace's live sandbox, so
+  // the run the chat test made is above this one in the same console — which is
+  // itself worth seeing, because it means one machine, two surfaces.
+  const mine = page.locator(".sandbox-exec").last();
+  await expect(mine.locator(".sandbox-stdout")).toContainText("drew a 120 x 90 figure", {
+    timeout: 60_000,
+  });
+  const figure = mine.locator("img.artifact-image");
+  await expect(figure).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => decoded(figure), { timeout: 15_000 }).toBe(true);
+  // The console does not follow its own output, so the shot has to be taken
+  // where the figure is — a screenshot of the scroll position the panel happens
+  // to be in proves nothing about the thing it is meant to show.
+  await figure.scrollIntoViewIfNeeded();
+  await page.locator(".sandbox-layout").screenshot({
+    path: "test-results/sandbox-artifact.png",
+  });
+
+  // And after a reload, because the descriptors live on the execution row.
+  await page.reload();
+  await openView(page, "Documents", /Sandbox/);
+  const again = page.locator(".sandbox-exec").last().locator("img.artifact-image");
+  await expect(again).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => decoded(again), { timeout: 15_000 }).toBe(true);
+
+  // Every live machine, not just this test's: the chat test's `run_python` and
+  // the navigation spec both leave one running, and three is the workspace's
+  // concurrency limit. Leaving them up would make whichever spec runs next fail
+  // with a 429 that has nothing to do with itself.
+  const stop = page.locator(".sandbox-policy-actions").getByRole("button", {
+    name: "Stop",
+  });
+  for (const item of await page.locator(".sandbox-item").all()) {
+    await item.click();
+    if (await stop.isVisible()) await stop.click();
+  }
+  await expect(page.locator(".sandbox-status.running")).toHaveCount(0);
+
+  await openView(page, "Knowledge", /Sources/);
+  const row = page.locator(".source-row", { hasText: "sandbox-png-1.png" });
+  page.once("dialog", (dialog) => dialog.accept());
+  await row.getByRole("button", { name: /^Delete sandbox-png-1\.png$/ }).click();
+  await expect(page.getByText("sandbox-png-1.png")).toHaveCount(0);
 });

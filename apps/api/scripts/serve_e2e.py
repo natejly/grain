@@ -9,6 +9,7 @@ import uvicorn
 
 DATABASE = Path("./data/e2e_workspace.db")
 OBJECTS = Path("./data/e2e_objects")
+SANDBOXES = Path("./data/e2e_sandboxes")
 API_DIR = Path(__file__).resolve().parents[1]
 
 # The password the browser suite signs in with. It belongs to the seeded demo
@@ -20,6 +21,8 @@ if DATABASE.exists():
     DATABASE.unlink()
 if OBJECTS.exists():
     shutil.rmtree(OBJECTS)
+if SANDBOXES.exists():
+    shutil.rmtree(SANDBOXES)
 
 os.environ["APP_ENV"] = "development"
 os.environ["DATABASE_URL"] = "sqlite:///./data/e2e_workspace.db"
@@ -31,6 +34,16 @@ os.environ["OBJECTS_DIR"] = "./data/e2e_objects"
 os.environ["MODEL_PROVIDER"] = "scripted"
 os.environ["SCRIPTED_MODEL_SCRIPT"] = "apps/web/e2e/agent-script.json"
 os.environ["TOOL_HOST_ALLOWLIST"] = "api.github.com"
+# Code execution on, on the local driver. The browser suite is the only place
+# that can prove a figure the agent draws actually reaches a user's screen, and
+# it cannot prove it against a sandbox that refuses to start. `subprocess` runs
+# as this process's own user and is not a sandbox — Settings refuse it outside
+# development/test for exactly that reason — but it harvests `chart.png` from
+# the session directory through the same code path the container driver uses,
+# which is the part under test here.
+os.environ["SANDBOX_ENABLED"] = "1"
+os.environ["SANDBOX_PROVIDER"] = "subprocess"
+os.environ["SANDBOX_WORKDIR"] = "./data/e2e_sandboxes"
 os.environ["WEB_ORIGIN"] = "http://127.0.0.1:3010"
 # Off, deliberately. The web app has a sign-in screen now, so the browser suite
 # authenticates the way a user does — cookie, CSRF header and all — and a signed

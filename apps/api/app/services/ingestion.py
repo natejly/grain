@@ -308,3 +308,21 @@ def object_path(workspace_id: str, source_id: str, filename: str) -> Path:
     directory = settings.objects_dir / workspace_id / source_id
     directory.mkdir(parents=True, exist_ok=True)
     return directory / sanitize_filename(filename)
+
+
+#: How a browser asks for the bytes `object_path` wrote. Declared here, beside
+#: the place they live, and used by the route itself (`api/sources.py`) so the
+#: address a descriptor hands out and the address the server answers on cannot
+#: drift apart. Only the path shape is shared: the "/api" prefix belongs to
+#: every router in this app at once, and the origin belongs to the client.
+SOURCE_CONTENT_ROUTE = "/sources/{source_id}/content"
+
+
+def content_path(source_id: str) -> str:
+    """The API path that streams one source's stored bytes.
+
+    Relative on purpose. This process does not reliably know the public origin
+    it is reached on — it sits behind whatever the deployment put in front of it
+    — and the client already holds the base URL it is talking to.
+    """
+    return "/api" + SOURCE_CONTENT_ROUTE.format(source_id=source_id)

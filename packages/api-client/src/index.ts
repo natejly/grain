@@ -79,12 +79,44 @@ export type Citation = {
   score: number;
 };
 
+/**
+ * The citation validator's verdict on one answer — exactly the report in
+ * apps/api/app/services/citations.py, no more.
+ *
+ * The contract the model is held to is "attach [n] after each claim supported
+ * by passage n, and only use [n] markers that match supplied passages". This
+ * says whether it did.
+ */
+export type CitationCheck = {
+  /** How many passages the model was handed. */
+  evidence_count: number;
+  /** How many [n] markers the answer contained, duplicates included. */
+  marker_count: number;
+  /** Passage numbers cited that exist. */
+  cited: number[];
+  /** Passage numbers cited that do not exist — fabricated. */
+  out_of_range: number[];
+  /** Supplied passages never cited. Not a violation. */
+  uncited: number[];
+  /** Citation-shaped brackets that could not be parsed, e.g. "[1,]". */
+  malformed: string[];
+  /** False when anything was fabricated or malformed. */
+  valid: boolean;
+  summary: string;
+};
+
 export type Message = {
   id: string;
   run_id: string;
   role: "user" | "assistant" | "tool";
   content: string;
   citations: Citation[];
+  /**
+   * null means this answer was never checked — a denied tool call, a budget
+   * park, a message written before the check existed. Not the same as "checked
+   * and clean", and must never be rendered as one.
+   */
+  citation_report: CitationCheck | null;
   created_at: string;
 };
 
@@ -117,7 +149,13 @@ export type Source = {
   filename: string;
   media_type: string;
   byte_size: number;
-  status: "queued" | "processing" | "ready" | "failed" | "deleted";
+  /**
+   * "stored" is a file the workspace holds but never ingested — a figure a
+   * sandbox run drew. Deliberately not "ready", which means indexed and
+   * quotable everywhere else, and which retrieval must not be led to believe
+   * about a PNG.
+   */
+  status: "queued" | "processing" | "ready" | "stored" | "failed" | "deleted";
   error: string;
   chunk_count: number;
   created_at: string;
@@ -160,6 +198,8 @@ export type AgentToolCall = {
   result_preview: string;
   error: string;
   latency_ms: number;
+  /** Files the call left behind — the chart a `run_python` call drew. */
+  artifacts: ToolArtifact[];
   created_at: string;
 };
 
@@ -616,30 +656,48 @@ export type SandboxExecution = {
   stderr: string;
   /** Non-empty when the *user's* code failed. Infrastructure failure is a 5xx. */
   error: string;
+  /** How many the provider produced, including any the storage caps refused. */
   artifact_count: number;
+  /** The ones that were stored, and so can be shown. Survives a reload. */
+  artifacts: ToolArtifact[];
   duration_ms: number;
   created_at: string;
 };
 
 /**
- * A chart or image an execution produced. Every field past `kind`/`mime` is
- * optional because which ones are populated is the server's artifact layer's
- * choice: large payloads are written to the object store and named by `url`,
- * small ones ride back inline as base64 in `data`.
+ * A file a tool call or an execution produced — a matplotlib figure, a PDF —
+ * saved as a workspace `Source`.
+ *
+ * This used to describe an inline-base64 contract the server stopped honouring:
+ * it declared `data` and `url` as optional and the server sent neither, so
+ * every consumer's "do I have bytes?" check answered no and every chart the
+ * sandbox drew was silently dropped on the floor. It now mirrors
+ * `ToolArtifact` in apps/api/app/schemas.py exactly, and `url` is required
+ * because an artifact nobody can address is an artifact nobody can see.
  */
-export type SandboxArtifact = {
+export type ToolArtifact = {
+  /** The `Source` row holding the bytes. */
+  id: string;
+  /** "png", "jpeg", "svg", "chart", … — what the sandbox called it. */
   kind: string;
   mime: string;
-  url?: string;
-  data?: string;
-  is_main?: boolean;
-  /** Structured chart description, strictly better than a PNG when present. */
-  chart_json?: string;
+  bytes: number;
+  /**
+   * Path under the API root that streams the bytes. Relative: pass it to
+   * `api.sourceContent`, which resolves it against the base URL and carries the
+   * session. It is deliberately not usable as an `<img src>` — see that method.
+   */
+  url: string;
+  /** Read off the file header, when the format carries one. */
+  width?: number | null;
+  height?: number | null;
+  /** A structured chart description, when the provider supplied one. */
+  chart?: unknown;
 };
 
 export type SandboxRun = {
   execution: SandboxExecution;
-  artifacts: SandboxArtifact[];
+  artifacts: ToolArtifact[];
   /** True when output was clipped, so the panel can say so. */
   truncated: boolean;
   /** The session as it stands after the run — status and counters included. */
@@ -1231,6 +1289,40 @@ export class WorkspaceApi {
 
   deleteSource(sourceId: string): Promise<void> {
     return this.request(`/api/sources/${sourceId}`, { method: "DELETE" }, true);
+  }
+
+  /**
+   * One source's stored bytes — an uploaded PDF, a chart a sandbox run drew.
+   *
+   * Fetched here and handed back as a Blob rather than pointed at with an
+   * `<img src>`, which does not work and cannot be made to work:
+   *
+   * 1. An `<img>` request carries no `X-Workspace-Id`, and the API falls back
+   *    to the caller's *oldest* membership when the header is absent. A user in
+   *    two workspaces would find every image in the newer one 404ing. That is
+   *    deterministic, not a browser quirk.
+   * 2. The API is a different site from the web app, so an `<img>` to it is a
+   *    third-party subresource. Safari blocks those cookies outright and Chrome
+   *    is removing them; `SameSite=None` is permission to send the cookie, not
+   *    a promise the browser will. The picture would vanish for some users and
+   *    nobody would be able to say why.
+   *
+   * `request` cannot be reused because it parses JSON. This goes through
+   * `dispatch`, which is the same credentialed, workspace-scoped fetch every
+   * other call uses — so this needs no CORS change of any kind.
+   */
+  async sourceContent(sourceId: string): Promise<Blob> {
+    const path = `/api/sources/${sourceId}/content`;
+    const init: RequestInit = {};
+    const response = await this.dispatch(path, init, this.buildHeaders(init, false), false);
+    if (response.status === 401) this.signalUnauthorized();
+    if (!response.ok) {
+      throw new ApiError(
+        (await WorkspaceApi.detailOf(response)) || `Request failed (${response.status})`,
+        response.status,
+      );
+    }
+    return response.blob();
   }
 
   getChunk(chunkId: string): Promise<ProvenanceChunk> {

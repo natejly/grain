@@ -1080,6 +1080,76 @@ select:focus-visible {
   background: transparent;
 }
 
+/* The citation validator's verdict, under the answer it judged.
+   Indented to the message body's gutter so it reads as part of the answer
+   rather than as a system notice floating beside it. */
+.citation-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  margin-left: 31px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.citation-check > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.citation-check > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.citation-check strong {
+  font-weight: 600;
+}
+
+.citation-check span {
+  color: var(--text-muted);
+}
+
+/* Quiet: this is the expected outcome, and it is here so that silence cannot be
+   mistaken for "never checked" — not to be celebrated on every turn. */
+.citation-check.clean {
+  color: var(--text-muted);
+}
+
+.citation-check.clean > svg {
+  color: var(--green);
+}
+
+/* Worth a glance, not an alarm. `CitationReport.is_valid` is true here — the
+   validator says in as many words that uncited passages are not a contract
+   violation — so painting this like the fabricated case would be the UI
+   inventing a verdict the checker declined to make. The icon carries the
+   difference; the plate does not. */
+.citation-check.uncited {
+  color: var(--text-muted);
+}
+
+.citation-check.uncited > svg {
+  color: var(--amber);
+}
+
+/* The one state that is a defect: the model named a passage nobody gave it. */
+.citation-check.fabricated {
+  border-color: var(--red-border);
+  background: var(--red-muted);
+  color: var(--red);
+}
+
+.citation-check.fabricated span {
+  color: inherit;
+}
+
 .citations {
   margin-top: 12px;
   padding-left: 31px;
@@ -1407,7 +1477,7 @@ select:focus-visible {
 .source-table-head,
 .source-row {
   display: grid;
-  grid-template-columns: minmax(260px, 2fr) minmax(145px, 1fr) 90px 95px 38px;
+  grid-template-columns: minmax(260px, 2fr) minmax(145px, 1fr) 90px 95px 68px;
   align-items: center;
   gap: 12px;
   padding: 0 16px;
@@ -1507,6 +1577,35 @@ select:focus-visible {
   font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.source-row-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Same shape as the delete control beside it: two icon buttons of different
+   sizes in one cell read as a mistake rather than a hierarchy. */
+.open-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.open-button:hover {
+  background: var(--accent-muted);
+  color: var(--accent-text);
+}
+
+.open-button:disabled {
+  color: var(--control-disabled-text);
+  cursor: default;
 }
 
 .delete-button {
@@ -4821,16 +4920,34 @@ select:focus-visible {
   font-size: 11px;
 }
 
-.sandbox-artifacts {
+/* Figures a tool call or an execution produced. One rule for both homes — the
+   sandbox console and the chat transcript — because it is one idea. The light
+   backing plate matters: a matplotlib figure has a transparent background, so
+   on the dark theme a chart drawn in black ink on nothing is invisible. */
+.artifact-images {
   display: grid;
   gap: 10px;
   padding: 12px;
   background: var(--preview-bg);
 }
 
-.sandbox-artifacts img {
+.artifact-image {
   max-width: 100%;
+  height: auto;
   border-radius: 6px;
+}
+
+.artifact-pending {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+}
+
+.artifact-missing {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .sandbox-running {

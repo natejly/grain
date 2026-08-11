@@ -367,9 +367,13 @@ def _execute(db: Session, context: ToolContext, args: Dict[str, Any], *, kind: s
         source=source,
         result=result,
         settings=settings,
+        artifacts=descriptors,
     )
     dropped = len(result.artifacts) - len(descriptors)
-    return ToolResult(content=_render(result, descriptors, dropped=dropped))
+    return ToolResult(
+        content=_render(result, descriptors, dropped=dropped),
+        artifacts=descriptors,
+    )
 
 
 def _run_python(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:

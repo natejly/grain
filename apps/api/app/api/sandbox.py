@@ -16,8 +16,9 @@ the one value that would let a leaked response address a live machine directly.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -28,7 +29,7 @@ from ..auth import Actor, get_actor
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import SandboxExecution, SandboxSession
-from ..schemas import ApiModel
+from ..schemas import ApiModel, ToolArtifact
 from ..services.audit import record_audit
 from ..services.sandbox import outputs
 from ..services.sandbox import provider as provider_module
@@ -72,7 +73,12 @@ class SandboxExecutionOut(ApiModel):
     stdout: str
     stderr: str
     error: str
+    #: How many the provider produced, including any the storage caps refused.
     artifact_count: int
+    #: The ones that were stored, addressable. Carried on the row rather than
+    #: only on the live run response, so reopening the panel shows the figures
+    #: again instead of a count and three empty spaces.
+    artifacts: List[ToolArtifact]
     duration_ms: int
     created_at: datetime
 
@@ -86,9 +92,11 @@ class SandboxRunOut(ApiModel):
     """
 
     execution: SandboxExecutionOut
-    #: Object-store descriptors from `outputs.persist_artifacts`, already
-    #: JSON-safe. Untyped because the shape is the artifact layer's to define.
-    artifacts: List[Dict[str, Any]]
+    #: Object-store descriptors from `outputs.persist_artifacts`. Typed now that
+    #: the panel renders them: the reason no chart was ever visible is that the
+    #: client's idea of this shape and the server's had drifted apart for a year
+    #: with nothing in between able to notice.
+    artifacts: List[ToolArtifact]
     truncated: bool
     session: SandboxSessionOut
 
@@ -131,6 +139,15 @@ def _session_out(session: SandboxSession) -> SandboxSessionOut:
     )
 
 
+def _stored_artifacts(raw: str) -> List[ToolArtifact]:
+    """Descriptors off the row. A row written before the column existed holds
+    "", which is not JSON and is also not a reason to fail a history listing."""
+    try:
+        return ToolArtifact.collect(json.loads(raw or "[]"))
+    except ValueError:
+        return []
+
+
 def _execution_out(execution: SandboxExecution) -> SandboxExecutionOut:
     return SandboxExecutionOut(
         id=execution.id,
@@ -141,6 +158,7 @@ def _execution_out(execution: SandboxExecution) -> SandboxExecutionOut:
         stderr=execution.stderr,
         error=execution.error,
         artifact_count=execution.artifact_count,
+        artifacts=_stored_artifacts(execution.artifacts_json),
         duration_ms=execution.duration_ms,
         created_at=execution.created_at,
     )
@@ -318,12 +336,13 @@ def run_in_sandbox(
         source=payload.source,
         result=result,
         settings=settings,
+        artifacts=artifacts,
     )
     sessions.touch(db, session)
     db.commit()
     return SandboxRunOut(
         execution=_execution_out(execution),
-        artifacts=artifacts,
+        artifacts=ToolArtifact.collect(artifacts),
         truncated=result.truncated,
         session=_session_out(session),
     )

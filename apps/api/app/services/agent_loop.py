@@ -493,6 +493,11 @@ def execute_agent_tool_call(
                 record.error = str(exc)[:1000]
     record.latency_ms = int((time.monotonic() - started) * 1000)
     record.result_preview = (result.content or "")[:500]
+    # Carried beside the preview, not inside it: `result_preview` is prose for
+    # the model clipped at 500 characters, and the artifact list is the part a
+    # long stdout pushes off the end. The event repeats them so a live chat
+    # renders the figure without waiting for a refetch.
+    record.artifacts_json = json.dumps(result.artifacts)
     append_event(
         db,
         workspace_id=run.workspace_id,
@@ -503,6 +508,7 @@ def execute_agent_tool_call(
             "tool_name": name,
             "status": record.status,
             "preview": record.result_preview,
+            "artifacts": result.artifacts,
         },
     )
     record_audit(

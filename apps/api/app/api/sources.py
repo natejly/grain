@@ -18,6 +18,7 @@ from ..schemas import ChunkOut, SourceOut
 from ..services.audit import record_audit
 from ..services.graph import mark_graph_stale, rebuild_graph
 from ..services.ingestion import (
+    SOURCE_CONTENT_ROUTE,
     ingest_source,
     object_path,
     sanitize_filename,
@@ -147,7 +148,7 @@ _SERVED_TYPES = {
 _INLINE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 
-@router.get("/sources/{source_id}/content")
+@router.get(SOURCE_CONTENT_ROUTE)
 def get_source_content(
     source_id: str,
     actor: Actor = Depends(get_actor),

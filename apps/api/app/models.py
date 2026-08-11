@@ -176,6 +176,11 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     citations_json: Mapped[str] = mapped_column(Text, default="[]")
+    # The citation validator's verdict on *this* answer — the payload of the
+    # `run.citations` event, kept where a reader will meet it again. Empty means
+    # the answer was never checked (a denial, a budget park), which is a
+    # different fact from "checked and clean" and must not render as one.
+    citation_report_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -370,6 +375,11 @@ class AgentToolCall(Base):
     # sentence for board moves. Computed before execution, so the approval card
     # can show the change rather than just the tool's name.
     proposal_preview: Mapped[str] = mapped_column(Text, default="")
+    # Descriptors for the files this call produced — a matplotlib figure the
+    # sandbox drew, saved as a workspace Source. Held as its own column rather
+    # than parsed back out of `result_preview`, which is clipped to 500
+    # characters and drops the artifact list first on a chatty run.
+    artifacts_json: Mapped[str] = mapped_column(Text, default="[]")
     decided_by: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -643,7 +653,13 @@ class SandboxExecution(Base):
     stdout: Mapped[str] = mapped_column(Text, default="")
     stderr: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
+    # How many the provider handed back, including any the caps refused.
     artifact_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Descriptors for the ones that were actually stored, so reopening the panel
+    # shows the figures again. Without this the console could only show a chart
+    # in the seconds after it was drawn, and a reload lost it — which is the
+    # same invisibility as never rendering it, arriving a minute later.
+    artifacts_json: Mapped[str] = mapped_column(Text, default="[]")
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

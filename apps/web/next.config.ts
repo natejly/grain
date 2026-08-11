@@ -16,7 +16,16 @@ const contentSecurityPolicy = [
   "form-action 'self'",
   "frame-ancestors 'none'",
   "object-src 'none'",
-  "img-src 'self' data:",
+  // `blob:` for the same reason `frame-src` has it, and it is the third thing
+  // that had to be true before any chart the sandbox drew could be seen. A
+  // stored figure lives behind an authenticated route on the API origin, so it
+  // is fetched through the API client and handed to the <img> as a blob: URL
+  // this document created — which `img-src 'self' data:` blocked outright, with
+  // no error anywhere but the browser console. Adding the API origin here
+  // instead would have been both wider and useless: a cross-site <img> carries
+  // no workspace header and no third-party cookie in Safari. A blob: URL names
+  // only bytes this document already holds and reaches no network.
+  "img-src 'self' data: blob:",
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   // 'wasm-unsafe-eval' is required by esbuild-wasm, which bundles project files

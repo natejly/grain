@@ -13,7 +13,6 @@ import {
   Trash2,
 } from "lucide-react";
 import type {
-  SandboxArtifact,
   SandboxExecution,
   SandboxExecutionKind,
   SandboxNetworkPolicy,
@@ -21,6 +20,7 @@ import type {
 } from "@workspace/api-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { ArtifactImages } from "../source-image";
 import { describeError, formatRelative } from "./shared";
 
 export type SandboxViewProps = {
@@ -96,45 +96,13 @@ function statusLabel(session: SandboxSession): string {
   return "Failed to start";
 }
 
-/** Base64 payloads ride back inline; larger artifacts are named by URL. */
-function artifactSource(artifact: SandboxArtifact): string {
-  if (artifact.url) return artifact.url;
-  if (artifact.data) return `data:${artifact.mime};base64,${artifact.data}`;
-  return "";
-}
-
-function Artifacts({ artifacts }: { artifacts: SandboxArtifact[] }) {
-  const images = artifacts.filter(
-    (artifact) => artifact.mime.startsWith("image/") && artifactSource(artifact),
-  );
-  if (images.length === 0) return null;
-  return (
-    <div className="sandbox-artifacts">
-      {images.map((artifact, index) => (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          key={`${artifact.kind}-${index}`}
-          src={artifactSource(artifact)}
-          alt={`Figure ${index + 1} from this execution`}
-        />
-      ))}
-    </div>
-  );
-}
-
 /**
  * One execution, rendered the way a terminal would: the command, then its
  * streams. stdout and stderr are visually distinct because "it printed nothing
  * and warned twice" and "it printed twice" are different outcomes, and a single
  * merged blob makes them look identical.
  */
-function ExecutionBlock({
-  execution,
-  artifacts,
-}: {
-  execution: SandboxExecution;
-  artifacts: SandboxArtifact[];
-}) {
+function ExecutionBlock({ execution }: { execution: SandboxExecution }) {
   return (
     <article className="sandbox-exec">
       <header className="sandbox-exec-head">
@@ -152,11 +120,11 @@ function ExecutionBlock({
       {execution.stdout && <pre className="sandbox-stdout">{execution.stdout}</pre>}
       {execution.stderr && <pre className="sandbox-stderr">{execution.stderr}</pre>}
       {execution.error && <pre className="sandbox-exec-error">{execution.error}</pre>}
-      <Artifacts artifacts={artifacts} />
+      <ArtifactImages artifacts={execution.artifacts} label="this execution" />
       {!execution.stdout &&
         !execution.stderr &&
         !execution.error &&
-        artifacts.length === 0 && (
+        execution.artifacts.length === 0 && (
           <p className="sandbox-exec-quiet">No output.</p>
         )}
     </article>
@@ -170,10 +138,10 @@ export function SandboxView({
 }: SandboxViewProps) {
   const [sessions, setSessions] = useState<SandboxSession[]>([]);
   const [activeId, setActiveId] = useState("");
+  // Artifacts ride on the execution row itself, so the console keeps no second
+  // map keyed by execution id: the history endpoint returns the same figures
+  // the run did, and a reload no longer empties the panel.
   const [history, setHistory] = useState<SandboxExecution[]>([]);
-  // Artifacts arrive with a run and are not part of the stored history, so they
-  // are held per execution id rather than being re-derived from the list.
-  const [artifacts, setArtifacts] = useState<Record<string, SandboxArtifact[]>>({});
   const [source, setSource] = useState("");
   const [kind, setKind] = useState<SandboxExecutionKind>("code");
   const [busy, setBusy] = useState(false);
@@ -264,10 +232,6 @@ export function SandboxView({
     try {
       const result = await api.runInSandbox(active.id, source, kind);
       setHistory((rows) => [...rows, result.execution]);
-      setArtifacts((current) => ({
-        ...current,
-        [result.execution.id]: result.artifacts,
-      }));
       replace(result.session);
     } catch (caught) {
       setError(describeError(caught, "The sandbox could not run that"));
@@ -378,11 +342,7 @@ export function SandboxView({
               <p className="sandbox-exec-quiet">Nothing has run in this sandbox yet.</p>
             )}
             {history.map((execution) => (
-              <ExecutionBlock
-                key={execution.id}
-                execution={execution}
-                artifacts={artifacts[execution.id] ?? []}
-              />
+              <ExecutionBlock key={execution.id} execution={execution} />
             ))}
             {busy && (
               <p className="sandbox-running">

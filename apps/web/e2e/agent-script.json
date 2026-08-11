@@ -101,5 +101,30 @@
         "denied_text": "Understood \u2014 I wrote nothing."
       }
     ]
+  },
+  {
+    "match": "check the rollout date",
+    "steps": [
+      {
+        "text": "Onboarding time drops by forty percent [1], and the rollout completes in March [42]."
+      }
+    ]
+  },
+  {
+    "match": "plot the rollout",
+    "steps": [
+      {
+        "call": {
+          "name": "run_python",
+          "arguments": {
+            "code": "import struct, zlib\nw, h = 240, 160\nrows = b\"\".join(\n    b\"\\x00\" + b\"\".join(\n        bytes((60 + (x * 195) // w, 40 + (y * 150) // h, 200 - (x * 120) // w))\n        for x in range(w)\n    )\n    for y in range(h)\n)\ndef chunk(kind, body):\n    return (struct.pack(\">I\", len(body)) + kind + body\n            + struct.pack(\">I\", zlib.crc32(kind + body) & 0xffffffff))\npng = (b\"\\x89PNG\\r\\n\\x1a\\n\"\n       + chunk(b\"IHDR\", struct.pack(\">IIBBBBB\", w, h, 8, 2, 0, 0, 0))\n       + chunk(b\"IDAT\", zlib.compress(rows))\n       + chunk(b\"IEND\", b\"\"))\nopen(\"chart.png\", \"wb\").write(png)\nprint(\"wrote chart.png\", w, \"x\", h)\n"
+          }
+        }
+      },
+      {
+        "text": "Plotted it. The figure is saved to this workspace.",
+        "denied_text": "Understood \u2014 I drew nothing."
+      }
+    ]
   }
 ]

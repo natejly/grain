@@ -73,12 +73,18 @@ def _complete_with_message(
     content: str,
     citations: list[dict[str, object]],
     already_streamed: bool = False,
+    citation_report: dict[str, object] | None = None,
 ) -> None:
     """Persist the assistant message and close the run.
 
     `already_streamed` is set by the agent path, whose deltas were emitted by the
     loop as the model produced them. The `/tool` paths compose their reply here
     with no model behind it, so that text is still chunked for a live feel.
+
+    `citation_report` is the validator's verdict on this exact answer, stored on
+    the message so it outlives the event stream. None — every caller but
+    `_finish_run` — leaves the column empty, which reads as "not checked" rather
+    than "checked and clean".
     """
     db = SessionLocal()
     try:
@@ -126,6 +132,9 @@ def _complete_with_message(
             role="assistant",
             content=content,
             citations_json=json.dumps(citations),
+            citation_report_json=(
+                json.dumps(citation_report) if citation_report is not None else ""
+            ),
         )
         db.add(message)
         db.flush()
@@ -168,12 +177,13 @@ def _finish_run(
     # Before _complete_with_message, deliberately: that call emits run.completed,
     # which consumers treat as terminal and stop reading on. An event appended
     # after it is an event nobody sees.
-    _record_citation_report(run, answer, evidence)
+    report = _record_citation_report(run, answer, evidence)
     _complete_with_message(
         run,
         content=answer,
         citations=_citations(evidence),
         already_streamed=already_streamed,
+        citation_report=report,
     )
     try:
         write_conversation_memory(run.id)
@@ -187,7 +197,9 @@ def _finish_run(
         )
 
 
-def _record_citation_report(run: Run, answer: str, evidence: list[Evidence]) -> None:
+def _record_citation_report(
+    run: Run, answer: str, evidence: list[Evidence]
+) -> dict[str, object] | None:
     """Check the answer honoured the citation contract, and record the outcome.
 
     Recorded on every completed run, not only on violations: a hallucinated-citation
@@ -196,10 +208,18 @@ def _record_citation_report(run: Run, answer: str, evidence: list[Evidence]) -> 
 
     This observes; it never rewrites the answer and never fails the run. A
     validator that can break the thing it is watching is worse than no validator.
+
+    Returns the payload so the caller can store it on the message this verdict is
+    about. An event and an audit row are both places a reader never goes; the
+    message is the one surface where a fabricated `[4]` can still be caught. None
+    means the validator itself failed, which is not a verdict.
     """
     try:
         report = validate_citations(answer, evidence)
-        payload = {**report.to_dict(), "summary": summarize_citations(report)}
+        payload: dict[str, object] = {
+            **report.to_dict(),
+            "summary": summarize_citations(report),
+        }
         db = SessionLocal()
         try:
             append_event(
@@ -221,10 +241,12 @@ def _record_citation_report(run: Run, answer: str, evidence: list[Evidence]) -> 
             db.commit()
         finally:
             db.close()
+        return payload
     except Exception:
         logger.warning(
             "citation validation raised for run %s", run.id, exc_info=True
         )
+        return None
 
 
 def _fail_run(db, run_id: str, exc: Exception) -> None:
@@ -493,6 +515,18 @@ def execute_tool_call(tool_call_id: str) -> None:
         run = db.get(Run, call.run_id)
         if run is None or run.cancel_requested:
             return
+        # Carried on every event this call emits. The agent loop has always named
+        # its tool; this path did not, so a chat watching the stream could say
+        # only "a tool failed" — and a user cannot act on a failure they cannot
+        # name. Filtered by workspace rather than fetched by primary key: the id
+        # comes off a row, and a name read across a tenant boundary would be
+        # printed straight into another workspace's event stream.
+        tool = db.scalar(
+            select(Tool).where(
+                Tool.id == call.tool_id, Tool.workspace_id == run.workspace_id
+            )
+        )
+        tool_name = tool.name if tool is not None else ""
         call.status = "executing"
         run.status = "running"
         run.lease_expires_at = utcnow() + timedelta(
@@ -503,7 +537,7 @@ def execute_tool_call(tool_call_id: str) -> None:
             workspace_id=run.workspace_id,
             run_id=run.id,
             event_type="tool.started",
-            payload={"tool_call_id": call.id},
+            payload={"tool_call_id": call.id, "tool_name": tool_name},
         )
         db.commit()
         try:
@@ -518,6 +552,7 @@ def execute_tool_call(tool_call_id: str) -> None:
                 event_type="tool.completed",
                 payload={
                     "tool_call_id": call.id,
+                    "tool_name": tool_name,
                     "status_code": status_code,
                     "preview": body[:500],
                 },
@@ -551,7 +586,11 @@ def execute_tool_call(tool_call_id: str) -> None:
                 workspace_id=run.workspace_id,
                 run_id=run.id,
                 event_type="tool.failed",
-                payload={"tool_call_id": call.id, "error": call.error},
+                payload={
+                    "tool_call_id": call.id,
+                    "tool_name": tool_name,
+                    "error": call.error,
+                },
             )
             append_event(
                 db,

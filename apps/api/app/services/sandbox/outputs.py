@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from ...config import Settings
 from ...models import SandboxSession, Source, new_id
-from ..ingestion import object_path
+from ..ingestion import content_path, object_path
 from .types import Artifact, ExecResult
 
 #: Per execution. Eight is roughly "a figure per subplot of a normal analysis";
@@ -207,6 +207,11 @@ def persist_artifacts(
             "kind": artifact.kind,
             "mime": mime,
             "bytes": len(data),
+            # An id names the row; this names the bytes. Relative to the API
+            # root rather than absolute, because the API's public origin is not
+            # a thing this process reliably knows — the client already holds the
+            # base it talks to, and joining is its job.
+            "url": content_path(source.id),
         }
         size = _dimensions(artifact.kind, data)
         if size is not None:

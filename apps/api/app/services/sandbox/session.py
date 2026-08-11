@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -373,12 +373,19 @@ def record_execution(
     source: str,
     result: ExecResult,
     settings: Settings,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
 ) -> SandboxExecution:
     """Write one execution to the activity trail and bill it to the session.
 
     Output is clipped before it is stored: this table records what happened, not
     a place to park a 200 MB build log, and an unclipped `pip install -v` will
     happily supply one.
+
+    `artifacts` are the descriptors `outputs.persist_artifacts` already wrote —
+    the ones that survived the caps, which is why they are passed in rather than
+    re-derived from `result.artifacts`. They are stored so that reopening the
+    console shows the figures again; `artifact_count` says how many the provider
+    produced, and the two differ exactly when something was dropped.
     """
     limit = settings.sandbox_max_output_bytes
     error = result.error
@@ -401,6 +408,7 @@ def record_execution(
         stderr=_clipped(result.stderr, limit),
         error=_clipped(error, limit),
         artifact_count=len(result.artifacts),
+        artifacts_json=json.dumps(artifacts or []),
         duration_ms=result.duration_ms,
     )
 

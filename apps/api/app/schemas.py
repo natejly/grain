@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 class ApiModel(BaseModel):
@@ -150,12 +150,41 @@ class Citation(BaseModel):
     url: Optional[str] = None
 
 
+class CitationCheck(ApiModel):
+    """The citation validator's verdict on one answer.
+
+    Exactly `services.citations.CitationReport.to_dict()` plus its one-line
+    summary. Nothing is added here: the validator is deliberately a pure
+    function with its own tests, and a field invented at the API boundary would
+    be a claim no test covers.
+    """
+
+    #: How many passages the model was actually handed.
+    evidence_count: int
+    #: How many [n] markers the answer contained, duplicates included.
+    marker_count: int
+    #: Passage numbers the answer cited that exist. Sorted, deduplicated.
+    cited: List[int]
+    #: Passage numbers the answer cited that do not exist — fabricated.
+    out_of_range: List[int]
+    #: Supplied passages the answer never cited. Not a violation.
+    uncited: List[int]
+    #: Citation-shaped brackets that could not be parsed, e.g. "[1,]".
+    malformed: List[str]
+    #: False when anything was fabricated or malformed. Uncited does not fail.
+    valid: bool
+    summary: str
+
+
 class MessageOut(ApiModel):
     id: str
     run_id: str
     role: str
     content: str
     citations: List[Citation] = []
+    #: None means this answer was never checked — a denied tool call, a budget
+    #: park — which is a different fact from "checked and found clean".
+    citation_report: Optional[CitationCheck] = None
     created_at: datetime
 
 
@@ -229,6 +258,52 @@ class AgentApprovalRequest(BaseModel):
     remember: bool = False
 
 
+class ToolArtifact(ApiModel):
+    """A file a tool call produced, saved as a workspace `Source`.
+
+    One descriptor from `services/sandbox/outputs.persist_artifacts`. Typed here
+    rather than passed through as a free dict now that a client *renders* it: an
+    untyped blob is a contract nobody can check, and the field that went missing
+    for a year was `url`.
+    """
+
+    #: The `Source` row holding the bytes, in this workspace.
+    id: str
+    #: "png", "jpeg", "svg", "chart", … — what the sandbox called it.
+    kind: str
+    mime: str
+    bytes: int
+    #: Path under the API root that streams the bytes, e.g.
+    #: `/api/sources/{id}/content`. Relative: the origin is the client's.
+    url: str
+    #: Read from the file header when the format carries one, so a caller can
+    #: reserve the right box before the image arrives.
+    width: Optional[int] = None
+    height: Optional[int] = None
+    #: A structured chart description, when the provider supplied one.
+    chart: Optional[Any] = None
+
+    @classmethod
+    def collect(cls, items: Any) -> List[ToolArtifact]:
+        """Descriptors to models, dropping whatever does not fit.
+
+        Tolerant on purpose, and in both directions: these arrive from a stored
+        JSON column that predates this model, and from a provider that may one
+        day describe something new. A listing of tool calls must not 500 because
+        one row from last year has no `url` — the card just shows no picture,
+        which is what every card did before this existed.
+        """
+        if not isinstance(items, list):
+            return []
+        kept: List[ToolArtifact] = []
+        for item in items:
+            try:
+                kept.append(cls.model_validate(item))
+            except ValidationError:
+                continue
+        return kept
+
+
 class AgentToolCallOut(ApiModel):
     id: str
     run_id: str
@@ -240,6 +315,8 @@ class AgentToolCallOut(ApiModel):
     result_preview: str
     error: str
     latency_ms: int
+    #: What the call left behind that is a file rather than a sentence.
+    artifacts: List[ToolArtifact] = []
     created_at: datetime
 
 

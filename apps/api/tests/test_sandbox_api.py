@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import SandboxExecution, SandboxSession
+from app.models import SandboxExecution, SandboxSession, Source
 
 MISSING = "00000000-0000-4000-8000-0000000000ff"
 
@@ -58,6 +58,13 @@ def _clean_sessions():
     try:
         db.query(SandboxExecution).delete()
         db.query(SandboxSession).delete()
+        # A persisted figure is a Source row in the shared test workspace, and
+        # this module now makes them. Named by the one filename shape
+        # `outputs.persist_artifacts` produces, so an upload from a neighbouring
+        # module is never in the blast radius.
+        db.query(Source).filter(Source.filename.like("sandbox-%")).delete(
+            synchronize_session=False
+        )
         db.commit()
     finally:
         db.close()
@@ -137,6 +144,104 @@ def test_run_executes_and_lands_in_the_history(client):
     history = client.get(f"/api/sandbox/{session['id']}/executions")
     assert history.status_code == 200
     assert [row["id"] for row in history.json()] == [body["execution"]["id"]]
+
+
+def _real_png() -> bytes:
+    """A 2x1 PNG a browser will actually decode.
+
+    Written with zlib and struct rather than mocked, because the thing under
+    test is whether real bytes survive the round trip from a sandbox to an
+    `<img>` — and a fake payload proves the plumbing while leaving the only
+    interesting question ("is it a picture at the far end?") unasked.
+    """
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(body))
+            + kind
+            + body
+            + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">IIBBBBB", 2, 1, 8, 2, 0, 0, 0)
+    # One filter byte, then two RGB pixels.
+    raw = b"\x00" + b"\xff\x00\x00" + b"\x00\x00\xff"
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _script_one_png(png: bytes) -> None:
+    """Queue a single-PNG execution on the module's fake provider."""
+    import base64
+
+    from app.services.sandbox.provider import get_provider
+    from app.services.sandbox.types import Artifact, ExecResult
+
+    get_provider(get_settings()).script(
+        ExecResult(
+            stdout="plotted\n",
+            artifacts=(
+                Artifact(
+                    kind="png",
+                    mime="image/png",
+                    data=base64.b64encode(png).decode(),
+                    is_main=True,
+                ),
+            ),
+        )
+    )
+
+
+def test_an_artifact_descriptor_addresses_a_route_that_serves_it(client):
+    """The chart the sandbox drew is fetchable at the address it was handed.
+
+    This is the seam the whole feature died on: figures were stored, described,
+    counted — and the descriptor carried no address, so the panel rendered
+    nothing and said nothing. Asserting on the *descriptor* alone would have
+    passed then too. So the URL in the response is followed, and the bytes that
+    come back are compared to the bytes that went in.
+    """
+    png = _real_png()
+    _script_one_png(png)
+    session = create_session(client)
+    body = client.post(
+        f"/api/sandbox/{session['id']}/run", json={"source": "plot()"}
+    ).json()
+
+    assert body["execution"]["artifact_count"] == 1
+    artifact = body["artifacts"][0]
+    assert artifact["mime"] == "image/png"
+    assert (artifact["width"], artifact["height"]) == (2, 1)
+    assert artifact["url"] == f"/api/sources/{artifact['id']}/content"
+
+    served = client.get(artifact["url"])
+    assert served.status_code == 200, served.text
+    assert served.content == png
+    assert served.headers["content-type"] == "image/png"
+    # Rendered, not downloaded — an attachment is not a picture in a panel.
+    assert served.headers["content-disposition"].startswith("inline")
+
+    # And it is still addressable after the run response is gone. A chart that
+    # only exists in the seconds before a reload is invisible on a delay.
+    history = client.get(f"/api/sandbox/{session['id']}/executions").json()
+    assert history[0]["artifacts"] == body["artifacts"]
+
+
+def test_an_artifact_url_is_no_use_to_another_workspace(client, stranger):
+    """The address is a plain GET, so it is exactly as leaky as its guard."""
+    _script_one_png(_real_png())
+    session = create_session(client)
+    artifact = client.post(
+        f"/api/sandbox/{session['id']}/run", json={"source": "plot()"}
+    ).json()["artifacts"][0]
+
+    assert stranger.get(artifact["url"]).status_code == 404
 
 
 def test_run_refuses_an_empty_body_before_reaching_the_provider(client):
