@@ -278,6 +278,44 @@ def scripted_app_html(app_name: str, binding_names: List[str]) -> str:
 </script>"""
 
 
+def scripted_workflow_graph(input_text: str) -> str:
+    """Stand in for the workflow compiler's model call.
+
+    Emits a two-node DAG — search the workspace's sources, then summarise them —
+    that is deliberately *valid*: `search_sources` is in every workspace's
+    registry, the reference points upstream, and the trigger is manual. So a test
+    that exercises the compile path end to end without injecting a step gets a
+    real pass through the validator rather than a stub that skips it.
+
+    Not scripted per prompt. A script entry can express a bad graph when a test
+    wants one; the default here is the good one.
+    """
+    query = input_text.strip().splitlines()[1] if "\n" in input_text else "workspace"
+    return json.dumps(
+        {
+            "name": "Scripted workflow",
+            "description": "Search the workspace, then summarise what came back.",
+            "trigger": {"kind": "manual", "cron": "", "timezone": "UTC"},
+            "nodes": [
+                {
+                    "id": "gather",
+                    "kind": "tool",
+                    "tool": "search_sources",
+                    "arguments": {"query": query[:200]},
+                    "description": "Find the relevant passages.",
+                },
+                {
+                    "id": "summarise",
+                    "kind": "agent",
+                    "prompt": "Summarise these passages: {{ gather.output }}",
+                    "description": "Write the summary.",
+                },
+            ],
+            "edges": [{"from": "gather", "to": "summarise"}],
+        }
+    )
+
+
 def scripted_model_step(
     settings: Settings, *, prompt: str, evidence: List[Evidence]
 ) -> Callable[[List[Any], List[Dict[str, Any]], str], Iterable[Tuple[str, Any]]]:

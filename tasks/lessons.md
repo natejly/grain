@@ -241,3 +241,15 @@
 - A "create it and take me there" action that hands the work to a self-fetching
   panel has to be a request the panel *consumes*, not a boolean it reads. A
   plain flag boots another machine every time the view remounts while it is set.
+- One word must name one thing. "LaTeX" named both a *document format* (markdown
+  with KaTeX maths, compiles nothing) and a *project kind* (wasmtex → PDF). A
+  user picked the shallower one, got no PDF, and reported the compiler broken —
+  twice. The compiler was never wrong. When two features legitimately share a
+  word, the ambiguity is a bug in the product even though every unit test passes:
+  rename the one that does less, and make the real one reachable from the surface
+  the user actually looked at (the Create menu).
+- A CSP a test cannot get around is usually the CSP working. `fetch()` of the
+  preview's `blob:` URL fails because `connect-src` has no `blob:` — only
+  `frame-src` does, deliberately. Wrap `URL.createObjectURL` in an init script
+  and inspect the Blob instead; reading a Blob is not a fetch. Do not widen the
+  policy to make an assertion convenient.

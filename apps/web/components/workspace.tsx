@@ -199,6 +199,10 @@ export function Workspace() {
     setSidebarOpen(false);
     if (action.id === "document") return createDocument(name, kind);
     if (action.id === "project") return createProject(name, "");
+    // The only Create entry that names a project *kind*: a LaTeX document is a
+    // project seeded with a .tex that compiles to a PDF, which is what a user
+    // picking "LaTeX" is after.
+    if (action.id === "latex") return createProject(name, "", "latex");
     if (action.id === "board") return createBoard(name);
     if (action.id === "sandbox") return setSandboxRequested(true);
     // A dashboard is named, bound to data and generated in one editor; opening

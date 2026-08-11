@@ -5,6 +5,7 @@ import { ArrowLeft, ChevronDown, Plus } from "lucide-react";
 import { useState } from "react";
 import { DisclosureMenu } from "./disclosure-menu";
 import { CREATE_ACTIONS, type CreateAction } from "./views/navigation";
+import { DOCUMENT_KIND_LABELS } from "./views/shared";
 
 /**
  * "+ Create" — a button that makes things, not a place you visit.
@@ -14,10 +15,10 @@ import { CREATE_ACTIONS, type CreateAction } from "./views/navigation";
  * the actual making to whatever button you could find once you got there.
  * Picking "Document" here creates a document and opens it.
  *
- * Two of the five need nothing said first — a sandbox is a machine, and a
+ * Two of the six need nothing said first — a sandbox is a machine, and a
  * dashboard collects its name, datasets and prompt in the editor it opens — so
- * they run on the first click. The other three ask for the one thing that
- * cannot be filled in later, since nothing here can be renamed after the fact.
+ * they run on the first click. The rest ask for the one thing that cannot be
+ * filled in later, since nothing here can be renamed after the fact.
  */
 export type CreateMenuProps = {
   create: (action: CreateAction, name: string, kind: DocumentKind) => Promise<void>;
@@ -75,7 +76,7 @@ function CreatePanel({
   return (
     <form
       className="create-form"
-      aria-label={`New ${chosen.label.toLowerCase()}`}
+      aria-label={`New ${chosen.noun}`}
       onSubmit={(event) => {
         event.preventDefault();
         if (!name.trim()) return;
@@ -91,7 +92,7 @@ function CreatePanel({
         >
           <ArrowLeft size={13} />
         </button>
-        <strong>New {chosen.label.toLowerCase()}</strong>
+        <strong>New {chosen.noun}</strong>
       </div>
       <input
         value={name}
@@ -106,12 +107,15 @@ function CreatePanel({
           aria-label="Document format"
           onChange={(event) => setKind(event.target.value as DocumentKind)}
         >
-          <option value="markdown">Markdown</option>
-          <option value="latex">LaTeX</option>
+          {Object.entries(DOCUMENT_KIND_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
         </select>
       )}
       <button type="submit" className="primary-button" disabled={busy || !name.trim()}>
-        {busy ? "Creating…" : `Create ${chosen.label.toLowerCase()}`}
+        {busy ? "Creating…" : `Create ${chosen.noun}`}
       </button>
     </form>
   );

@@ -158,7 +158,14 @@ test("the Create menu offers every kind of thing", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Create new" }).click();
   const menu = page.getByRole("group", { name: "Create" });
-  for (const thing of ["Document", "Project", "Sandbox", "Board", "Dashboard"]) {
+  for (const thing of [
+    "Document",
+    "Project",
+    "LaTeX document",
+    "Sandbox",
+    "Board",
+    "Dashboard",
+  ]) {
     await expect(menu.getByRole("button", { name: thing, exact: true })).toBeVisible();
   }
   await shot(page, "create-menu");
@@ -167,6 +174,11 @@ test("the Create menu offers every kind of thing", async ({ page }) => {
   // in later, since none of these can be renamed.
   await menu.getByRole("button", { name: "Document", exact: true }).click();
   await expect(menu.getByRole("textbox", { name: "Document title" })).toBeVisible();
+  // The document formats must not claim the word "LaTeX": neither of them
+  // compiles anything, and the one that used to say it sent a user looking for
+  // a PDF down a path that could never produce one.
+  const format = menu.getByRole("combobox", { name: "Document format" });
+  await expect(format.getByRole("option")).toHaveText(["Markdown", "Markdown + math"]);
   await shot(page, "create-menu-document");
 
   // The open panel's scrim covers the viewport, so Create has to be dismissed

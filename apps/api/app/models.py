@@ -951,3 +951,134 @@ class AppRelease(Base):
     content_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     published_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
+class Workflow(Base):
+    """A stored automation: natural language on one side, a validated DAG on the other.
+
+    `graph_json` is the compiled DAG (see services/workflows/dag.py) and
+    `source_prompt` is the sentence it was compiled from. Both are kept because
+    they answer different questions — the graph says what will run, the prompt
+    says what someone asked for — and a recompile that drifts from the ask is
+    only visible when you still have the ask.
+
+    A workflow is a *program a scheduler may run without a human present*, which
+    is why nothing here carries authority of its own. Nodes name tools; the
+    workspace's `tool_policies` decide at execution time whether each one runs or
+    parks. Compiling a workflow grants nothing.
+    """
+
+    __tablename__ = "workflows"
+    __table_args__ = (Index("ix_workflows_workspace_status", "workspace_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    source_prompt: Mapped[str] = mapped_column(Text, default="")
+    graph_json: Mapped[str] = mapped_column(Text)
+    # Bumped on every recompile. Runs record the version they executed, so a
+    # workflow edited on Tuesday does not rewrite the history of Monday's run.
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    # draft -> active -> disabled. Only `active` is eligible for a trigger.
+    status: Mapped[str] = mapped_column(String(16), default="draft")
+    # manual | schedule. The compiler extracts a cron from "every Monday"; no
+    # ticker dispatches it yet, so a schedule is a recorded intent until one does.
+    trigger_kind: Mapped[str] = mapped_column(String(16), default="manual")
+    schedule_cron: Mapped[str] = mapped_column(String(120), default="")
+    schedule_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class WorkflowRun(Base):
+    """One execution of one workflow version.
+
+    Deliberately shaped like `Run`: the same status vocabulary, the same
+    `waiting_for_approval` park, and an optional `run_id` so a workflow that
+    parks on a tool call reuses the run/event/approval machinery verbatim rather
+    than growing a second one beside it.
+    """
+
+    __tablename__ = "workflow_runs"
+    __table_args__ = (
+        Index("ix_workflow_runs_workspace_status", "workspace_id", "status"),
+        Index("ix_workflow_runs_workflow_created", "workflow_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id"), index=True)
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    # The workflow version this run executed. Not a live join — the row is the
+    # record of what actually ran.
+    workflow_version: Mapped[int] = mapped_column(Integer, default=1)
+    graph_json: Mapped[str] = mapped_column(Text, default="")
+    # manual | schedule. `schedule` means no human was at the diff, which is what
+    # makes the approval park load-bearing rather than a courtesy.
+    trigger: Mapped[str] = mapped_column(String(16), default="manual")
+    # queued | running | waiting_for_approval | succeeded | failed | cancelled
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    # The chat Run backing agent-step nodes and carrying the approval + RunEvent
+    # stream. Null until a node needs one.
+    run_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("runs.id"), nullable=True, index=True
+    )
+    input_json: Mapped[str] = mapped_column(Text, default="{}")
+    error: Mapped[str] = mapped_column(Text, default="")
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class WorkflowNodeRun(Base):
+    """Per-node state for one workflow run — the reason a resume is cheap.
+
+    The unique constraint on (workflow_run_id, node_key) is what makes "skip the
+    nodes that already finished" a database fact rather than a convention: a
+    resumed executor selects this table, and a node that succeeded cannot be
+    inserted twice or run twice. That is the same property `Run.agent_state_json`
+    buys for a chat turn, expressed per node instead of per turn.
+
+    `policy` records *what authorised this node* — `allow` because the tool is
+    read-only or the workspace granted a standing permission, or `ask` because a
+    human decided on this specific call. Without it the audit trail cannot tell a
+    3am unattended write apart from one somebody approved, and those are very
+    different events.
+    """
+
+    __tablename__ = "workflow_node_runs"
+    __table_args__ = (
+        UniqueConstraint("workflow_run_id", "node_key"),
+        Index("ix_workflow_node_runs_run_status", "workflow_run_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    workflow_run_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_runs.id"), index=True
+    )
+    # The node's id inside graph_json, not a foreign key — the graph is a
+    # document, and this is the join back into it.
+    node_key: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(16), default="tool")
+    tool_name: Mapped[str] = mapped_column(String(120), default="")
+    # pending | running | waiting_for_approval | succeeded | failed | skipped
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    # Arguments after upstream outputs were substituted — what actually ran, not
+    # the template that produced it.
+    arguments_json: Mapped[str] = mapped_column(Text, default="{}")
+    output_json: Mapped[str] = mapped_column(Text, default="")
+    policy: Mapped[str] = mapped_column(String(16), default="")
+    agent_tool_call_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("agent_tool_calls.id"), nullable=True
+    )
+    error: Mapped[str] = mapped_column(Text, default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

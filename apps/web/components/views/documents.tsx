@@ -16,6 +16,7 @@ import {
   type PendingDecision,
   type PendingDocumentEdit,
 } from "./document-pending";
+import { DOCUMENT_KIND_LABELS } from "./shared";
 
 export type DocumentsViewProps = {
   documents: DocumentSummary[];
@@ -32,9 +33,11 @@ export type DocumentsViewProps = {
 };
 
 /**
- * Markdown plus LaTeX math, rendered with KaTeX. `$…$` and `$$…$$` work in both
- * document kinds; a "latex" document is prose with math, not a TeX compilation
- * target — \documentclass and friends are shown verbatim.
+ * Markdown plus TeX maths, rendered with KaTeX. `$…$` and `$$…$$` work in both
+ * document kinds; neither is a TeX compilation target — \documentclass and
+ * friends are shown verbatim. That is why the kind stored as "latex" is
+ * labelled "Markdown + math" (see DOCUMENT_KIND_LABELS): a user who wants a
+ * PDF wants Create → LaTeX document, which makes a LaTeX *project*.
  */
 export function MathMarkdown({ content }: { content: string }) {
   return (
@@ -121,8 +124,11 @@ export function DocumentsView({
               value={newKind}
               onChange={(event) => setNewKind(event.target.value as DocumentKind)}
             >
-              <option value="markdown">Markdown</option>
-              <option value="latex">LaTeX</option>
+              {Object.entries(DOCUMENT_KIND_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
             </select>
             <button type="submit" className="primary-button">
               Create
@@ -143,7 +149,7 @@ export function DocumentsView({
                 >
                   <FileText size={14} />
                   <span className="doc-title">{item.title}</span>
-                  <span className="doc-kind">{item.kind}</span>
+                  <span className="doc-kind">{DOCUMENT_KIND_LABELS[item.kind]}</span>
                 </button>
               </li>
             ))}
@@ -156,7 +162,7 @@ export function DocumentsView({
           <header className="document-head">
             <div>
               <h2>{active.title}</h2>
-              <span className="doc-kind">{active.kind}</span>
+              <span className="doc-kind">{DOCUMENT_KIND_LABELS[active.kind]}</span>
             </div>
             <div className="document-actions">
               <button

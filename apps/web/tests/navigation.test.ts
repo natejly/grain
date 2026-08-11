@@ -85,14 +85,37 @@ describe("navigation model", () => {
 });
 
 describe("create actions", () => {
-  it("offers the five things a user can make", () => {
+  it("offers the six things a user can make", () => {
     expect(CREATE_ACTIONS.map((action) => action.label)).toEqual([
       "Document",
       "Project",
+      "LaTeX document",
       "Sandbox",
       "Board",
       "Dashboard",
     ]);
+  });
+
+  it("offers LaTeX only as the project kind that compiles to a PDF", () => {
+    // The bug this closes: "LaTeX" named a *document* format that renders
+    // KaTeX maths and emits no PDF, so the word had two meanings and the
+    // shallower one won. Exactly one create action may say LaTeX, and it must
+    // make a project — projects are where the TeX engine runs.
+    const latex = CREATE_ACTIONS.filter((action) => /latex/i.test(action.label));
+    expect(latex.map((action) => action.id)).toEqual(["latex"]);
+    expect(latex[0].view).toBe("projects");
+  });
+
+  it("names each thing the way it reads mid-sentence", () => {
+    // "New {noun}" and "Create {noun}" are built from this, and lowercasing the
+    // label instead would print "latex document" — the wordmark is the whole
+    // point of that entry.
+    for (const action of CREATE_ACTIONS) {
+      expect(action.noun.toLowerCase()).toBe(action.label.toLowerCase());
+    }
+    expect(CREATE_ACTIONS.find((action) => action.id === "latex")?.noun).toBe(
+      "LaTeX document",
+    );
   });
 
   it("targets only views the navigation can reach", () => {

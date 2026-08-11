@@ -1,4 +1,4 @@
-import { ApiError, type Source } from "@workspace/api-client";
+import { ApiError, type DocumentKind, type Source } from "@workspace/api-client";
 
 export type View =
   | "chat"
@@ -41,6 +41,21 @@ export function baseName(filename: string): string {
 export function isTabular(filename: string): boolean {
   return /\.(csv|json)$/i.test(filename);
 }
+
+/**
+ * What each document format is called on screen.
+ *
+ * The stored value for the second one is still "latex" — the API, the agent's
+ * tools and every existing row use it, and renaming the wire value would be a
+ * migration for a word. The *label* had to change: a "latex" document is
+ * markdown with KaTeX maths and produces no PDF, so users who picked it
+ * expecting one reported the TeX compiler as broken. "LaTeX" now names only
+ * the LaTeX project kind, which really does compile.
+ */
+export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
+  markdown: "Markdown",
+  latex: "Markdown + math",
+};
 
 export const PAGE_TITLES: Record<View, string> = {
   chat: "Chat",

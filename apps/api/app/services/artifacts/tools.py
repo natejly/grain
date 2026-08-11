@@ -543,8 +543,10 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
         "create_document": ToolSpec(
             name="create_document",
             description=(
-                "Create a document. kind is 'markdown' or 'latex'; both support "
-                "LaTeX math in $…$ and $$…$$."
+                "Create a document. kind is 'markdown' or 'latex'; both are "
+                "markdown that renders math in $…$ and $$…$$, and neither is "
+                "compiled. For a document that must become a PDF, create a "
+                "project with kind 'latex' instead."
             ),
             parameters={
                 "type": "object",

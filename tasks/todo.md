@@ -1253,3 +1253,92 @@ not a toast.
 
 **Counts.** Group badges moved with their groups; the pending-approval count
 rides on the Settings trigger so a parked run is visible from anywhere.
+
+---
+
+## Phase 10 — Workflow automations: NL → DAG (foundation pass)
+
+- [x] Decide the executor question with evidence (LangGraph vs. in-house DAG on
+      the existing run/event/approval machinery); measure the real dependency cost
+- [x] `docs/adr/0007-workflow-automations.md` recording the decision and its
+      residual risks, in the register of ADR 0005
+- [x] Schema: `workflows`, `workflow_runs`, `workflow_node_runs` + migration 0019,
+      verified against a scratch DB from `base` to `head`
+- [x] The NL → DAG compiler: prompt, strict schema, and a validator that refuses
+      cycles, unknown tools, dangling edges, forward references, and arguments
+      that do not type-check against the tool's JSON Schema
+- [x] Tests: schema round-trip, migration chain, and the validator against
+      hostile/malformed model output
+- [x] Deferred deliberately: the executor, HTTP routes, the schedule ticker
+
+### Review — Phase 10
+
+**The executor decision: no LangGraph.** Four of the five things a workflow
+engine is — durable state, resumption, human-in-the-loop interrupts, streaming —
+already exist in `agent_loop.py` and are built against this product's tenancy and
+approval model. Adopting LangGraph means running its checkpointer beside
+`runs.agent_state_json`, and making `POST /api/agent-tool-calls/{id}/decision` a
+translator between two state machines that must agree on what "parked" means.
+Its checkpointer interface is keyed on a bare `thread_id` string, so tenancy
+would move from a `WHERE workspace_id = ?` that 130 tests exercise onto string
+formatting that none of them can. Measured cost against this venv: 17 packages,
+including a `websockets` 17.0.1 → 15.0.1 downgrade forced by `langgraph-sdk` on
+the server uvicorn uses, and `langsmith` as a hard transitive. ADR 0007 records
+the reasoning and the conditions under which it should be revisited.
+
+**The compiler is the half that matters and it is executor-agnostic.** It emits a
+JSON document; a document walks into a `StateGraph` as easily as into our own
+loop. So the decision above is reversible and the valuable work is not blocked
+on it.
+
+**Validation is exhaustive, not early-exit**, because the caller's next move is
+either a human reading the whole list or a repair prompt built from it. The check
+that earns its keep is `reference_not_upstream`: a node reading
+`{{ later.output }}` passes every other check and reads an empty value at run
+time. Ancestry, not adjacency. The deferral rule — a value that is *purely* a
+reference cannot be typed now, one embedded in a larger string is a string — is
+one regex and it is the difference between false rejections and missed ones.
+
+**Approvals go through `resolve_policy` unchanged.** No workflow-specific policy
+path. Scoping workflows read-only was considered and rejected: "post to Slack" is
+a write, and it would push authors toward agent nodes with less review surface.
+`workflow_node_runs.policy` records which authority ran each node so the trail can
+tell an unattended 3am write from an approved one.
+
+**Verification.** 75 new tests. The validator was mutation-tested — disabling the
+upstream check, over-eager deferral, and downgrading `tool_unknown` to a warning
+each fail tests. The migration was run from `base` on a scratch DB and its columns
+compared against the ORM, since dev/test come from `create_all` and production
+from alembic.
+
+**Deferred, stated in the ADR rather than implied:** the executor, HTTP routes
+(hence no new `RouteCase`s — there is nothing to probe), and the schedule ticker.
+Cron is validated and stored; nothing dispatches it, and the UI must not say
+otherwise.
+
+
+---
+
+## Fix — "LaTeX" meant two things (user-reported: "latex isn't rendering")
+
+- [x] Root cause: `Create → Document → LaTeX` made a markdown+KaTeX document,
+      which correctly compiles nothing; `Create → Project → LaTeX document` is
+      the wasmtex/TeX Live path that yields a PDF. Same word, two meanings, and
+      the shallower one was the one in reach.
+- [x] Renamed the document format to "Markdown + math" everywhere it is visible
+      (Create menu, Documents form, the `doc-kind` badge) via one
+      `DOCUMENT_KIND_LABELS` map in `views/shared.ts`. The stored kind stays
+      `"latex"` — the API, the agent tool and every existing row use it — and the
+      map carries the comment saying why the wire value and the label differ.
+- [x] `Create → LaTeX document` added to `CREATE_ACTIONS`: it makes a *project*
+      with kind `latex` and opens it, so the word now only ever means TeX in,
+      PDF out. `CreateAction` grew a `noun` because the menu built its "New …"
+      and "Create …" strings by lowercasing the label, which would print
+      "latex document".
+- [x] `create_document`'s tool description now tells the agent that neither
+      document kind is compiled, and to make a `latex` *project* for a PDF.
+- [x] Closed the coverage gap: `apps/web/e2e/latex-project.spec.ts` drives
+      Create → LaTeX document, waits for the compile to settle, and proves a real
+      PDF (%PDF- magic, ~140 KB) reached the preview's blob: URL. Verified by
+      rendering the PDF: title page, abstract, two sections, both display
+      equations, a resolved \ref and a BibTeX citation.

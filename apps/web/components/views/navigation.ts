@@ -153,6 +153,7 @@ export const DEFAULT_GROUP_VIEW = Object.fromEntries(
 export type CreateActionId =
   | "document"
   | "project"
+  | "latex"
   | "sandbox"
   | "board"
   | "dashboard";
@@ -161,6 +162,13 @@ export type CreateAction = {
   id: CreateActionId;
   /** Singular, because picking this makes exactly one of them. */
   label: string;
+  /**
+   * The label as it reads mid-sentence — "New …", "Create …". Spelled out
+   * rather than lowercasing `label`, because "LaTeX" is a wordmark and
+   * toLowerCase() would turn the one entry this menu has to name precisely
+   * into "latex".
+   */
+  noun: string;
   /** Where the new thing opens. Also what ties the action to the nav model. */
   view: View;
   icon: LucideIcon;
@@ -176,14 +184,39 @@ export type CreateAction = {
  * The Create menu. Every entry names a view from NAV_GROUPS and borrows its
  * icon, so an action can never point at something the rest of the navigation
  * cannot reach, and the two surfaces cannot drift into different icons.
+ *
+ * "LaTeX document" is a Project, not a Document, and it is here because that
+ * was not discoverable: a user looking for LaTeX found the *document* format
+ * of the same name, which renders KaTeX maths and produces no PDF, and
+ * reported the TeX compiler as broken. In this menu the word now means one
+ * thing — TeX in, PDF out.
  */
 export const CREATE_ACTIONS: CreateAction[] = (
   [
-    { id: "document", label: "Document", view: "documents", prompt: "Document title" },
-    { id: "project", label: "Project", view: "projects", prompt: "Project name" },
-    { id: "sandbox", label: "Sandbox", view: "sandbox", prompt: "" },
-    { id: "board", label: "Board", view: "boards", prompt: "Board name" },
-    { id: "dashboard", label: "Dashboard", view: "dashboards", prompt: "" },
+    {
+      id: "document",
+      label: "Document",
+      noun: "document",
+      view: "documents",
+      prompt: "Document title",
+    },
+    { id: "project", label: "Project", noun: "project", view: "projects", prompt: "Project name" },
+    {
+      id: "latex",
+      label: "LaTeX document",
+      noun: "LaTeX document",
+      view: "projects",
+      prompt: "Document name",
+    },
+    { id: "sandbox", label: "Sandbox", noun: "sandbox", view: "sandbox", prompt: "" },
+    { id: "board", label: "Board", noun: "board", view: "boards", prompt: "Board name" },
+    {
+      id: "dashboard",
+      label: "Dashboard",
+      noun: "dashboard",
+      view: "dashboards",
+      prompt: "",
+    },
   ] as const
 ).map((action) => {
   const item = ITEM_OF_VIEW.get(action.view);
