@@ -31,7 +31,8 @@ from sqlalchemy.orm import Session
 
 from ...config import Settings, get_settings
 from ..llm_tools import ToolContext, ToolSpec, build_registry
-from ..model import _openai_client, privacy_safe_identifier
+from ..model import _openai_client, call_responses, privacy_safe_identifier
+from ..usage import WORKFLOW_COMPILE, usage_scope
 from .dag import MAX_NODES, WorkflowGraph
 from .validate import (
     CompileError,
@@ -171,7 +172,10 @@ def default_step(settings: Settings, *, user_id: str) -> CompilerStep:
     client = _openai_client(settings)
 
     def step(instructions: str, input_text: str) -> str:
-        response = client.responses.create(
+        response = call_responses(
+            client,
+            operation=WORKFLOW_COMPILE,
+            settings=settings,
             model=settings.openai_model,
             instructions=instructions,
             input=input_text,
@@ -247,25 +251,33 @@ def compile_workflow(
     catalogue = render_tool_catalogue(tools)
     call = step or default_step(settings, user_id=context.user_id)
 
-    raw = call(WORKFLOW_INSTRUCTIONS, _compile_input(source_prompt, catalogue))
-    attempt = 1
-    last: WorkflowCompileError
-    while True:
-        try:
-            compiled = compile_document(parse_model_json(raw), tools)
-        except WorkflowCompileError as exc:
-            last = exc
-        else:
-            compiled.attempts = attempt
-            compiled.raw_response = raw
-            return compiled
-        if attempt > max_repairs:
-            raise last
-        raw = call(
-            REPAIR_INSTRUCTIONS,
-            _repair_input(source_prompt, catalogue, raw, last.report),
-        )
-        attempt += 1
+    # A compile is up to `max_repairs + 1` calls at the codegen output budget, and
+    # a repair round is spend caused by a *failed* attempt — invisible unless the
+    # ledger counts it, which is the point of billing the whole loop.
+    with usage_scope(
+        workspace_id=context.workspace_id,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+    ):
+        raw = call(WORKFLOW_INSTRUCTIONS, _compile_input(source_prompt, catalogue))
+        attempt = 1
+        last: WorkflowCompileError
+        while True:
+            try:
+                compiled = compile_document(parse_model_json(raw), tools)
+            except WorkflowCompileError as exc:
+                last = exc
+            else:
+                compiled.attempts = attempt
+                compiled.raw_response = raw
+                return compiled
+            if attempt > max_repairs:
+                raise last
+            raw = call(
+                REPAIR_INSTRUCTIONS,
+                _repair_input(source_prompt, catalogue, raw, last.report),
+            )
+            attempt += 1
 
 
 def summarize(compiled: CompiledWorkflow) -> Dict[str, Any]:

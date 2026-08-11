@@ -30,6 +30,16 @@ proceeding, which is the containment the whole design rests on.
 writes a terminal status and a legible error, and marks the nodes that never got
 to run as `skipped`. The run record is always readable afterwards.
 
+**Nothing is left on the floor, and nothing is picked up twice.** A run whose
+process died is claimed by `recover_workflow_runs` under the same
+`runs.run_lease_seconds` lease the chat path uses, and resumed through the same
+`advance_run` — so recovery is the ordinary walk starting from the ordinary
+place, not a second mechanism with its own opinions. Everything above still
+holds while it does: a parked run is left alone because it is waiting on a
+person, an interrupted write still refuses to be retried, and the retry a
+read-only node does get is bounded so a node that kills its process cannot be
+resumed forever.
+
 The backing `Run` is created eagerly rather than lazily, which is a change of
 emphasis from ADR 0007's "null until a node needs one". It buys two things worth
 more than the row: `execute_agent_tool_call` needs a run to attach its
@@ -41,12 +51,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import timedelta
-from typing import Any, Dict, List, Mapping, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 import jsonschema
 from jsonschema import Draft202012Validator
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ...clock import utcnow
@@ -85,9 +96,28 @@ logger = logging.getLogger(__name__)
 #: shaped `workflow_runs` like `runs` so a reader holds one status model.
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
+#: A workflow run in one of these is *waiting on a machine*, so a sweep may take
+#: it. `waiting_for_approval` is deliberately absent: that run is waiting on a
+#: person, and recovering it would resume a graph nobody has approved yet.
+RECOVERABLE = ("queued", "running")
+
 #: How much of a node's output travels into the next node's arguments. A tool
 #: that returns a 10MB document must not turn the graph into a memory profile.
 MAX_OUTPUT_CHARS = 100_000
+
+#: How many times a process may die on the *same* node before the run is failed
+#: instead of resumed. Without a bound, a node that reliably kills its process —
+#: a tool that OOMs on a large input, a wedged MCP connection — is retried by
+#: every sweep forever. `WorkflowNodeRun.attempt` already counts exactly this, so
+#: the bound is a comparison rather than new state.
+MAX_NODE_ATTEMPTS = 3
+
+#: A run older than this is failed rather than recovered, whatever state it is
+#: in. It is the bound of last resort: it catches the loop `MAX_NODE_ATTEMPTS`
+#: cannot see, where the process dies in `_prepare` before any node row exists.
+#: It is also the right *product* answer, and for the reason `schedule.CATCHUP`
+#: gives — finishing yesterday's "post the daily summary" today is not a rescue.
+RECOVERY_MAX_AGE = timedelta(hours=12)
 
 
 class _Halt(Exception):
@@ -154,6 +184,131 @@ def process_workflow_run(workflow_run_id: str) -> None:
         advance_run(db, workflow_run)
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------
+# Recovery after an unclean stop
+# --------------------------------------------------------------------------
+
+
+def recover_workflow_runs() -> List[str]:
+    """Resume every workflow run whose executing process died. Owns its session.
+
+    The chat-side twin of this is `recover_durable_work`, and the shape is
+    copied rather than reinvented: claim everything under one session, commit,
+    close, then hand each claimed id to the ordinary entry point. Executing
+    inside the claiming transaction would hold it open for the length of a graph.
+
+    ADR 0007 left this out and said what the gap cost: "the run stays `running`
+    until somebody re-runs it". For an automation nobody is watching, that is the
+    whole difference between reliable and usually.
+    """
+    db = SessionLocal()
+    try:
+        claimed = claim_orphaned_runs(db)
+    finally:
+        db.close()
+    for workflow_run_id in claimed:
+        process_workflow_run(workflow_run_id)
+    return claimed
+
+
+def claim_orphaned_runs(
+    db: Session,
+    *,
+    settings: Optional[Settings] = None,
+    moment: Optional[datetime] = None,
+) -> List[str]:
+    """Take ownership of the runs a dead process left behind. Executes nothing.
+
+    Split from `recover_workflow_runs` so a caller that already has a request's
+    session — `POST /api/workflows/tick` — can claim synchronously and execute on
+    a background task. Claiming is a few UPDATEs; executing is a graph.
+
+    A run past `RECOVERY_MAX_AGE` is terminated here rather than returned, so the
+    sweep that gives up on it also says so in the run record instead of leaving
+    a row that quietly stops being considered.
+    """
+    settings = settings or get_settings()
+    now = moment or utcnow()
+    oldest = now - RECOVERY_MAX_AGE
+    candidates = list(
+        db.scalars(
+            select(WorkflowRun).where(WorkflowRun.status.in_(RECOVERABLE))
+        )
+    )
+    claimed: List[str] = []
+    for workflow_run in candidates:
+        if not _claim(db, workflow_run, now=now, settings=settings):
+            continue
+        if (workflow_run.started_at or workflow_run.created_at) < oldest:
+            _terminate(
+                db,
+                workflow_run,
+                _Halt(
+                    "failed",
+                    "run_abandoned",
+                    "this run was interrupted more than "
+                    f"{int(RECOVERY_MAX_AGE.total_seconds() // 3600)}h ago and is "
+                    "too old to resume safely",
+                ),
+            )
+            continue
+        claimed.append(workflow_run.id)
+    return claimed
+
+
+def _claim(
+    db: Session, workflow_run: WorkflowRun, *, now: datetime, settings: Settings
+) -> bool:
+    """Atomically become the one process working on this run. True means we won.
+
+    Two API processes booting together sweep the same table in the same second,
+    and the loser must find out *before* it starts a node rather than by
+    colliding on the unique constraint half a tool call later. So the test is a
+    conditional UPDATE and the database compares and swaps, exactly as
+    `schedule.claim` does for the ticker.
+
+    The lease is the one `runs.run_lease_seconds` already describes, held on the
+    backing `Run` — the same row, the same column and the same expiry the chat
+    path leases, because a workflow run *is* a chat run wearing a graph. A run
+    that has no backing row yet has executed nothing, so there is no lease to
+    take; the status column carries the claim instead, and the staleness window
+    is what stops the sweep stealing a run whose `BackgroundTask` is about to
+    start it two milliseconds from now.
+    """
+    lease = timedelta(seconds=settings.run_lease_seconds)
+    if workflow_run.run_id:
+        statement = (
+            update(Run)
+            .where(
+                Run.id == workflow_run.run_id,
+                or_(Run.lease_expires_at.is_(None), Run.lease_expires_at < now),
+            )
+            .values(lease_expires_at=now + lease)
+        )
+    else:
+        statement = (
+            update(WorkflowRun)
+            .where(
+                WorkflowRun.id == workflow_run.id,
+                WorkflowRun.run_id.is_(None),
+                WorkflowRun.status.in_(RECOVERABLE),
+                WorkflowRun.updated_at < now - lease,
+            )
+            # `updated_at` is the claim's own expiry, so a process that dies
+            # again between here and `_ensure_backing_run` becomes eligible one
+            # lease later rather than never.
+            .values(status="running", updated_at=now)
+        )
+    # `Session.execute` is typed as returning `Result`, which has no rowcount; a
+    # DML statement always yields a `CursorResult`, which does.
+    result = cast("CursorResult[Any]", db.execute(statement))
+    db.commit()
+    if result.rowcount != 1:
+        return False
+    db.refresh(workflow_run)
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -241,6 +396,13 @@ def _prepare(
         )
 
     run = _ensure_backing_run(db, workflow_run, graph)
+    # Take the lease *before* the slow part, not after. `build_registry` talks to
+    # every connected MCP server, so the gap between creating the backing run and
+    # leasing it is seconds wide, and an unleased backing run is exactly what
+    # `_claim` reads as "the process holding this is gone".
+    run.lease_expires_at = utcnow() + timedelta(seconds=settings.run_lease_seconds)
+    db.commit()
+
     context = ToolContext(
         workspace_id=workflow_run.workspace_id,
         user_id=run.created_by,
@@ -298,6 +460,12 @@ def _walk(db: Session, workflow_run: WorkflowRun, state: _State) -> None:
         if workflow_run.cancel_requested:
             raise _Halt("cancelled", "cancelled", "the run was cancelled", node_key)
 
+        # Renew before each node, not once per advance. A ten-node graph outlives
+        # a 90-second lease easily, and an expired lease on a run that is very
+        # much alive is an invitation for the next recovery sweep to claim it.
+        state.run.lease_expires_at = utcnow() + timedelta(
+            seconds=state.settings.run_lease_seconds
+        )
         row = _begin_node(db, workflow_run, node, row)
         parked = _execute_node(db, workflow_run, node, row, state)
         if parked:
@@ -316,7 +484,19 @@ def _reject_or_retry_interrupted(
     "the tool returned". Re-running is safe when the tool only reads. When it
     writes, the truthful statement is that nobody knows whether the email went
     out, and the useful behaviour is to say so rather than to send a second one.
+
+    Read-only does not mean free, which is why the retry is bounded. A node that
+    kills its process every time it runs would otherwise be resumed by every
+    sweep for as long as the deployment lives.
     """
+    if row.attempt >= MAX_NODE_ATTEMPTS:
+        raise _Halt(
+            "failed",
+            "node_retry_exhausted",
+            f"“{node.id}” was interrupted {row.attempt} times; it is not being "
+            "retried again",
+            node.id,
+        )
     spec = state.registry.get(node.tool) if node.kind == "tool" else None
     read_only = spec is not None and spec.read_only
     if node.kind == "tool" and not read_only:
@@ -873,7 +1053,11 @@ def _mark_skipped(db: Session, workflow_run: WorkflowRun, halt: _Halt) -> None:
                 )
             )
         elif row.status in {"pending", "running", "waiting_for_approval"}:
-            row.status = "failed" if row.node_key == halt.node else "skipped"
+            # `running` is `failed` even when the halt names no node — a run
+            # abandoned by the recovery sweep has one, and "skipped" would claim
+            # the run ended before reaching a node that had already started.
+            reached = row.node_key == halt.node or row.status == "running"
+            row.status = "failed" if reached else "skipped"
             row.error = row.error or halt.message[:1000]
             row.finished_at = utcnow()
 

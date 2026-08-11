@@ -132,7 +132,8 @@ test("Create reaches a sibling of the destination it opens", async ({ page }) =>
   await expect(tabs(page, "Documents").getByRole("button", { name: /^Boards/ }))
     .toHaveAttribute("aria-current", "page");
 
-  page.once("dialog", (dialog) => dialog.accept());
+  // No arm: deleting a board is not confirm()-gated, and a handler with nothing
+  // to catch stays live for whatever dialog comes next in this test.
   await page.getByRole("button", { name: "Delete Create Menu Board" }).click();
   await expect(page.getByRole("heading", { name: "Create Menu Board" })).toHaveCount(0);
 });

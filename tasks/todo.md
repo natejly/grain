@@ -78,3 +78,64 @@ hidden here: nothing recovers a workflow run whose process died mid-node (the
 guard added to `run_agent_turn` stops the chat recovery sweep from mangling one,
 but does not resume it), and scope narrows *where* a standing allow applies, not
 how long it lasts.
+
+---
+
+## Workflow run recovery, and a confirm() on document deletion
+
+Two independent jobs, run alongside another agent's token-accounting work.
+
+### 1. Recovery of a workflow run whose process died
+
+Closed the deferral the ADR 0007 postscript recorded. The old note called it "a
+small change to `services/recovery.py`", and the interesting part is why it is
+not: a chat run recovers by *replaying its turn*, and a workflow run has to
+resume from its first incomplete node. So recovery claims a run and then calls
+`advance_run` — the ordinary walk, started from the ordinary place — which is
+what makes every rule the executor already enforces keep applying to a recovered
+run without being restated.
+
+- `executor.recover_workflow_runs()` claims and resumes; `claim_orphaned_runs()`
+  claims only, so `POST /api/workflows/tick` can claim on the request's session
+  and run the graphs on a background task. Called from `recover_durable_work` at
+  boot **and** from the tick, because recovering only at process start leaves a
+  run orphaned on a long-lived box waiting for the next deploy.
+- Parked runs are excluded by status. A park clears the backing run's lease on
+  purpose, so a lease-only sweep would have resumed every approval in the inbox.
+- The read-only/write rule is inherited, not re-implemented. An interrupted
+  write still ends the run with `node_interrupted`.
+- Bounded twice: `MAX_NODE_ATTEMPTS = 3` on the `attempt` column that already
+  counted interruptions, and `RECOVERY_MAX_AGE = 12h` as the bound of last
+  resort for a crash in `_prepare` that leaves no node row at all.
+- The claim is a conditional UPDATE on the backing run's `lease_expires_at` —
+  the same lease `runs.run_lease_seconds` describes for chat — renewed per node
+  so a long graph does not outlive its own claim. A run with no backing row is
+  claimed on status behind one lease of quiet, so the sweep cannot race the
+  `BackgroundTask` that `POST /run` just scheduled.
+- `recover_durable_work` now excludes workflow-backed runs from the chat sweep.
+  `run_agent_turn`'s guard stopped a stray assistant message but raised, and
+  `process_run` records exceptions by failing the run — the guard was protecting
+  the conversation by destroying the record of the automation.
+
+Eight tests: a run killed mid-DAG recovers with the completed node's tool
+recording exactly one call across both executions; recovery refuses to repeat an
+interrupted write; a parked run is untouched; a second claim returns nothing; a
+fresh queued run is not stolen; both bounds fire; the chat sweep leaves the
+backing run alone; and the tick picks an orphan up.
+
+### 2. `confirm()` on document deletion
+
+Added in `handlers/documents.ts`, matching `removeSource`. Then the hygiene
+sweep the job asked for. Three `page.once("dialog", …)` handlers were armed for
+dialogs that never appear — `features.spec.ts` (board, project) and
+`navigation.spec.ts` (board) — because **boards and projects are not
+confirm()-gated either**, contrary to the brief. Left the arms off with a
+comment rather than changing two more views' UX unasked; flagged for a decision.
+`workflows.spec.ts` gained the arm it now needs.
+
+### Gates
+
+ruff clean, mypy 107 files, pytest 1333 passed / 1 skipped / 3 xfailed with one
+failure that reproduces with these changes stashed (`test_doc_pending.py::
+test_approving_a_listed_edit_applies_it_and_finishes_the_run`, the other agent's),
+vitest 181, playwright 32.

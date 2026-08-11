@@ -125,6 +125,11 @@ class WorkflowCompileOut(ApiModel):
 
 class WorkflowTickOut(ApiModel):
     dispatched: List[str]
+    #: Runs a previous process died holding, claimed by this tick and resumed
+    #: from their first incomplete node. Reported separately from `dispatched`
+    #: because "we started something new" and "we picked something up off the
+    #: floor" are different facts about a deployment's health.
+    recovered: List[str]
     moment: datetime
 
 
@@ -619,9 +624,19 @@ def tick(
         raise HTTPException(status_code=401, detail="Not authorised")
 
     started = schedule.dispatch_due(db)
+    # The tick is also the recovery sweep, because it is the only thing that
+    # happens on a schedule. Recovering only at process start means a run
+    # orphaned on a box that never restarts waits for the next deploy, and
+    # "reliable unless we stop deploying" is not what unattended automation
+    # promises. Claiming is a handful of UPDATEs; the graphs run in the
+    # background, so a slow recovery cannot make a cron call time out.
+    recovered = executor.claim_orphaned_runs(db, settings=settings)
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
+    for workflow_run_id in recovered:
+        background_tasks.add_task(executor.process_workflow_run, workflow_run_id)
     return WorkflowTickOut(
         dispatched=[workflow_run.id for workflow_run in started],
+        recovered=recovered,
         moment=schedule.floor_minute(utcnow()),
     )

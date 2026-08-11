@@ -17,6 +17,7 @@ from ..database import SessionLocal
 from ..models import Chunk, GraphEdge, GraphEntity, GraphProjection, MemoryItem, Source
 from .audit import record_audit
 from .model import GRAPH_ENTITY_KINDS, extract_graph_facts, normalize_relation
+from .usage import usage_scope
 
 ENTITY_PATTERN = re.compile(
     r"\b(?:[A-Z][A-Za-z0-9&'’-]{1,})(?:[ \t]+(?:[A-Z][A-Za-z0-9&'’-]{1,})){0,3}\b"
@@ -446,22 +447,26 @@ def rebuild_graph(workspace_id: str, actor_id: str) -> None:
         # workspace's vocabulary is known, and every counter below must already
         # be keyed on the merged node.
         chunk_facts: List[Tuple[Chunk, Source, PassageFacts]] = []
-        for chunk, source in rows:
-            version_hasher.update(chunk.id.encode())
-            version_hasher.update(hashlib.sha256(chunk.content.encode()).digest())
-            chunk_facts.append(
-                (
-                    chunk,
-                    source,
-                    analyze_passage(
-                        chunk.content,
-                        user_id=actor_id,
-                        settings=settings,
-                        use_llm=llm_budget > 0,
-                    ),
+        # One rebuild is up to MAX_LLM_PASSAGES_PER_REBUILD extraction calls with
+        # no user waiting on them, which is exactly the shape of spend that goes
+        # unnoticed until it is on an invoice.
+        with usage_scope(workspace_id=workspace_id, user_id=actor_id):
+            for chunk, source in rows:
+                version_hasher.update(chunk.id.encode())
+                version_hasher.update(hashlib.sha256(chunk.content.encode()).digest())
+                chunk_facts.append(
+                    (
+                        chunk,
+                        source,
+                        analyze_passage(
+                            chunk.content,
+                            user_id=actor_id,
+                            settings=settings,
+                            use_llm=llm_budget > 0,
+                        ),
+                    )
                 )
-            )
-            llm_budget = max(0, llm_budget - 1)
+                llm_budget = max(0, llm_budget - 1)
 
         memory_items = list(
             db.scalars(
@@ -479,12 +484,13 @@ def rebuild_graph(workspace_id: str, actor_id: str) -> None:
         for item in memory_items:
             version_hasher.update(item.id.encode())
             version_hasher.update(hashlib.sha256(item.content.encode()).digest())
-            facts = analyze_passage(
-                item.content,
-                user_id=actor_id,
-                settings=settings,
-                use_llm=llm_budget > 0,
-            )
+            with usage_scope(workspace_id=workspace_id, user_id=actor_id):
+                facts = analyze_passage(
+                    item.content,
+                    user_id=actor_id,
+                    settings=settings,
+                    use_llm=llm_budget > 0,
+                )
             llm_budget = max(0, llm_budget - 1)
             curated_raw = (
                 str(raw)[:MAX_ENTITY_NAME_CHARS]

@@ -10,6 +10,7 @@ from typing import List, Optional, Sequence, Tuple
 import numpy as np
 
 from ..config import Settings, get_settings
+from . import usage as usage_service
 
 # Entries, not bytes. One entry is a 64-char key plus one vector — 6KB for
 # text-embedding-3-small, 12KB for -3-large — so 256 entries costs ~1.5-3MB.
@@ -193,6 +194,11 @@ def embed_texts(
     Settings refuse to boot `openai` without a key, so the first branch is what
     actually fires; the second only catches a `model_copy` that edited the key
     out, which bypasses validation.
+
+    This is also the accounting chokepoint for embeddings, which are the spend
+    everyone forgets: no prompt, no answer, no latency anyone notices, and one
+    per chunk of every document ever uploaded. There is exactly one
+    `embeddings.create` in this app and its usage is recorded here.
     """
     settings = settings or get_settings()
     if not texts:
@@ -211,6 +217,14 @@ def embed_texts(
     response = client.embeddings.create(
         model=settings.openai_embedding_model,
         input=[text[:4000] for text in texts],
+    )
+    usage_service.record_model_usage(
+        model=settings.openai_embedding_model,
+        operation=usage_service.EMBEDDING,
+        # The embeddings API reports `prompt_tokens`/`total_tokens` rather than
+        # the Responses API's input/output split; `token_counts` reads both.
+        usage=getattr(response, "usage", None),
+        settings=settings,
     )
     ordered = sorted(response.data, key=lambda item: item.index)
     return [pack_vector(item.embedding) for item in ordered]

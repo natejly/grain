@@ -419,14 +419,52 @@ nothing, so the warning in "What is not built" stays true of any deployment that
 has not deliberately turned scheduling on. Where it *is* configured, the UI may
 now describe a schedule as active.
 
+### Recovery, which turned out not to be one line
+
+The gap this section used to describe — nothing re-queued a workflow run whose
+process died — is closed. It was not the one-line change the old text predicted,
+because "re-queue it" is the wrong verb: a chat run resumes by replaying its
+turn, and a workflow run must resume from its *first incomplete node*. So
+recovery reuses `advance_run` rather than `process_run`, and every rule
+`advance_run` already enforces keeps applying to a recovered run for free. That
+is the point of routing it through the ordinary walk instead of writing a second
+one.
+
+`recover_workflow_runs` claims and resumes; `claim_orphaned_runs` claims only, so
+a caller holding a request's session can hand the graphs to a background task.
+Both are called: `recover_durable_work` at process start, and `POST
+/api/workflows/tick` every minute, because recovering only at boot means a run
+orphaned on a box that never restarts waits for the next deploy.
+
+Four rules decide what may be resumed, and three of them are refusals.
+
+- **Parked is not crashed.** Only `queued` and `running` are swept.
+  `waiting_for_approval` is waiting on a person, and a park deliberately clears
+  the backing run's lease — so a sweep that looked only at leases would resume
+  every approval in the inbox and perform the write nobody agreed to.
+- **An interrupted write is still not retried.** Recovery inherits the rule
+  rather than restating it. `node_interrupted` ends the run exactly as before,
+  and at-least-once does not arrive through the back door.
+- **A retry is bounded.** `MAX_NODE_ATTEMPTS` against the `attempt` column that
+  already counted interruptions, plus `RECOVERY_MAX_AGE` as the bound of last
+  resort — it catches a process dying in `_prepare`, before any node row exists,
+  and it is the same judgement `CATCHUP` makes for the ticker: finishing
+  yesterday's 9am job this afternoon is not a rescue.
+- **One process, one run.** The claim is a conditional UPDATE on the lease
+  `runs.run_lease_seconds` already describes, held on the backing `Run` — the
+  same row and column the chat path leases — and renewed per node so a ten-node
+  graph does not outlive its own claim. A run with no backing row has executed
+  nothing and is claimed on its status instead, behind one lease of quiet so the
+  sweep cannot race the `BackgroundTask` that `POST /run` just scheduled.
+
+One consequence worth stating: `recover_durable_work` now *excludes* a
+workflow's backing run from the chat sweep. Handing one to `process_run` reaches
+`run_agent_turn`'s guard, which raises — and `process_run` records exceptions by
+failing the run. The guard would have protected the conversation by destroying
+the record of the automation.
+
 ### Still not built
 
-- **Recovery of a workflow run interrupted mid-node.** `recover_durable_work`
-  re-queues chat runs; nothing re-queues a workflow run whose process died. The
-  run stays `running` until somebody re-runs it, and `run_agent_turn` refuses to
-  start a chat turn on a workflow's backing run so the recovery sweep cannot
-  turn one into a stray assistant message. Making the sweep resume workflows is
-  a small change to `services/recovery.py` and is not in this pass.
 - **Pinning an MCP server identity per node.** Unchanged from above: a server
   replaced by a different one with the same tool names is still undetectable.
 - **Expiry on a grant.** Scope narrows *where* a standing allow applies, not how

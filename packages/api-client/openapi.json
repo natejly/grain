@@ -477,6 +477,221 @@
         "title": "AdminStorageOut",
         "type": "object"
       },
+      "AdminUsageGroupOut": {
+        "description": "One row of a breakdown: a model, a user, or an operation.",
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "unpriced_calls": {
+            "title": "Unpriced Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "calls",
+          "input_tokens",
+          "output_tokens",
+          "total_tokens",
+          "cost_usd",
+          "unpriced_calls"
+        ],
+        "title": "AdminUsageGroupOut",
+        "type": "object"
+      },
+      "AdminUsageOut": {
+        "properties": {
+          "by_model": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUsageGroupOut"
+            },
+            "title": "By Model",
+            "type": "array"
+          },
+          "by_operation": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUsageGroupOut"
+            },
+            "title": "By Operation",
+            "type": "array"
+          },
+          "by_user": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUsageGroupOut"
+            },
+            "title": "By User",
+            "type": "array"
+          },
+          "pricing_configured": {
+            "title": "Pricing Configured",
+            "type": "boolean"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "top_runs": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUsageRunOut"
+            },
+            "title": "Top Runs",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/AdminUsageTotalsOut"
+          },
+          "unpriced_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unpriced Models",
+            "type": "array"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "since",
+          "totals",
+          "by_model",
+          "by_user",
+          "by_operation",
+          "top_runs",
+          "unpriced_models",
+          "pricing_configured"
+        ],
+        "title": "AdminUsageOut",
+        "type": "object"
+      },
+      "AdminUsageRunOut": {
+        "description": "One run's spend. The runaway-loop question, asked in money.",
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "last_call_at": {
+            "format": "date-time",
+            "title": "Last Call At",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "unpriced_calls": {
+            "title": "Unpriced Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "conversation_id",
+          "calls",
+          "total_tokens",
+          "cost_usd",
+          "unpriced_calls",
+          "last_call_at"
+        ],
+        "title": "AdminUsageRunOut",
+        "type": "object"
+      },
+      "AdminUsageTotalsOut": {
+        "properties": {
+          "cached_input_tokens": {
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "priced_calls": {
+            "title": "Priced Calls",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "unpriced_calls": {
+            "title": "Unpriced Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "calls",
+          "input_tokens",
+          "cached_input_tokens",
+          "output_tokens",
+          "reasoning_tokens",
+          "total_tokens",
+          "cost_usd",
+          "priced_calls",
+          "unpriced_calls"
+        ],
+        "title": "AdminUsageTotalsOut",
+        "type": "object"
+      },
       "AgentApprovalRequest": {
         "properties": {
           "decision": {
@@ -4259,10 +4474,18 @@
             "format": "date-time",
             "title": "Moment",
             "type": "string"
+          },
+          "recovered": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recovered",
+            "type": "array"
           }
         },
         "required": [
           "dispatched",
+          "recovered",
           "moment"
         ],
         "title": "WorkflowTickOut",
@@ -4790,6 +5013,68 @@
           }
         },
         "summary": "Get Storage",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/usage": {
+      "get": {
+        "description": "What this workspace spent on models, and on what.\n\nFive aggregates over one indexed window: the totals, three breakdowns, and\nthe costliest runs. Each is a single GROUP BY, so the route's cost tracks the\nwindow rather than the size of the workspace.",
+        "operationId": "get_usage_api_admin_usage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUsageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Usage",
         "tags": [
           "admin"
         ]

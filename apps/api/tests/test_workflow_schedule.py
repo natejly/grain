@@ -317,6 +317,51 @@ def test_the_tick_endpoint_takes_no_arguments_at_all(
     assert [run for run in runs if run is not None and run.workflow_id == workflow.id] == []
 
 
+def test_the_tick_also_picks_up_a_run_a_dead_process_left_behind(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recovery on a schedule, not only at boot.
+
+    `recover_durable_work` runs once, at process start, which is the right hook
+    for a deploy and no hook at all for a box that does not restart. The tick is
+    the only thing that happens every minute, so it is where an orphaned run gets
+    picked up — claimed synchronously, executed on a background task, and
+    reported separately from what the cron actually dispatched.
+    """
+    from test_workflow_executor import Kill, orphan
+
+    # `TestClient(app)` runs the lifespan, which starts the boot-time sweep on a
+    # thread — and that sweep would race this one for the same run and usually
+    # win. Silencing it is what leaves the tick as the only claimant, which is
+    # the thing under test.
+    from app import main as main_module
+
+    monkeypatch.setattr(main_module, "recover_durable_work", lambda: (0, 0, 0))
+
+    probe = Probe("probe_read", raises=Kill, raise_on=1)
+    install(monkeypatch, probe)
+    workflow = store(db, identity, graph([tool_node("only", "probe_read")]))
+    workflow_run = executor.start_run(db, workflow, user_id=identity.user_id)
+    db.commit()
+    with pytest.raises(Kill):
+        executor.advance_run(db, workflow_run)
+    orphan(db, workflow_run)
+
+    with _secret(monkeypatch, "correct-horse"):
+        with TestClient(app, base_url=TEST_BASE_URL) as client:
+            response = client.post(
+                "/api/workflows/tick",
+                headers={"Authorization": "Bearer correct-horse"},
+            )
+
+    assert response.status_code == 200, response.text
+    assert workflow_run.id in response.json()["recovered"]
+    db.expire_all()
+    resumed = db.get(WorkflowRun, workflow_run.id)
+    assert resumed is not None and resumed.status == "succeeded", resumed
+    assert len(probe.calls) == 2
+
+
 class _secret:
     """Point `Settings` at a cron secret for the duration of a block."""
 

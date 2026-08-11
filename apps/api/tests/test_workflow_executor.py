@@ -9,7 +9,10 @@ argument depends on. These tests are those properties, one for one:
   number for a tool that sends email;
 - an unattended write parks and waits rather than proceeding;
 - a resumed run comes back through the existing decision endpoint;
-- one node failing leaves a run record you can read.
+- one node failing leaves a run record you can read;
+- and nobody has to notice the crash: the recovery sweep resumes the run under a
+  lease, refuses to touch one that is merely parked, and gives up rather than
+  retrying forever.
 
 The tools are fakes, but nothing else is: the real `execute_agent_tool_call`,
 the real `resolve_policy`, the real `AgentToolCall` rows and the real decision
@@ -20,12 +23,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import pytest
 from conftest import Identity, create_identity
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
+from app.clock import utcnow
 from app.database import SessionLocal
 from app.main import app
 from app.models import (
@@ -765,3 +771,306 @@ def test_a_recovery_sweep_cannot_start_a_chat_turn_on_a_workflow_run(
 
     with pytest.raises(RuntimeError, match="workflow"):
         agent_loop.run_agent_turn(db, backing, evidence=[])
+
+
+# --------------------------------------------------------------------------
+# Recovery after an unclean stop
+# --------------------------------------------------------------------------
+
+
+def orphan(db: Any, workflow_run: WorkflowRun) -> None:
+    """Make this run look like one whose process died and never came back.
+
+    A crash does not tidy up after itself, so the row is left exactly as the
+    executor last committed it and only the *lease* is moved into the past —
+    which is the whole signal a survivor has that the holder is gone. Written
+    through a Core UPDATE so `updated_at`'s `onupdate` cannot quietly refresh
+    the very staleness the sweep is about to test.
+    """
+    stale = utcnow() - timedelta(seconds=600)
+    db.execute(
+        update(Run)
+        .where(Run.id == workflow_run.run_id)
+        .values(lease_expires_at=stale)
+    )
+    db.execute(
+        update(WorkflowRun)
+        .where(WorkflowRun.id == workflow_run.id)
+        .values(updated_at=stale)
+    )
+    db.commit()
+    db.expire_all()
+
+
+def reread(db: Any, workflow_run: WorkflowRun) -> WorkflowRun:
+    """The run as another process would see it, after a sweep in its own session."""
+    db.expire_all()
+    row = db.get(WorkflowRun, workflow_run.id)
+    assert row is not None
+    return row
+
+
+def test_a_crashed_run_is_recovered_without_repeating_the_work_it_finished(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The headline: nobody presses anything, and the run finishes correctly.
+
+    Same `Kill` as the resume test — a BaseException travels through every
+    `except Exception` the way a SIGKILL travels through everything — but here
+    the second execution is started by the sweep rather than by the test. The
+    assertion that carries the whole design is `len(first.calls) == 1`: the node
+    that committed before the crash is read out of `workflow_node_runs`, not run
+    again, across two executions of one run.
+    """
+    first = Probe("probe_read", reply="gathered")
+    second = Probe("probe_second", raises=Kill, raise_on=1)
+    install(monkeypatch, first, second)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("gather", "probe_read"),
+                tool_node("crash", "probe_second", {"text": "{{ gather.output }}"}),
+            ],
+            [{"from": "gather", "to": "crash"}],
+        ),
+        trigger="schedule",
+    )
+    with pytest.raises(Kill):
+        executor.advance_run(db, workflow_run)
+    orphan(db, workflow_run)
+
+    assert executor.recover_workflow_runs() == [workflow_run.id]
+
+    resumed = reread(db, workflow_run)
+    assert resumed.status == "succeeded", resumed.error
+    assert len(first.calls) == 1, "the committed node ran a second time"
+    assert len(second.calls) == 2, "the interrupted read-only node was not retried"
+    assert nodes_of(db, resumed)["crash"].attempt == 1
+
+
+def test_recovery_still_refuses_to_repeat_an_interrupted_write(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recovery must not quietly turn writes into at-least-once.
+
+    The rule belongs to `advance_run`, and recovery gets it by *using*
+    `advance_run` rather than by reimplementing the walk — which is the reason
+    the sweep claims a run and then calls the ordinary entry point.
+    """
+    writer = Probe("probe_write", read_only=False)
+    install(monkeypatch, writer)
+    grant(db, identity, "probe_write", "allow", scope="workflow")
+
+    workflow_run = begin(db, identity, graph([tool_node("send", "probe_write")]))
+    with pytest.raises(Kill):
+        writer.raises = Kill
+        executor.advance_run(db, workflow_run)
+    assert len(writer.calls) == 1
+    orphan(db, workflow_run)
+
+    assert executor.recover_workflow_runs() == [workflow_run.id]
+
+    resumed = reread(db, workflow_run)
+    assert resumed.status == "failed"
+    assert "node_interrupted" in resumed.error
+    assert len(writer.calls) == 1, "recovery re-sent a write of unknown effect"
+
+
+def test_a_run_parked_on_an_approval_is_not_recovered(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parked is not crashed. It is waiting on a person, and it must keep waiting.
+
+    A park deliberately clears the backing run's lease — nothing is executing —
+    so a sweep that looked only at leases would claim every approval in the
+    inbox and run the write the approver has not agreed to yet. The status is
+    what distinguishes them, and this is the test that says so.
+    """
+    writer = Probe("probe_write", read_only=False)
+    install(monkeypatch, writer)
+
+    workflow_run = begin(
+        db, identity, graph([tool_node("send", "probe_write")]), trigger="schedule"
+    )
+    executor.advance_run(db, workflow_run)
+    assert workflow_run.status == "waiting_for_approval"
+    backing = db.get(Run, workflow_run.run_id)
+    assert backing is not None and backing.lease_expires_at is None
+
+    assert executor.claim_orphaned_runs(db) == []
+    assert executor.recover_workflow_runs() == []
+
+    still_parked = reread(db, workflow_run)
+    assert still_parked.status == "waiting_for_approval"
+    assert writer.calls == [], "recovery ran a write nobody had approved"
+
+
+def test_only_one_sweep_can_claim_the_same_run(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two API processes booting together must not both resume one run.
+
+    The claim is a conditional UPDATE on the lease `runs.run_lease_seconds`
+    already describes, so the loser finds out by getting `rowcount == 0` rather
+    than by colliding on the unique constraint half a tool call later. Calling
+    the claim twice in a row is the same race with the interleaving made
+    deterministic.
+    """
+    probe = Probe("probe_read", raises=Kill, raise_on=1)
+    install(monkeypatch, probe)
+
+    workflow_run = begin(db, identity, graph([tool_node("only", "probe_read")]))
+    with pytest.raises(Kill):
+        executor.advance_run(db, workflow_run)
+    orphan(db, workflow_run)
+
+    assert executor.claim_orphaned_runs(db) == [workflow_run.id]
+    assert executor.claim_orphaned_runs(db) == [], "a second process claimed it too"
+
+
+def test_a_fresh_queued_run_is_not_stolen_from_the_task_about_to_start_it(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`POST /run` returns 202 and starts the graph on a background task.
+
+    Between the commit and the task there is a window with no backing run and so
+    no lease to hold, and a sweep that ignored it would race the request that
+    just created the run. One lease of quiet is the gate; after it, the run is
+    genuinely abandoned and the sweep takes it.
+    """
+    probe = Probe("probe_read")
+    install(monkeypatch, probe)
+
+    workflow_run = begin(db, identity, graph([tool_node("only", "probe_read")]))
+    assert workflow_run.run_id is None
+    assert executor.claim_orphaned_runs(db) == []
+
+    db.execute(
+        update(WorkflowRun)
+        .where(WorkflowRun.id == workflow_run.id)
+        .values(updated_at=utcnow() - timedelta(seconds=600))
+    )
+    db.commit()
+    db.expire_all()
+
+    assert executor.recover_workflow_runs() == [workflow_run.id]
+    assert reread(db, workflow_run).status == "succeeded"
+    assert len(probe.calls) == 1
+
+
+def test_a_node_that_keeps_killing_its_process_stops_being_retried(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bounded, and the bound is `MAX_NODE_ATTEMPTS` against an existing counter.
+
+    A read-only node is safe to retry, which is not the same as free: one that
+    OOMs its process on every attempt would be resumed by every sweep for the
+    life of the deployment. `WorkflowNodeRun.attempt` already counts the
+    interruptions, so the bound is a comparison rather than new state.
+    """
+    probe = Probe("probe_read")
+    install(monkeypatch, probe)
+
+    workflow_run = begin(db, identity, graph([tool_node("only", "probe_read")]))
+    db.add(
+        WorkflowNodeRun(
+            workspace_id=identity.workspace_id,
+            workflow_run_id=workflow_run.id,
+            node_key="only",
+            kind="tool",
+            tool_name="probe_read",
+            status="running",
+            attempt=executor.MAX_NODE_ATTEMPTS,
+        )
+    )
+    db.commit()
+
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "failed"
+    assert "node_retry_exhausted" in workflow_run.error
+    assert probe.calls == [], "an exhausted node was retried anyway"
+
+
+def test_a_run_too_old_to_resume_is_failed_rather_than_recovered(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bound of last resort, and the one the product wants anyway.
+
+    It catches the loop the per-node bound cannot see — a process dying in
+    `_prepare`, before any node row exists — and it is also the honest answer for
+    a scheduled automation: finishing yesterday's 9am job this afternoon is not a
+    rescue, for the same reason `schedule.CATCHUP` refuses to replay a day.
+    """
+    probe = Probe("probe_read", raises=Kill, raise_on=1)
+    install(monkeypatch, probe)
+
+    workflow_run = begin(
+        db, identity, graph([tool_node("only", "probe_read")]), trigger="schedule"
+    )
+    with pytest.raises(Kill):
+        executor.advance_run(db, workflow_run)
+    orphan(db, workflow_run)
+    db.execute(
+        update(WorkflowRun)
+        .where(WorkflowRun.id == workflow_run.id)
+        .values(started_at=utcnow() - executor.RECOVERY_MAX_AGE - timedelta(hours=1))
+    )
+    db.commit()
+    db.expire_all()
+
+    assert executor.claim_orphaned_runs(db) == []
+
+    abandoned = reread(db, workflow_run)
+    assert abandoned.status == "failed"
+    assert "run_abandoned" in abandoned.error
+    # And it says so on the row rather than just falling out of the query, so
+    # the next sweep does not have to rediscover that it gave up.
+    assert nodes_of(db, abandoned)["only"].status == "failed"
+    assert len(probe.calls) == 1
+
+
+def test_the_chat_sweep_leaves_a_workflows_backing_run_alone(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run_agent_turn`'s guard prevents corruption; the exclusion prevents damage.
+
+    Handing a workflow's backing run to `process_run` reaches that guard, which
+    raises — and `process_run` records exceptions by failing the run. The
+    conversation would be protected by destroying the record of the automation.
+    So the chat sweep skips these rows and the workflow sweep, which resumes from
+    the first incomplete node, owns them.
+    """
+    from app.services.recovery import recover_durable_work
+
+    first = Probe("probe_read", reply="gathered")
+    second = Probe("probe_second", raises=Kill, raise_on=1)
+    install(monkeypatch, first, second)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("gather", "probe_read"),
+                tool_node("crash", "probe_second", {"text": "{{ gather.output }}"}),
+            ],
+            [{"from": "gather", "to": "crash"}],
+        ),
+    )
+    with pytest.raises(Kill):
+        executor.advance_run(db, workflow_run)
+    orphan(db, workflow_run)
+
+    recover_durable_work()
+
+    resumed = reread(db, workflow_run)
+    assert resumed.status == "succeeded", resumed.error
+    backing = db.get(Run, resumed.run_id)
+    assert backing is not None
+    assert backing.status == "completed"
+    assert "workflow" not in backing.error
+    assert len(first.calls) == 1

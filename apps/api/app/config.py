@@ -3,10 +3,32 @@ from __future__ import annotations
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ModelPrice(BaseModel):
+    """What one model costs, in USD per million tokens.
+
+    Rates live in settings rather than in a constant because a price is not a
+    property of the code: OpenAI reprices models without asking, and a hardcoded
+    table would make "our invoice moved" a deploy instead of an env change.
+
+    `cached_input` is optional and falls back to `input`. That fallback is the
+    conservative direction — a cache discount we do not know about makes the
+    recorded cost too high, never too low, and a silently under-reported bill is
+    the failure mode worth avoiding.
+    """
+
+    input: float = Field(ge=0.0)
+    output: float = Field(default=0.0, ge=0.0)
+    cached_input: Optional[float] = Field(default=None, ge=0.0)
+
+    @property
+    def effective_cached_input(self) -> float:
+        return self.input if self.cached_input is None else self.cached_input
 
 
 def project_root() -> Path:
@@ -48,6 +70,25 @@ class Settings(BaseSettings):
     openai_max_output_tokens: int = 1200
     openai_embedding_model: str = "text-embedding-3-small"
     openai_codegen_max_output_tokens: int = 16000
+
+    # --- Model pricing -----------------------------------------------------
+    # {model name: {"input": …, "output": …, "cached_input": …}} in USD per
+    # million tokens, e.g.
+    #   MODEL_PRICES='{"gpt-5.5":{"input":1.25,"output":10,"cached_input":0.125}}'
+    #
+    # Empty by default, and that emptiness is the honest answer rather than a
+    # gap. Token counts are facts this app measures; prices are facts only the
+    # provider's price list knows, and shipping a guessed default would put a
+    # fabricated number on an admin dashboard labelled "cost". With no rate for a
+    # model, `model_usage` rows still record every token and leave `cost_usd`
+    # null, and GET /api/admin/usage names the unpriced models so an operator can
+    # see exactly what configuring this would buy.
+    #
+    # The lookup is by exact model name, including the dated snapshot if that is
+    # what OPENAI_MODEL names — a prefix match would price `gpt-5-nano` off a
+    # `gpt-5` entry, which is wrong by an order of magnitude in the direction
+    # nobody notices.
+    model_prices: Dict[str, ModelPrice] = {}
 
     # --- Web search --------------------------------------------------------
     # OpenAI's hosted web_search tool, which runs on the provider side and comes
@@ -549,6 +590,16 @@ class Settings(BaseSettings):
             # Credential-based (unofficial API); only token encryption is needed.
             return True
         return False
+
+    def price_for(self, model: str) -> Optional[ModelPrice]:
+        """The configured rate for a model, or None when there isn't one.
+
+        None means "record the tokens, leave the cost null". It must never become
+        a zero or a neighbouring model's rate: an invented price is worse than a
+        missing one because nothing downstream can tell it apart from a measured
+        one.
+        """
+        return self.model_prices.get(model.strip())
 
     @property
     def active_model_provider(self) -> Literal["openai", "scripted"]:

@@ -78,6 +78,11 @@ export function createDocumentHandlers({
   }
 
   async function removeDocument(document: DocumentSummary) {
+    // The gate every other destructive action in the shell has. It matters more
+    // here than for a source: a document is written in this editor and its
+    // versions go with it, so there is nothing to re-upload.
+    if (!window.confirm(`Delete “${document.title}” and its version history?`)) return;
+    setError("");
     try {
       await api.deleteDocument(document.id);
       setActiveDocument((current) => (current?.id === document.id ? null : current));

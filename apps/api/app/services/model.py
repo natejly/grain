@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 from openai import OpenAI
 
 from ..config import Settings, get_settings
+from . import usage
 from .retrieval import Evidence
 
 logger = logging.getLogger(__name__)
@@ -261,6 +262,36 @@ def _openai_client(settings: Settings) -> OpenAI:
     )
 
 
+def call_responses(
+    client: OpenAI, *, operation: str, settings: Settings, **kwargs: Any
+) -> Any:
+    """Every non-streaming Responses call in this app. Records what it spent.
+
+    The chokepoint exists so accounting is a property of *calling the API* rather
+    than a step each of the five call sites has to remember. `client.responses
+    .create` appears nowhere else outside this module and the streaming helper
+    below; a sixth caller that wants a model gets billing whether or not its
+    author thought about it, which is the only version of this that stays true.
+
+    The model recorded is the one *requested*, not the snapshot the response
+    reports back. Rates in `MODEL_PRICES` are keyed by the name an operator
+    configures, and a response that resolves `gpt-5.5` to a dated snapshot would
+    otherwise miss its own rate and record a null cost for a model we can price.
+
+    `settings` is required rather than looked up, so the call is priced by the
+    same configuration that chose the model — a caller running on an overridden
+    Settings would otherwise be billed against the process-wide one.
+    """
+    response = client.responses.create(**kwargs)
+    usage.record_model_usage(
+        model=str(kwargs.get("model") or ""),
+        operation=operation,
+        usage=getattr(response, "usage", None),
+        settings=settings,
+    )
+    return response
+
+
 def stream_agent_response(
     client: OpenAI,
     settings: Settings,
@@ -269,12 +300,22 @@ def stream_agent_response(
     input_items: List[object],
     tools: List[Dict[str, object]],
     instructions: str,
+    operation: str = "",
 ) -> Iterator[Tuple[str, object]]:
     """Stream one agent turn as ("delta", text) events then ("completed", response).
 
     The terminal response carries the full `.output`, including any function
     calls and any hosted `web_search` call with its `url_citation` annotations,
     so the caller's tool handling is identical to the non-streaming path.
+
+    Usage is read off that same terminal response, which is the only place the
+    stream reports it — a turn that dies mid-stream is a turn nobody can price,
+    and `response.failed` carries no counts to salvage.
+
+    `operation` defaults to whatever the enclosing `usage_scope` bound, which is
+    how an agent node inside a workflow gets billed as unattended work without
+    the step function that reaches this call having to be told: the distinction
+    belongs to what *started* the run, not to this frame.
 
     Annotation events (`response.output_text.annotation.added`) arrive
     interleaved with the deltas and are deliberately dropped here. Citations are
@@ -301,7 +342,16 @@ def stream_agent_response(
         if event_type == "response.output_text.delta":
             yield "delta", getattr(event, "delta", "") or ""
         elif event_type == "response.completed":
-            yield "completed", getattr(event, "response", None)
+            completed = getattr(event, "response", None)
+            usage.record_model_usage(
+                model=settings.openai_model,
+                operation=(
+                    operation or usage.current_attribution().operation or usage.CHAT
+                ),
+                usage=getattr(completed, "usage", None),
+                settings=settings,
+            )
+            yield "completed", completed
         elif event_type in {"response.failed", "response.incomplete"}:
             response = getattr(event, "response", None)
             error = getattr(response, "error", None)
@@ -319,7 +369,10 @@ def generate_code(
     """Single-file code generation."""
     settings = settings or get_settings()
     client = _openai_client(settings)
-    response = client.responses.create(
+    response = call_responses(
+        client,
+        operation=usage.CODEGEN,
+        settings=settings,
         model=settings.openai_model,
         instructions=instructions,
         input=input_text,
@@ -381,7 +434,10 @@ def extract_memories(
         # storage down the same path, so its claim keys get the same validation.
         return [_with_claim_key(item) for item in scripted_memories(settings, prompt)]
     client = _openai_client(settings)
-    response = client.responses.create(
+    response = call_responses(
+        client,
+        operation=usage.MEMORY_EXTRACTION,
+        settings=settings,
         model=settings.openai_model,
         instructions=MEMORY_EXTRACTION_INSTRUCTIONS,
         input="User said:\n" + prompt[:4000] + "\n\nAssistant replied:\n" + answer[:4000],
@@ -463,7 +519,10 @@ def situate_chunk(
         return ""
     try:
         client = _openai_client(settings)
-        response = client.responses.create(
+        response = call_responses(
+            client,
+            operation=usage.CONTEXT_BLURB,
+        settings=settings,
             model=settings.openai_context_model,
             instructions=CHUNK_CONTEXT_INSTRUCTIONS,
             input=(
@@ -517,7 +576,10 @@ def extract_graph_facts(
         # candidates it already generated and adds no typed layer.
         return empty
     client = _openai_client(settings)
-    response = client.responses.create(
+    response = call_responses(
+        client,
+        operation=usage.GRAPH_EXTRACTION,
+        settings=settings,
         model=settings.openai_model,
         instructions=GRAPH_EXTRACTION_INSTRUCTIONS,
         input="Passage:\n" + text[:MAX_GRAPH_PASSAGE_CHARS],

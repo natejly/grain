@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..models import AgentToolCall, Run, ToolPolicy, WorkflowRun
+from . import usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .llm_tools import ToolContext, ToolResult, ToolSpec, build_registry
@@ -21,6 +22,7 @@ from .model import (
     stream_agent_response,
 )
 from .retrieval import Evidence
+from .usage import usage_scope
 from .web_search import (
     anchor_citations,
     harvest,
@@ -116,6 +118,10 @@ def _default_model_step(
     `evidence` only reaches the scripted test double, which quotes it when no
     script entry matches the prompt. The OpenAI path is handed the same passages
     through the prompt itself, so it has no use for them here.
+
+    How the turn is *billed* is not an argument, because this function is also
+    the seam tests replace: it is carried by the `usage_scope` the caller has
+    already opened, and read back inside `stream_agent_response`.
     """
     if settings.active_model_provider == "scripted":
         from .scripted_model import scripted_model_step
@@ -228,6 +234,12 @@ def resolve_policy(
     if valid.get(CHAT_SCOPE) == "deny":
         return "deny"
     return "allow" if spec.read_only else "ask"
+
+
+def _billing_operation(scope: PolicyScope) -> str:
+    """How a turn in this situation is billed. Same split as the policy scope,
+    and for the same reason: unattended spend is the kind worth seeing alone."""
+    return usage.WORKFLOW_NODE if scope == WORKFLOW_SCOPE else usage.CHAT
 
 
 def policy_scope_for_run(db: Session, run: Run) -> PolicyScope:
@@ -613,7 +625,8 @@ def run_agent_turn(
     is the record that matters, and it can be re-run.
     """
     settings = settings or get_settings()
-    if not workflow_node and policy_scope_for_run(db, run) == WORKFLOW_SCOPE:
+    scope = policy_scope_for_run(db, run)
+    if not workflow_node and scope == WORKFLOW_SCOPE:
         raise RuntimeError("This run belongs to a workflow; start it through the executor")
     context = ToolContext(
         workspace_id=run.workspace_id,
@@ -632,16 +645,26 @@ def run_agent_turn(
         ],
         evidence=list(evidence),
     )
-    outcome = _advance(
-        db,
-        run,
-        state,
-        registry=registry,
-        context=context,
-        step=model_step or _default_model_step(settings, run, list(evidence)),
-        settings=settings,
-        scope=policy_scope_for_run(db, run),
-    )
+    # Bound here rather than in the caller because this is the innermost frame
+    # that knows all four ids, and because both callers — the chat worker and the
+    # workflow executor — reach the model through it.
+    with usage_scope(
+        workspace_id=run.workspace_id,
+        run_id=run.id,
+        conversation_id=run.conversation_id,
+        user_id=run.created_by,
+        operation=_billing_operation(scope),
+    ):
+        outcome = _advance(
+            db,
+            run,
+            state,
+            registry=registry,
+            context=context,
+            step=model_step or _default_model_step(settings, run, list(evidence)),
+            settings=settings,
+            scope=scope,
+        )
     return _finish(db, run, outcome)
 
 
@@ -703,16 +726,24 @@ def resume_agent_turn(
         conversation_id=run.conversation_id,
     )
     registry = build_registry(db, context)
-    outcome = _advance(
-        db,
-        run,
-        state,
-        registry=registry,
-        context=context,
-        step=model_step or _default_model_step(settings, run, state.evidence),
-        settings=settings,
-        scope=policy_scope_for_run(db, run),
-    )
+    scope = policy_scope_for_run(db, run)
+    with usage_scope(
+        workspace_id=run.workspace_id,
+        run_id=run.id,
+        conversation_id=run.conversation_id,
+        user_id=run.created_by,
+        operation=_billing_operation(scope),
+    ):
+        outcome = _advance(
+            db,
+            run,
+            state,
+            registry=registry,
+            context=context,
+            step=model_step or _default_model_step(settings, run, state.evidence),
+            settings=settings,
+            scope=scope,
+        )
     if workflow_run is not None:
         # The agent node's turn is over; the graph is not. Returning None keeps
         # `services/runs.resume_run` from completing a run the next node still

@@ -21,6 +21,7 @@ from .audit import record_audit
 from .graph import rebuild_graph
 from .model import situate_chunk
 from .retrieval import clear_source_postings, embed_chunks, index_chunks
+from .usage import usage_scope
 
 logger = logging.getLogger(__name__)
 
@@ -116,13 +117,18 @@ def contextualize_chunks(
     settings = settings or get_settings()
     if not settings.retrieval_contextual or not chunks:
         return []
+    workspace_id = chunks[0].workspace_id
+
+    def situate(chunk: Chunk) -> str:
+        # The scope is opened *inside* the worker. A ThreadPoolExecutor thread
+        # starts with a fresh context rather than a copy of the submitter's, so a
+        # scope opened around `pool.map` would not reach the call that spends the
+        # tokens and every blurb in the corpus would be billed to nobody.
+        with usage_scope(workspace_id=workspace_id):
+            return situate_chunk(document, chunk.content, settings=settings)
+
     with ThreadPoolExecutor(max_workers=CONTEXT_WORKERS) as pool:
-        blurbs = list(
-            pool.map(
-                lambda chunk: situate_chunk(document, chunk.content, settings=settings),
-                chunks,
-            )
-        )
+        blurbs = list(pool.map(situate, chunks))
     written: List[Chunk] = []
     for chunk, blurb in zip(chunks, blurbs, strict=True):
         if blurb:

@@ -1114,6 +1114,69 @@ class WorkflowNodeRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ModelUsage(Base):
+    """One billable model call: what it spent, who caused it, and at what rate.
+
+    Counts and identifiers only. No prompt, no completion, not one character of
+    either — this table is read by an admin panel and kept far longer than a
+    conversation is, so putting content here would quietly turn a cost ledger
+    into a second, unregulated copy of everyone's messages.
+
+    `run_id`, `conversation_id` and `user_id` are plain columns rather than
+    foreign keys, for two reasons. An embedding of an uploaded document has no
+    run and no conversation to point at, and a ledger row must outlive the run it
+    describes — a deleted conversation must not be able to erase what it cost.
+    `workspace_id` *is* a foreign key, because a row that belongs to no tenant
+    can be neither shown nor scoped.
+
+    The rate columns are the reason a historical row can be trusted. Cost is
+    computed once, at write time, from the rate configured then; storing the rate
+    beside it means a price change next quarter reprices nothing that already
+    happened, and an operator can see which number produced which figure.
+    `cost_usd` is null — never zero — when the model had no configured rate, so
+    "we did not know the price" stays distinguishable from "it was free".
+    """
+
+    __tablename__ = "model_usage"
+    __table_args__ = (
+        # The admin panel's shape: one workspace, one time window, newest first.
+        Index("ix_model_usage_workspace_created", "workspace_id", "created_at"),
+        # "What did this run cost" — the runaway-loop question, asked by run.
+        Index("ix_model_usage_workspace_run", "workspace_id", "run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(36), default="")
+    conversation_id: Mapped[str] = mapped_column(String(36), default="")
+    user_id: Mapped[str] = mapped_column(String(36), default="")
+    # What caused the call: chat | workflow_node | embedding | codegen |
+    # context_blurb | memory_extraction | graph_extraction | workflow_compile.
+    # Free text rather than an enum so a new caller records something honest
+    # instead of failing a constraint mid-turn.
+    operation: Mapped[str] = mapped_column(String(32), default="", index=True)
+    provider: Mapped[str] = mapped_column(String(24), default="openai")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    # `cached_input_tokens` is a subset of input_tokens and `reasoning_tokens` a
+    # subset of output_tokens, exactly as the provider reports them. Summing the
+    # four would double-count; they are kept apart so the split stays visible.
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cached_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    reasoning_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # USD per million tokens, frozen at write time. Null together with cost_usd.
+    input_rate_usd_per_mtok: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cached_input_rate_usd_per_mtok: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    output_rate_usd_per_mtok: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 # ---------------------------------------------------------------------------
 # A human decision on a tool call is written once.
 #

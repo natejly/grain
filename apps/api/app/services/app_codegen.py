@@ -13,6 +13,7 @@ from ..schemas import DatasetQuery
 from .analytics import AnalyticsValidationError, current_dataset_version, execute_dataset_query
 from .model import generate_code
 from .scripted_model import scripted_app_html
+from .usage import usage_scope
 
 MAX_HTML_BYTES = 256 * 1024
 SNAPSHOT_ROW_LIMIT = 200
@@ -200,12 +201,13 @@ def build_code_manifest(
             parts.append(
                 "Existing app to modify (return the full updated fragment):\n" + previous_html
             )
-        body = generate_code(
-            CODEGEN_INSTRUCTIONS,
-            "\n\n".join(parts),
-            user_id=user_id,
-            settings=settings,
-        )
+        with usage_scope(workspace_id=workspace_id, user_id=user_id):
+            body = generate_code(
+                CODEGEN_INSTRUCTIONS,
+                "\n\n".join(parts),
+                user_id=user_id,
+                settings=settings,
+            )
 
     lint_generated_html(body)
     html = JASMINE_RUNTIME + "\n" + body

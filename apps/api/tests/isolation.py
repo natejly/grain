@@ -66,6 +66,7 @@ from app.models import (
     McpTool,
     MemoryItem,
     Message,
+    ModelUsage,
     OAuthState,
     Project,
     ProjectFile,
@@ -623,6 +624,31 @@ def build_tenant(label: str) -> Tenant:
         db.add(policy)
         db.flush()
         ids["tool_policy"] = policy.id
+
+        # One ledger row per tenant, so GET /api/admin/usage has something to
+        # aggregate and the leak check has a foreign run id, user id and model
+        # name to look for. The model name carries the label for the same reason
+        # the dataset cells do: a breakdown leaks *values*, not only ids.
+        model_usage = ModelUsage(
+            workspace_id=workspace_id,
+            run_id=run.id,
+            conversation_id=conversation.id,
+            user_id=user_id,
+            operation="chat",
+            model=f"{label}-secret-model",
+            input_tokens=100,
+            cached_input_tokens=10,
+            output_tokens=50,
+            reasoning_tokens=20,
+            total_tokens=150,
+            cost_usd=0.5,
+            input_rate_usd_per_mtok=1.0,
+            cached_input_rate_usd_per_mtok=0.1,
+            output_rate_usd_per_mtok=8.0,
+        )
+        db.add(model_usage)
+        db.flush()
+        ids["model_usage"] = model_usage.id
 
         db.commit()
     finally:
@@ -1328,6 +1354,11 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase("GET", "/api/admin/storage", SCOPED),
     RouteCase("GET", "/api/admin/mcp-servers", SCOPED),
     RouteCase("GET", "/api/admin/sandbox-sessions", SCOPED),
+    # Token and cost accounting. SCOPED rather than DENY because it takes no id
+    # at all — only a window — so the only way it could cross tenants is by
+    # aggregating rows it should not see, which is exactly what the leak scan
+    # over every id and marker string catches.
+    RouteCase("GET", "/api/admin/usage", SCOPED),
     # The one admin route that takes an id, and it names a live machine — same
     # verdict as DELETE /api/sandbox/{session_id} for the same reason.
     RouteCase(

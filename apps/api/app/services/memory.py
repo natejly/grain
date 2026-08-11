@@ -37,6 +37,7 @@ from .embeddings import (
 from .graph import extract_entities, mark_graph_stale, name_candidates
 from .model import extract_memories, normalize_claim_key
 from .retrieval import tokenize
+from .usage import usage_scope
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +352,10 @@ def _embed_pending(items: Sequence[MemoryItem], settings: Settings) -> None:
     if not pending:
         return
     try:
-        vectors = embed_texts([item.content for item in pending], settings)
+        # The rows carry the tenant, so this is attributed whether the caller was
+        # the post-run writer (which also knows the run) or the `remember` tool.
+        with usage_scope(workspace_id=pending[0].workspace_id):
+            vectors = embed_texts([item.content for item in pending], settings)
     except Exception:
         vectors = None
     if vectors is None:
@@ -480,9 +484,15 @@ def write_conversation_memory(run_id: str) -> None:
         )
         message_ids = [message.id for message in messages]
 
-        extracted = extract_memories(
-            run.prompt, answer, user_id=run.created_by, settings=settings
-        )
+        with usage_scope(
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            conversation_id=run.conversation_id,
+            user_id=run.created_by,
+        ):
+            extracted = extract_memories(
+                run.prompt, answer, user_id=run.created_by, settings=settings
+            )
 
         touched = apply_extracted_memories(
             db,
@@ -814,7 +824,8 @@ def recall(
 
     semantic_by_id: Dict[str, float] = {}
     try:
-        query_blob = _embed_query(query, settings)
+        with usage_scope(workspace_id=workspace_id, conversation_id=conversation_id):
+            query_blob = _embed_query(query, settings)
     except Exception:
         # A missing key returns None without raising; reaching here means the
         # provider actually failed, which silently degrades recall to lexical-only.

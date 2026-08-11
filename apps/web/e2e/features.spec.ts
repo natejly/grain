@@ -77,7 +77,10 @@ test("boards: create a board, add cards, and manage columns", async ({ page }) =
     path: "test-results/feature-boards.png",
   });
 
-  page.once("dialog", (dialog) => dialog.accept());
+  // No arm: deleting a board is not confirm()-gated. A `once` handler for a
+  // dialog that never arrives stays live and accepts the *next* one, which is
+  // then handled twice — once by the leftover and once by its own arm — and the
+  // second `accept()` throws into the page. Arm only where a dialog appears.
   await page.getByRole("button", { name: "Delete Sweep Board" }).click();
   await expect(page.getByRole("heading", { name: "Sweep Board" })).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -110,7 +113,8 @@ test("projects: a web project seeds files and bundles a live preview", async ({ 
     path: "test-results/feature-projects.png",
   });
 
-  page.once("dialog", (dialog) => dialog.accept());
+  // No arm: deleting a project is not confirm()-gated either. See the board
+  // spec above for why a handler with nothing to catch is not harmless.
   await page.getByRole("button", { name: /Delete project/ }).click();
   await expect(page.getByText("Sweep App")).toHaveCount(0);
   expect(errors).toEqual([]);

@@ -31,14 +31,15 @@ same query would be a second place for the membership filter to be wrong.
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from ..auth import Actor, require_owner
+from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import (
@@ -51,6 +52,7 @@ from ..models import (
     McpTool,
     Membership,
     MemoryItem,
+    ModelUsage,
     Run,
     SandboxSession,
     Source,
@@ -559,4 +561,276 @@ def get_storage(
         memory_item_count=sum(memory_by_status.values()),
         graph_entity_count=_total(db, GraphEntity, GraphEntity.workspace_id == workspace),
         graph_edge_count=_total(db, GraphEdge, GraphEdge.workspace_id == workspace),
+    )
+
+
+# --------------------------------------------------------------------------
+# Model usage and cost
+#
+# The one panel here that is about money. Three things shape it.
+#
+# *Every figure is bounded by a window.* `model_usage` grows with every model
+# call the workspace makes, which is by far the fastest-growing table in the
+# schema; an all-time aggregate would turn this route into a full scan that gets
+# slower every day it is looked at.
+#
+# *Tokens and cost are reported separately, not merged.* A row whose model had
+# no configured rate contributes its tokens and no cost, and is counted in
+# `unpriced_calls` rather than folded in as zero. Summing nulls as zero is how a
+# dashboard ends up quietly under-reporting a bill; `unpriced_models` names the
+# models that would need a rate in MODEL_PRICES for the number to be complete.
+#
+# *No content, because the table holds none.* Everything below is counts,
+# identifiers and money.
+
+
+# A year is long enough for "what did we spend last quarter" and short enough
+# that the index still bounds the scan.
+MAX_USAGE_WINDOW_DAYS = 365
+# Breakdown rows returned per axis. Models and operations are bounded by their
+# own cardinality; users are bounded by the workspace, which is not, so the cut
+# is applied in SQL and the heaviest spenders are the ones kept.
+USAGE_GROUP_LIMIT = 25
+TOP_RUNS_LIMIT = 10
+
+
+class AdminUsageTotalsOut(ApiModel):
+    calls: int
+    input_tokens: int
+    # A subset of input_tokens, reported by the provider and billed at its own
+    # rate — not an extra amount to add on.
+    cached_input_tokens: int
+    output_tokens: int
+    # Likewise a subset of output_tokens.
+    reasoning_tokens: int
+    total_tokens: int
+    # Summed over priced rows only. Read it next to `unpriced_calls`: a large
+    # unpriced count means this figure is a floor, not the bill.
+    cost_usd: float
+    priced_calls: int
+    unpriced_calls: int
+
+
+class AdminUsageGroupOut(ApiModel):
+    """One row of a breakdown: a model, a user, or an operation."""
+
+    key: str
+    # The same string for models and operations; a name or email for a user, so
+    # the panel does not have to join ids back to people itself.
+    label: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost_usd: float
+    unpriced_calls: int
+
+
+class AdminUsageRunOut(ApiModel):
+    """One run's spend. The runaway-loop question, asked in money."""
+
+    run_id: str
+    conversation_id: str
+    calls: int
+    total_tokens: int
+    cost_usd: float
+    unpriced_calls: int
+    last_call_at: datetime
+
+
+class AdminUsageOut(ApiModel):
+    window_days: int
+    since: datetime
+    totals: AdminUsageTotalsOut
+    by_model: List[AdminUsageGroupOut]
+    by_user: List[AdminUsageGroupOut]
+    by_operation: List[AdminUsageGroupOut]
+    # Ordered by cost, then tokens — so a run that burned tokens on an unpriced
+    # model still surfaces rather than sorting to the bottom on a null cost.
+    top_runs: List[AdminUsageRunOut]
+    # Models seen in this window with no rate in MODEL_PRICES. Their tokens are
+    # in every count above and their cost is in none of them.
+    unpriced_models: List[str]
+    # False when MODEL_PRICES is empty, i.e. no cost figure here can be anything
+    # but zero. Stated explicitly so a panel can say "not configured" instead of
+    # showing a confident $0.00.
+    pricing_configured: bool
+
+
+# Selected in this order by every aggregate below, so one row builder can read
+# them positionally.
+_USAGE_SUMS = (
+    func.count(),
+    func.coalesce(func.sum(ModelUsage.input_tokens), 0),
+    func.coalesce(func.sum(ModelUsage.cached_input_tokens), 0),
+    func.coalesce(func.sum(ModelUsage.output_tokens), 0),
+    func.coalesce(func.sum(ModelUsage.reasoning_tokens), 0),
+    func.coalesce(func.sum(ModelUsage.total_tokens), 0),
+    func.coalesce(func.sum(ModelUsage.cost_usd), 0.0),
+    # COUNT ignores nulls, so this counts the rows that *have* a cost; the
+    # unpriced remainder is the difference. Doing it this way rather than with a
+    # CASE keeps it one portable expression on both backends.
+    func.count(ModelUsage.cost_usd),
+)
+
+
+def _usage_window(
+    workspace_id: str, days: int
+) -> Tuple[datetime, Tuple[ColumnElement[bool], ...]]:
+    since = utcnow() - timedelta(days=days)
+    return since, (
+        ModelUsage.workspace_id == workspace_id,
+        ModelUsage.created_at >= since,
+    )
+
+
+def _usage_groups(
+    db: Session,
+    column: InstrumentedAttribute[str],
+    *filters: ColumnElement[bool],
+    limit: int = USAGE_GROUP_LIMIT,
+) -> List[Tuple[str, Sequence[Any]]]:
+    """(key, aggregate row) for one breakdown axis, biggest spender first.
+
+    Sorted on cost first and tokens second so an unpriced model — cost 0 by
+    arithmetic, not by fact — is still ranked by the one measurement it does
+    have, instead of being pushed off the end of the list by the cut below.
+    """
+    rows = db.execute(
+        select(column, *_USAGE_SUMS)
+        .where(*filters)
+        .group_by(column)
+        .order_by(
+            func.coalesce(func.sum(ModelUsage.cost_usd), 0.0).desc(),
+            func.coalesce(func.sum(ModelUsage.total_tokens), 0).desc(),
+            column,
+        )
+        .limit(limit)
+    ).all()
+    return [(str(row[0]), row[1:]) for row in rows]
+
+
+def _group_out(key: str, label: str, sums: Sequence[Any]) -> AdminUsageGroupOut:
+    calls, input_tokens, _cached, output_tokens, _reasoning, total, cost, priced = sums
+    return AdminUsageGroupOut(
+        key=key,
+        label=label or key,
+        calls=int(calls),
+        input_tokens=int(input_tokens),
+        output_tokens=int(output_tokens),
+        total_tokens=int(total),
+        cost_usd=float(cost or 0.0),
+        unpriced_calls=int(calls) - int(priced),
+    )
+
+
+@router.get("/usage", response_model=AdminUsageOut)
+def get_usage(
+    days: int = Query(default=30, ge=1, le=MAX_USAGE_WINDOW_DAYS),
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AdminUsageOut:
+    """What this workspace spent on models, and on what.
+
+    Five aggregates over one indexed window: the totals, three breakdowns, and
+    the costliest runs. Each is a single GROUP BY, so the route's cost tracks the
+    window rather than the size of the workspace.
+    """
+    since, window = _usage_window(actor.workspace_id, days)
+
+    totals_row = db.execute(select(*_USAGE_SUMS).where(*window)).one()
+    calls, inputs, cached, outputs, reasoning, total, cost, priced = totals_row
+    totals = AdminUsageTotalsOut(
+        calls=int(calls),
+        input_tokens=int(inputs),
+        cached_input_tokens=int(cached),
+        output_tokens=int(outputs),
+        reasoning_tokens=int(reasoning),
+        total_tokens=int(total),
+        cost_usd=float(cost or 0.0),
+        priced_calls=int(priced),
+        unpriced_calls=int(calls) - int(priced),
+    )
+
+    by_model = [
+        _group_out(key, key, sums)
+        for key, sums in _usage_groups(db, ModelUsage.model, *window)
+    ]
+    by_operation = [
+        _group_out(key, key, sums)
+        for key, sums in _usage_groups(db, ModelUsage.operation, *window)
+    ]
+
+    user_groups = _usage_groups(db, ModelUsage.user_id, *window)
+    # One lookup for the whole page, and scoped to this workspace's membership:
+    # a stale user id from a former member resolves to no name rather than to
+    # someone else's, and never to a person outside the workspace.
+    names: Dict[str, str] = {
+        str(user_id): (name or email)
+        for user_id, name, email in db.execute(
+            select(User.id, User.name, User.email)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                Membership.workspace_id == actor.workspace_id,
+                User.id.in_([key for key, _ in user_groups] or [""]),
+            )
+        ).all()
+    }
+    by_user = [
+        _group_out(key, names.get(key, ""), sums) for key, sums in user_groups
+    ]
+
+    run_rows = db.execute(
+        select(
+            ModelUsage.run_id,
+            # Any conversation id on the run's rows; they all carry the same one.
+            func.max(ModelUsage.conversation_id),
+            func.count(),
+            func.coalesce(func.sum(ModelUsage.total_tokens), 0),
+            func.coalesce(func.sum(ModelUsage.cost_usd), 0.0),
+            func.count(ModelUsage.cost_usd),
+            func.max(ModelUsage.created_at),
+        )
+        .where(*window, ModelUsage.run_id != "")
+        .group_by(ModelUsage.run_id)
+        .order_by(
+            func.coalesce(func.sum(ModelUsage.cost_usd), 0.0).desc(),
+            func.coalesce(func.sum(ModelUsage.total_tokens), 0).desc(),
+            ModelUsage.run_id,
+        )
+        .limit(TOP_RUNS_LIMIT)
+    ).all()
+    top_runs = [
+        AdminUsageRunOut(
+            run_id=str(run_id),
+            conversation_id=str(conversation_id or ""),
+            calls=int(run_calls),
+            total_tokens=int(run_tokens),
+            cost_usd=float(run_cost or 0.0),
+            unpriced_calls=int(run_calls) - int(run_priced),
+            last_call_at=last_at,
+        )
+        for run_id, conversation_id, run_calls, run_tokens, run_cost, run_priced, last_at
+        in run_rows
+    ]
+
+    unpriced = db.scalars(
+        select(ModelUsage.model)
+        .where(*window, ModelUsage.cost_usd.is_(None))
+        .group_by(ModelUsage.model)
+        .order_by(func.count().desc(), ModelUsage.model)
+        .limit(USAGE_GROUP_LIMIT)
+    ).all()
+
+    return AdminUsageOut(
+        window_days=days,
+        since=since,
+        totals=totals,
+        by_model=by_model,
+        by_user=by_user,
+        by_operation=by_operation,
+        top_runs=top_runs,
+        unpriced_models=[str(model) for model in unpriced],
+        pricing_configured=bool(settings.model_prices),
     )

@@ -138,10 +138,10 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   // The approved write really happened, and is this spec's to clean up.
   await openView(page, "Documents", /^Documents/);
   await page.getByText(WORKFLOW_DOCUMENT).click();
-  // No dialog here on purpose: deleting a document is the one destructive
-  // action in this shell that is *not* confirm()-gated, and arming a `once`
-  // handler for a dialog that never arrives leaves it live to steal — and
-  // double-accept — the next one.
+  // Confirm()-gated like every other destructive action here, so the handler
+  // has to be armed before the click. It is consumed by this dialog, which is
+  // what keeps it from reaching the conversation delete further down.
+  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete document" }).click();
   await expect(page.getByText(WORKFLOW_DOCUMENT)).toHaveCount(0);
 

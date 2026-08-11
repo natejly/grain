@@ -31,6 +31,7 @@ from .embeddings import (
     query_embedding_cache,
     ranked_cosine_scores,
 )
+from .usage import usage_scope
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +243,11 @@ def embed_chunks(
     for start in range(0, len(pending), EMBED_BATCH):
         batch = pending[start : start + EMBED_BATCH]
         try:
-            vectors = embed_texts([indexed_text(chunk) for chunk in batch], settings)
+            # Attributed off the rows themselves, so every path that embeds a
+            # corpus — ingest, the backfill script, a reconcile — is billed
+            # without each having to remember to say so.
+            with usage_scope(workspace_id=batch[0].workspace_id):
+                vectors = embed_texts([indexed_text(chunk) for chunk in batch], settings)
         except Exception:
             logger.warning("chunk embedding failed; retrieval stays lexical", exc_info=True)
             continue
@@ -489,7 +494,8 @@ def dense_ranking(
     """
     settings = settings or get_settings()
     try:
-        query_blob = _embed_query(query, settings)
+        with usage_scope(workspace_id=workspace_id):
+            query_blob = _embed_query(query, settings)
     except Exception:
         logger.warning("retrieval degraded to lexical-only: embedding failed", exc_info=True)
         return []
