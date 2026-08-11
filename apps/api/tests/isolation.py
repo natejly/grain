@@ -1333,7 +1333,6 @@ ROUTE_CASES: List[RouteCase] = [
         expect=422,
         note="bundles another tenant's dashboard into a new app",
     ),
-    RouteCase("GET", "/api/apps/{app_id}/preview", DENY, path_ids={"app_id": "app"}),
     RouteCase(
         "POST",
         "/api/apps/{app_id}/generate",

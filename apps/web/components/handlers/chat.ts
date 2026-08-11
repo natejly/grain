@@ -9,7 +9,6 @@ import type {
   DocumentVersion,
   Message,
   ToolArtifact,
-  ToolCall,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
@@ -468,21 +467,6 @@ export function createChatHandlers({
     }
   }
 
-  async function decide(call: ToolCall, decision: "approved" | "denied") {
-    setError("");
-    try {
-      await api.decideToolCall(call.id, decision);
-      await refreshSecondary();
-      if (!activeRun && call.conversation_id === activeConversation) {
-        // Resume streaming the run we just unblocked; runs in other
-        // conversations continue server-side and load on next open.
-        void followRun(call.run_id, call.conversation_id);
-      }
-    } catch (caught) {
-      setError(describeError(caught, "Could not record decision"));
-    }
-  }
-
   return {
     selectConversation,
     newConversation,
@@ -491,6 +475,5 @@ export function createChatHandlers({
     cancelActiveRun,
     regenerate,
     submitPrompt,
-    decide,
   };
 }

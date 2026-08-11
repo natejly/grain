@@ -1,15 +1,93 @@
 "use client";
 
 import { Activity, Check, X } from "lucide-react";
-import type { AuditEvent, ToolCall } from "@workspace/api-client";
+import { useState } from "react";
+import type { AgentToolCall, AuditEvent } from "@workspace/api-client";
+import type { ToolDecision } from "./chat";
+import { ProposalDiff } from "./document-pending";
 import { formatRelative } from "./shared";
 
+/**
+ * Approvals here are `AgentToolCall`s — the same records the chat cards and the
+ * Workflows view decide, read through the same `decideAgentCall`.
+ *
+ * The panel used to read the legacy `ToolCall`/`Tool` tables instead. Nothing
+ * creates a `Tool` row outside `seed_dev_workspace`, so outside a dev database
+ * this queue could never fill: it promised a review surface and always showed
+ * "no pending requests", however many runs were actually parked waiting.
+ */
 export type ActivityViewProps = {
-  calls: ToolCall[];
+  calls: AgentToolCall[];
   events: AuditEvent[];
-  decide: (call: ToolCall, decision: "approved" | "denied") => Promise<void>;
+  decide: ToolDecision;
   activeRun: string | null;
 };
+
+/**
+ * One parked call. `remember` is offered here for the same reason chat offers
+ * it: the answer to "may the agent do this" is usually about the tool, not this
+ * one call, and without it the queue re-fills with the same request.
+ */
+function ApprovalRequest({
+  call,
+  decide,
+}: {
+  call: AgentToolCall;
+  decide: ToolDecision;
+}) {
+  const [remember, setRemember] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function choose(decision: "approved" | "denied") {
+    setBusy(true);
+    try {
+      await decide(call, decision, remember);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <article className="approval-card">
+      <div className="approval-card-top">
+        <div className="tool-glyph">
+          <Activity size={17} />
+        </div>
+        <div>
+          <span>Assistant request</span>
+          <strong>{call.name}</strong>
+        </div>
+      </div>
+      {call.proposal_preview && (
+        <div className="approval-proposal">
+          <ProposalDiff preview={call.proposal_preview} />
+        </div>
+      )}
+      <label className="approval-remember">
+        <input
+          type="checkbox"
+          checked={remember}
+          onChange={(event) => setRemember(event.target.checked)}
+        />
+        Always allow {call.name}
+      </label>
+      <div className="decision-buttons">
+        <button disabled={busy} onClick={() => void choose("denied")}>
+          <X size={15} />
+          Deny
+        </button>
+        <button
+          className="approve"
+          disabled={busy}
+          onClick={() => void choose("approved")}
+        >
+          <Check size={15} />
+          {remember ? "Approve" : "Approve once"}
+        </button>
+      </div>
+    </article>
+  );
+}
 
 export function ActivityView({ calls, events, decide, activeRun }: ActivityViewProps) {
   const pending = calls.filter((call) => call.status === "proposed");
@@ -40,31 +118,7 @@ export function ActivityView({ calls, events, decide, activeRun }: ActivityViewP
             </div>
           ) : (
             pending.map((call) => (
-              <article className="approval-card" key={call.id}>
-                <div className="approval-card-top">
-                  <div className="tool-glyph">
-                    <Activity size={17} />
-                  </div>
-                  <div>
-                    <span>Assistant request</span>
-                    <strong>{call.tool_name}</strong>
-                  </div>
-                </div>
-                <div className="request-url">{call.request_url}</div>
-                <div className="decision-buttons">
-                  <button onClick={() => void decide(call, "denied")}>
-                    <X size={15} />
-                    Deny
-                  </button>
-                  <button
-                    className="approve"
-                    onClick={() => void decide(call, "approved")}
-                  >
-                    <Check size={15} />
-                    Approve once
-                  </button>
-                </div>
-              </article>
+              <ApprovalRequest key={call.id} call={call} decide={decide} />
             ))
           )}
         </div>

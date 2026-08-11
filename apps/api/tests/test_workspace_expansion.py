@@ -51,6 +51,78 @@ def test_graph_projection_is_rebuildable_and_has_provenance(client):
     assert rebuilt["version"] == first_version
 
 
+def test_reuploading_a_corrected_file_versions_the_dataset_it_already_named(client):
+    """The exact sequence the web app runs when a tabular source lands twice.
+
+    A dataset is auto-created per ready CSV/JSON source, keyed on the file's
+    base name. So a corrected re-upload arrives as a *new* source with a name
+    the workspace already holds — and `POST /api/datasets` answers that with
+    409, which the browser swallowed. The correction became a source nobody
+    queried while every dashboard kept reading the wrong numbers.
+
+    Versioning is what makes the second upload mean something, so this pins the
+    whole path: the collision is still a 409, the version endpoint accepts the
+    *new* source, and a query afterwards returns the corrected rows.
+    """
+    name = "Sales " + uuid.uuid4().hex[:8]
+    first = upload(
+        client,
+        "sales.csv",
+        "team,revenue\nNorth,10\n",
+        "text/csv",
+    )
+    created = client.post(
+        "/api/datasets",
+        headers=key(),
+        json={"name": name, "description": "", "source_id": first["id"]},
+    )
+    assert created.status_code == 201, created.text
+    dataset = created.json()
+    assert dataset["current_version"] == 1
+
+    corrected = upload(
+        client,
+        "sales.csv",
+        "team,revenue\nNorth,99\n",
+        "text/csv",
+    )
+    # Why the UI cannot simply create a second dataset: the name is taken.
+    collision = client.post(
+        "/api/datasets",
+        headers=key(),
+        json={"name": name, "description": "", "source_id": corrected["id"]},
+    )
+    assert collision.status_code == 409, collision.text
+
+    versioned = client.post(
+        f"/api/datasets/{dataset['id']}/versions",
+        headers=key(),
+        json={"source_id": corrected["id"]},
+    )
+    assert versioned.status_code == 201, versioned.text
+    after = versioned.json()
+    assert after["id"] == dataset["id"]
+    assert after["current_version"] == 2
+    assert after["source_id"] == corrected["id"]
+    assert after["content_hash"] != dataset["content_hash"]
+
+    # The point of the whole exercise: queries read the correction.
+    result = client.post(
+        f"/api/datasets/{dataset['id']}/query",
+        json={
+            "group_by": "team",
+            "metrics": [{"field": "revenue", "operation": "sum", "label": "total"}],
+        },
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["rows"] == [{"team": "North", "total": 99}]
+
+    # And exactly one dataset carries that name, not two.
+    named = [item for item in client.get("/api/datasets").json() if item["name"] == name]
+    assert len(named) == 1
+    assert named[0]["current_version"] == 2
+
+
 def test_dataset_dashboard_and_generated_app_release_flow(client):
     source = upload(
         client,

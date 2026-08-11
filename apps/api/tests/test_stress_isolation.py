@@ -365,7 +365,6 @@ ID_ROUTES = [
     "/api/documents/{id}",
     "/api/projects/{id}",
     "/api/chunks/{id}",
-    "/api/apps/{id}/preview",
     "/api/conversations/{id}/messages",
     "/api/runs/{id}/events",
     "/api/db/connections/{id}/schema",

@@ -251,7 +251,6 @@ def test_foreign_ids_answer_404_not_500_or_403_ambiguity(
         ("GET", f"/api/projects/{tenant_b.id('project')}"),
         ("GET", f"/api/chunks/{tenant_b.id('chunk')}"),
         ("GET", f"/api/conversations/{tenant_b.id('conversation')}/messages"),
-        ("GET", f"/api/apps/{tenant_b.id('app')}/preview"),
         ("GET", f"/api/db/connections/{tenant_b.id('db_connection')}/schema"),
         ("GET", f"/api/integrations/{tenant_b.id('integration_account')}/jobs"),
     ]

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createFromMenu, openSettings, openView } from "./shell";
 
-test("upload, cited answer, provenance, graph, approval, and deletion", async ({
+test("upload, cited answer, provenance, graph, and deletion", async ({
   page,
 }) => {
   await page.goto("/");
@@ -32,13 +32,11 @@ test("upload, cited answer, provenance, graph, approval, and deletion", async ({
   await openView(page, "Knowledge", /Graph/);
   await expect(page.getByText("Project Northstar", { exact: true }).first()).toBeVisible();
 
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
-  await composer.fill("/tool github-zen");
-  await composer.press("Enter");
-  await openSettings(page, "Activity");
-  await expect(page.getByText("github-zen", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Deny" }).click();
-  await expect(page.getByText("No pending requests")).toBeVisible();
+  // The `/tool github-zen` approval that used to sit here is gone with the
+  // panel that showed it. It only ever had something to display because
+  // seed_dev_workspace writes a `Tool` row and no endpoint does — so it proved
+  // the dev seed, not the product. The real queue is asserted further down,
+  // against an approval the agent loop actually parks.
 
   await openView(page, "Knowledge", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
@@ -182,6 +180,19 @@ test("a parked write is decidable from the Documents view", async ({ page }) => 
   await expect(page.locator(".tool-card", { hasText: "edit_document" })).toBeVisible({
     timeout: 20_000,
   });
+
+  // The same parked call, seen from the approvals queue. This is the assertion
+  // the old `/tool github-zen` one should always have been: Activity read the
+  // legacy `tool_calls` table, which only the dev seed can populate, so in a
+  // real deployment it showed "No pending requests" no matter how many runs
+  // were waiting — and the Settings badge, fed by the same list, never lit.
+  await expect(page.getByRole("button", { name: /awaiting approval/ })).toBeVisible();
+  await openSettings(page, "Activity");
+  const queued = page.locator(".approval-card", { hasText: "edit_document" });
+  await expect(queued).toBeVisible();
+  await expect(queued.locator(".diff-line.add")).toHaveText(
+    "+Page the on-call engineer in the payments rotation.",
+  );
 
   // Walk away from chat with the run still parked: the diff has to find the
   // user again beside the document it would change.

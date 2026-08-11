@@ -1,98 +1,62 @@
-# Reachability: sandbox charts, and the citation verdict
+# Reachability audit — finish the small items, then re-sweep
 
-Two capabilities exist server-side and cannot be reached from the app.
+## Part 1
 
-## 1. No chart the agent draws is visible anywhere
+- [ ] 1. Delete `GET /api/apps/{id}/preview` + `api.previewApp` + `AppPreviewOut`/`AppPreview`
+      and the three isolation-test route-table entries. Zero callers; the editor
+      renders through the `/frame` iframe.
+- [ ] 2. Point the Activity approvals panel at `AgentToolCall` (the real path).
+      Also fix `pendingApprovals` in `use-workspace.ts`, which feeds the nav
+      badge off the same legacy list — so the badge is permanently 0 too.
+- [ ] 3. `User.email_verified_at`: claim is STALE. It is read at
+      `apps/api/app/api/auth.py:670` (Google-link takeover gate) and at `:173`
+      into `AuthSessionOut.email_verified`, which IS in the client type. Do not
+      enforce at login; surface the state so it is observable.
+- [ ] 4. Wire CSV/JSON re-upload to `createDatasetVersion`. Today the auto-create
+      effect hits the 409 name conflict and swallows it, so re-upload is a silent
+      no-op, not "a second unrelated dataset". Update ADR 0003.
 
-`services/sandbox/outputs.py` stores every figure as a workspace `Source` and
-returns `{id, kind, mime, bytes, width, height}` — no `data`, no `url`. The web
-`SandboxArtifact` type still describes the *old* inline-base64 contract, so
-`artifactSource()` returns `""` and `Artifacts` renders `null`. Commit 04aa7b8
-added `GET /api/sources/{id}/content`; nothing calls it.
+## Part 2 — re-sweep (report only)
 
-- [x] Descriptor carries `url` (the API path), so the client has an address.
-- [x] `SandboxArtifact` in api-client matches what the server actually sends.
-- [x] `api.sourceContent(id)` fetches the bytes **through the API client**, not
-      through `<img src>`: see "Why not `<img src>`" below.
-- [x] `SourceImage` component: blob -> object URL -> `<img alt>`; revokes on
-      unmount; says so out loud when the fetch fails.
-- [x] Sandbox panel renders it.
-- [x] Chat renders it: `ToolResult.artifacts` -> `agent_tool_calls.artifacts_json`
-      -> `AgentToolCallOut.artifacts` -> `tool.completed` payload -> tool card.
-- [x] Sources view can open a stored file (`sandbox-png-1.png` is a `Source` with
-      `status="stored"`, which the web union did not even have a label for).
-- [x] `views/projects.tsx`: checked, no change. A `ProjectFile.content` is a
-      `Text` column of `str` end to end and no tool writes a sandbox output back
-      into a project; the preview pane is fed only `{path, content}` strings.
+- [ ] routes with no client caller
+- [ ] emitted-but-unconsumed RunEvent types
+- [ ] inert-by-default settings
+- [ ] columns written but never read
+- [ ] doc drift
 
-### Why not `<img src="https://api…/api/sources/{id}/content">`
-Two reasons, one of them deterministic:
-1. An `<img>` request carries no `X-Workspace-Id`. `auth._resolve_workspace`
-   then falls back to the caller's *oldest* membership, so for a user in two
-   workspaces every image in the newer one 404s. Not a maybe — a bug.
-2. The cookie is `SameSite=None`, but a cross-**site** subresource cookie is
-   blocked outright by Safari and being removed by Chrome. Nothing in the app
-   would tell the user why the picture vanished.
-The e2e suite cannot detect either: `127.0.0.1:3010` and `127.0.0.1:8010` are
-the same *site*, so the cookie is same-site there whatever production does.
-Fetching through the client (`credentials: "include"` + `X-Workspace-Id`, which
-already works for every other call) has neither problem and widens no CORS.
+## Gates
 
-## 2. `run.citations` is emitted and nobody listens
-
-- [x] Persist the report on the message it is about (`messages.citation_report_json`),
-      so the verdict survives a reload. Fields are exactly `CitationReport.to_dict()`
-      plus `summary` — nothing invented.
-- [x] Handle `run.citations` in the stream so the verdict lands with the answer.
-- [x] Render it under the assistant message: fabricated `[n]` and malformed
-      markers are loud, a clean check is quiet, and nothing is shown when no
-      passages were supplied.
-- [x] `tool.failed` (runs.py:553) is handled, and both it and `tool.started`
-      now name the tool, so a throwing tool is no longer a bare `run.failed`.
-
-## Verification
-- [x] ruff / mypy / pytest / openapi export
-- [x] tsc / lint / vitest / build
-- [x] playwright twice, consecutively
-- [x] screenshots looked at, and `naturalWidth` asserted rather than presence
+ruff, mypy(108), pytest(1399/1/3), export_openapi, tsc, lint, vitest(251),
+build, playwright(42) x2.
 
 ## Review
 
-### There were three locks on the door, not one
-The audit named the missing `url`. Fixing that produced an `<img>` with an alt
-string and no picture, because the web `SandboxArtifact` type still described an
-inline-base64 contract the server had abandoned — `data` and `url` both optional,
-both absent, `artifactSource()` returning `""`, nothing failing anywhere. Fixing
-*that* produced a broken-image icon, because `apps/web/next.config.ts` carried
-`img-src 'self' data:` and blocked the blob: URL, with the only complaint in the
-browser console. The same file already had `frame-src 'self' blob:` added for the
-identical bug in the LaTeX preview. Note that `img-src 'self'` would not have
-permitted the API origin either, so the naive `<img src>` was never going to work
-even setting the cookie and header problems aside.
+All four Part 1 items done; Part 2 swept and reported, not fixed.
 
-### What was added beyond the brief, and why
-- **`sandbox_executions.artifacts_json`.** Without it the console could only show
-  a figure in the seconds after it was drawn; a reload emptied the panel. That is
-  the same invisibility arriving a minute later. It also *removed* state — the
-  panel's per-execution artifact map is gone, because the row carries them.
-- **An open affordance in Sources, and a label for `status="stored"`.** Every
-  sandbox figure lands there and the status rendered as the raw word "stored".
-- **`tool.started` also names its tool**, since the same lookup answered both and
-  the chat's status line was already reaching for `tool_name`.
+1. Deleted. Route, `AppPreviewOut`, `AppPreview`, `previewApp`, three isolation
+   route-table entries, and the OpenAPI block. `test_tenant_isolation` asserts
+   routes↔cases both ways, so the deletion is verified rather than asserted.
+2. Activity now reads `AgentToolCall` through the same `decideAgentCall` chat and
+   Workflows use, reusing `ProposalDiff`. Also fixed `pendingApprovals`, which
+   fed the Settings badge off the same dead list — the badge could never light.
+   Dropped the frontend's now-unused legacy state and its two per-load fetches.
+3. Claim was stale: the column IS read, at `auth.py` (Google account-linking
+   gate) and into `AuthSessionOut.email_verified`, which is in the client type.
+   Kept and did NOT enforce at login; reasoning recorded at `_issue_login`. The
+   real gap was that nothing rendered it — the identity chip now does.
+4. Wired re-upload to `createDatasetVersion`. The audit's "second unrelated
+   dataset" was wrong: `POST /api/datasets` 409s on the name and the browser
+   swallowed it, so re-upload was a silent no-op. New API test pins the whole
+   sequence including that queries then read the correction. ADR 0003 gained a
+   postscript naming the two things that append to the chain.
 
-### Deferred, deliberately
-- **`views/projects.tsx` needs no change.** A `ProjectFile.content` is a `Text`
-  column of `str` end to end, no tool writes a sandbox output back into a
-  project, and the preview pane is fed only `{path, content}` strings. A binary
-  artifact cannot reach it without a new storage decision that this task is not.
-- **`SandboxRunOut.artifacts` is now redundant** with `execution.artifacts`. Left
-  in place: it is a published API field, and a test asserts the two agree.
-- **The `chart` descriptor field is carried but not rendered.** Re-drawing a
-  structured chart in the app's own theme is a feature, not a reachability fix.
+Also corrected README's approvals demo, which my change to (2) invalidated.
 
-### Honest note on what the browser suite can and cannot prove
-It proves the images decode, that the verdict renders and survives a reload, and
-that both work in dark. It **cannot** prove the cross-site cookie story either
-way: `127.0.0.1:3010` and `127.0.0.1:8010` are the same *site*, so the local
-stack would have passed a naive `<img src>` that fails in Safari today. That part
-rests on the reasoning above, not on a green run.
+Gates: ruff clean, mypy 108, pytest 1398/1 skipped/3 xfailed (1399 baseline − 2
+deleted route cases + 1 new test), openapi exported, tsc/lint clean, vitest 253
+(251 + 2 CSS guards), build clean, playwright 42 twice. Injected-failure check:
+reverting the panel failed exactly one test — this one — on both new assertions
+independently.
+
+Deferred, with sizing, in the report: the legacy Tool/ToolCall backend subsystem
+(reaches the run executor and ~10 test files), and every Part 2 finding.

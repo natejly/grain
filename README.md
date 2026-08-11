@@ -65,8 +65,15 @@ and `make dev-web` in two terminals.
 Open [http://localhost:3000](http://localhost:3000). The API reference is at
 [http://localhost:8000/docs](http://localhost:8000/docs).
 
-Try asking “Who owns the Atlas pilot?” after seeding. To exercise approvals,
-send `/tool github-zen`, open **Activity**, and approve or deny the request.
+Try asking “Who owns the Atlas pilot?” after seeding. To exercise approvals, ask
+for something that writes — “draft a launch runbook” — and the run parks on an
+approval card you can answer in the conversation or from **Activity**, which
+queues every request waiting on a human.
+
+(`/tool github-zen` still reaches the older HTTP-tool path, but only in a dev
+database: the `Tool` row it needs is written by `seed_dev_workspace` and by no
+endpoint, so that path cannot fire in a real deployment and no longer has a
+surface of its own.)
 
 ## Connect OpenAI
 

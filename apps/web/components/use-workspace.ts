@@ -20,7 +20,6 @@ import type {
   ProjectSummary,
   ProvenanceChunk,
   Source,
-  ToolCall,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
@@ -48,7 +47,6 @@ export function useWorkspace() {
   const [activeConversation, setActiveConversation] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
-  const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
   const [agentCalls, setAgentCalls] = useState<AgentToolCall[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
@@ -92,9 +90,15 @@ export function useWorkspace() {
   const activeProjectRef = useRef<string | null>(null);
   const datasetAttempts = useRef(new Set<string>());
 
+  /**
+   * Drives the Activity badge, so it has to count the approvals that actually
+   * happen: `AgentToolCall`s parked by the agent loop. It counted legacy
+   * `ToolCall`s until now, and nothing outside the dev seed creates the `Tool`
+   * rows those hang off — so the badge sat at zero while real runs waited.
+   */
   const pendingApprovals = useMemo(
-    () => toolCalls.filter((call) => call.status === "proposed"),
-    [toolCalls],
+    () => agentCalls.filter((call) => call.status === "proposed"),
+    [agentCalls],
   );
 
   const dashboards = useMemo(
@@ -103,14 +107,12 @@ export function useWorkspace() {
   );
 
   const refreshSecondary = useCallback(async () => {
-    const [nextSources, nextTools, nextAgentCalls, nextAudit] = await Promise.all([
+    const [nextSources, nextAgentCalls, nextAudit] = await Promise.all([
       api.listSources(),
-      api.listToolCalls(),
       api.listAgentToolCalls(),
       api.listAuditEvents(),
     ]);
     setSources(nextSources);
-    setToolCalls(nextTools);
     setAgentCalls(nextAgentCalls);
     setAuditEvents(nextAudit);
   }, []);
@@ -187,7 +189,6 @@ export function useWorkspace() {
         boot,
         chats,
         nextSources,
-        nextTools,
         nextAgentCalls,
         nextAudit,
         nextGraph,
@@ -200,7 +201,6 @@ export function useWorkspace() {
         api.bootstrap(),
         api.listConversations(),
         api.listSources(),
-        api.listToolCalls(),
         api.listAgentToolCalls(),
         api.listAuditEvents(),
         api.getGraph(),
@@ -219,7 +219,6 @@ export function useWorkspace() {
         return [...createdDuringLoad, ...chats];
       });
       setSources(nextSources);
-      setToolCalls(nextTools);
       setAgentCalls(nextAgentCalls);
       setAuditEvents(nextAudit);
       setGraph(nextGraph);
@@ -292,6 +291,13 @@ export function useWorkspace() {
 
   // A ready CSV/JSON source becomes a queryable dataset on its own, so
   // dashboards can bind to it without a separate builder step.
+  //
+  // Re-uploading a corrected file appends a *version* rather than making a
+  // second dataset — the content-hashed chain ADR 0003 specifies. This used to
+  // call createDataset unconditionally, which answered the re-upload with the
+  // 409 on the dataset name and swallowed it: the corrected file landed as a
+  // source, and every dashboard bound to that dataset kept querying the bad
+  // rows with nothing on screen to say so.
   useEffect(() => {
     const pending = sources.filter(
       (source) =>
@@ -304,16 +310,22 @@ export function useWorkspace() {
     pending.forEach((source) => datasetAttempts.current.add(source.id));
     void (async () => {
       for (const source of pending) {
+        const name = baseName(source.filename);
+        // Matched on name because that is what the API holds unique per
+        // workspace, and what made the old call collide.
+        const existing = datasets.find((dataset) => dataset.name === name);
         try {
-          const created = await api.createDataset(
-            baseName(source.filename),
-            source.id,
-          );
-          setDatasets((items) =>
-            items.some((item) => item.id === created.id)
-              ? items
-              : [created, ...items],
-          );
+          const saved = existing
+            ? await api.createDatasetVersion(existing.id, source.id)
+            : await api.createDataset(name, source.id);
+          setDatasets((items) => {
+            const known = items.some((item) => item.id === saved.id);
+            // Replace, never skip: a new version changes current_version,
+            // source_id and the column schema on the same dataset id.
+            return known
+              ? items.map((item) => (item.id === saved.id ? saved : item))
+              : [saved, ...items];
+          });
         } catch {
           // The source is still searchable in chat; it just has no dataset.
         }
@@ -425,7 +437,6 @@ export function useWorkspace() {
     activeConversation,
     messages,
     sources,
-    toolCalls,
     agentCalls,
     auditEvents,
     graph,

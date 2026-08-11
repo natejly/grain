@@ -44,7 +44,6 @@ export function Workspace() {
     activeConversation,
     messages,
     sources,
-    toolCalls,
     agentCalls,
     auditEvents,
     graph,
@@ -119,7 +118,6 @@ export function Workspace() {
     cancelActiveRun,
     regenerate,
     submitPrompt,
-    decide,
     uploadFiles,
     removeSource,
     openChunk,
@@ -303,7 +301,20 @@ export function Workspace() {
           </div>
           <div>
             <strong>{session?.user_name || "Connecting…"}</strong>
-            <span>{session?.user_email || session?.workspace_name || ""}</span>
+            <span>
+              {session?.user_email || session?.workspace_name || ""}
+              {/* The one place the verification state is legible. It is not a
+                  sign-in requirement on purpose (gating login on delivered mail
+                  turns an SMTP outage into a lockout with no way back in), but
+                  it does decide whether a Google sign-in may claim this account
+                  — apps/api/app/api/auth.py, the account-linking branch — so a
+                  user is entitled to know which side of that line they are on. */}
+              {session && session.user_email && !session.email_verified && (
+                <span className="identity-unverified" title="Confirm your address from the email we sent">
+                  unverified
+                </span>
+              )}
+            </span>
           </div>
           <button
             className="icon-button"
@@ -535,9 +546,9 @@ export function Workspace() {
 
         {view === "activity" && (
           <ActivityView
-            calls={toolCalls}
+            calls={agentCalls}
             events={auditEvents}
-            decide={decide}
+            decide={decideAgentCall}
             activeRun={activeRun}
           />
         )}

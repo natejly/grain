@@ -673,10 +673,3 @@ class PublishedAppOut(BaseModel):
     manifest: Dict[str, Any]
 
 
-class AppPreviewOut(BaseModel):
-    name: str
-    slug: str
-    description: str
-    version: int
-    status: str
-    manifest: Dict[str, Any]

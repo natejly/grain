@@ -735,6 +735,17 @@ select:focus-visible {
   color: var(--text-dim);
 }
 
+.identity-unverified {
+  margin-left: 5px;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .main-panel {
   position: relative;
   min-width: 0;
@@ -1773,18 +1784,25 @@ select:focus-visible {
   font-size: 10px;
 }
 
-.request-url {
-  overflow: hidden;
+/* Wraps the shared ProposalDiff so a diff in the approvals queue reads exactly
+   as it does on the chat card and in Documents. */
+.approval-proposal {
+  overflow: auto;
+  max-height: 220px;
   margin: 0 12px 10px;
-  padding: 8px 9px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface);
+}
+
+.approval-remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 10px;
   color: var(--text-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .decision-buttons {

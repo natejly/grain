@@ -1050,45 +1050,6 @@
         "title": "AppGenerateRequest",
         "type": "object"
       },
-      "AppPreviewOut": {
-        "properties": {
-          "description": {
-            "title": "Description",
-            "type": "string"
-          },
-          "manifest": {
-            "additionalProperties": true,
-            "title": "Manifest",
-            "type": "object"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "slug": {
-            "title": "Slug",
-            "type": "string"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "version": {
-            "title": "Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "name",
-          "slug",
-          "description",
-          "version",
-          "status",
-          "manifest"
-        ],
-        "title": "AppPreviewOut",
-        "type": "object"
-      },
       "AppReleaseCreate": {
         "properties": {
           "dashboard_ids": {
@@ -6199,64 +6160,6 @@
           }
         },
         "summary": "Generate App Release",
-        "tags": [
-          "generated-apps"
-        ]
-      }
-    },
-    "/api/apps/{app_id}/preview": {
-      "get": {
-        "operationId": "preview_app_api_apps__app_id__preview_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "app_id",
-            "required": true,
-            "schema": {
-              "title": "App Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Workspace-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AppPreviewOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Preview App",
         "tags": [
           "generated-apps"
         ]

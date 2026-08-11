@@ -564,15 +564,6 @@ export type GeneratedApp = {
   updated_at: string;
 };
 
-export type AppPreview = {
-  name: string;
-  slug: string;
-  description: string;
-  version: number;
-  status: string;
-  manifest: AppManifest;
-};
-
 export type PublishedApp = {
   name: string;
   slug: string;
@@ -1827,10 +1818,6 @@ export class WorkspaceApi {
       { method: "POST" },
       true,
     );
-  }
-
-  previewApp(appId: string): Promise<AppPreview> {
-    return this.request(`/api/apps/${appId}/preview`);
   }
 
   // --- Workspace administration ---------------------------------------------

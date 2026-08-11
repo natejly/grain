@@ -59,3 +59,32 @@ describe("documents pending-edit panel styling", () => {
     expect(body).toMatch(/overflow-y:\s*(auto|scroll)/);
   });
 });
+
+/**
+ * The approvals queue in Activity renders the same proposals, so it inherits
+ * the same hazard: it now shows a full unified diff where it used to show a
+ * one-line URL, and an unbounded one pushes Approve/Deny out of the card.
+ */
+describe("activity approvals queue styling", () => {
+  it("has a rule for every class the queue renders", () => {
+    for (const selector of [
+      ".approval-card",
+      ".approval-card-top",
+      ".approval-proposal",
+      ".approval-remember",
+      ".decision-buttons",
+      ".tool-glyph",
+      ".diff",
+      ".diff-line",
+      ".proposal-note",
+    ]) {
+      expect(ruleBody(selector), `${selector} has no rule`).not.toBe("");
+    }
+  });
+
+  it("bounds the proposal so the decision buttons stay in the card", () => {
+    const body = ruleBody(".approval-proposal");
+    expect(body).toMatch(/max-height:/);
+    expect(body).toMatch(/overflow:\s*(auto|scroll)/);
+  });
+});

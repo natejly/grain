@@ -207,6 +207,15 @@ def _issue_login(
     privilege change, so the token that existed before it must not survive it —
     otherwise an attacker who planted a session cookie in the victim's browser
     still holds a valid token after the victim signs in (session fixation).
+
+    Deliberately does not require ``email_verified_at``. Signing in with your own
+    password proves what login needs to prove; the mailbox proof is a *second*
+    factor that only matters where an address is being taken as identity, which
+    is the Google account-linking branch below and nowhere else. Gating login on
+    it as well would make every session depend on outbound mail, converting an
+    SMTP outage into a total lockout that no one locked out can self-service.
+    The flag is reported on ``AuthSessionOut.email_verified`` so the state is
+    visible rather than silent.
     """
     existing_token = request.cookies.get(settings.session_cookie_name, "")
     existing = (

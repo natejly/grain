@@ -15,7 +15,6 @@ from ..database import get_db
 from ..models import AppRelease, GeneratedApp, new_id
 from ..schemas import (
     AppGenerateRequest,
-    AppPreviewOut,
     AppReleaseCreate,
     AppReleaseOut,
     GeneratedAppCreate,
@@ -541,38 +540,6 @@ def published_app_frame(
         raise HTTPException(status_code=404, detail="Published app not found")
     manifest = _code_manifest_or_404(release)
     return _frame_response(manifest["html"])
-
-
-@router.get("/api/apps/{app_id}/preview", response_model=AppPreviewOut)
-def preview_app(
-    app_id: str,
-    actor: Actor = Depends(get_actor),
-    db: Session = Depends(get_db),
-) -> AppPreviewOut:
-    app = _workspace_app(db, actor, app_id)
-    release = None
-    if app.current_release_id:
-        release = db.get(AppRelease, app.current_release_id)
-    if release is None or release.workspace_id != actor.workspace_id:
-        release = db.scalar(
-            select(AppRelease)
-            .where(
-                AppRelease.app_id == app.id,
-                AppRelease.workspace_id == actor.workspace_id,
-            )
-            .order_by(AppRelease.version.desc())
-            .limit(1)
-        )
-    if release is None:
-        raise HTTPException(status_code=404, detail="App release not found")
-    return AppPreviewOut(
-        name=app.name,
-        slug=app.slug,
-        description=app.description,
-        version=release.version,
-        status=release.status,
-        manifest=json.loads(release.manifest_json),
-    )
 
 
 @router.get("/published/apps/{slug}", response_model=PublishedAppOut)
