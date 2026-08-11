@@ -45,6 +45,9 @@ export type ChatHandlerDeps = {
   draft: string;
   activeConversation: string | null;
   activeRun: string | null;
+  /** "" = the workspace default; otherwise the authored agent to answer as. */
+  selectedAgentId: string;
+  setSelectedAgentId: Dispatch<SetStateAction<string>>;
   setError: Dispatch<SetStateAction<string>>;
   setView: Dispatch<SetStateAction<View>>;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -75,6 +78,8 @@ export function createChatHandlers({
   draft,
   activeConversation,
   activeRun,
+  selectedAgentId,
+  setSelectedAgentId,
   setError,
   setView,
   setSidebarOpen,
@@ -254,7 +259,7 @@ export function createChatHandlers({
       const response = await api.sendMessage(
         activeConversation,
         lastUser.content,
-        bootstrap?.default_agent_id,
+        selectedAgentId || bootstrap?.default_agent_id,
       );
       setMessages((items) =>
         items.some((item) => item.id === response.message.id)
@@ -263,6 +268,9 @@ export function createChatHandlers({
       );
       void followRun(response.run.id, activeConversation);
     } catch (caught) {
+      if (caught instanceof Error && caught.message.includes("Agent is not available")) {
+        setSelectedAgentId("");
+      }
       setError(describeError(caught, "Could not regenerate"));
     }
   }
@@ -454,7 +462,7 @@ export function createChatHandlers({
       const response = await api.sendMessage(
         conversationId,
         content,
-        bootstrap?.default_agent_id,
+        selectedAgentId || bootstrap?.default_agent_id,
       );
       setMessages((items) => {
         const existing = items.some((item) => item.id === response.message.id);
@@ -463,6 +471,12 @@ export function createChatHandlers({
       void followRun(response.run.id, conversationId);
     } catch (caught) {
       setDraft(content);
+      // The chosen agent was disabled or deleted since the menu was rendered.
+      // Fall back to the default so the next send works instead of failing the
+      // same way forever.
+      if (caught instanceof Error && caught.message.includes("Agent is not available")) {
+        setSelectedAgentId("");
+      }
       setError(describeError(caught, "Could not send message"));
     }
   }

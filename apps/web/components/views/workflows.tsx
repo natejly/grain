@@ -3,6 +3,7 @@
 import {
   WorkflowCompileError,
   WorkflowInputError,
+  type AgentInfo,
   type AgentToolCall,
   type Workflow,
   type WorkflowCompileFinding,
@@ -625,6 +626,48 @@ export function WorkflowsView({
   const runs = runsByWorkflow[activeId] ?? [];
 
   /**
+   * The enabled agents, for each agent step's "runs as" picker. Fetched once;
+   * a failure leaves the roster empty and the canvas read-only, which is the
+   * graph exactly as it was before agents were assignable.
+   */
+  const [agentRoster, setAgentRoster] = useState<AgentInfo[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listAgents()
+      .then((rows) => {
+        if (!cancelled) setAgentRoster(rows.filter((row) => row.enabled));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function assignAgent(nodeId: string, agentId: string) {
+    if (!active) return;
+    const graph = {
+      ...active.graph,
+      nodes: (active.graph.nodes ?? []).map((node) =>
+        node.id === nodeId ? { ...node, agent: agentId } : node,
+      ),
+    };
+    setBusy(true);
+    try {
+      // The server re-validates (and bumps the version): a pick that names a
+      // vanished agent is rejected with a compile error, never stored.
+      const updated = await api.updateWorkflow(active.id, { graph });
+      setWorkflows((rows) =>
+        rows.map((row) => (row.id === updated.id ? updated : row)),
+      );
+    } catch (caught) {
+      setError(describeError(caught, "Could not assign the agent"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
    * Backing runs this workspace's ceiling is currently holding, by run id.
    *
    * The last of the three signals `resolvePausedReason` weighs, and the only
@@ -1171,6 +1214,8 @@ export function WorkflowsView({
                 graph={active.graph}
                 nodeRuns={runDetail ? nodeRuns : undefined}
                 pausedReason={runDetail ? pausedReasonOf(runDetail) : ""}
+                agents={agentRoster}
+                onAssignAgent={(nodeId, agentId) => void assignAgent(nodeId, agentId)}
                 renderApproval={(node) => {
                   if (node.status !== "waiting_for_approval") return null;
                   // Both parks land the node on the same status, and only the

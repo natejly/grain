@@ -72,6 +72,9 @@ export function useWorkspace() {
   const [activeProject, setActiveProject] = useState<WorkspaceProject | null>(null);
   const [view, setView] = useState<View>("chat");
   const [draft, setDraft] = useState("");
+  // Which authored agent answers the next message; "" is the workspace
+  // default. Session state on purpose — a conversation does not remember it.
+  const [selectedAgentId, setSelectedAgentId] = useState("");
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState("");
   /**
@@ -433,6 +436,8 @@ export function useWorkspace() {
     draft,
     activeConversation,
     activeRun,
+    selectedAgentId,
+    setSelectedAgentId,
     setError,
     setView,
     setSidebarOpen,
@@ -519,6 +524,8 @@ export function useWorkspace() {
     setView,
     draft,
     setDraft,
+    selectedAgentId,
+    setSelectedAgentId,
     activeRun,
     runStatus,
     budgetPark,

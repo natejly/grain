@@ -2,6 +2,7 @@ import {
   Activity,
   BarChart3,
   Blocks,
+  Bot,
   Braces,
   Brain,
   Database,
@@ -80,7 +81,15 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Chat",
     icon: MessageSquare,
     surface: "rail",
-    items: [{ view: "chat", label: "Chat", icon: MessageSquare }],
+    /**
+     * Agents live beside Chat, not in settings: an agent is who you are
+     * talking to, so the place you author one is a tab away from the place
+     * you use one.
+     */
+    items: [
+      { view: "chat", label: "Chat", icon: MessageSquare },
+      { view: "agents", label: "Agents", icon: Bot },
+    ],
   },
   /**
    * "Files", not "Documents". The group has held Projects, Boards and

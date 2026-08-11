@@ -260,8 +260,12 @@ def test_an_agent_node_in_a_workflow_resolves_at_workflow_scope(
         executor=poisoned,
         read_only=False,
     )
-    monkeypatch.setattr(executor, "build_registry", lambda d, c: {"probe_write": tool})
-    monkeypatch.setattr(agent_loop, "build_registry", lambda d, c: {"probe_write": tool})
+    monkeypatch.setattr(
+        executor, "build_registry", lambda d, c, allowed=None: {"probe_write": tool}
+    )
+    monkeypatch.setattr(
+        agent_loop, "build_registry", lambda d, c, allowed=None: {"probe_write": tool}
+    )
     # The workspace clicked "always allow" in a conversation, once.
     grant(db, identity, "probe_write", "allow", scope=CHAT_SCOPE)
 

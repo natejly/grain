@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  AgentInfo,
   WorkflowCompileFinding,
   WorkflowGraph,
   WorkflowGraphNode,
@@ -101,6 +102,13 @@ export type WorkflowGraphViewProps = {
    * waiting for a decision or held by the ceiling, and is told from here.
    */
   pausedReason?: string;
+  /** The workspace's enabled agents, for naming who an agent step runs as. */
+  agents?: AgentInfo[];
+  /**
+   * Makes each agent step's "runs as" a picker instead of a caption. Absent on
+   * read-only canvases (compile previews, and graphs nobody may edit).
+   */
+  onAssignAgent?: (nodeId: string, agentId: string) => void;
 };
 
 /** Chip width and row pitch, in flow units. The dot grid is 20, so both align. */
@@ -161,13 +169,16 @@ type StepData = {
   approval: ReactNode;
   /** A step that stopped the run: open, and not closeable by moving away. */
   pinned: boolean;
+  agents: AgentInfo[];
+  onAssignAgent?: (nodeId: string, agentId: string) => void;
   [key: string]: unknown;
 };
 
 type StepNode = Node<StepData, "step">;
 
 function StepChip({ data, positionAbsoluteX, positionAbsoluteY }: NodeProps<StepNode>) {
-  const { node, run, after, warnings, pausedReason, approval, pinned } = data;
+  const { node, run, after, warnings, pausedReason, approval, pinned, agents, onAssignAgent } =
+    data;
   // Sticky is the click: a person reading three steps in turn should not have
   // to keep the pointer inside a 240px box to keep the answer on screen.
   const [sticky, setSticky] = useState(false);
@@ -315,10 +326,34 @@ function StepChip({ data, positionAbsoluteX, positionAbsoluteY }: NodeProps<Step
 
           {node.kind === "agent" && (
             <>
+              <p className="workflow-node-label">Runs as</p>
+              {onAssignAgent && agents.length > 0 ? (
+                <select
+                  className="workflow-agent-select"
+                  value={node.agent ?? ""}
+                  onChange={(event) => onAssignAgent(node.id, event.target.value)}
+                  aria-label={`Agent for ${node.id}`}
+                >
+                  <option value="">Default agent</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="workflow-node-prompt">
+                  {agents.find((agent) => agent.id === node.agent)?.name ??
+                    (node.agent ? "An agent no longer offered" : "Default agent")}
+                </p>
+              )}
               <p className="workflow-node-label">Prompt</p>
               <p className="workflow-node-prompt">{prompt}</p>
               <p className="workflow-node-caveat">
                 Chooses its own tools when it runs, so this card cannot list them.
+                {node.agent
+                  ? " Its choices are limited to the assigned agent's provisioned tools."
+                  : ""}{" "}
                 Every call it makes is still checked against this workspace&rsquo;s
                 policy and parks for approval if it writes.
               </p>
@@ -461,6 +496,8 @@ export function WorkflowGraphView({
   warnings,
   renderApproval,
   pausedReason = "",
+  agents,
+  onAssignAgent,
 }: WorkflowGraphViewProps) {
   const approvalOf = useCallback(
     (run: WorkflowNodeRun | null): ReactNode =>
@@ -527,12 +564,14 @@ export function WorkflowGraphView({
               pausedReason,
               approval: approvalOf(run),
               pinned,
+              agents: agents ?? [],
+              onAssignAgent,
             },
           },
         ];
       }),
     );
-  }, [graph, nodeRuns, warnings, pausedReason, approvalOf]);
+  }, [graph, nodeRuns, warnings, pausedReason, approvalOf, agents, onAssignAgent]);
 
   const edges = useMemo<Edge[]>(() => {
     const known = new Set(graph.nodes.map((node) => node.id));

@@ -765,6 +765,7 @@ DB_GET_ALLOWLIST = {
     ("app/api/integrations.py", "SyncJob"): "id from a scoped replay row",
     ("app/services/ingestion.py", "Source"): "worker; id from an authorized route",
     ("app/services/memory.py", "Run"): "worker; id from an authorized route",
+    ("app/services/agent_loop.py", "Agent"): "workspace re-checked on the next line",
     ("app/services/agent_loop.py", "AgentToolCall"): "id is the loop's own row",
     ("app/services/agent_loop.py", "Conversation"): "workspace re-checked on the next line",
     ("app/services/agent_loop.py", "Document"): "workspace re-checked on the next line",

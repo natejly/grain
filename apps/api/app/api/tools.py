@@ -18,6 +18,7 @@ from ..schemas import (
     ApprovalRequest,
     ToolArtifact,
     ToolCallOut,
+    ToolInfoOut,
     ToolPolicyOut,
     ToolPolicyRequest,
 )
@@ -25,6 +26,7 @@ from ..services.agent_loop import open_document, policy_scope_for_run
 from ..services.artifacts import documents, proposals
 from ..services.audit import record_audit
 from ..services.events import append_event
+from ..services.llm_tools import ToolContext, registry_families
 from ..services.runs import deny_tool_call, execute_tool_call, resume_run
 from ..services.workflows import executor as workflow_executor
 from ..services.workflows.inputs import InputBindingError
@@ -265,6 +267,38 @@ def _upsert_policy(
         db.add(row)
     row.policy = policy
     return row
+
+
+@router.get("/tools", response_model=List[ToolInfoOut])
+def list_registry_tools(
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> List[ToolInfoOut]:
+    """The live tool registry, grouped by family — the provisioning checklist.
+
+    Built from the same `registry_families` the loop's `build_registry`
+    flattens, so what an agent editor offers and what a turn can call cannot
+    disagree. Like every registry build, this consults the workspace's MCP
+    servers, so it reflects what is connected *now*.
+    """
+    context = ToolContext(
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id="",
+    )
+    out: List[ToolInfoOut] = []
+    for family, tools in registry_families(db, context):
+        for name in sorted(tools):
+            spec = tools[name]
+            out.append(
+                ToolInfoOut(
+                    name=spec.name,
+                    description=spec.description,
+                    read_only=spec.read_only,
+                    family=family,
+                )
+            )
+    return out
 
 
 @router.get("/tool-policies", response_model=List[ToolPolicyOut])

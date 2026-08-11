@@ -965,6 +965,33 @@ ROUTE_CASES: List[RouteCase] = [
         # row and return 204, and the tamper digest would show B's grant gone.
         query={"scope": "workflow"},
     ),
+    # -- agents ------------------------------------------------------------
+    RouteCase("GET", "/api/agents", SCOPED),
+    RouteCase(
+        "GET",
+        "/api/tools",
+        SCOPED,
+        note="the registry is built per workspace; the list must be the caller's",
+    ),
+    RouteCase(
+        "POST",
+        "/api/agents",
+        SCOPED,
+        body={"name": "mine", "instructions": "Answer plainly."},
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/agents/{agent_id}",
+        DENY,
+        path_ids={"agent_id": "agent"},
+        body={"name": "mine now"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/agents/{agent_id}",
+        DENY,
+        path_ids={"agent_id": "agent"},
+    ),
     # -- audit / graph / memory -------------------------------------------
     RouteCase("GET", "/api/audit-events", SCOPED),
     RouteCase("GET", "/api/graph", SCOPED),

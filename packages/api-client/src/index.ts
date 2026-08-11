@@ -208,6 +208,56 @@ export type ToolPolicy = {
   policy: "ask" | "allow" | "deny";
 };
 
+// --- Agents (authored system prompts + provisioned tools) ---
+
+/**
+ * An agent a person authored: a name, a system prompt, and — optionally — a
+ * provisioned subset of the tool registry. `allowed_tools: null` means the
+ * whole registry; a list (empty included) is an explicit grant. The subset
+ * narrows what the model is offered; workspace tool policies still gate what
+ * any surviving tool may do.
+ */
+export type AgentInfo = {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  enabled: boolean;
+  allowed_tools: string[] | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentCreateBody = {
+  name: string;
+  instructions: string;
+  description?: string;
+  allowed_tools?: string[] | null;
+};
+
+/**
+ * Every field optional; omitted means "leave alone". `clear_allowed_tools`
+ * exists because `allowed_tools: null` cannot distinguish "reset to all tools"
+ * from "not editing tools" in a PATCH.
+ */
+export type AgentUpdateBody = {
+  name?: string;
+  description?: string;
+  instructions?: string;
+  enabled?: boolean;
+  allowed_tools?: string[] | null;
+  clear_allowed_tools?: boolean;
+};
+
+/** One registry tool, as the provisioning checklist renders it. */
+export type ToolInfo = {
+  name: string;
+  description: string;
+  read_only: boolean;
+  /** The registry family it ships with ("core", "mcp", "sandbox", …). */
+  family: string;
+};
+
 /**
  * "markdown" is rendered, maths and all; "text" is shown exactly as typed.
  *
@@ -1441,6 +1491,32 @@ export class WorkspaceApi {
     );
   }
 
+  // --- Agents (authored system prompts + provisioned tools) ---
+
+  listAgents(): Promise<AgentInfo[]> {
+    return this.request("/api/agents");
+  }
+
+  createAgent(body: AgentCreateBody): Promise<AgentInfo> {
+    return this.request("/api/agents", { method: "POST", body: JSON.stringify(body) }, true);
+  }
+
+  updateAgent(agentId: string, body: AgentUpdateBody): Promise<AgentInfo> {
+    return this.request(`/api/agents/${agentId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  deleteAgent(agentId: string): Promise<undefined> {
+    return this.request(`/api/agents/${agentId}`, { method: "DELETE" });
+  }
+
+  /** The live tool registry, for the agent editor's provisioning checklist. */
+  listTools(): Promise<ToolInfo[]> {
+    return this.request("/api/tools");
+  }
+
   listToolPolicies(): Promise<ToolPolicy[]> {
     return this.request("/api/tool-policies");
   }
@@ -2416,6 +2492,12 @@ export type WorkflowGraphNode = {
    * no condition and on rows written before guards existed.
    */
   when?: WorkflowGuard | null;
+  /**
+   * Agent nodes only: the authored agent this step runs as, by id. "" (or
+   * absent, on rows written before agents were assignable) means the workspace
+   * default. Set by the editor's picker — the compiler never emits ids.
+   */
+  agent?: string;
 };
 
 /** Spelled from/to on the wire, which is why this is not {source,target}. */

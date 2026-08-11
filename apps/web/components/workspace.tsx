@@ -11,6 +11,7 @@ import { SettingsMenu } from "./settings-menu";
 import { useWorkspace } from "./use-workspace";
 import { ActivityView } from "./views/activity";
 import { AdminView } from "./views/admin";
+import { AgentsView } from "./views/agents";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
 import { DashboardEditor } from "./views/dashboard-editor";
@@ -64,6 +65,8 @@ export function Workspace() {
     setView,
     draft,
     setDraft,
+    selectedAgentId,
+    setSelectedAgentId,
     activeRun,
     runStatus,
     budgetPark,
@@ -462,6 +465,8 @@ export function Workspace() {
             openCitation={openCitation}
             onAttach={() => setView("sources")}
             endRef={endRef}
+            selectedAgentId={selectedAgentId}
+            onSelectAgent={setSelectedAgentId}
           />
         )}
 
@@ -576,6 +581,10 @@ export function Workspace() {
             removeProject={removeProject}
           />
         )}
+
+        {/* Self-contained like WorkflowsView: the agent list is fetched when
+            somebody opens the editor, not at page load. */}
+        {view === "agents" && <AgentsView setError={setError} />}
 
         {/* Self-contained: a workflow's run history is nobody's business until
             they open this, so it is fetched here rather than at page load. */}

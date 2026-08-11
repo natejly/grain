@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import type {
+  AgentInfo,
   AgentToolCall,
   Citation,
   CitationCheck,
@@ -22,7 +23,8 @@ import type {
   Message,
   Source,
 } from "@workspace/api-client";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import { api } from "../api";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
@@ -66,7 +68,54 @@ export type ChatViewProps = {
   openCitation: (citation: Citation) => Promise<void>;
   onAttach: () => void;
   endRef: React.RefObject<HTMLDivElement | null>;
+  /** "" means the workspace default agent; otherwise an authored agent's id. */
+  selectedAgentId: string;
+  onSelectAgent: (agentId: string) => void;
 };
+
+/**
+ * Who answers the next message. Fetches the enabled agents itself — the list
+ * is small, only this control wants it, and putting it in the workspace hook
+ * would load it for every user who never opens the menu. One agent means no
+ * choice, so the control renders nothing and the composer stays as it was.
+ */
+function AgentSelect({
+  selectedAgentId,
+  onSelectAgent,
+}: {
+  selectedAgentId: string;
+  onSelectAgent: (agentId: string) => void;
+}) {
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listAgents()
+      .then((rows) => {
+        if (!cancelled) setAgents(rows.filter((row) => row.enabled));
+      })
+      .catch(() => undefined); // the default agent still answers
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (agents.length < 2) return null;
+  return (
+    <select
+      className="agent-select"
+      value={selectedAgentId}
+      onChange={(event) => onSelectAgent(event.target.value)}
+      aria-label="Agent"
+    >
+      <option value="">Default agent</option>
+      {agents.map((agent) => (
+        <option key={agent.id} value={agent.id}>
+          {agent.name}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -310,6 +359,8 @@ export function ChatView({
   openCitation,
   onAttach,
   endRef,
+  selectedAgentId,
+  onSelectAgent,
 }: ChatViewProps) {
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
@@ -444,6 +495,10 @@ export function ChatView({
             >
               <Paperclip size={17} />
             </button>
+            <AgentSelect
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={onSelectAgent}
+            />
             <span className="composer-spacer" />
             {activeRun ? (
               <button
