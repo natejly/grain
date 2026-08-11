@@ -775,6 +775,13 @@ DB_GET_ALLOWLIST = {
     ("app/services/connectors/sync_jobs.py", "SyncJob"): "worker; scoped id",
     ("app/services/connectors/sync_jobs.py", "IntegrationAccount"): "read off the job",
     ("app/services/mcp/registry.py", "McpServer"): "id bound from a scoped query",
+    ("app/services/workflows/executor.py", "WorkflowRun"): (
+        "worker; id from an authorized route or the run's own row"
+    ),
+    ("app/services/workflows/executor.py", "Run"): "id read off the workflow run",
+    ("app/services/workflows/executor.py", "AgentToolCall"): (
+        "id is the row the executor just wrote"
+    ),
 }
 
 

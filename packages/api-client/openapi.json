@@ -3702,6 +3702,10 @@
             "title": "Policy",
             "type": "string"
           },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
           "tool_name": {
             "title": "Tool Name",
             "type": "string"
@@ -3709,7 +3713,8 @@
         },
         "required": [
           "tool_name",
-          "policy"
+          "policy",
+          "scope"
         ],
         "title": "ToolPolicyOut",
         "type": "object"
@@ -3723,6 +3728,15 @@
               "deny"
             ],
             "title": "Policy",
+            "type": "string"
+          },
+          "scope": {
+            "default": "chat",
+            "enum": [
+              "chat",
+              "workflow"
+            ],
+            "title": "Scope",
             "type": "string"
           },
           "tool_name": {
@@ -3792,6 +3806,512 @@
           "token"
         ],
         "title": "VerifyEmailIn",
+        "type": "object"
+      },
+      "WorkflowCompileOut": {
+        "properties": {
+          "graph": {
+            "additionalProperties": true,
+            "title": "Graph",
+            "type": "object"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "title": "Summary",
+            "type": "object"
+          }
+        },
+        "required": [
+          "graph",
+          "summary"
+        ],
+        "title": "WorkflowCompileOut",
+        "type": "object"
+      },
+      "WorkflowCompileRequest": {
+        "properties": {
+          "source_prompt": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Source Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_prompt"
+        ],
+        "title": "WorkflowCompileRequest",
+        "type": "object"
+      },
+      "WorkflowCreateRequest": {
+        "description": "Either a sentence to compile or an already-formed graph, never neither.\n\nA hand-written graph goes through `compile_document`, the same function the\nmodel's output goes through, so a person cannot store something a model\nwould have been refused for.",
+        "properties": {
+          "graph": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph"
+          },
+          "source_prompt": {
+            "default": "",
+            "title": "Source Prompt",
+            "type": "string"
+          },
+          "status": {
+            "default": "draft",
+            "enum": [
+              "draft",
+              "active",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "WorkflowCreateRequest",
+        "type": "object"
+      },
+      "WorkflowNodeRunOut": {
+        "properties": {
+          "agent_tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Tool Call Id"
+          },
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "latency_ms": {
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "node_key": {
+            "title": "Node Key",
+            "type": "string"
+          },
+          "output": {
+            "title": "Output",
+            "type": "string"
+          },
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_key",
+          "kind",
+          "tool_name",
+          "status",
+          "attempt",
+          "arguments",
+          "output",
+          "policy",
+          "agent_tool_call_id",
+          "error",
+          "latency_ms",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "WorkflowNodeRunOut",
+        "type": "object"
+      },
+      "WorkflowOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "graph": {
+            "additionalProperties": true,
+            "title": "Graph",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Dispatched At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "requires_approval": {
+            "title": "Requires Approval",
+            "type": "boolean"
+          },
+          "schedule_cron": {
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "title": "Schedule Timezone",
+            "type": "string"
+          },
+          "source_prompt": {
+            "title": "Source Prompt",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger_kind": {
+            "title": "Trigger Kind",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "source_prompt",
+          "graph",
+          "version",
+          "status",
+          "trigger_kind",
+          "schedule_cron",
+          "schedule_timezone",
+          "requires_approval",
+          "last_dispatched_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WorkflowOut",
+        "type": "object"
+      },
+      "WorkflowRunDetailOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowNodeRunOut"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          },
+          "workflow_version": {
+            "title": "Workflow Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "workflow_id",
+          "workflow_version",
+          "trigger",
+          "status",
+          "run_id",
+          "error",
+          "started_at",
+          "finished_at",
+          "created_at",
+          "nodes"
+        ],
+        "title": "WorkflowRunDetailOut",
+        "type": "object"
+      },
+      "WorkflowRunOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          },
+          "workflow_version": {
+            "title": "Workflow Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "workflow_id",
+          "workflow_version",
+          "trigger",
+          "status",
+          "run_id",
+          "error",
+          "started_at",
+          "finished_at",
+          "created_at"
+        ],
+        "title": "WorkflowRunOut",
+        "type": "object"
+      },
+      "WorkflowRunRequest": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "title": "WorkflowRunRequest",
+        "type": "object"
+      },
+      "WorkflowTickOut": {
+        "properties": {
+          "dispatched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dispatched",
+            "type": "array"
+          },
+          "moment": {
+            "format": "date-time",
+            "title": "Moment",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dispatched",
+          "moment"
+        ],
+        "title": "WorkflowTickOut",
+        "type": "object"
+      },
+      "WorkflowUpdateRequest": {
+        "properties": {
+          "graph": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph"
+          },
+          "source_prompt": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Prompt"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "draft",
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "title": "WorkflowUpdateRequest",
         "type": "object"
       },
       "WorkspaceMembershipOut": {
@@ -10439,6 +10959,598 @@
         "summary": "Set Tool Policy",
         "tags": [
           "tools"
+        ]
+      }
+    },
+    "/api/workflows": {
+      "get": {
+        "operationId": "list_workflows_api_workflows_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowOut"
+                  },
+                  "title": "Response List Workflows Api Workflows Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Workflows",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "post": {
+        "description": "Compile and store an automation.",
+        "operationId": "create_workflow_api_workflows_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Workflow",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/workflows/compile": {
+      "post": {
+        "description": "Natural language to a validated DAG, without saving anything.\n\nThe preview a person reads before deciding whether to store an automation.\nIt grants nothing and creates nothing; a compiled workflow is a proposal.",
+        "operationId": "compile_workflow_preview_api_workflows_compile_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowCompileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowCompileOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compile Workflow Preview",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/workflows/runs/{workflow_run_id}": {
+      "get": {
+        "description": "One run, with every node's state \u2014 including the ones that never ran.",
+        "operationId": "get_workflow_run_api_workflows_runs__workflow_run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_run_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Workflow Run",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/workflows/tick": {
+      "post": {
+        "description": "Dispatch every workflow whose cron fires now. For an external cron only.\n\nUnauthenticated by necessity \u2014 a cron has no session \u2014 and therefore given\nthe smallest possible surface: no arguments, no workflow id, no timestamp,\nand a body that names only what it started. The secret is compared with\n`secrets.compare_digest`, and its absence is a 503 rather than an open door.",
+        "operationId": "tick_api_workflows_tick_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTickOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tick",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/workflows/{workflow_id}": {
+      "delete": {
+        "description": "Delete the workflow and its run history.\n\nHistory goes with it deliberately. A run detail whose graph has been deleted\ncan no longer say what it executed, and a half-readable audit trail invites\nmore confident conclusions than it can support.",
+        "operationId": "delete_workflow_api_workflows__workflow_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Workflow",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "get": {
+        "operationId": "get_workflow_api_workflows__workflow_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Workflow",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "patch": {
+        "description": "Enable, disable, or recompile.\n\nA recompile bumps `version` and leaves `source_prompt` beside the graph, so\na graph that has drifted from what somebody asked for is still visible as\ndrift rather than as the new truth.",
+        "operationId": "update_workflow_api_workflows__workflow_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Workflow",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/workflows/{workflow_id}/run": {
+      "post": {
+        "description": "Start a run now. 202: the graph executes on a background task.\n\nA manual run is still policy-gated at `workflow` scope. Pressing the button\nis not standing next to the write \u2014 the graph may take a minute to reach it,\nand by then the person who pressed it has moved on.",
+        "operationId": "run_workflow_api_workflows__workflow_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Workflow",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/workflows/{workflow_id}/runs": {
+      "get": {
+        "operationId": "list_workflow_runs_api_workflows__workflow_id__runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowRunOut"
+                  },
+                  "title": "Response List Workflow Runs Api Workflows  Workflow Id  Runs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Workflow Runs",
+        "tags": [
+          "workflows"
         ]
       }
     },

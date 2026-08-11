@@ -667,20 +667,40 @@ class McpTool(Base):
 
 
 class ToolPolicy(Base):
-    """Per-workspace approval policy for an agent tool, overriding its default.
+    """Per-workspace, *per-scope* approval policy for an agent tool.
 
     Absent a row, a tool's policy comes from ToolSpec.read_only: read-only tools
     run unattended, write-capable tools ask. A row set by the user — typically
     via "always allow" on an approval card — wins over that default.
+
+    `scope` is the fix for the residual risk ADR 0007 called the sharpest. The
+    grant used to be workspace-wide, so one click of "always allow" on
+    `send_email` in a chat authorised every future *scheduled, unattended*
+    workflow to send email forever — and a standing allow removes the approval
+    park, which is the only containment prompt injection has to get past. A
+    grant is now recorded against the situation it was given in:
+
+    - ``chat``      a person is typing and will see what happens next.
+    - ``workflow``  a compiled DAG is executing, possibly at 3am with nobody
+                    watching.
+
+    Every row written before this column existed is `chat`, which is exactly
+    what those grants meant when they were made. `resolve_policy` reads them
+    (agent_loop.py) and is the single place the two scopes are compared.
     """
 
     __tablename__ = "tool_policies"
-    __table_args__ = (UniqueConstraint("workspace_id", "tool_name"),)
+    # Scope joins the key rather than replacing `tool_name`: one tool can carry
+    # a different verdict in each situation, which is the entire point.
+    __table_args__ = (UniqueConstraint("workspace_id", "tool_name", "scope"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     tool_name: Mapped[str] = mapped_column(String(120))
     policy: Mapped[str] = mapped_column(String(16), default="ask")
+    # chat | workflow. Defaults to chat so a caller that does not know about
+    # scopes keeps writing the grant it always wrote.
+    scope: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat")
     created_by: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -983,11 +1003,19 @@ class Workflow(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     # draft -> active -> disabled. Only `active` is eligible for a trigger.
     status: Mapped[str] = mapped_column(String(16), default="draft")
-    # manual | schedule. The compiler extracts a cron from "every Monday"; no
-    # ticker dispatches it yet, so a schedule is a recorded intent until one does.
+    # manual | schedule. The compiler extracts a cron from "every Monday";
+    # services/workflows/schedule.py dispatches it when an external cron calls
+    # POST /api/workflows/tick.
     trigger_kind: Mapped[str] = mapped_column(String(16), default="manual")
     schedule_cron: Mapped[str] = mapped_column(String(120), default="")
     schedule_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # The minute this workflow was last dispatched for, truncated to the minute.
+    # It is the claim, not a log: the ticker advances it with a conditional
+    # UPDATE, so two ticks landing in the same minute — a retry, an overlapping
+    # cron, two web dynos — produce one run between them and not two.
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

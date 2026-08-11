@@ -30,6 +30,7 @@ from __future__ import annotations
 import difflib
 import re
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import jsonschema
@@ -228,6 +229,70 @@ def _cron_value(token: str, names: Mapping[str, int]) -> Optional[int]:
     if token.isdigit():
         return int(token)
     return names.get(token.lower())
+
+
+def cron_matches(expression: str, moment: datetime) -> bool:
+    """Does `moment` — already in the workflow's own timezone — fall on this cron?
+
+    Deliberately beside `cron_error` rather than in the scheduler. The validator
+    decides what a cron expression *is* and the ticker decides when it *fires*,
+    and the one bug neither can survive is the two disagreeing: a field the
+    validator accepts and the matcher expands differently is an automation that
+    compiles and then runs on the wrong day. Sharing the bounds tables and the
+    field regex is what stops that.
+
+    Day-of-month and day-of-week follow POSIX: when both are restricted, either
+    matching is enough. It is a strange rule and it is the rule every crontab in
+    the world already behaves by.
+    """
+    if cron_error(expression) is not None:
+        return False
+    fields = expression.strip().split()
+    minute, hour, dom, month, dow = (
+        _cron_set(index, raw) for index, raw in enumerate(fields)
+    )
+    if moment.minute not in minute or moment.hour not in hour:
+        return False
+    if moment.month not in month:
+        return False
+    # Python's Monday=0 against cron's Sunday=0.
+    weekday = (moment.weekday() + 1) % 7
+    dom_restricted = fields[2] != "*"
+    dow_restricted = fields[4] != "*"
+    if dom_restricted and dow_restricted:
+        return moment.day in dom or weekday in dow
+    if dom_restricted:
+        return moment.day in dom
+    if dow_restricted:
+        return weekday in dow
+    return True
+
+
+def _cron_set(index: int, raw: str) -> Set[int]:
+    """Expand one validated cron field into the values it fires on."""
+    low, high = _CRON_BOUNDS[index]
+    names = _CRON_NAMES[index]
+    values: Set[int] = set()
+    for part in raw.split(","):
+        body, _, step_text = part.partition("/")
+        step = int(step_text) if step_text else 1
+        if body == "*":
+            start, end = low, high
+        else:
+            tokens = body.split("-")
+            first = _cron_value(tokens[0], names)
+            last = _cron_value(tokens[-1], names) if len(tokens) > 1 else first
+            if first is None or last is None:  # pragma: no cover - cron_error ran
+                continue
+            # `5/15` means "from 5 to the top of the range, every 15", which is
+            # not what a bare `5` means and is easy to expand wrongly.
+            start, end = first, (high if step_text and len(tokens) == 1 else last)
+        values.update(range(start, end + 1, step))
+    if index == 4:
+        # Both 0 and 7 are Sunday, and a cron written with one must match a
+        # weekday computed as the other.
+        values = {0 if value == 7 else value for value in values}
+    return values
 
 
 # --------------------------------------------------------------------------

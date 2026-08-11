@@ -27,6 +27,7 @@ from .api import (
     sources,
     system,
     tools,
+    workflows,
 )
 from .api.auth import router as auth_router
 from .auth import seed_dev_workspace
@@ -104,4 +105,5 @@ app.include_router(projects.router)
 app.include_router(sandbox.router)
 app.include_router(analytics.router)
 app.include_router(generated_apps.router)
+app.include_router(workflows.router)
 app.include_router(admin.router)

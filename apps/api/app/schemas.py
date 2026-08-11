@@ -234,11 +234,18 @@ class AgentToolCallOut(ApiModel):
 class ToolPolicyOut(ApiModel):
     tool_name: str
     policy: str
+    #: Which situation this verdict answers for. Two rows can name the same tool,
+    #: so a client that drops this field cannot tell them apart.
+    scope: str
 
 
 class ToolPolicyRequest(BaseModel):
     tool_name: str = Field(min_length=1, max_length=120)
     policy: Literal["ask", "allow", "deny"]
+    # Defaults to chat, so a client written before scopes existed keeps setting
+    # the grant it always set. Authorising unattended execution has to be asked
+    # for by name — that is the entire point of the split.
+    scope: Literal["chat", "workflow"] = "chat"
 
 
 class DocumentSummaryOut(ApiModel):

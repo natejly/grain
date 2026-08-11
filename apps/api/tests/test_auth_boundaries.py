@@ -32,6 +32,12 @@ PUBLIC_UNSAFE_ROUTES = {
     "/api/auth/password/reset/request",
     "/api/auth/password/reset/confirm",
     "/api/auth/verify-email",
+    # The schedule ticker. An external cron holds no session, so it authenticates
+    # with a shared secret compared inside the route, and it is given the
+    # smallest surface a state-changing route can have: no arguments at all — no
+    # workflow id, no timestamp — so it can only fire what a workspace's own cron
+    # expression already said to fire. Unset secret means 503, not open.
+    "/api/workflows/tick",
 }
 
 

@@ -2,9 +2,12 @@
 
 ## Status
 
-Accepted, partially implemented. This pass lands the decision, the schema and
-the compiler. The executor is specified here and deliberately not built yet;
-"What is not built" says exactly where the line is.
+Accepted, implemented. The first pass landed the decision, the schema and the
+compiler. A second pass landed the executor, the HTTP routes, the schedule
+ticker and — the reason it went first — a policy scope narrower than a
+workspace. "What is not built" below is the *original* line and is kept as
+written; the postscript at the end of this document says what has since crossed
+it and what has not.
 
 ## Context
 
@@ -333,3 +336,98 @@ Stated plainly so nothing here reads as shipped.
   net install, one line of honesty in `pyproject.toml`.
 - **Cron is validated but not scheduled, which is a UI hazard more than a
   technical one.** See "What is not built".
+
+---
+
+## Postscript: the second pass
+
+Everything above is the original document, unedited. This section records what
+was built afterwards and, where it differs from what was specified, why.
+
+### The policy scope came first, because it was load-bearing
+
+"The standing `allow` is the real hole, and workflows widen it" was the sharpest
+of the residual risks, and the executor would have made it live: an automation
+running unattended is precisely the thing a workspace-wide grant was never asked
+about. So `tool_policies` gained a `scope` column — `chat` or `workflow` — and
+the unique key became `(workspace_id, tool_name, scope)`. Migration
+`0020_tool_policy_scope` rebuilds the table (the old constraint was declared
+inline and has no portable name to drop) and backfills every existing row as
+`chat`, which is exactly what those rows meant when somebody clicked them.
+
+`resolve_policy` is still the only place a verdict is decided, and it now takes a
+`scope` with **no default** — the only value a default could take is the wide
+one, and a call site that forgot to think about unattended execution would then
+silently get the answer that assumes a human is watching. The rule it applies:
+
+- a row in this scope decides;
+- absent one, a `chat` **deny** still denies a workflow, because a prohibition is
+  not a grant and refusing to carry it is the one direction of leakage that makes
+  the system less safe;
+- absent one, any other `chat` row is ignored, so the workflow falls back to the
+  tool's own `read_only` default and parks on every write.
+
+The narrow reading is therefore the *default*, not a setting. Two details make it
+hold in practice. `policy_scope_for_run` reads the scope off the run rather than
+off which loop is executing, so an **agent node inside a workflow** resolves at
+workflow scope too — that node is exactly where the injection scenario in
+"Consequences" lands, and resolving it at chat scope would have left the hole
+open through the widest door. And "always allow" on an approval card now
+remembers at the scope of the card that raised it, so approving a workflow's
+write grants a workflow permission and not an unrelated chat one.
+
+### The executor
+
+Built as specified, on `resolve_policy` → `execute_agent_tool_call`, with one
+change of emphasis and one rule the original did not state.
+
+The change: the backing `Run` is created **eagerly**, not "null until a node
+needs one". Reusing the chat loop's executor at all requires a run to hang the
+`AgentToolCall` and the events off, and creating one up front also puts a parked
+workflow's approval card into a conversation — which is the only approval inbox
+the product actually has.
+
+The rule: **a node found `running` on resume is not simply retried.** The unique
+constraint proves a *committed* node ran once; it says nothing about one that was
+executing when the process died. A read-only node is retried. A write-capable one
+ends the run with `node_interrupted` and a human decides, because "at least once
+is the wrong number" cuts both ways and re-sending an email that may already have
+gone is the failure this section warned about.
+
+Run-time reference resolution landed in `services/workflows/refs.py`. A
+whole-value `{{ node.output }}` keeps the upstream type, an embedded one
+interpolates, and the resolved arguments are re-checked against the tool's schema
+and **rejected** rather than coerced — the deferral in `validate.py` cashed in.
+
+### The ticker exists, and is inert by default
+
+`POST /api/workflows/tick` is a claim-based endpoint an external cron calls; no
+new always-on service. It takes no arguments — no workflow id, no timestamp, no
+workspace — so it can only fire what a workspace's own cron expression already
+said to fire, and `workflows.last_dispatched_at` is advanced by a conditional
+UPDATE, so a retried, replayed or triply-delivered tick produces one run per
+workflow per minute. Downtime is not replayed past one minute of grace: a
+scheduler that catches up on a day of outage sends a day of email.
+
+`cron_matches` lives beside `cron_error` in `validate.py` deliberately. A field
+the validator accepts and the matcher expands differently is an automation that
+compiles and then runs on the wrong day, and sharing the bounds tables is what
+stops that.
+
+With `WORKFLOW_CRON_SECRET` unset the endpoint answers 503 and dispatches
+nothing, so the warning in "What is not built" stays true of any deployment that
+has not deliberately turned scheduling on. Where it *is* configured, the UI may
+now describe a schedule as active.
+
+### Still not built
+
+- **Recovery of a workflow run interrupted mid-node.** `recover_durable_work`
+  re-queues chat runs; nothing re-queues a workflow run whose process died. The
+  run stays `running` until somebody re-runs it, and `run_agent_turn` refuses to
+  start a chat turn on a workflow's backing run so the recovery sweep cannot
+  turn one into a stray assistant message. Making the sweep resume workflows is
+  a small change to `services/recovery.py` and is not in this pass.
+- **Pinning an MCP server identity per node.** Unchanged from above: a server
+  replaced by a different one with the same tool names is still undetectable.
+- **Expiry on a grant.** Scope narrows *where* a standing allow applies, not how
+  long. "Always allow, for a month" remains a good idea nobody has built.

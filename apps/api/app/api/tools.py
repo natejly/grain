@@ -18,6 +18,7 @@ from ..schemas import (
     ToolPolicyOut,
     ToolPolicyRequest,
 )
+from ..services.agent_loop import policy_scope_for_run
 from ..services.audit import record_audit
 from ..services.events import append_event
 from ..services.runs import deny_tool_call, execute_tool_call, resume_run
@@ -169,17 +170,33 @@ def decide_tool_call(
 
 
 def _upsert_policy(
-    db: Session, *, workspace_id: str, actor_id: str, tool_name: str, policy: str
+    db: Session,
+    *,
+    workspace_id: str,
+    actor_id: str,
+    tool_name: str,
+    policy: str,
+    scope: str = "chat",
 ) -> ToolPolicy:
+    """Set one workspace's verdict for one tool *in one scope*.
+
+    The scope filter is not optional now that (workspace_id, tool_name, scope) is
+    the unique key: without it this would happily find a workflow grant and
+    overwrite it with the answer to a question about chat.
+    """
     row = db.scalar(
         select(ToolPolicy).where(
             ToolPolicy.workspace_id == workspace_id,
             ToolPolicy.tool_name == tool_name,
+            ToolPolicy.scope == scope,
         )
     )
     if row is None:
         row = ToolPolicy(
-            workspace_id=workspace_id, tool_name=tool_name, created_by=actor_id
+            workspace_id=workspace_id,
+            tool_name=tool_name,
+            scope=scope,
+            created_by=actor_id,
         )
         db.add(row)
     row.policy = policy
@@ -212,6 +229,7 @@ def set_tool_policy(
         actor_id=actor.user_id,
         tool_name=payload.tool_name,
         policy=payload.policy,
+        scope=payload.scope,
     )
     record_audit(
         db,
@@ -220,7 +238,7 @@ def set_tool_policy(
         action="tool_policy.set",
         resource_type="tool_policy",
         resource_id=payload.tool_name,
-        detail={"policy": payload.policy},
+        detail={"policy": payload.policy, "scope": payload.scope},
     )
     db.commit()
     return row
@@ -271,12 +289,18 @@ def decide_agent_tool_call(
     call.decided_by = actor.user_id
     call.decided_at = utcnow()
     if payload.remember:
+        # "Always allow" answers the question the card asked, and no other. A
+        # card raised by a workflow node is asking about unattended execution, so
+        # remembering it grants at workflow scope; a chat card grants at chat
+        # scope. Recording both against one workspace-wide row is the standing
+        # grant ADR 0007 named as its sharpest residual risk.
         _upsert_policy(
             db,
             workspace_id=actor.workspace_id,
             actor_id=actor.user_id,
             tool_name=call.name,
             policy="allow" if payload.decision == "approved" else "deny",
+            scope=policy_scope_for_run(db, run),
         )
     db.add(
         IdempotencyRecord(

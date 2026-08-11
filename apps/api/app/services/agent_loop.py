@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..clock import utcnow
 from ..config import Settings, get_settings
-from ..models import AgentToolCall, Run, ToolPolicy
+from ..models import AgentToolCall, Run, ToolPolicy, WorkflowRun
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .llm_tools import ToolContext, ToolResult, ToolSpec, build_registry
@@ -173,26 +173,78 @@ def _serialize_item(item: Any) -> Any:
     return {key: value for key, value in vars(item).items() if value is not None}
 
 
+#: Where a tool call is being made from. `chat` is a person typing, who will see
+#: the result and can undo it. `workflow` is a compiled DAG executing, possibly
+#: on a schedule with nobody at the diff.
+PolicyScope = Literal["chat", "workflow"]
+
+CHAT_SCOPE: PolicyScope = "chat"
+WORKFLOW_SCOPE: PolicyScope = "workflow"
+
+
 def resolve_policy(
-    db: Session, *, workspace_id: str, spec: Optional[ToolSpec]
+    db: Session, *, workspace_id: str, spec: Optional[ToolSpec], scope: PolicyScope
 ) -> str:
-    """ask | allow | deny for one tool, workspace override beating the default.
+    """ask | allow | deny for one tool in one situation. The only decision point.
 
     Without an override, read-only tools run unattended and write-capable tools
     ask. An unknown tool resolves to allow so the loop can hand the model back a
     plain "unknown tool" error instead of parking the run on a phantom approval.
+
+    `scope` has no default, and that is deliberate: the only value a default
+    could take is the wide one, and a call site that forgot to think about
+    unattended execution would then get the answer that assumes a human is
+    watching. Making it explicit costs one keyword and removes the failure.
+
+    How the two scopes interact is the whole of ADR 0007's sharpest residual
+    risk:
+
+    - A row **in this scope** decides. Full stop.
+    - Absent one, a `chat` **deny** still denies a workflow. A prohibition is not
+      a grant; refusing to carry it across would be the one direction of leakage
+      that makes the system less safe, and nobody granted anything by writing it.
+    - Absent one, any other `chat` row — notably a standing `allow` from clicking
+      "always allow" on an approval card — is **ignored** by a workflow, which
+      falls back to the tool's own default and therefore parks on every write.
+
+    So "always allow send_email", clicked once in a conversation, does not
+    authorise a 3am scheduled run to send mail. Getting that authority requires
+    granting it at `workflow` scope, where the question being answered is the
+    question actually being asked.
     """
     if spec is None:
         return "allow"
-    override = db.scalar(
-        select(ToolPolicy).where(
-            ToolPolicy.workspace_id == workspace_id,
-            ToolPolicy.tool_name == spec.name,
+    rows = list(
+        db.scalars(
+            select(ToolPolicy).where(
+                ToolPolicy.workspace_id == workspace_id,
+                ToolPolicy.tool_name == spec.name,
+            )
         )
     )
-    if override is not None and override.policy in {"ask", "allow", "deny"}:
-        return override.policy
+    valid = {row.scope: row.policy for row in rows if row.policy in {"ask", "allow", "deny"}}
+    if scope in valid:
+        return valid[scope]
+    if valid.get(CHAT_SCOPE) == "deny":
+        return "deny"
     return "allow" if spec.read_only else "ask"
+
+
+def policy_scope_for_run(db: Session, run: Run) -> PolicyScope:
+    """Which situation this run's tool calls are being made in.
+
+    A chat run is `chat`. A run the workflow executor created is `workflow` —
+    including while an *agent* node is borrowing it, because "nobody is watching"
+    is a property of what started the run, not of which loop happens to be
+    executing inside it.
+
+    That distinction is the leg of the fix that matters most. ADR 0007's
+    injection scenario ends at an agent node honouring instructions it read out
+    of a fetched document, and an agent node resolving at chat scope would
+    inherit the very standing grant the scope split exists to withhold.
+    """
+    backing = db.scalar(select(WorkflowRun.id).where(WorkflowRun.run_id == run.id))
+    return WORKFLOW_SCOPE if backing is not None else CHAT_SCOPE
 
 
 def _render_result(result: ToolResult, evidence_offset: int) -> str:
@@ -221,7 +273,7 @@ def _cancelled(db: Session, run: Run, state: LoopState) -> Cancelled:
     return Cancelled(text=state.text_so_far)
 
 
-def _describe_proposal(
+def describe_proposal(
     db: Session, context: ToolContext, spec: ToolSpec, raw_arguments: str
 ) -> str:
     """Render what the call would do, for the approval card. Never fatal."""
@@ -255,7 +307,7 @@ def _park_for_approval(
         name=str(call.get("name") or ""),
         arguments_json=raw_arguments[:4000],
         call_id=str(call.get("call_id") or "")[:80],
-        proposal_preview=_describe_proposal(db, context, spec, raw_arguments),
+        proposal_preview=describe_proposal(db, context, spec, raw_arguments),
         status="proposed",
     )
     db.add(record)
@@ -297,7 +349,7 @@ def _park_for_approval(
     return Paused(tool_call_id=record.id)
 
 
-def _execute_call(
+def execute_agent_tool_call(
     db: Session,
     run: Run,
     registry: Dict[str, ToolSpec],
@@ -391,6 +443,7 @@ def _drain_pending(
     *,
     registry: Dict[str, ToolSpec],
     context: ToolContext,
+    scope: PolicyScope,
 ) -> Optional[Outcome]:
     """Run queued calls until one needs approval. None means the queue emptied."""
     while state.pending_calls:
@@ -402,11 +455,13 @@ def _drain_pending(
         spec = registry.get(name)
         decision = call.get("decision")
         if decision is None:
-            policy = resolve_policy(db, workspace_id=run.workspace_id, spec=spec)
+            policy = resolve_policy(
+                db, workspace_id=run.workspace_id, spec=spec, scope=scope
+            )
             if policy == "ask" and spec is not None:
                 return _park_for_approval(db, run, state, call, spec, context)
             decision = "denied" if policy == "deny" else "approved"
-        result = _execute_call(
+        result = execute_agent_tool_call(
             db,
             run,
             registry,
@@ -475,10 +530,13 @@ def _advance(
     context: ToolContext,
     step: ModelStep,
     settings: Settings,
+    scope: PolicyScope,
 ) -> Outcome:
     tools = _tool_payload(registry, settings)
     while True:
-        blocked = _drain_pending(db, run, state, registry=registry, context=context)
+        blocked = _drain_pending(
+            db, run, state, registry=registry, context=context, scope=scope
+        )
         if blocked is not None:
             return blocked
         if state.iteration >= MAX_ITERATIONS:
@@ -543,9 +601,20 @@ def run_agent_turn(
     memory_context: str = "",
     settings: Optional[Settings] = None,
     model_step: Optional[ModelStep] = None,
+    workflow_node: bool = False,
 ) -> Optional[AgentResult]:
-    """Start a turn. None means the run parked for approval or was cancelled."""
+    """Start a turn. None means the run parked for approval or was cancelled.
+
+    `workflow_node` is asserted by the workflow executor, which borrows this
+    function for an `agent` node. Nobody else may start a turn on a run that
+    backs a workflow: `recover_durable_work` re-queues runs left `running` by an
+    unclean stop, and without this the recovery sweep would staple a chat turn
+    onto an automation. Failing loudly is the correct outcome — the workflow run
+    is the record that matters, and it can be re-run.
+    """
     settings = settings or get_settings()
+    if not workflow_node and policy_scope_for_run(db, run) == WORKFLOW_SCOPE:
+        raise RuntimeError("This run belongs to a workflow; start it through the executor")
     context = ToolContext(
         workspace_id=run.workspace_id,
         user_id=run.created_by,
@@ -571,6 +640,7 @@ def run_agent_turn(
         context=context,
         step=model_step or _default_model_step(settings, run, list(evidence)),
         settings=settings,
+        scope=policy_scope_for_run(db, run),
     )
     return _finish(db, run, outcome)
 
@@ -584,8 +654,32 @@ def resume_agent_turn(
     settings: Optional[Settings] = None,
     model_step: Optional[ModelStep] = None,
 ) -> Optional[AgentResult]:
-    """Continue a parked turn once the user has decided on the proposed call."""
+    """Continue a parked turn once the user has decided on the proposed call.
+
+    Also the door a *workflow* comes back through. ADR 0007 chose one park and
+    one resume over two state machines that have to agree, so a workflow node
+    that needs approval writes the same `AgentToolCall` against the same `Run`,
+    and `POST /api/agent-tool-calls/{id}/decision` lands here for both. The
+    branch below is where the two part company:
+
+    - No `agent_state_json` means no model turn was in flight, so the parked call
+      belongs to a workflow *tool* node and the executor owns the resume.
+    - With state, an *agent* node inside a workflow parked mid-turn. The turn
+      finishes here, but the graph has not, so the executor takes the answer as
+      that node's output and carries on rather than the run being completed.
+
+    Imported inside the function because the executor imports this module — it
+    is built on this machinery, which is the point.
+    """
+    from .workflows import executor as workflow_executor
+
     settings = settings or get_settings()
+    workflow_run = db.scalar(select(WorkflowRun).where(WorkflowRun.run_id == run.id))
+    if workflow_run is not None and not run.agent_state_json:
+        workflow_executor.resume_after_decision(
+            db, workflow_run, tool_call_id=tool_call_id, decision=decision
+        )
+        return None
     if not run.agent_state_json:
         raise RuntimeError("Run has no saved agent state to resume")
     state = LoopState.from_json(run.agent_state_json)
@@ -617,5 +711,12 @@ def resume_agent_turn(
         context=context,
         step=model_step or _default_model_step(settings, run, state.evidence),
         settings=settings,
+        scope=policy_scope_for_run(db, run),
     )
+    if workflow_run is not None:
+        # The agent node's turn is over; the graph is not. Returning None keeps
+        # `services/runs.resume_run` from completing a run the next node still
+        # needs, and the executor writes the terminal state when the DAG ends.
+        workflow_executor.resume_after_agent_turn(db, workflow_run, outcome=outcome)
+        return None
     return _finish(db, run, outcome)

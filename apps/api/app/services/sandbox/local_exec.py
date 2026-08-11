@@ -95,6 +95,31 @@ def ensure_session_root(base: Path, external_id: str, *, mode: int = 0) -> Path:
     return path
 
 
+def _is_contained_regular_file(path: Path, root: Path) -> bool:
+    """True only for a real file that genuinely lives under `root`.
+
+    Every check here exists because the harvester runs on the HOST, as the API
+    user, over the bind mount — outside every guarantee the container flags buy.
+    Generated code cannot read /etc/passwd itself (--read-only, --cap-drop ALL,
+    uid 65534), but it can create a symlink named chart.png pointing at it, and
+    the harvester following that link reads the host file with the API's own
+    authority and persists it as a workspace source.
+
+    `is_file()`, `stat()` and `read_bytes()` all follow symlinks, so the link
+    has to be rejected before any of them is called: `lstat` describes the link
+    itself. `resolve()` is then belt-and-braces for a directory component that
+    is itself a link.
+    """
+    try:
+        if path.is_symlink() or not path.lstat().st_mode & 0o170000 == 0o100000:
+            return False
+        resolved = path.resolve()
+        root_resolved = root.resolve()
+    except OSError:
+        return False
+    return resolved == root_resolved or str(resolved).startswith(str(root_resolved) + os.sep)
+
+
 def snapshot(directory: Path) -> Dict[Path, float]:
     """mtimes before an execution, so the diff afterwards finds what it wrote.
 
@@ -104,7 +129,7 @@ def snapshot(directory: Path) -> Dict[Path, float]:
     """
     seen: Dict[Path, float] = {}
     for path in directory.rglob("*"):
-        if path.is_file():
+        if _is_contained_regular_file(path, directory):
             try:
                 seen[path] = path.stat().st_mtime
             except OSError:
@@ -124,7 +149,9 @@ def harvest_artifacts(
 
     candidates: List[Tuple[float, Path]] = []
     for path in directory.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in ARTIFACT_TYPES:
+        if not _is_contained_regular_file(path, directory):
+            continue
+        if path.suffix.lower() not in ARTIFACT_TYPES:
             continue
         try:
             mtime = path.stat().st_mtime
@@ -363,8 +390,13 @@ class LocalProvider:
             return ()
         entries: List[FileEntry] = []
         for child in sorted(target.rglob("*") if depth > 1 else target.iterdir()):
+            # lstat, and skip links entirely: stat() on a symlink reports the
+            # size and existence of whatever it points at, leaking host paths
+            # into a listing the model reads.
+            if child.is_symlink():
+                continue
             try:
-                stat = child.stat()
+                stat = child.lstat()
             except OSError:
                 continue
             entries.append(

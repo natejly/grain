@@ -224,6 +224,15 @@ class Settings(BaseSettings):
     memory_lexical_candidate_limit: int = 400
     memory_transcript_messages: int = 10
     run_lease_seconds: int = 90
+
+    # --- Workflow schedules ------------------------------------------------
+    # The bearer token an external cron presents to POST /api/workflows/tick.
+    # Unset means no dispatch at all, and that default is the honest one: ADR
+    # 0007 says a schedule the system does not keep is worse than a missing
+    # feature, so a deployment that has not configured a ticker has genuinely
+    # inert schedules rather than an endpoint anyone can poke.
+    workflow_cron_secret: Optional[SecretStr] = None
+
     google_client_id: str = ""
     google_client_secret: Optional[SecretStr] = None
     strava_client_id: str = ""

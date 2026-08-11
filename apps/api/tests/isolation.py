@@ -79,6 +79,9 @@ from app.models import (
     ToolCall,
     ToolGrant,
     ToolPolicy,
+    Workflow,
+    WorkflowNodeRun,
+    WorkflowRun,
     new_id,
 )
 from app.services.analytics import create_dataset_version
@@ -543,6 +546,83 @@ def build_tenant(label: str) -> Tenant:
         db.add(execution)
         db.flush()
         ids["sandbox_execution"] = execution.id
+
+        # A stored automation, one execution of it, and one node inside that
+        # execution. Written directly for the same reason the sandbox rows are:
+        # the point is to own a workflow whose id another tenant can name, not
+        # to re-test compilation. The graph is a real one — it parses and names a
+        # tool every workspace has — so a route that reads it does not fall over
+        # before it gets as far as the workspace filter.
+        workflow = Workflow(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} secret workflow",
+            description=f"{label} secret automation",
+            source_prompt=f"summarise {label} secret sources every monday",
+            graph_json=json.dumps(
+                {
+                    "name": f"{label} secret workflow",
+                    "description": f"{label} secret automation",
+                    "trigger": {"kind": "manual", "cron": "", "timezone": "UTC"},
+                    "nodes": [
+                        {
+                            "id": "gather",
+                            "kind": "tool",
+                            "tool": "search_sources",
+                            "arguments": {"query": f"{label} secret"},
+                            "description": "Find the passages.",
+                        }
+                    ],
+                    "edges": [],
+                }
+            ),
+            status="draft",
+        )
+        db.add(workflow)
+        db.flush()
+        ids["workflow"] = workflow.id
+
+        workflow_run = WorkflowRun(
+            workspace_id=workspace_id,
+            workflow_id=workflow.id,
+            created_by=user_id,
+            workflow_version=1,
+            graph_json=workflow.graph_json,
+            trigger="manual",
+            status="succeeded",
+        )
+        db.add(workflow_run)
+        db.flush()
+        ids["workflow_run"] = workflow_run.id
+
+        node_run = WorkflowNodeRun(
+            workspace_id=workspace_id,
+            workflow_run_id=workflow_run.id,
+            node_key="gather",
+            kind="tool",
+            tool_name="search_sources",
+            status="succeeded",
+            policy="allow",
+            output_json=json.dumps(f"{label} secret workflow output"),
+        )
+        db.add(node_run)
+        db.flush()
+        ids["workflow_node_run"] = node_run.id
+
+        # A standing chat grant, so the scope split has something to be wrong
+        # about: `test_workflow_policy_scope.py` proves this row does not reach
+        # an unattended run, and the tamper digest proves the sweep never adds a
+        # workflow-scoped sibling to it.
+        policy = ToolPolicy(
+            workspace_id=workspace_id,
+            tool_name="search_sources",
+            policy="allow",
+            scope="chat",
+            created_by=user_id,
+        )
+        db.add(policy)
+        db.flush()
+        ids["tool_policy"] = policy.id
 
         db.commit()
     finally:
@@ -1070,6 +1150,65 @@ ROUTE_CASES: List[RouteCase] = [
         DENY,
         path_ids={"session_id": "sandbox_session"},
     ),
+    # -- workflows ---------------------------------------------------------
+    # A workflow id is worth more than most: naming another tenant's automation
+    # would let you read the graph (which names their tools and datasets), run it
+    # unattended, or delete it. Every id-taking route is a DENY, and the run
+    # detail is a DENY of its own because a workflow_run id reaches the node
+    # table without passing through the workflow.
+    RouteCase(
+        "POST",
+        "/api/workflows/compile",
+        SCOPED,
+        body={"source_prompt": "search the workspace and summarise it"},
+    ),
+    RouteCase("GET", "/api/workflows", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/workflows",
+        SCOPED,
+        body={"source_prompt": "search the workspace and summarise it"},
+    ),
+    RouteCase(
+        "GET", "/api/workflows/{workflow_id}", DENY, path_ids={"workflow_id": "workflow"}
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/workflows/{workflow_id}",
+        DENY,
+        path_ids={"workflow_id": "workflow"},
+        body={"status": "active"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/workflows/{workflow_id}",
+        DENY,
+        path_ids={"workflow_id": "workflow"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/workflows/{workflow_id}/run",
+        DENY,
+        path_ids={"workflow_id": "workflow"},
+        body={"payload": {}},
+    ),
+    RouteCase(
+        "GET",
+        "/api/workflows/{workflow_id}/runs",
+        DENY,
+        path_ids={"workflow_id": "workflow"},
+    ),
+    RouteCase(
+        "GET",
+        "/api/workflows/runs/{workflow_run_id}",
+        DENY,
+        path_ids={"workflow_run_id": "workflow_run"},
+    ),
+    # Unauthenticated by design: an external cron has no session. It takes no
+    # arguments at all — no workflow id, no timestamp — so there is no foreign
+    # resource to point it at, and with WORKFLOW_CRON_SECRET unset (as it is
+    # here) it refuses outright. See api/workflows.py:tick.
+    RouteCase("POST", "/api/workflows/tick", PUBLIC),
     # -- integrations ------------------------------------------------------
     RouteCase("GET", "/api/integrations", SCOPED),
     RouteCase(

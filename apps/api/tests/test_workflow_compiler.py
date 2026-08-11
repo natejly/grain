@@ -745,9 +745,16 @@ def test_compiling_grants_no_authority(client):
             select(ToolPolicy).where(ToolPolicy.workspace_id == workspace_id)
         ).all()
         assert len(before) == len(after)
-        assert (
-            resolve_policy(db, workspace_id=workspace_id, spec=REGISTRY["post_message"])
-            == "ask"
-        )
+        # In both scopes: compiling grants nothing anywhere.
+        for scope in ("chat", "workflow"):
+            assert (
+                resolve_policy(
+                    db,
+                    workspace_id=workspace_id,
+                    spec=REGISTRY["post_message"],
+                    scope=scope,
+                )
+                == "ask"
+            )
     finally:
         db.close()
