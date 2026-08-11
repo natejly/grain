@@ -2,6 +2,8 @@ import type {
   Workflow,
   WorkflowCompileFinding,
   WorkflowGraph,
+  WorkflowGuard,
+  WorkflowGuardOperator,
   WorkflowInputSpec,
   WorkflowNodeRun,
   WorkflowNodeRunStatus,
@@ -207,6 +209,52 @@ export interface RunTimeline {
   rows: TimelineRow[];
   /** The scale a bar's offset/width is a fraction of; at least 1 to never divide by zero. */
   totalMs: number;
+}
+
+const GUARD_OPERATOR_WORDS: Record<WorkflowGuardOperator, string> = {
+  eq: "=",
+  ne: "≠",
+  gt: ">",
+  lt: "<",
+  gte: "≥",
+  lte: "≤",
+  in: "is one of",
+  truthy: "is true",
+  falsy: "is not true",
+  present: "is set",
+  absent: "is not set",
+};
+
+const UNARY_GUARD_OPERATORS: WorkflowGuardOperator[] = [
+  "truthy",
+  "falsy",
+  "present",
+  "absent",
+];
+
+function guardOperandText(value: string): string {
+  // Strip the {{ }} so a reference reads as a path; a literal is left as written.
+  const whole = value.trim().match(/^\{\{\s*(.+?)\s*\}\}$/);
+  return whole ? whole[1] : value;
+}
+
+function guardLiteralText(value: unknown): string {
+  if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
+  if (value === null || value === undefined) return "nothing";
+  return String(value);
+}
+
+/**
+ * A `when` guard as a phrase a person can read, e.g.
+ * "triage.output.severity = high". The graph prefixes "Runs only if"; this is
+ * the condition itself, with the reference braces stripped and the operator
+ * spelled as a symbol or short words rather than `gte`.
+ */
+export function describeGuard(guard: WorkflowGuard): string {
+  const left = guardOperandText(guard.left);
+  const word = GUARD_OPERATOR_WORDS[guard.op] ?? guard.op;
+  if (UNARY_GUARD_OPERATORS.includes(guard.op)) return `${left} ${word}`;
+  return `${left} ${word} ${guardLiteralText(guard.right)}`;
 }
 
 /**

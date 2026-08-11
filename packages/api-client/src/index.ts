@@ -2335,6 +2335,32 @@ export type WorkflowTriggerKind = "manual" | "schedule";
 export type WorkflowStatus = "draft" | "active" | "disabled";
 export type WorkflowNodeKind = "tool" | "agent" | "manual";
 
+/** The comparisons a node's `when` guard may make. Mirrors dag.GUARD_OPERATORS. */
+export type WorkflowGuardOperator =
+  | "eq"
+  | "ne"
+  | "gt"
+  | "lt"
+  | "gte"
+  | "lte"
+  | "truthy"
+  | "falsy"
+  | "present"
+  | "absent"
+  | "in";
+
+/**
+ * A structured condition on whether a node runs. `left` is a reference
+ * (`{{ node.output.field }}` / `{{ input.field }}`) or a literal; `right` is the
+ * value it is compared against, unused by the unary operators (truthy/falsy/
+ * present/absent). Data, not an expression — see dag.GuardSpec.
+ */
+export type WorkflowGuard = {
+  left: string;
+  op: WorkflowGuardOperator;
+  right?: unknown;
+};
+
 export type WorkflowTrigger = {
   kind: WorkflowTriggerKind;
   /** Five fields, or "" for a manual trigger. No @daily nicknames. */
@@ -2384,6 +2410,12 @@ export type WorkflowGraphNode = {
    * a row written before manual nodes existed, and on the other two kinds.
    */
   fields?: WorkflowInputSpec[];
+  /**
+   * Optional condition on whether this node runs. When it is false the node —
+   * and anything reachable only through it — is skipped. Absent on a node with
+   * no condition and on rows written before guards existed.
+   */
+  when?: WorkflowGuard | null;
 };
 
 /** Spelled from/to on the wire, which is why this is not {source,target}. */

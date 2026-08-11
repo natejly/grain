@@ -12,6 +12,7 @@ import {
   buildTimeline,
   compileErrorTitle,
   compileWarningTitle,
+  describeGuard,
   describeReviewability,
   describeSchedule,
   draftFromInputs,
@@ -560,6 +561,36 @@ describe("formatDuration", () => {
   it("renders something for a zero or negative span rather than a gap", () => {
     expect(formatDuration(0)).toBe("0ms");
     expect(formatDuration(-5)).toBe("0ms");
+  });
+});
+
+describe("describeGuard", () => {
+  it("strips the reference braces and spells the operator", () => {
+    expect(
+      describeGuard({ left: "{{ triage.output.severity }}", op: "eq", right: "high" }),
+    ).toBe("triage.output.severity = high");
+    expect(
+      describeGuard({ left: "{{ count.output.total }}", op: "gte", right: 10 }),
+    ).toBe("count.output.total ≥ 10");
+  });
+
+  it("omits the right operand for a unary operator", () => {
+    expect(describeGuard({ left: "{{ page.output }}", op: "present" })).toBe(
+      "page.output is set",
+    );
+    expect(describeGuard({ left: "{{ flag.output }}", op: "falsy" })).toBe(
+      "flag.output is not true",
+    );
+  });
+
+  it("joins a list right operand for `in`", () => {
+    expect(
+      describeGuard({ left: "{{ input.env }}", op: "in", right: ["prod", "staging"] }),
+    ).toBe("input.env is one of prod, staging");
+  });
+
+  it("leaves a literal left operand as written", () => {
+    expect(describeGuard({ left: "high", op: "eq", right: "low" })).toBe("high = low");
   });
 });
 

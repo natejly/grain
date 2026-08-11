@@ -51,6 +51,7 @@ from .dag import (
     MAX_NODES,
     NODE_KEY_RE,
     TRIGGER_INPUT_NAMES,
+    UNARY_OPERATORS,
     WHOLE_REFERENCE_RE,
     InputSpec,
     NodeSpec,
@@ -353,6 +354,7 @@ def validate_graph(
         _check_node_kind(node, registry, report)
     ancestors = {} if cyclic else _ancestors(ids, edges)
     for node in graph.nodes:
+        _check_guard(node, report)
         _check_references(
             node, ids, ancestors, cyclic=cyclic, declared=declared, report=report
         )
@@ -875,7 +877,8 @@ def _check_references(
     """Every `{{ ... }}` names a real, upstream node — or a declared input."""
     known = set(ids)
     _check_input_references(node, declared, report)
-    for name in references([node.arguments, node.prompt, node.description]):
+    scanned = [node.arguments, node.prompt, node.description, *_guard_operands(node)]
+    for name in references(scanned):
         if name == INPUT_NAMESPACE:
             continue
         if name not in known:
@@ -900,6 +903,58 @@ def _check_references(
             )
 
 
+def _guard_operands(node: NodeSpec) -> List[Any]:
+    """The guard's operands, for the reference walk to check like any other value.
+
+    Folding them into the same `references`/`input_fields` scan the arguments go
+    through is what gives a `when: {{ triage.output }} …` the identical
+    upstream-and-declared checks — one rule for where a reference may point,
+    guard or argument alike, instead of a second that can drift.
+    """
+    if node.when is None:
+        return []
+    return [node.when.left, node.when.right]
+
+
+def _check_guard(node: NodeSpec, report: CompileReport) -> None:
+    """A node's `when` guard is structurally sound.
+
+    Reference validity (does `left` point upstream) is proven by the shared
+    reference walk; this covers the guard's own shape: a `left` to compare, and a
+    `right` only where the operator reads one. A guard whose `left` is a bare
+    literal is not refused but flagged — a condition that cannot change is almost
+    always a reference the author forgot to wrap in `{{ }}`.
+    """
+    guard = node.when
+    if guard is None:
+        return
+    if not guard.left.strip():
+        report.errors.append(
+            CompileError(
+                "guard_missing_operand",
+                "a `when` guard needs a left operand to test",
+                node.id,
+            )
+        )
+    if guard.op in UNARY_OPERATORS and guard.right is not None:
+        report.errors.append(
+            CompileError(
+                "guard_unexpected_right",
+                f"the `{guard.op}` guard reads only its left operand; drop `right`",
+                node.id,
+            )
+        )
+    if guard.left.strip() and not references([guard.left]) and not input_fields([guard.left]):
+        report.warnings.append(
+            CompileError(
+                "guard_constant",
+                "this `when` guard tests a fixed value, so it is the same every "
+                "run; did you mean to reference a node or input with {{ … }}?",
+                node.id,
+            )
+        )
+
+
 def _check_input_references(
     node: NodeSpec, declared: Optional[Set[str]], report: CompileReport
 ) -> None:
@@ -914,7 +969,8 @@ def _check_input_references(
     """
     if declared is None:
         return
-    for name in input_fields([node.arguments, node.prompt, node.description]):
+    scanned = [node.arguments, node.prompt, node.description, *_guard_operands(node)]
+    for name in input_fields(scanned):
         if name in declared or name in TRIGGER_INPUT_NAMES:
             continue
         close = difflib.get_close_matches(name, sorted(declared), n=3, cutoff=0.6)

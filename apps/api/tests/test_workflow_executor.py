@@ -1507,3 +1507,151 @@ def test_a_released_graph_that_parks_on_a_write_stops_saying_it_is_held_by_money
     assert backing.paused_reason == agent_loop.PAUSED_FOR_APPROVAL
     assert workflow_run.status == "waiting_for_approval"
     assert workflow_run.paused_reason == agent_loop.PAUSED_FOR_APPROVAL
+
+
+# --------------------------------------------------------------------------
+# Conditional `when` guards: a node runs, or it and its branch are skipped
+# --------------------------------------------------------------------------
+
+
+def _guarded(node: Dict[str, Any], when: Dict[str, Any]) -> Dict[str, Any]:
+    return {**node, "when": when}
+
+
+def test_a_node_whose_guard_is_false_is_skipped_and_the_run_still_succeeds(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of a guard: the step does not run, and the run does not fail."""
+    triage = Probe("probe_triage", reply=json.dumps({"severity": "low"}))
+    page = Probe("probe_page", read_only=False)
+    install(monkeypatch, triage, page)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("triage", "probe_triage"),
+                _guarded(
+                    tool_node("page", "probe_page", {"text": "wake someone"}),
+                    {"left": "{{ triage.output.severity }}", "op": "eq", "right": "high"},
+                ),
+            ],
+            [{"from": "triage", "to": "page"}],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "succeeded"
+    rows = nodes_of(db, workflow_run)
+    assert rows["triage"].status == "succeeded"
+    assert rows["page"].status == "skipped"
+    assert not page.calls, "a skipped node's tool must never be called"
+
+
+def test_a_true_guard_lets_the_node_run(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    triage = Probe("probe_triage", reply=json.dumps({"severity": "high"}))
+    # Read-only so a true guard is what the test isolates: a write-capable node
+    # would park on policy, which is a separate concern from the condition.
+    page = Probe("probe_page", read_only=True)
+    install(monkeypatch, triage, page)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("triage", "probe_triage"),
+                _guarded(
+                    tool_node("page", "probe_page", {"text": "wake someone"}),
+                    {"left": "{{ triage.output.severity }}", "op": "eq", "right": "high"},
+                ),
+            ],
+            [{"from": "triage", "to": "page"}],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "succeeded"
+    rows = nodes_of(db, workflow_run)
+    assert rows["page"].status == "succeeded"
+    assert page.calls == [{"text": "wake someone"}]
+
+
+def test_a_skip_prunes_a_node_reachable_only_through_the_skipped_one(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A guard on one node takes the whole branch below it with it."""
+    triage = Probe("probe_triage", reply=json.dumps({"severity": "low"}))
+    page = Probe("probe_page", read_only=False)
+    escalate = Probe("probe_escalate", read_only=False)
+    install(monkeypatch, triage, page, escalate)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("triage", "probe_triage"),
+                _guarded(
+                    tool_node("page", "probe_page"),
+                    {"left": "{{ triage.output.severity }}", "op": "eq", "right": "high"},
+                ),
+                tool_node("escalate", "probe_escalate"),
+            ],
+            [
+                {"from": "triage", "to": "page"},
+                {"from": "page", "to": "escalate"},
+            ],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "succeeded"
+    rows = nodes_of(db, workflow_run)
+    assert rows["page"].status == "skipped"
+    # escalate depended only on page, which was pruned, so it is unreachable.
+    assert rows["escalate"].status == "skipped"
+    assert not escalate.calls
+
+
+def test_a_node_with_one_live_dependency_runs_despite_a_skipped_one(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unreachable means *every* path in was skipped — one live path is enough."""
+    triage = Probe("probe_triage", reply=json.dumps({"severity": "low"}))
+    page = Probe("probe_page", read_only=False)
+    # `summary` actually runs, so it is read-only to isolate reachability from
+    # the approval gate; `page` is pruned by its guard before policy is reached.
+    summary = Probe("probe_summary", read_only=True)
+    install(monkeypatch, triage, page, summary)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("triage", "probe_triage"),
+                _guarded(
+                    tool_node("page", "probe_page"),
+                    {"left": "{{ triage.output.severity }}", "op": "eq", "right": "high"},
+                ),
+                # Depends on triage (ran) and page (skipped); one live path in.
+                tool_node("summary", "probe_summary", {"text": "sev {{ triage.output.severity }}"}),
+            ],
+            [
+                {"from": "triage", "to": "page"},
+                {"from": "triage", "to": "summary"},
+                {"from": "page", "to": "summary"},
+            ],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "succeeded"
+    rows = nodes_of(db, workflow_run)
+    assert rows["page"].status == "skipped"
+    assert rows["summary"].status == "succeeded"
+    assert summary.calls == [{"text": "sev low"}]

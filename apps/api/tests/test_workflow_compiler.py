@@ -809,3 +809,60 @@ def test_compiling_grants_no_authority(client):
             )
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------
+# `when` guards — validated like any other reference, plus their own shape
+# --------------------------------------------------------------------------
+
+
+def _guard_on_post(when: Dict[str, Any]) -> Dict[str, Any]:
+    """The base graph with a `when` guard on its final node."""
+    document = _graph()
+    for node in document["nodes"]:
+        if node["id"] == "post":
+            node["when"] = when
+    return document
+
+
+def test_a_guard_referencing_an_upstream_node_is_accepted() -> None:
+    document = _guard_on_post(
+        {"left": "{{ summarise.output }}", "op": "present"}
+    )
+    assert _codes(document) == []
+
+
+def test_a_unary_guard_may_not_carry_a_right_operand() -> None:
+    document = _guard_on_post(
+        {"left": "{{ summarise.output }}", "op": "present", "right": "x"}
+    )
+    assert "guard_unexpected_right" in _codes(document)
+
+
+def test_a_guard_that_references_no_node_or_input_is_flagged_constant() -> None:
+    document = _guard_on_post({"left": "high", "op": "eq", "right": "low"})
+    assert "guard_constant" in [item.code for item in _warnings(document)]
+
+
+def test_a_guard_referencing_a_non_upstream_node_is_refused() -> None:
+    # `post` does not have `pull_prs`… actually it does (transitively); reference a
+    # node that is genuinely not an ancestor by pointing at a sibling with no path.
+    document = _graph()
+    document["nodes"].append(
+        {"id": "aside", "kind": "agent", "prompt": "unrelated"}
+    )
+    for node in document["nodes"]:
+        if node["id"] == "summarise":
+            node["when"] = {"left": "{{ aside.output }}", "op": "present"}
+    assert "reference_not_upstream" in _codes(document)
+
+
+def test_a_guard_referencing_an_unknown_input_is_refused() -> None:
+    document = _graph()
+    document["inputs"] = [
+        {"name": "threshold", "type": "integer", "label": "Threshold", "required": True}
+    ]
+    for node in document["nodes"]:
+        if node["id"] == "post":
+            node["when"] = {"left": "{{ input.nonexistent }}", "op": "present"}
+    assert "reference_unknown_input" in _codes(document)

@@ -42,6 +42,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   argumentRows,
   compileWarningTitle,
+  describeGuard,
   inputLabel,
   isBudgetPark,
   layerGraph,
@@ -307,6 +308,10 @@ function StepChip({ data, positionAbsoluteX, positionAbsoluteY }: NodeProps<Step
           {approval}
 
           {node.description && <p className="workflow-node-why">{node.description}</p>}
+
+          {node.when && (
+            <p className="workflow-node-when">Runs only if {describeGuard(node.when)}</p>
+          )}
 
           {node.kind === "agent" && (
             <>

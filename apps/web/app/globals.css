@@ -5998,6 +5998,16 @@ select:focus-visible {
   font-size: 10.5px;
 }
 
+.workflow-node-when {
+  margin: 0;
+  align-self: flex-start;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--clay-muted);
+  color: var(--clay);
+  font-size: 11px;
+}
+
 .workflow-node-caveat {
   margin: 0;
   padding: 6px 8px;

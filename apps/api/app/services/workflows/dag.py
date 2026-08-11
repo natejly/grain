@@ -28,7 +28,7 @@ start instead of at node six. See `inputs.py`.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterator, List, Literal
+from typing import Any, Dict, Iterator, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -116,6 +116,52 @@ class InputSpec(BaseModel):
     choices: List[Any] = Field(default_factory=list)
 
 
+#: The comparisons a node's `when` guard may make. A closed, named set rather
+#: than an expression language, for exactly the reason the reference syntax is
+#: closed: "when should this step run" is part of a stored program a scheduler
+#: runs unattended, and the smallest thing that can gate it is the one with the
+#: least to audit. `truthy/falsy/present/absent` read only the left operand.
+GUARD_OPERATORS = (
+    "eq",
+    "ne",
+    "gt",
+    "lt",
+    "gte",
+    "lte",
+    "truthy",
+    "falsy",
+    "present",
+    "absent",
+    "in",
+)
+
+#: The operators that read only `left`; `right` is meaningless for them and the
+#: validator refuses one.
+UNARY_OPERATORS = ("truthy", "falsy", "present", "absent")
+
+
+class GuardSpec(BaseModel):
+    """A structured condition on whether a node runs.
+
+    `left` is a reference — `{{ node.output.field }}` or `{{ input.field }}` —
+    resolved against the run's values; `op` names the comparison; `right` is the
+    literal (or a second reference) it is compared against, and is unused by the
+    unary operators. It is *data*, not a parsed expression, so a person reviewing
+    a workflow can read the condition without running an evaluator in their head,
+    and nothing here can reach beyond a comparison. A reference that names a step
+    which was itself skipped resolves to *absent*, which is false for every
+    comparison and answerable by `present`/`absent`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    left: str
+    op: Literal[
+        "eq", "ne", "gt", "lt", "gte", "lte", "truthy", "falsy", "present", "absent", "in"
+    ]
+    right: Any = None
+
+
 class NodeSpec(BaseModel):
     """One step. A named tool call, one turn of the agent loop, or a human pause.
 
@@ -145,6 +191,11 @@ class NodeSpec(BaseModel):
     #: Empty on `tool`/`agent` nodes, which collect nothing. See `NodeSpec` above
     #: and `validate._check_manual`.
     fields: List[InputSpec] = Field(default_factory=list)
+    #: An optional condition on whether this node runs at all. When it evaluates
+    #: false the node is skipped — and so is anything reachable only through it,
+    #: which is how a `when` on one node prunes a whole branch. See
+    #: `validate._check_guard` and `executor._walk`.
+    when: Optional[GuardSpec] = None
 
 
 class EdgeSpec(BaseModel):

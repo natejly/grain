@@ -97,6 +97,7 @@ from ..events import append_event
 from ..llm_tools import ToolContext, ToolSpec, build_registry
 from . import inputs, refs
 from .dag import InputSpec, NodeSpec, WorkflowGraph
+from .guards import evaluate_guard
 from .inputs import InputBindingError
 from .validate import parse_graph, topological_order, validate_graph
 
@@ -477,12 +478,24 @@ def _prepare(
 
 def _walk(db: Session, workflow_run: WorkflowRun, state: _State) -> None:
     existing = _node_runs(db, workflow_run)
+    # A skipped node has no output; it is tracked here, not in `state.outputs`, so
+    # a reference to it resolves as *absent* — which is what makes a guard reading
+    # a pruned branch answer false rather than raise.
+    skipped = {key for key, row in existing.items() if row.status == "skipped"}
+    dependencies: Dict[str, List[str]] = {node_id: [] for node_id in state.order}
+    for edge in state.graph.edges:
+        if edge.target in dependencies:
+            dependencies[edge.target].append(edge.source)
+
     for node_key in state.order:
         node = state.nodes[node_key]
         row = existing.get(node_key)
 
-        if row is not None and row.status in {"succeeded", "skipped"}:
+        if row is not None and row.status == "succeeded":
             state.outputs[node_key] = _stored_output(row)
+            continue
+        if row is not None and row.status == "skipped":
+            skipped.add(node_key)
             continue
         if row is not None and row.status == "waiting_for_approval":
             # Still parked. Somebody called advance twice; the decision endpoint
@@ -494,6 +507,22 @@ def _walk(db: Session, workflow_run: WorkflowRun, state: _State) -> None:
         db.refresh(workflow_run)
         if workflow_run.cancel_requested:
             raise _Halt("cancelled", "cancelled", "the run was cancelled", node_key)
+
+        # A node every one of whose paths in was skipped is unreachable: the
+        # branch that would have fed it was not taken, so it is not taken either.
+        # A node with no dependencies, or with one live dependency, is not pruned
+        # this way — only a `when` can stop it.
+        deps = dependencies[node_key]
+        if deps and all(dep in skipped for dep in deps):
+            _skip_node(db, workflow_run, node, row, "every step it depends on was skipped")
+            skipped.add(node_key)
+            continue
+        if node.when is not None and not evaluate_guard(
+            node.when, outputs=state.outputs, payload=state.payload
+        ):
+            _skip_node(db, workflow_run, node, row, "its “when” condition was not met")
+            skipped.add(node_key)
+            continue
 
         # Renew before each node, not once per advance. A ten-node graph outlives
         # a 90-second lease easily, and an expired lease on a run that is very
@@ -508,6 +537,36 @@ def _walk(db: Session, workflow_run: WorkflowRun, state: _State) -> None:
         state.outputs[node_key] = _stored_output(row)
 
     _succeed(db, workflow_run, state)
+
+
+def _skip_node(
+    db: Session,
+    workflow_run: WorkflowRun,
+    node: NodeSpec,
+    row: Optional[WorkflowNodeRun],
+    reason: str,
+) -> None:
+    """Record a node the run reached but deliberately did not run.
+
+    Distinct from the skipped rows `_terminate` writes for a run that *ended*
+    early: this run is healthy and walks on. The node gets a `skipped` row with no
+    output — so a reference to it resolves as absent — and the reason lands where
+    the run detail can show which branch was not taken and why.
+    """
+    if row is None:
+        row = WorkflowNodeRun(
+            workspace_id=workflow_run.workspace_id,
+            workflow_run_id=workflow_run.id,
+            node_key=node.id,
+            kind=node.kind,
+            tool_name=node.tool,
+        )
+        db.add(row)
+    row.status = "skipped"
+    row.error = reason
+    row.output_json = ""
+    row.finished_at = utcnow()
+    db.commit()
 
 
 def _reject_or_retry_interrupted(

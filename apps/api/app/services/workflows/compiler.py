@@ -66,7 +66,8 @@ Reply with one JSON object and nothing else. No prose, no code fence.
   ],
   "nodes": [
     {{"id": "slug", "kind": "tool", "tool": "exact_tool_name",
-      "arguments": {{...}}, "description": "why this step exists"}},
+      "arguments": {{...}}, "description": "why this step exists",
+      "when": {{"left": "{{{{ prior.output.field }}}}", "op": "eq", "right": "value"}}}},
     {{"id": "slug", "kind": "agent", "prompt": "what to do", "description": "..."}},
     {{"id": "slug", "kind": "manual", "prompt": "question shown to a person",
       "fields": [{{"name": "slug", "type": "string", "label": "...", "required": true}}],
@@ -106,8 +107,16 @@ Rules, all enforced by a validator that will reject your answer:
    `arguments`. The person's values become the node's output, readable
    downstream as {{{{ node_id.output.field_name }}}}. Use one when a step needs a
    human's judgement or input before the workflow can continue.
-10. No fields other than those shown. Unknown fields are rejected.
-11. At most {MAX_NODES} nodes and {MAX_INPUTS} inputs. Prefer the smallest graph
+10. Any node may carry an optional `when` guard to make it conditional:
+    {{"left": "{{{{ node_id.output.field }}}}", "op": "...", "right": literal}}. The
+    node runs only when the guard is true; otherwise it — and any node reachable
+    only through it — is skipped and the run walks on. `op` is one of eq, ne, gt,
+    lt, gte, lte, in, or the one-operand truthy, falsy, present, absent (which omit
+    `right`). `left` should reference an upstream node or input. Example: page a
+    person only when {{"left": "{{{{ triage.output.severity }}}}", "op": "eq",
+    "right": "high"}}.
+11. No fields other than those shown. Unknown fields are rejected.
+12. At most {MAX_NODES} nodes and {MAX_INPUTS} inputs. Prefer the smallest graph
     that does the job.
 
 Tools marked (writes) will pause the workflow for human approval before they
