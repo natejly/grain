@@ -4,15 +4,18 @@ import type {
   WorkflowGraph,
   WorkflowGraphNode,
   WorkflowInputSpec,
+  WorkflowNodeRun,
 } from "@workspace/api-client";
 import {
   argumentRows,
   attributeProblems,
+  buildTimeline,
   compileErrorTitle,
   compileWarningTitle,
   describeReviewability,
   describeSchedule,
   draftFromInputs,
+  formatDuration,
   groupFindings,
   isBudgetPark,
   layerGraph,
@@ -22,6 +25,25 @@ import {
   runIsSettled,
   upstreamOf,
 } from "../components/views/workflow-format";
+
+function nodeRun(overrides: Partial<WorkflowNodeRun> = {}): WorkflowNodeRun {
+  return {
+    node_key: "step",
+    kind: "tool",
+    tool_name: "search_sources",
+    status: "succeeded",
+    attempt: 1,
+    arguments: {},
+    output: "",
+    policy: "allow",
+    agent_tool_call_id: null,
+    error: "",
+    latency_ms: 0,
+    started_at: null,
+    finished_at: null,
+    ...overrides,
+  };
+}
 
 function node(id: string, extra: Partial<WorkflowGraphNode> = {}): WorkflowGraphNode {
   return {
@@ -514,5 +536,74 @@ describe("describeSchedule", () => {
     );
     expect(note.tone).toBe("live");
     expect(note.detail).toContain("Last dispatched");
+  });
+});
+
+describe("formatDuration", () => {
+  it("keeps sub-second spans in milliseconds", () => {
+    expect(formatDuration(40)).toBe("40ms");
+    expect(formatDuration(999)).toBe("999ms");
+  });
+
+  it("carries one decimal only while seconds are small", () => {
+    expect(formatDuration(1400)).toBe("1.4s");
+    expect(formatDuration(12000)).toBe("12s");
+  });
+
+  it("becomes minutes-and-seconds past a minute, carrying a rounded 60", () => {
+    expect(formatDuration(123000)).toBe("2m 3s");
+    expect(formatDuration(120000)).toBe("2m");
+    // 119.6s must not render as "1m 60s".
+    expect(formatDuration(119600)).toBe("2m");
+  });
+
+  it("renders something for a zero or negative span rather than a gap", () => {
+    expect(formatDuration(0)).toBe("0ms");
+    expect(formatDuration(-5)).toBe("0ms");
+  });
+});
+
+describe("buildTimeline", () => {
+  const run = { started_at: "2026-01-01T00:00:00.000Z", created_at: "2026-01-01T00:00:00.000Z" };
+
+  it("orders nodes by when they started, not by graph position", () => {
+    const { rows } = buildTimeline(run, [
+      nodeRun({ node_key: "second", started_at: "2026-01-01T00:00:02.000Z", latency_ms: 500 }),
+      nodeRun({ node_key: "first", started_at: "2026-01-01T00:00:01.000Z", latency_ms: 500 }),
+    ]);
+    expect(rows.map((r) => r.node.node_key)).toEqual(["first", "second"]);
+    expect(rows[0].offsetMs).toBe(1000);
+    expect(rows[1].offsetMs).toBe(2000);
+  });
+
+  it("sorts a node that never ran to the end, with no offset or duration", () => {
+    const { rows } = buildTimeline(run, [
+      nodeRun({ node_key: "skipped", status: "skipped" }),
+      nodeRun({ node_key: "ran", started_at: "2026-01-01T00:00:01.000Z", latency_ms: 200 }),
+    ]);
+    expect(rows.map((r) => r.node.node_key)).toEqual(["ran", "skipped"]);
+    expect(rows[1].offsetMs).toBeNull();
+    expect(rows[1].durationMs).toBeNull();
+  });
+
+  it("falls back to finished minus started when latency was not recorded", () => {
+    const { rows } = buildTimeline(run, [
+      nodeRun({
+        node_key: "a",
+        started_at: "2026-01-01T00:00:01.000Z",
+        finished_at: "2026-01-01T00:00:03.500Z",
+        latency_ms: 0,
+      }),
+    ]);
+    expect(rows[0].durationMs).toBe(2500);
+  });
+
+  it("scales totalMs to the furthest reach and never divides by zero", () => {
+    const empty = buildTimeline(run, []);
+    expect(empty.totalMs).toBe(1);
+    const { totalMs } = buildTimeline(run, [
+      nodeRun({ node_key: "a", started_at: "2026-01-01T00:00:01.000Z", latency_ms: 4000 }),
+    ]);
+    expect(totalMs).toBe(5000);
   });
 });

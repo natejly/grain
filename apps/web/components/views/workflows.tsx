@@ -35,12 +35,15 @@ import { ProposalDiff } from "./document-pending";
 import { describeError, formatRelative } from "./shared";
 import {
   attributeProblems,
+  buildTimeline,
   compileErrorTitle,
   describeReviewability,
   describeSchedule,
+  formatDuration,
   groupFindings,
   inputLabel,
   isBudgetPark,
+  nodeStatusLabel,
   resolvePausedReason,
   runIsSettled,
   runStatusLabel,
@@ -326,6 +329,95 @@ function InputDeclaration({ specs }: { specs: WorkflowInputSpec[] }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+/**
+ * The nodes of a run against the clock: what ran, in the order it ran, how long
+ * it took, and — for a step that produced output or failed — the detail on tap.
+ *
+ * The graph above answers "what is the shape of this workflow"; this answers
+ * "what did this run actually do, and where did the time go". The two are
+ * deliberately not the same view: a topological graph cannot show that step
+ * three sat parked for a person for two minutes while step four ran in 40ms.
+ */
+function WorkflowRunTimeline({
+  run,
+  pausedReason,
+}: {
+  run: WorkflowRunDetail;
+  pausedReason: string;
+}) {
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const { rows, totalMs } = buildTimeline(run, run.nodes);
+  if (!rows.length) return null;
+  return (
+    <div className="workflow-timeline">
+      <div className="panel-title">
+        <div>
+          <strong>Timeline</strong>
+        </div>
+        <span className="panel-count">{rows.length}</span>
+      </div>
+      <ol className="workflow-timeline-rows">
+        {rows.map(({ node, offsetMs, durationMs }) => {
+          const held = isBudgetPark(node.status, pausedReason);
+          const statusClass = held ? "budget" : node.status;
+          const left = offsetMs === null ? 0 : (offsetMs / totalMs) * 100;
+          const width = durationMs ? Math.max((durationMs / totalMs) * 100, 1.5) : 0;
+          const hasOutput =
+            node.output !== null && node.output !== undefined && node.output !== "";
+          const hasDetail = Boolean(node.error) || hasOutput;
+          const open = openKey === node.node_key;
+          return (
+            <li key={node.node_key} className={`workflow-timeline-row ${statusClass}`}>
+              <button
+                type="button"
+                className="workflow-timeline-head"
+                disabled={!hasDetail}
+                aria-expanded={hasDetail ? open : undefined}
+                onClick={() => setOpenKey(open ? null : node.node_key)}
+              >
+                <span className={`workflow-node-status ${statusClass}`}>
+                  {nodeStatusLabel(node.status, pausedReason)}
+                </span>
+                <span className="workflow-timeline-name">
+                  <code>{node.node_key}</code>
+                  {node.attempt > 1 && <em> · attempt {node.attempt}</em>}
+                </span>
+                <span className="workflow-timeline-track" aria-hidden>
+                  {offsetMs !== null && (
+                    <span
+                      className="workflow-timeline-bar"
+                      style={{
+                        insetInlineStart: `${left}%`,
+                        width: width ? `${width}%` : undefined,
+                      }}
+                    />
+                  )}
+                </span>
+                <span className="workflow-timeline-time">
+                  {offsetMs === null ? "—" : `+${formatDuration(offsetMs)}`}
+                  {durationMs ? ` · ${formatDuration(durationMs)}` : ""}
+                </span>
+              </button>
+              {open && hasDetail && (
+                <div className="workflow-timeline-detail">
+                  {node.error && <p className="workflow-node-error">{node.error}</p>}
+                  {hasOutput && (
+                    <pre className="workflow-node-output">
+                      {typeof node.output === "string"
+                        ? node.output
+                        : JSON.stringify(node.output, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
 
@@ -1118,6 +1210,12 @@ export function WorkflowsView({
                   );
                 }}
               />
+              {runDetail && (
+                <WorkflowRunTimeline
+                  run={runDetail}
+                  pausedReason={pausedReasonOf(runDetail)}
+                />
+              )}
             </section>
 
             <section className="workflow-runs-pane">

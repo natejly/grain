@@ -3,6 +3,7 @@ import type {
   WorkflowCompileFinding,
   WorkflowGraph,
   WorkflowInputSpec,
+  WorkflowNodeRun,
   WorkflowNodeRunStatus,
   WorkflowRunStatus,
 } from "@workspace/api-client";
@@ -172,6 +173,80 @@ export function nodeStatusLabel(status: string, pausedReason = ""): string {
 export function runStatusLabel(status: string, pausedReason = ""): string {
   if (isBudgetPark(status, pausedReason)) return BUDGET_RUN_LABEL;
   return RUN_STATUS_LABELS[status as WorkflowRunStatus] ?? status;
+}
+
+/**
+ * A span of milliseconds in the coarsest unit that still reads true: a tool that
+ * returns in 40ms and a workflow that ran for four minutes are the same column,
+ * and `240000ms` in that column tells nobody anything. Sub-second stays in ms,
+ * seconds carry one decimal only while they are small enough for it to matter,
+ * and past a minute it becomes `Nm Ns`. Non-positive input is `0ms` rather than
+ * a blank, so a zero-latency node still renders something rather than a gap.
+ */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds - minutes * 60);
+  // 119.6s rounds the remainder to 60; carry it rather than print "1m 60s".
+  if (rest === 60) return `${minutes + 1}m`;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
+
+export interface TimelineRow {
+  node: WorkflowNodeRun;
+  /** Start relative to the run's own start, or null for a node that never ran. */
+  offsetMs: number | null;
+  /** How long the node took, or null while it is still running / never ran. */
+  durationMs: number | null;
+}
+
+export interface RunTimeline {
+  rows: TimelineRow[];
+  /** The scale a bar's offset/width is a fraction of; at least 1 to never divide by zero. */
+  totalMs: number;
+}
+
+/**
+ * The nodes of a run laid out against the clock, for a trace/timeline.
+ *
+ * Ordered by when each node *started*, not by graph position — a timeline that
+ * re-sorts the topological order into wall-clock order is the whole point, and
+ * it is what makes a slow step or a long gap visible. Nodes that never ran
+ * (pending, or skipped by a branch that was not taken) have no start; they sort
+ * to the end and render without a bar rather than being dropped, because "this
+ * step did not run" is information a run list should keep.
+ *
+ * Duration prefers the recorded `latency_ms` and falls back to finished−started,
+ * so a node whose latency was never written still shows a span if it has both
+ * timestamps. Pure and timestamp-driven (no wall clock), so a test can hold it.
+ */
+export function buildTimeline(
+  run: { started_at: string | null; created_at: string },
+  nodes: WorkflowNodeRun[],
+): RunTimeline {
+  const baseline = Date.parse(run.started_at ?? run.created_at);
+  const rows: TimelineRow[] = nodes.map((node) => {
+    const started = node.started_at ? Date.parse(node.started_at) : NaN;
+    const finished = node.finished_at ? Date.parse(node.finished_at) : NaN;
+    const offsetMs =
+      Number.isNaN(started) || Number.isNaN(baseline) ? null : Math.max(0, started - baseline);
+    let durationMs: number | null = null;
+    if (node.latency_ms > 0) durationMs = node.latency_ms;
+    else if (!Number.isNaN(started) && !Number.isNaN(finished))
+      durationMs = Math.max(0, finished - started);
+    return { node, offsetMs, durationMs };
+  });
+  rows.sort((a, b) => {
+    if (a.offsetMs === null && b.offsetMs === null) return 0;
+    if (a.offsetMs === null) return 1;
+    if (b.offsetMs === null) return -1;
+    return a.offsetMs - b.offsetMs;
+  });
+  const totalMs = Math.max(1, ...rows.map((r) => (r.offsetMs ?? 0) + (r.durationMs ?? 0)));
+  return { rows, totalMs };
 }
 
 /**
