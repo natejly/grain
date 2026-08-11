@@ -12,7 +12,7 @@ from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
-from ..models import Chunk, IdempotencyRecord, Source, new_id
+from ..models import Chunk, Source, new_id
 from ..schemas import ChunkOut, SourceOut
 from ..services.audit import record_audit
 from ..services.graph import mark_graph_stale, rebuild_graph
@@ -24,6 +24,7 @@ from ..services.ingestion import (
 )
 from ..services.retrieval import clear_source_postings
 from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key, replayed_resource_gone
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
@@ -54,12 +55,11 @@ async def upload_source(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> Source:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "source.upload",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="source.upload",
+        key=key,
     )
     if replay:
         source = db.scalar(
@@ -69,8 +69,9 @@ async def upload_source(
                 Source.deleted_at.is_(None),
             )
         )
-        if source:
-            return source
+        if source is None:
+            raise replayed_resource_gone()
+        return source
     filename = sanitize_filename(file.filename or "source.txt")
     try:
         validate_filename(filename)
@@ -95,13 +96,12 @@ async def upload_source(
     path.write_bytes(data)
     source.object_key = str(path)
     db.add(source)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="source.upload",
-            key=key,
-            resource_id=source.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="source.upload",
+        key=key,
+        resource_id=source.id,
     )
     record_audit(
         db,
@@ -155,12 +155,11 @@ def delete_source(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> None:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "source.delete",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="source.delete",
+        key=key,
     )
     if replay:
         return
@@ -179,13 +178,12 @@ def delete_source(
     clear_source_postings(db, source.id)
     db.execute(delete(Chunk).where(Chunk.source_id == source.id))
     mark_graph_stale(db, actor.workspace_id)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="source.delete",
-            key=key,
-            resource_id=source.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="source.delete",
+        key=key,
+        resource_id=source.id,
     )
     record_audit(
         db,

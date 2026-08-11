@@ -15,9 +15,10 @@ import smtplib
 from dataclasses import dataclass
 from datetime import timedelta
 from email.message import EmailMessage as MimeMessage
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol, cast
 
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ...clock import utcnow
@@ -133,22 +134,52 @@ def issue_email_token(
 def consume_email_token(
     db: Session, *, raw_token: str, purpose: str
 ) -> Optional[EmailToken]:
-    """Redeem a token, or return None. Redemption is a one-way door."""
+    """Redeem a token, or return None. Redemption is a one-way door.
+
+    The claim is a single conditional UPDATE and its rowcount is the verdict, so
+    the *database* decides which of two overlapping redemptions of one link wins.
+    A SELECT for `consumed_at IS NULL` followed by a Python-side assignment
+    cannot decide that: both readers see an unconsumed row and both go on to set
+    a password. `WHERE consumed_at IS NULL` is evaluated while the row is locked
+    for writing on every engine, so the loser's rowcount is 0 on Postgres as well
+    as SQLite.
+
+    The claim is committed on its own, before the caller does anything with the
+    token, which is what makes the door one-way in the direction that matters: a
+    burnt link with an unchanged password costs the user one more reset mail,
+    while a redeemable link whose password write failed is a live credential.
+    """
     if not raw_token:
         return None
     now = utcnow()
-    token = db.scalar(
+    token_hash = hash_token(raw_token)
+    # The cast is only about typing: an ORM-enabled UPDATE really does return a
+    # CursorResult, but Session.execute is annotated as the generic Result.
+    claimed = cast(
+        "CursorResult[Any]",
+        db.execute(
+            update(EmailToken)
+            .where(
+                EmailToken.token_hash == token_hash,
+                EmailToken.purpose == purpose,
+                EmailToken.consumed_at.is_(None),
+                EmailToken.expires_at > now,
+            )
+            .values(consumed_at=now)
+        ),
+    ).rowcount
+    if not claimed:
+        # Unknown, expired, or already redeemed — and the empty write
+        # transaction is rolled back rather than left sitting on a lock.
+        db.rollback()
+        return None
+    db.commit()
+    return db.scalar(
         select(EmailToken).where(
-            EmailToken.token_hash == hash_token(raw_token),
+            EmailToken.token_hash == token_hash,
             EmailToken.purpose == purpose,
-            EmailToken.consumed_at.is_(None),
-            EmailToken.expires_at > now,
         )
     )
-    if token is None:
-        return None
-    token.consumed_at = now
-    return token
 
 
 def verification_email(settings: Settings, *, to: str, raw_token: str) -> OutboundEmail:

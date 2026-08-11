@@ -294,19 +294,6 @@ def test_clip_of_zero_reports_everything_as_clipped() -> None:
 # Quota
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: ensure_session counts live sessions (session.py:166-171) and "
-        "then inserts (session.py:227-228) with a provider round trip in "
-        "between, and nothing serialises the two — no SELECT ... FOR UPDATE, no "
-        "partial unique index on (workspace_id, status), no retry. Overlapping "
-        "requests all read the same count and all create, so "
-        "`sandbox_max_concurrent_per_workspace` is advisory under any "
-        "concurrency at all. On e2b that is a billing and capacity control, not "
-        "a cosmetic one. Remove the xfail when creation is serialised."
-    ),
-)
 def test_overlapping_session_creation_cannot_exceed_the_workspace_quota(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

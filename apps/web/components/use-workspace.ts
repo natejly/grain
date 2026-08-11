@@ -152,6 +152,20 @@ export function useWorkspace() {
     setPendingEdits(await api.listPendingDocumentEdits());
   }, []);
 
+  /**
+   * Catch up after something changed the workspace without going through chat.
+   *
+   * A workflow run is the case this exists for: it approves a write, creates a
+   * document, and resolves a pending edit, none of which the shell's lists hear
+   * about — a chat turn refreshes them when its run ends, and a workflow run
+   * has no such subscriber. Without this the Documents view keeps showing the
+   * list it fetched at page load, and Chat keeps offering an approval that has
+   * already been answered.
+   */
+  const refreshOffScreenWork = useCallback(async () => {
+    await Promise.all([refreshSecondary(), refreshArtifacts(), refreshPendingEdits()]);
+  }, [refreshSecondary, refreshArtifacts, refreshPendingEdits]);
+
   const loadWorkspace = useCallback(async () => {
     // The list this load is allowed to overwrite. Anything that appears in the
     // sidebar *after* this snapshot was taken was created by the user while the
@@ -441,6 +455,7 @@ export function useWorkspace() {
     pendingApprovals,
     dashboards,
     loadWorkspace,
+    refreshOffScreenWork,
     ...documentHandlers,
     ...boardHandlers,
     ...infraHandlers,

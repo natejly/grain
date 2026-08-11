@@ -12,7 +12,7 @@ from ..auth import Actor, get_actor, require_owner
 from ..clock import utcnow
 from ..config import get_settings
 from ..database import get_db
-from ..models import AppRelease, GeneratedApp, IdempotencyRecord, new_id
+from ..models import AppRelease, GeneratedApp, new_id
 from ..schemas import (
     AppGenerateRequest,
     AppPreviewOut,
@@ -29,6 +29,7 @@ from ..services.generated_apps import (
     build_release_manifest,
 )
 from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key, replayed_resource_gone
 
 router = APIRouter(tags=["generated-apps"])
 
@@ -131,15 +132,22 @@ def create_app(
 ) -> GeneratedAppOut:
     if payload.visibility == "public" and actor.role != "owner":
         raise HTTPException(status_code=403, detail="Owner role required for public apps")
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "app.create",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="app.create",
+        key=key,
     )
     if replay:
-        return _app_out(db, _workspace_app(db, actor, replay.resource_id))
+        replayed = db.scalar(
+            select(GeneratedApp).where(
+                GeneratedApp.id == replay.resource_id,
+                GeneratedApp.workspace_id == actor.workspace_id,
+            )
+        )
+        if replayed is None:
+            raise replayed_resource_gone()
+        return _app_out(db, replayed)
     slug = payload.slug.strip().lower()
     existing = db.scalar(
         select(GeneratedApp).where(
@@ -181,13 +189,12 @@ def create_app(
     db.add(app)
     if release is not None:
         db.add(release)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="app.create",
-            key=key,
-            resource_id=app.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="app.create",
+        key=key,
+        resource_id=app.id,
     )
     record_audit(
         db,
@@ -222,12 +229,11 @@ def create_release(
 ) -> GeneratedAppOut:
     app = _workspace_app(db, actor, app_id)
     operation = f"app.release:{app.id}"
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == operation,
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=operation,
+        key=key,
     )
     if replay:
         return _app_out(db, app)
@@ -259,13 +265,12 @@ def create_release(
         content_hash=content_hash,
     )
     db.add(release)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation=operation,
-            key=key,
-            resource_id=release.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=operation,
+        key=key,
+        resource_id=release.id,
     )
     record_audit(
         db,
@@ -334,12 +339,11 @@ def publish_release(
     if release is None:
         raise HTTPException(status_code=404, detail="Release not found")
     operation = f"app.publish:{app.id}"
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == operation,
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=operation,
+        key=key,
     )
     if replay:
         return _app_out(db, app)
@@ -350,13 +354,12 @@ def publish_release(
         db=db,
         action="app.published",
     )
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation=operation,
-            key=key,
-            resource_id=release.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=operation,
+        key=key,
+        resource_id=release.id,
     )
     db.commit()
     return _app_out(db, app)
@@ -384,12 +387,11 @@ def rollback_release(
     if release is None:
         raise HTTPException(status_code=404, detail="Release not found")
     operation = f"app.rollback:{app.id}"
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == operation,
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=operation,
+        key=key,
     )
     if replay:
         return _app_out(db, app)
@@ -400,13 +402,12 @@ def rollback_release(
         db=db,
         action="app.rolled_back",
     )
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation=operation,
-            key=key,
-            resource_id=release.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=operation,
+        key=key,
+        resource_id=release.id,
     )
     db.commit()
     return _app_out(db, app)
@@ -428,12 +429,11 @@ def generate_app_release(
     if app.app_type != "code":
         raise HTTPException(status_code=422, detail="App is not a coded app")
     operation = f"app.generate:{app.id}"
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == operation,
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=operation,
+        key=key,
     )
     if replay:
         return _app_out(db, app)
@@ -474,13 +474,12 @@ def generate_app_release(
         content_hash=content_hash,
     )
     db.add(release)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation=operation,
-            key=key,
-            resource_id=release.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=operation,
+        key=key,
+        resource_id=release.id,
     )
     record_audit(
         db,

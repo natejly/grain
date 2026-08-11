@@ -32,7 +32,18 @@ describe("navigation model", () => {
       "Chat",
       "Documents",
       "Knowledge",
+      "Workflows",
     ]);
+  });
+
+  it("keeps Workflows on the rail rather than behind Settings", () => {
+    // Half of what the surface does is operating, not configuring: a run that
+    // parked on an approval at 3am is waiting for someone to *see* it, and
+    // Settings is the menu you open rarely and on purpose.
+    expect(groupForView("workflows").surface).toBe("rail");
+    // And it was appended, so the three destinations that were already on the
+    // rail did not move under a user who knew where they were.
+    expect(RAIL_GROUPS[RAIL_GROUPS.length - 1].id).toBe("workflows");
   });
 
   it("puts the places you configure behind Settings", () => {
@@ -85,7 +96,7 @@ describe("navigation model", () => {
 });
 
 describe("create actions", () => {
-  it("offers the six things a user can make", () => {
+  it("offers the seven things a user can make", () => {
     expect(CREATE_ACTIONS.map((action) => action.label)).toEqual([
       "Document",
       "Project",
@@ -93,6 +104,7 @@ describe("create actions", () => {
       "Sandbox",
       "Board",
       "Dashboard",
+      "Workflow",
     ]);
   });
 
@@ -148,5 +160,8 @@ describe("create actions", () => {
     // A sandbox is a machine, and a dashboard is named inside its own editor.
     expect(prompts.sandbox).toBe("");
     expect(prompts.dashboard).toBe("");
+    // A workflow is named by the compiler from the sentence it was asked for,
+    // so a name typed beforehand would be thrown away.
+    expect(prompts.workflow).toBe("");
   });
 });

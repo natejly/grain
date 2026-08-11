@@ -34,6 +34,7 @@ import { SandboxView } from "./views/sandbox";
 import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
 import { SourcesView } from "./views/sources";
 import { ThemeToggle } from "./theme-toggle";
+import { WorkflowsView } from "./views/workflows";
 import { WorkspaceSwitcher } from "./workspace-selection";
 
 export function Workspace() {
@@ -83,6 +84,7 @@ export function Workspace() {
     pendingApprovals,
     dashboards,
     loadWorkspace,
+    refreshOffScreenWork,
     openDocument,
     createDocument,
     saveDocument,
@@ -189,6 +191,11 @@ export function Workspace() {
   // back to Sandbox does not silently boot a second machine.
   const [sandboxRequested, setSandboxRequested] = useState(false);
 
+  // Same shape, same reason: "Workflow" in the Create menu opens the composer
+  // inside the panel that owns workflows, and the panel lowers the flag so
+  // navigating back later does not reopen a composer the user dismissed.
+  const [workflowRequested, setWorkflowRequested] = useState(false);
+
   /**
    * Make the thing, then show it — the whole point of moving Create off the
    * rail. The view is set *first*, synchronously: a `setView` after an awaited
@@ -205,6 +212,9 @@ export function Workspace() {
     if (action.id === "latex") return createProject(name, "", "latex");
     if (action.id === "board") return createBoard(name);
     if (action.id === "sandbox") return setSandboxRequested(true);
+    // A workflow is a sentence, compiled and reviewed before it exists at all,
+    // so the composer *is* the creation step — same as a dashboard's editor.
+    if (action.id === "workflow") return setWorkflowRequested(true);
     // A dashboard is named, bound to data and generated in one editor; opening
     // it *is* the creation step, and it lands on the gallery when closed.
     return setEditing("new");
@@ -495,6 +505,17 @@ export function Workspace() {
             setError={setError}
             startRequested={sandboxRequested}
             onStartHandled={() => setSandboxRequested(false)}
+          />
+        )}
+
+        {/* Self-contained like the sandbox panel: a workflow's run history is
+            nobody's business until they open this. */}
+        {view === "workflows" && (
+          <WorkflowsView
+            setError={setError}
+            composeRequested={workflowRequested}
+            onComposeHandled={() => setWorkflowRequested(false)}
+            onWorkspaceChanged={() => void refreshOffScreenWork().catch(() => undefined)}
           />
         )}
 

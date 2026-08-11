@@ -13,6 +13,7 @@ import {
   Plug,
   ShieldCheck,
   Terminal,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
 import type { View } from "./shared";
@@ -36,6 +37,7 @@ import type { View } from "./shared";
 export type GroupId =
   | "chat"
   | "documents"
+  | "workflows"
   | "knowledge"
   | "connections"
   | "activity"
@@ -97,6 +99,25 @@ export const NAV_GROUPS: NavGroup[] = [
       { view: "graph", label: "Graph", icon: Network },
     ],
   },
+  /**
+   * On the rail, and the argument had two sides.
+   *
+   * Against: the rail is deliberately short, and a workflow is a thing you
+   * *make*, which would put it among Documents' siblings. But nobody looking
+   * for automation looks under "Documents", and only half of what this surface
+   * does is making. The other half is operating — watching a run, and answering
+   * the approval an unattended run parked on. Settings is where you go rarely
+   * and on purpose; an approval that has been waiting since 3am is the opposite
+   * of that. So: a place you work, appended rather than inserted, because the
+   * three that were already here should not move for a fourth.
+   */
+  {
+    id: "workflows",
+    label: "Workflows",
+    icon: Workflow,
+    surface: "rail",
+    items: [{ view: "workflows", label: "Workflows", icon: Workflow }],
+  },
   {
     id: "connections",
     label: "Connections",
@@ -156,7 +177,8 @@ export type CreateActionId =
   | "latex"
   | "sandbox"
   | "board"
-  | "dashboard";
+  | "dashboard"
+  | "workflow";
 
 export type CreateAction = {
   id: CreateActionId;
@@ -215,6 +237,16 @@ export const CREATE_ACTIONS: CreateAction[] = (
       label: "Dashboard",
       noun: "dashboard",
       view: "dashboards",
+      prompt: "",
+    },
+    // Nothing is asked for here, for the same reason a dashboard asks for
+    // nothing: the sentence *is* the workflow. A name typed now would be
+    // thrown away, because the compiler names the automation from the ask.
+    {
+      id: "workflow",
+      label: "Workflow",
+      noun: "workflow",
+      view: "workflows",
       prompt: "",
     },
   ] as const

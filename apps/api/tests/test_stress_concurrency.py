@@ -101,20 +101,6 @@ def test_a_reset_token_is_refused_the_second_time_it_is_used(
     assert second.status_code == 400
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: consume_email_token (services/auth/email.py:133-151) is a "
-        "SELECT for `consumed_at IS NULL` followed by a Python-side "
-        "`token.consumed_at = now`, in separate transactions per request. There "
-        "is no `UPDATE ... WHERE consumed_at IS NULL` and no unique guard, so "
-        "concurrent redemptions of one link all see it unconsumed and all "
-        "proceed to set a password. The single-use property that the whole "
-        "password-reset design rests on holds only against a serial caller. "
-        "Remove the xfail when consumption is a conditional UPDATE whose "
-        "rowcount decides."
-    ),
-)
 def test_one_reset_token_cannot_be_consumed_by_two_transactions(
     resettable_user: Tuple[str, str],
 ) -> None:
@@ -319,22 +305,6 @@ def test_replaying_an_idempotency_key_sequentially_creates_one_conversation() ->
     assert first.json()["id"] == second.json()["id"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: every idempotency-guarded handler is SELECT-then-INSERT "
-        "against `UniqueConstraint('workspace_id','operation','key')` "
-        "(models.py:218) and nothing anywhere catches the violation — the only "
-        "`except IntegrityError` in app/api is signup (api/auth.py:317) and "
-        "main.py installs no exception handler. `create_conversation` "
-        "(api/chat.py:73-88) only *returns* on replay when the resource still "
-        "exists; once it has been deleted the handler falls through and inserts "
-        "the same key again, so the retry an Idempotency-Key exists to make safe "
-        "answers 500. The same fall-through is in `send_message` "
-        "(api/chat.py:228-296), and it is also what a concurrent replay hits. "
-        "Remove the xfail when the violation is answered as a replay."
-    ),
-)
 def test_replaying_a_key_whose_resource_was_deleted_does_not_500() -> None:
     """Deterministic, single-threaded, and the same defect a race would find.
 
@@ -487,25 +457,6 @@ def test_a_decided_tool_call_refuses_a_second_decision() -> None:
     assert second.status_code == 409
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: the approval gate is not enforced by the store. "
-        "decide_agent_tool_call (api/tools.py:265-272) reads "
-        "`call.status != 'proposed'`, raises 409 if it has moved, and otherwise "
-        "assigns the new status — a read-then-write with no "
-        "`UPDATE ... WHERE status='proposed'`, no version column and no "
-        "constraint. Two transactions that both read `proposed` therefore both "
-        "commit a decision, and the route schedules `resume_run` for each, so a "
-        "denial can be overwritten by an approval that a reviewer raced. "
-        "SQLite's single-writer lock happens to serialise the HTTP handlers in "
-        "this suite, which is why the interleaving is written out explicitly "
-        "here rather than left to threads — on any engine with row-level "
-        "concurrency it is the default outcome, not a rare one. Remove the "
-        "xfail when the transition is a conditional UPDATE whose rowcount "
-        "decides."
-    ),
-)
 def test_a_second_decision_cannot_land_on_a_call_that_was_already_decided() -> None:
     """The exact interleaving the route performs, made explicit.
 
@@ -621,21 +572,6 @@ def test_a_run_event_sequence_cannot_be_reused() -> None:
 # Memory supersession
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: _upsert_item (services/memory.py:186-282) selects the rows "
-        "holding a claim key, retires them by rewriting normalized_key, and "
-        "inserts a replacement — all guarded only by "
-        "`UniqueConstraint('workspace_id','kind','normalized_key')` "
-        "(models.py:769) and never by a lock. Two runs writing the same claim "
-        "both see no live row and both insert, so one commit dies on the "
-        "constraint. Its caller, write_conversation_memory (memory.py:455-465), "
-        "catches `Exception`, logs a warning and rolls back — so the losing "
-        "turn's entire memory set is discarded silently. Remove the xfail when "
-        "the upsert is retried or serialised."
-    ),
-)
 def test_two_runs_writing_one_claim_key_both_survive() -> None:
     identity = create_identity()
     first = session_scope()

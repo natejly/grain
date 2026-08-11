@@ -1,0 +1,846 @@
+"use client";
+
+import {
+  WorkflowCompileError,
+  type AgentToolCall,
+  type Workflow,
+  type WorkflowCompileFinding,
+  type WorkflowCompileResult,
+  type WorkflowNodeRun,
+  type WorkflowRun,
+  type WorkflowRunDetail,
+  type WorkflowStatus,
+} from "@workspace/api-client";
+import {
+  Check,
+  CircleSlash,
+  LoaderCircle,
+  Play,
+  Plus,
+  ShieldQuestion,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+  Workflow as WorkflowIcon,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "../api";
+import { ProposalDiff } from "./document-pending";
+import { describeError, formatRelative } from "./shared";
+import {
+  compileErrorTitle,
+  describeReviewability,
+  describeSchedule,
+  groupFindings,
+  runIsSettled,
+  runStatusLabel,
+} from "./workflow-format";
+import { WorkflowGraphView } from "./workflow-graph";
+
+/**
+ * Workflow automations, end to end: describe one in English, read the graph the
+ * compiler produced, save it, run it, and answer what it parked on.
+ *
+ * The panel owns its own data rather than joining the workspace hook, for the
+ * same reason the sandbox does: nobody who is chatting needs a workflow's run
+ * history fetched on every page load.
+ *
+ * Two things here are deliberate and easy to undo by accident.
+ *
+ * **Saving stores the graph you read, not the sentence again.** `create` is
+ * given the compiled document, so the automation that lands in the database is
+ * the one that was on screen. Passing the prompt back instead would run the
+ * model a second time and store whatever it said that time, which makes the
+ * review step decorative.
+ *
+ * **A failed compile is the common case.** The compiler checks every tool
+ * against this workspace's registry, and a model that invents one is refused —
+ * that is the feature working, so the refusal gets a panel with every finding
+ * in it, not a toast with the first one.
+ */
+export type WorkflowsViewProps = {
+  setError: (message: string) => void;
+  /**
+   * Set when the user picked "Workflow" from the Create menu. Consumed on the
+   * first render that sees it, like the sandbox's start request, so returning
+   * to this view later does not reopen a composer they closed.
+   */
+  composeRequested?: boolean;
+  onComposeHandled?: () => void;
+  /**
+   * Called when this panel has changed something the rest of the shell holds a
+   * list of. A workflow run approves a write, creates a document and resolves a
+   * pending edit without any of the shell's own refresh paths hearing about it.
+   */
+  onWorkspaceChanged?: () => void;
+};
+
+/**
+ * How many workflows are scanned for runs waiting on a human when the view
+ * opens. A bound rather than a page: the answer to "is anything waiting for me"
+ * has to arrive with the list, and a workspace with hundreds of automations
+ * should not open with hundreds of requests.
+ */
+const INBOX_WORKFLOWS = 25;
+const RUNS_PER_WORKFLOW = 20;
+
+type RunMap = Record<string, WorkflowRun[]>;
+
+function StatusChip({ status }: { status: WorkflowStatus }) {
+  return <span className={`workflow-chip ${status}`}>{status}</span>;
+}
+
+/** Every finding the validator collected, as something a person can act on. */
+function CompileFailure({
+  errors,
+  onDismiss,
+}: {
+  errors: WorkflowCompileFinding[];
+  onDismiss: () => void;
+}) {
+  return (
+    <section className="workflow-failure" role="alert">
+      <header>
+        <TriangleAlert size={16} />
+        <div>
+          <strong>That automation could not be built</strong>
+          <span>
+            The compiler checked every step against the tools this workspace
+            actually has and refused the plan. Nothing was saved. Rewording the
+            request — or naming the tool you meant — usually fixes it.
+          </span>
+        </div>
+        <button className="icon-button" onClick={onDismiss} aria-label="Dismiss compile errors">
+          <X size={16} />
+        </button>
+      </header>
+      {groupFindings(errors).map((group) => (
+        <div className="workflow-finding-group" key={group.node || "graph"}>
+          <span className="workflow-finding-where">
+            {group.node ? `Step “${group.node}”` : "The plan as a whole"}
+          </span>
+          {group.items.map((item, index) => (
+            <div className="workflow-finding" key={`${item.code}-${index}`}>
+              <strong>{compileErrorTitle(item.code)}</strong>
+              <p>{item.message}</p>
+            </div>
+          ))}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function AuthorPanel({
+  setError,
+  onSaved,
+}: {
+  setError: (message: string) => void;
+  onSaved: (workflow: Workflow) => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [preview, setPreview] = useState<WorkflowCompileResult | null>(null);
+  const [errors, setErrors] = useState<WorkflowCompileFinding[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function compile() {
+    if (!prompt.trim() || busy) return;
+    setBusy(true);
+    setErrors([]);
+    setPreview(null);
+    try {
+      setPreview(await api.compileWorkflow(prompt.trim()));
+    } catch (caught) {
+      if (caught instanceof WorkflowCompileError) setErrors(caught.errors);
+      else setError(describeError(caught, "Could not compile that automation"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function save() {
+    if (!preview || busy) return;
+    setBusy(true);
+    try {
+      // The reviewed document, not the sentence: a second compile could produce
+      // a different graph, and then the review was of something else.
+      onSaved(
+        await api.createWorkflow({
+          graph: preview.graph,
+          source_prompt: prompt.trim(),
+          status: "draft",
+        }),
+      );
+    } catch (caught) {
+      if (caught instanceof WorkflowCompileError) setErrors(caught.errors);
+      else setError(describeError(caught, "Could not save that workflow"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Which steps write, keyed by node, so the graph can mark them where they are.
+  const warnings: Record<string, WorkflowCompileFinding[]> = {};
+  for (const warning of preview?.summary.warnings ?? []) {
+    if (!warning.node) continue;
+    (warnings[warning.node] ??= []).push(warning);
+  }
+  const reviewability = preview
+    ? describeReviewability(preview.graph, preview.summary.requires_approval)
+    : null;
+
+  return (
+    <section className="workflow-author">
+      <div className="page-heading">
+        <div>
+          <h1>New workflow</h1>
+          <p>
+            Describe the automation in a sentence. It is compiled against this
+            workspace&rsquo;s tools and shown to you before anything is saved.
+          </p>
+        </div>
+      </div>
+
+      <div className="workflow-compose">
+        <textarea
+          className="workflow-prompt"
+          aria-label="Describe the automation"
+          placeholder="Every Monday, pull the open pull requests, summarise them, and post the summary to Slack."
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              void compile();
+            }
+          }}
+        />
+        <div className="workflow-compose-actions">
+          <span className="field-hint">
+            Compiling saves nothing and grants nothing — it is a proposal.
+          </span>
+          <button
+            className="primary-button"
+            onClick={() => void compile()}
+            disabled={busy || !prompt.trim()}
+          >
+            {busy ? <LoaderCircle size={14} className="spin" /> : <Sparkles size={14} />}
+            {busy ? "Compiling…" : "Compile"}
+          </button>
+        </div>
+      </div>
+
+      {errors.length > 0 && (
+        <CompileFailure errors={errors} onDismiss={() => setErrors([])} />
+      )}
+
+      {preview && (
+        <section className="workflow-preview">
+          <div className="workflow-preview-head">
+            <div>
+              <strong>{preview.summary.name}</strong>
+              <span>{preview.summary.description}</span>
+            </div>
+            <div className="workflow-preview-facts">
+              <span>
+                {preview.summary.node_count} step
+                {preview.summary.node_count === 1 ? "" : "s"}
+              </span>
+              <span>
+                {preview.summary.edge_count} link
+                {preview.summary.edge_count === 1 ? "" : "s"}
+              </span>
+              {preview.summary.attempts > 1 && (
+                <span>repaired after {preview.summary.attempts - 1}</span>
+              )}
+            </div>
+          </div>
+
+          {reviewability && (
+            <p className={`workflow-approval-note ${reviewability.tone}`}>
+              <ShieldQuestion size={14} />
+              {reviewability.text}
+            </p>
+          )}
+
+          <WorkflowGraphView graph={preview.graph} warnings={warnings} />
+
+          <div className="workflow-preview-actions">
+            <button className="ghost-button" onClick={() => setPreview(null)} disabled={busy}>
+              <X size={14} /> Discard
+            </button>
+            <button className="primary-button" onClick={() => void save()} disabled={busy}>
+              <Check size={14} /> {busy ? "Saving…" : "Save workflow"}
+            </button>
+          </div>
+        </section>
+      )}
+    </section>
+  );
+}
+
+function ApprovalCard({
+  node,
+  call,
+  decide,
+}: {
+  node: WorkflowNodeRun;
+  call: AgentToolCall | null;
+  decide: (callId: string, decision: "approved" | "denied", remember: boolean) => Promise<void>;
+}) {
+  const [remember, setRemember] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // A tool node's row points straight at its approval. An agent node's does
+  // not: it parked through the agent loop, which wrote the record against the
+  // backing run, so the caller resolves it that way and hands it in here.
+  const callId = node.agent_tool_call_id ?? call?.id ?? "";
+  const tool = call?.name || node.tool_name || node.node_key;
+
+  async function choose(decision: "approved" | "denied") {
+    if (!callId || busy) return;
+    setBusy(true);
+    try {
+      await decide(callId, decision, remember);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="workflow-approval">
+      <p className="workflow-approval-lead">
+        <ShieldQuestion size={14} />
+        This step is waiting for a person. Nothing has been written yet.
+      </p>
+      {/* The same markup the chat card and the document panel use, so a
+          proposal reads identically wherever a person meets it. */}
+      {call?.proposal_preview && (
+        <div className="workflow-approval-preview">
+          <ProposalDiff preview={call.proposal_preview} />
+        </div>
+      )}
+      {callId ? (
+        <>
+          <label className="remember">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+            />
+            {/* The server grants at the scope of the card that raised it, and
+                this card was raised by an automation running unattended. */}
+            Always allow {tool} in workflows
+          </label>
+          <div className="workflow-approval-actions">
+            <button
+              className="ghost-button"
+              disabled={busy}
+              onClick={() => void choose("denied")}
+            >
+              <CircleSlash size={14} /> Deny
+            </button>
+            <button
+              className="primary-button"
+              disabled={busy}
+              onClick={() => void choose("approved")}
+            >
+              <Check size={14} /> Approve
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="workflow-node-meta">
+          The approval record for this step is older than the last fifty and
+          could not be loaded. It is still decidable from the conversation this
+          run created.
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function WorkflowsView({
+  setError,
+  composeRequested = false,
+  onComposeHandled,
+  onWorkspaceChanged,
+}: WorkflowsViewProps) {
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [runsByWorkflow, setRunsByWorkflow] = useState<RunMap>({});
+  const [activeId, setActiveId] = useState("");
+  const [runDetail, setRunDetail] = useState<WorkflowRunDetail | null>(null);
+  const [approvals, setApprovals] = useState<Record<string, AgentToolCall>>({});
+  const [composing, setComposing] = useState(composeRequested);
+  const [schedulingEnabled, setSchedulingEnabled] = useState<boolean | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const active = workflows.find((item) => item.id === activeId) ?? null;
+  const runs = runsByWorkflow[activeId] ?? [];
+
+  const load = useCallback(async () => {
+    try {
+      const rows = await api.listWorkflows();
+      setWorkflows(rows);
+      const scanned = await Promise.all(
+        rows.slice(0, INBOX_WORKFLOWS).map(async (workflow) => {
+          try {
+            return [
+              workflow.id,
+              await api.listWorkflowRuns(workflow.id, RUNS_PER_WORKFLOW),
+            ] as const;
+          } catch {
+            // One workflow's history failing must not blank the list.
+            return [workflow.id, [] as WorkflowRun[]] as const;
+          }
+        }),
+      );
+      setRunsByWorkflow(Object.fromEntries(scanned));
+    } catch (caught) {
+      setError(describeError(caught, "Could not load workflows"));
+    } finally {
+      setLoaded(true);
+    }
+  }, [setError]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  /**
+   * Whether a stored cron can actually fire, asked of the ticker itself and
+   * asked only once, and only when this workspace has something scheduled.
+   *
+   * The question costs a request that is *meant* to fail — 503 when nothing
+   * dispatches, 401 when something does — so a workspace whose automations are
+   * all manual never asks it. An unreachable answer stays `null`, which
+   * `describeSchedule` reads as "we do not know" and never as "yes".
+   */
+  const hasSchedule = workflows.some((item) => item.trigger_kind === "schedule");
+  const probed = useRef(false);
+  useEffect(() => {
+    if (!hasSchedule || probed.current) return;
+    probed.current = true;
+    void api
+      .workflowSchedulingEnabled()
+      .then(setSchedulingEnabled)
+      .catch(() => undefined);
+  }, [hasSchedule]);
+
+  useEffect(() => {
+    if (!composeRequested) return;
+    onComposeHandled?.();
+    setComposing(true);
+    setActiveId("");
+    // The request flag is the trigger; the callback is stable enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composeRequested]);
+
+  // Held in refs so `openRun` can stay a stable callback: it is the body of a
+  // polling interval, and a new identity every render would tear the interval
+  // down and rebuild it 1.2 seconds at a time.
+  const settled = useRef(new Set<string>());
+  const changed = useRef(onWorkspaceChanged);
+  useEffect(() => {
+    changed.current = onWorkspaceChanged;
+  }, [onWorkspaceChanged]);
+
+  const refreshRuns = useCallback(async (workflowId: string) => {
+    const rows = await api.listWorkflowRuns(workflowId, RUNS_PER_WORKFLOW);
+    setRunsByWorkflow((current) => ({ ...current, [workflowId]: rows }));
+  }, []);
+
+  const openRun = useCallback(
+    async (workflowRunId: string) => {
+      try {
+        const detail = await api.getWorkflowRun(workflowRunId);
+        setRunDetail(detail);
+        // Parked nodes are fetched by state, not only by link: an agent node
+        // that parked has no `agent_tool_call_id` of its own, and looking only
+        // for the link is what made a waiting run undecidable.
+        if (
+          detail.nodes.some(
+            (node) =>
+              node.agent_tool_call_id || node.status === "waiting_for_approval",
+          )
+        ) {
+          const calls = await api.listAgentToolCalls();
+          setApprovals(Object.fromEntries(calls.map((call) => [call.id, call])));
+        }
+        // A finished run is where its writes have actually landed — the
+        // decision only authorised them. Told once per run, so the shell's
+        // lists catch up without a poll turning into a refresh storm.
+        if (runIsSettled(detail.status) && !settled.current.has(detail.id)) {
+          settled.current.add(detail.id);
+          changed.current?.();
+        }
+      } catch (caught) {
+        setError(describeError(caught, "Could not open that run"));
+      }
+    },
+    [setError],
+  );
+
+  // A run that has not settled is a run worth re-reading: nodes go from running
+  // to parked to done while nobody clicks anything.
+  const watchedRun = runDetail && !runIsSettled(runDetail.status) ? runDetail.id : "";
+  const watchedWorkflow = runDetail?.workflow_id ?? "";
+  useEffect(() => {
+    if (!watchedRun) return;
+    const timer = window.setInterval(() => {
+      void openRun(watchedRun);
+      if (watchedWorkflow) void refreshRuns(watchedWorkflow).catch(() => undefined);
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [watchedRun, watchedWorkflow, openRun, refreshRuns]);
+
+  function select(workflow: Workflow) {
+    setComposing(false);
+    setActiveId(workflow.id);
+    setRunDetail(null);
+  }
+
+  async function saved(workflow: Workflow) {
+    setWorkflows((rows) => [workflow, ...rows.filter((row) => row.id !== workflow.id)]);
+    setRunsByWorkflow((current) => ({ ...current, [workflow.id]: [] }));
+    setComposing(false);
+    setActiveId(workflow.id);
+    setRunDetail(null);
+  }
+
+  async function setStatus(workflow: Workflow, status: WorkflowStatus) {
+    setBusy(true);
+    try {
+      const updated = await api.updateWorkflow(workflow.id, { status });
+      setWorkflows((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
+    } catch (caught) {
+      setError(describeError(caught, "Could not change that workflow"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function run(workflow: Workflow) {
+    setBusy(true);
+    try {
+      const started = await api.runWorkflow(workflow.id);
+      setRunsByWorkflow((current) => ({
+        ...current,
+        [workflow.id]: [started, ...(current[workflow.id] ?? [])],
+      }));
+      await openRun(started.id);
+    } catch (caught) {
+      setError(describeError(caught, "Could not start that run"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(workflow: Workflow) {
+    if (!window.confirm(`Delete “${workflow.name}” and its run history?`)) return;
+    try {
+      await api.deleteWorkflow(workflow.id);
+      setWorkflows((rows) => rows.filter((row) => row.id !== workflow.id));
+      setRunsByWorkflow((current) => {
+        const next = { ...current };
+        delete next[workflow.id];
+        return next;
+      });
+      if (activeId === workflow.id) {
+        setActiveId("");
+        setRunDetail(null);
+      }
+    } catch (caught) {
+      setError(describeError(caught, "Could not delete that workflow"));
+    }
+  }
+
+  async function decide(
+    callId: string,
+    decision: "approved" | "denied",
+    remember: boolean,
+  ) {
+    try {
+      await api.decideAgentToolCall(callId, decision, remember);
+      if (runDetail) await openRun(runDetail.id);
+      if (watchedWorkflow) await refreshRuns(watchedWorkflow);
+      onWorkspaceChanged?.();
+    } catch (caught) {
+      setError(describeError(caught, "Could not record that decision"));
+    }
+  }
+
+  // Every run, across every workflow scanned, that stopped and is waiting for a
+  // person. The reason this view exists rather than only a per-workflow page.
+  const waiting = workflows.flatMap((workflow) =>
+    (runsByWorkflow[workflow.id] ?? [])
+      .filter((item) => item.status === "waiting_for_approval")
+      .map((item) => ({ workflow, run: item })),
+  );
+
+  const nodeRuns = Object.fromEntries(
+    (runDetail?.nodes ?? []).map((node) => [node.node_key, node]),
+  );
+
+  /**
+   * The approval a parked node is waiting on.
+   *
+   * Two shapes, because there are two ways to park. A **tool** node writes the
+   * `AgentToolCall` itself and stores its id. An **agent** node parks inside
+   * the chat loop, which writes the record against this workflow's backing
+   * `Run` and never touches the node row — so that one is found by the run.
+   */
+  function approvalFor(node: WorkflowNodeRun): AgentToolCall | null {
+    if (node.agent_tool_call_id) return approvals[node.agent_tool_call_id] ?? null;
+    if (!runDetail?.run_id) return null;
+    return (
+      Object.values(approvals).find(
+        (call) => call.run_id === runDetail.run_id && call.status === "proposed",
+      ) ?? null
+    );
+  }
+  const schedule = active ? describeSchedule(active, schedulingEnabled) : null;
+  const reviewability = describeReviewability(
+    active?.graph ?? { nodes: [] },
+    active?.requires_approval ?? false,
+  );
+
+  return (
+    <div className="workflow-layout">
+      <aside className="workflow-sidebar">
+        <div className="workflow-sidebar-head">
+          <span>Workflows</span>
+          <button
+            className="icon-button"
+            aria-label="New workflow"
+            onClick={() => {
+              setComposing(true);
+              setActiveId("");
+              setRunDetail(null);
+            }}
+          >
+            <Plus size={16} />
+          </button>
+        </div>
+
+        {waiting.length > 0 && (
+          <div className="workflow-inbox">
+            <span className="workflow-inbox-title">
+              <ShieldQuestion size={13} />
+              Waiting for you
+            </span>
+            {waiting.map(({ workflow, run: parked }) => (
+              <button
+                key={parked.id}
+                className="workflow-inbox-item"
+                onClick={() => {
+                  select(workflow);
+                  void openRun(parked.id);
+                }}
+              >
+                <strong>{workflow.name}</strong>
+                <span>
+                  {parked.trigger === "schedule" ? "Scheduled run" : "Manual run"} ·{" "}
+                  {formatRelative(parked.created_at)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {workflows.length === 0 ? (
+          <p className="workflow-empty">
+            {loaded
+              ? "No workflows yet. Describe one in a sentence and the compiler will build it."
+              : "Loading…"}
+          </p>
+        ) : (
+          <ul className="workflow-items">
+            {workflows.map((workflow) => {
+              const history = runsByWorkflow[workflow.id] ?? [];
+              const latest = history[0];
+              return (
+                <li key={workflow.id}>
+                  <button
+                    className={
+                      workflow.id === activeId ? "workflow-item active" : "workflow-item"
+                    }
+                    onClick={() => select(workflow)}
+                  >
+                    <WorkflowIcon size={14} />
+                    <span className="workflow-item-name">{workflow.name}</span>
+                    <StatusChip status={workflow.status} />
+                  </button>
+                  <div className="workflow-item-meta">
+                    <span>
+                      {workflow.trigger_kind === "schedule" ? "Scheduled" : "Manual"}
+                    </span>
+                    {latest && <span>{runStatusLabel(latest.status)}</span>}
+                    {latest && <span>{formatRelative(latest.created_at)}</span>}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </aside>
+
+      {composing && (
+        <div className="workflow-main">
+          <AuthorPanel setError={setError} onSaved={saved} />
+        </div>
+      )}
+
+      {!composing && !active && (
+        <div className="workflow-main empty">
+          <div className="empty-state">
+            <WorkflowIcon size={22} />
+            <p>
+              {loaded
+                ? "Pick a workflow, or describe a new one in a sentence."
+                : "Loading workflows…"}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!composing && active && (
+        <div className="workflow-main">
+          <header className="workflow-head">
+            <div>
+              <h1>{active.name}</h1>
+              <p>{active.description || active.source_prompt}</p>
+            </div>
+            <div className="workflow-head-actions">
+              <button
+                className="primary-button"
+                disabled={busy || active.status === "disabled"}
+                onClick={() => void run(active)}
+              >
+                <Play size={14} /> Run now
+              </button>
+              <button
+                className="ghost-button"
+                disabled={busy}
+                onClick={() =>
+                  void setStatus(active, active.status === "active" ? "disabled" : "active")
+                }
+              >
+                {active.status === "active" ? "Disable" : "Activate"}
+              </button>
+              <button
+                className="icon-button"
+                aria-label={`Delete ${active.name}`}
+                onClick={() => void remove(active)}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </header>
+
+          <div className="workflow-facts">
+            <StatusChip status={active.status} />
+            <span>version {active.version}</span>
+          </div>
+
+          {/* The two questions asked of an automation before it is trusted:
+              what will it do, and when will it happen. Same shape, side by
+              side, because neither answer is worth more than the other. */}
+          <div className="workflow-notes">
+            <div className={`workflow-note ${reviewability.tone}`}>
+              <strong>{reviewability.headline}</strong>
+              <span>{reviewability.text}</span>
+            </div>
+            {schedule && (
+              <div className={`workflow-note ${schedule.tone}`}>
+                <strong>{schedule.headline}</strong>
+                <span>{schedule.detail}</span>
+              </div>
+            )}
+          </div>
+
+          {active.source_prompt && (
+            <blockquote className="workflow-source">{active.source_prompt}</blockquote>
+          )}
+
+          <div className="workflow-body">
+            <section className="workflow-graph-pane">
+              <div className="panel-title">
+                <div>
+                  <strong>{runDetail ? "This run" : "The graph"}</strong>
+                </div>
+                {runDetail && (
+                  <button className="ghost-button" onClick={() => setRunDetail(null)}>
+                    <X size={13} /> Back to the graph
+                  </button>
+                )}
+              </div>
+              {runDetail && (
+                <div className={`workflow-run-banner ${runDetail.status}`}>
+                  <strong>{runStatusLabel(runDetail.status)}</strong>
+                  <span>
+                    {runDetail.trigger === "schedule"
+                      ? "Started by the schedule, with nobody watching."
+                      : "Started by hand."}{" "}
+                    Version {runDetail.workflow_version} ·{" "}
+                    {formatRelative(runDetail.created_at)}
+                  </span>
+                  {runDetail.error && (
+                    <span className="workflow-run-error">{runDetail.error}</span>
+                  )}
+                </div>
+              )}
+              <WorkflowGraphView
+                graph={active.graph}
+                nodeRuns={runDetail ? nodeRuns : undefined}
+                renderApproval={(node) =>
+                  node.status === "waiting_for_approval" ? (
+                    <ApprovalCard node={node} call={approvalFor(node)} decide={decide} />
+                  ) : null
+                }
+              />
+            </section>
+
+            <section className="workflow-runs-pane">
+              <div className="panel-title">
+                <div>
+                  <strong>Runs</strong>
+                </div>
+                <span className="panel-count">{runs.length}</span>
+              </div>
+              {runs.length === 0 ? (
+                <p className="workflow-empty">
+                  This workflow has not run yet.
+                </p>
+              ) : (
+                <ul className="workflow-run-list">
+                  {runs.map((item) => (
+                    <li key={item.id}>
+                      <button
+                        className={
+                          runDetail?.id === item.id
+                            ? "workflow-run-item active"
+                            : "workflow-run-item"
+                        }
+                        onClick={() => void openRun(item.id)}
+                      >
+                        <span className={`workflow-run-status ${item.status}`}>
+                          {runStatusLabel(item.status)}
+                        </span>
+                        <span className="workflow-run-when">
+                          {item.trigger === "schedule" ? "Scheduled" : "Manual"} ·{" "}
+                          {formatRelative(item.created_at)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

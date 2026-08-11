@@ -15,7 +15,6 @@ from ..database import SessionLocal, get_db
 from ..models import (
     Agent,
     Conversation,
-    IdempotencyRecord,
     Message,
     Run,
     RunEvent,
@@ -34,6 +33,7 @@ from ..services.audit import record_audit
 from ..services.events import append_event
 from ..services.runs import TERMINAL_RUN_STATES, process_run
 from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key, replayed_resource_gone
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -70,17 +70,17 @@ def create_conversation(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> Conversation:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "conversation.create",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="conversation.create",
+        key=key,
     )
     if replay:
         conversation = db.get(Conversation, replay.resource_id)
-        if conversation and conversation.workspace_id == actor.workspace_id:
-            return conversation
+        if conversation is None or conversation.workspace_id != actor.workspace_id:
+            raise replayed_resource_gone()
+        return conversation
     conversation = Conversation(
         id=new_id(),
         workspace_id=actor.workspace_id,
@@ -88,13 +88,12 @@ def create_conversation(
         title=payload.title.strip() or "New conversation",
     )
     db.add(conversation)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="conversation.create",
-            key=key,
-            resource_id=conversation.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="conversation.create",
+        key=key,
+        resource_id=conversation.id,
     )
     record_audit(
         db,
@@ -117,14 +116,15 @@ def delete_conversation(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> None:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "conversation.delete",
-            IdempotencyRecord.key == key,
-        )
-    )
-    if replay:
+    if find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="conversation.delete",
+        key=key,
+    ):
+        # A delete that already happened is the outcome the caller asked for,
+        # so a replay is answered with the same 204 whether or not the row is
+        # still there to look at.
         return
     conversation = db.scalar(
         select(Conversation).where(
@@ -159,13 +159,12 @@ def delete_conversation(
         )
     )
     db.delete(conversation)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="conversation.delete",
-            key=key,
-            resource_id=conversation_id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="conversation.delete",
+        key=key,
+        resource_id=conversation_id,
     )
     record_audit(
         db,
@@ -225,12 +224,8 @@ def send_message(
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "message.send",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db, workspace_id=actor.workspace_id, operation="message.send", key=key
     )
     if replay:
         run = db.scalar(
@@ -242,12 +237,13 @@ def send_message(
         message = db.scalar(
             select(Message).where(Message.run_id == replay.resource_id, Message.role == "user")
         )
-        if run and message:
-            return SendMessageResponse(
-                message=_message_out(message),
-                run=RunOut.model_validate(run),
-                replayed=True,
-            )
+        if run is None or message is None:
+            raise replayed_resource_gone()
+        return SendMessageResponse(
+            message=_message_out(message),
+            run=RunOut.model_validate(run),
+            replayed=True,
+        )
     # "The default agent" is now per workspace — every account gets one at
     # signup — because a global id would point a new tenant at the dev seed's
     # agent, or at nothing at all.
@@ -286,13 +282,12 @@ def send_message(
         event_type="run.queued",
         payload={"status": "queued", "message_id": message.id},
     )
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="message.send",
-            key=key,
-            resource_id=run.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="message.send",
+        key=key,
+        resource_id=run.id,
     )
     if conversation.title == "New conversation":
         conversation.title = payload.content.strip()[:64]
@@ -325,14 +320,11 @@ def cancel_run(
     )
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "run.cancel",
-            IdempotencyRecord.key == key,
-        )
-    )
-    if replay:
+    if find_replay(
+        db, workspace_id=actor.workspace_id, operation="run.cancel", key=key
+    ):
+        # The run was resolved before the replay branch, so there is always
+        # something to return here.
         return run
     if run.status in {"queued", "waiting_for_approval"}:
         run.cancel_requested = True
@@ -354,13 +346,12 @@ def cancel_run(
             event_type="run.cancelling",
             payload={"status": "cancelling"},
         )
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="run.cancel",
-            key=key,
-            resource_id=run.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="run.cancel",
+        key=key,
+        resource_id=run.id,
     )
     db.commit()
     return run

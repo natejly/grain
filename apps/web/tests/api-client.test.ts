@@ -169,6 +169,61 @@ describe("WorkspaceApi", () => {
     expect(signedOut).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps every finding when the workflow compiler refuses a plan", async () => {
+    // A compile failure is the common case, and the API answers 422 with a
+    // *list*. The generic path keeps only a string, which is why this one does
+    // not use it — "Request failed (422)" is not a screen anyone can act on.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: {
+            errors: [
+              { code: "tool_unknown", message: "no tool named “slak_post”", node: "post" },
+              { code: "graph_cycle", message: "a and b", node: "" },
+            ],
+            warnings: [
+              { code: "tool_write_capable", message: "send_email writes", node: "post" },
+            ],
+          },
+        }),
+        { status: 422, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      new WorkspaceApi("http://example.test").compileWorkflow("post to slack"),
+    ).rejects.toMatchObject({
+      status: 422,
+      errors: [
+        { code: "tool_unknown", node: "post" },
+        { code: "graph_cycle", node: "" },
+      ],
+      warnings: [{ code: "tool_write_capable", node: "post" }],
+    });
+  });
+
+  it("reads the scheduler's 503 as off and its 401 as armed, without signing out", async () => {
+    // The ticker is the only thing that knows whether a cron can fire, and it
+    // answers 401 when it *can* — the opposite of what a 401 means everywhere
+    // else. Routing that through the usual path would sign a user out of a
+    // correctly configured deployment the moment they opened Workflows.
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    const api = new WorkspaceApi("http://example.test");
+    const signedOut = vi.fn();
+    api.onUnauthorized(signedOut);
+
+    expect(await api.workflowSchedulingEnabled()).toBe(false);
+    expect(await api.workflowSchedulingEnabled()).toBe(true);
+    expect(signedOut).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "http://example.test/api/workflows/tick",
+      "http://example.test/api/workflows/tick",
+    ]);
+  });
+
   it("parses ordered resumable SSE events", async () => {
     const body = [
       "id: 3",

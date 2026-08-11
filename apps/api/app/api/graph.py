@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import GraphEdge, GraphEntity, GraphProjection, IdempotencyRecord
+from ..models import GraphEdge, GraphEntity, GraphProjection
 from ..schemas import GraphEdgeOut, GraphEntityOut, GraphOut
 from ..services.graph import rebuild_graph
 from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -92,12 +93,11 @@ def request_graph_rebuild(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> GraphOut:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "graph.rebuild",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="graph.rebuild",
+        key=key,
     )
     if replay is not None:
         return _graph_out(db, actor.workspace_id, 100)
@@ -111,13 +111,12 @@ def request_graph_rebuild(
     else:
         projection.status = "queued"
         projection.error = ""
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="graph.rebuild",
-            key=key,
-            resource_id=projection.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="graph.rebuild",
+        key=key,
+        resource_id=projection.id,
     )
     db.commit()
     background_tasks.add_task(rebuild_graph, actor.workspace_id, actor.user_id)

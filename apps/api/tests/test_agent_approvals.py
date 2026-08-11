@@ -210,3 +210,45 @@ def test_agent_tool_calls_are_listable(client, _no_resume):
     match = [row for row in rows if row["id"] == call_id]
     assert match and match[0]["run_id"] == run_id
     assert json.loads(match[0]["arguments_json"]) == {}
+
+
+def test_the_decision_claim_is_refused_once_another_transaction_holds_it(
+    client, _no_resume
+):
+    """The route's gate, exercised as the loser of a race sees it.
+
+    `decide_agent_tool_call` no longer reads `status == 'proposed'` and then
+    assigns; it claims the row with `UPDATE ... WHERE status = 'proposed'` and
+    lets the rowcount decide, because two reviewers who both read an open card
+    both pass an `if` and both go on to schedule `resume_run`. Only the claim
+    itself can be tested here — SQLite serialises the two HTTP handlers, so
+    driving both through the client would prove nothing about the gate.
+    """
+    from app.api.tools import _claim_decision
+
+    _run_id, call_id = _park_run(client)
+    identity = client.get("/api/bootstrap").json()["identity"]
+    db = SessionLocal()
+    try:
+        assert _claim_decision(
+            db,
+            AgentToolCall,
+            call_id=call_id,
+            workspace_id=identity["workspace_id"],
+            decision="denied",
+            actor_id=identity["user_id"],
+        )
+        db.commit()
+        # The same claim from a reviewer who read the card while it was open.
+        assert not _claim_decision(
+            db,
+            AgentToolCall,
+            call_id=call_id,
+            workspace_id=identity["workspace_id"],
+            decision="approved",
+            actor_id=identity["user_id"],
+        )
+        db.commit()
+        assert db.get(AgentToolCall, call_id).status == "denied"
+    finally:
+        db.close()

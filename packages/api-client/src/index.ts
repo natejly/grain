@@ -1692,6 +1692,118 @@ export class WorkspaceApi {
     return this.request(`/api/sandbox/${sessionId}`, { method: "DELETE" }, true);
   }
 
+  // --- Workflow automations (ADR 0007) --------------------------------------
+  // Three of these do not go through `request`, and the reason is the feature's
+  // central claim: a graph that names a tool this workspace does not have is
+  // refused at compile time, with *every* finding collected rather than the
+  // first. That report is a list, `request` keeps only a string, and a screen
+  // that has to read like a helpful message cannot be built on "Request failed
+  // (422)". `workflowWrite` walks the same dispatch and CSRF-retry path and
+  // keeps the report.
+
+  private async workflowWrite<T>(
+    path: string,
+    method: string,
+    body: unknown,
+  ): Promise<T> {
+    const init: RequestInit = { method, body: JSON.stringify(body) };
+    const headers = this.buildHeaders(init, true);
+    let response = await this.dispatch(path, init, headers, true);
+    if (
+      response.status === 403 &&
+      /csrf/i.test(await WorkspaceApi.detailOf(response))
+    ) {
+      try {
+        await this.me();
+      } catch {
+        // Leave the retry to produce the authoritative error.
+      }
+      response = await this.dispatch(path, init, headers, true);
+    }
+    if (response.status === 401) this.signalUnauthorized();
+    if (!response.ok) throw await workflowFailure(response);
+    return (await response.json()) as T;
+  }
+
+  /** Natural language to a validated DAG. Saves nothing; grants nothing. */
+  compileWorkflow(sourcePrompt: string): Promise<WorkflowCompileResult> {
+    return this.workflowWrite("/api/workflows/compile", "POST", {
+      source_prompt: sourcePrompt,
+    });
+  }
+
+  listWorkflows(): Promise<Workflow[]> {
+    return this.request("/api/workflows");
+  }
+
+  /** Either a sentence to compile or an already-formed graph, never neither. */
+  createWorkflow(payload: WorkflowCreateInput): Promise<Workflow> {
+    return this.workflowWrite("/api/workflows", "POST", payload);
+  }
+
+  getWorkflow(workflowId: string): Promise<Workflow> {
+    return this.request(`/api/workflows/${workflowId}`);
+  }
+
+  /** Enable, disable, or recompile — a recompile bumps `version`. */
+  updateWorkflow(workflowId: string, payload: WorkflowUpdateInput): Promise<Workflow> {
+    return this.workflowWrite(`/api/workflows/${workflowId}`, "PATCH", payload);
+  }
+
+  /** Deletes the run history with it; the API says so and means it. */
+  deleteWorkflow(workflowId: string): Promise<void> {
+    return this.request(`/api/workflows/${workflowId}`, { method: "DELETE" }, true);
+  }
+
+  /** Start a run now. 202: the graph executes on a background task. */
+  runWorkflow(
+    workflowId: string,
+    payload: Record<string, unknown> = {},
+  ): Promise<WorkflowRun> {
+    return this.request(
+      `/api/workflows/${workflowId}/run`,
+      { method: "POST", body: JSON.stringify({ payload }) },
+      true,
+    );
+  }
+
+  listWorkflowRuns(workflowId: string, limit = 50): Promise<WorkflowRun[]> {
+    return this.request(`/api/workflows/${workflowId}/runs?limit=${limit}`);
+  }
+
+  /** One run with every node's state, including the ones that never ran. */
+  getWorkflowRun(workflowRunId: string): Promise<WorkflowRunDetail> {
+    return this.request(`/api/workflows/runs/${workflowRunId}`);
+  }
+
+  /**
+   * Can a stored cron actually fire? Asked of the ticker, which is the only
+   * thing that knows.
+   *
+   * ADR 0007 forbids the UI from describing a schedule as active when nothing
+   * dispatches it, and no other endpoint reports that: `WORKFLOW_CRON_SECRET`
+   * is a server secret and is deliberately absent from `/api/bootstrap`. So
+   * this asks `POST /api/workflows/tick` without presenting the secret. Unset
+   * → 503, "scheduling is not configured". Set → 401, because the endpoint is
+   * armed and we did not prove we are the cron. Neither answer dispatches
+   * anything: the secret comparison happens before `dispatch_due`, and the
+   * route takes no arguments, so there is nothing to name and nothing to fire.
+   *
+   * It must not go through `request`, because a 401 here means the opposite of
+   * what it means everywhere else — the ticker is *working* — and signalling it
+   * would sign the user out of a configured deployment on sight.
+   */
+  async workflowSchedulingEnabled(): Promise<boolean> {
+    const init: RequestInit = { method: "POST" };
+    const response = await this.dispatch(
+      "/api/workflows/tick",
+      init,
+      this.buildHeaders(init, true),
+      true,
+    );
+    return response.status !== 503;
+  }
+
   async *streamRun(runId: string, after = 0): AsyncGenerator<RunEvent> {
     // A long-lived cross-origin GET still needs the cookie, or chat goes quiet
     // the moment authentication lands. GET is CSRF-exempt, so no header here.
@@ -1734,4 +1846,214 @@ export class WorkspaceApi {
       }
     }
   }
+}
+
+// --- Workflow automations (ADR 0007) ----------------------------------------
+// The graph is a document, and these mirror `services/workflows/dag.py` field
+// for field. Every node object carries every field — the API dumps the whole
+// pydantic model — so a tool node still arrives with `prompt: ""` and an agent
+// node with `tool: ""`. `kind` is what tells them apart, never the emptiness.
+
+export type WorkflowTriggerKind = "manual" | "schedule";
+export type WorkflowStatus = "draft" | "active" | "disabled";
+export type WorkflowNodeKind = "tool" | "agent";
+
+export type WorkflowTrigger = {
+  kind: WorkflowTriggerKind;
+  /** Five fields, or "" for a manual trigger. No @daily nicknames. */
+  cron: string;
+  timezone: string;
+};
+
+export type WorkflowGraphNode = {
+  id: string;
+  kind: WorkflowNodeKind;
+  description: string;
+  /** Tool nodes only. Statically reviewable: this is every call it can make. */
+  tool: string;
+  arguments: Record<string, unknown>;
+  /** Agent nodes only. Which tools it calls is decided at run time. */
+  prompt: string;
+};
+
+/** Spelled from/to on the wire, which is why this is not {source,target}. */
+export type WorkflowGraphEdge = { from: string; to: string };
+
+export type WorkflowGraph = {
+  name: string;
+  description: string;
+  trigger: WorkflowTrigger;
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+};
+
+export type Workflow = {
+  id: string;
+  name: string;
+  description: string;
+  /** The sentence the graph was compiled from; kept so drift stays visible. */
+  source_prompt: string;
+  graph: WorkflowGraph;
+  version: number;
+  status: WorkflowStatus;
+  trigger_kind: WorkflowTriggerKind;
+  schedule_cron: string;
+  schedule_timezone: string;
+  /** Answered against the live registry: will this park, or complete alone? */
+  requires_approval: boolean;
+  last_dispatched_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One finding from the validator. `node` is "" for a graph-level problem. */
+export type WorkflowCompileFinding = {
+  code: string;
+  message: string;
+  node: string;
+};
+
+export type WorkflowCompileSummary = {
+  name: string;
+  description: string;
+  trigger: WorkflowTrigger;
+  node_count: number;
+  edge_count: number;
+  requires_approval: boolean;
+  /** 1 on a first-pass success, 2 when the repair pass rescued it. */
+  attempts: number;
+  warnings: WorkflowCompileFinding[];
+};
+
+export type WorkflowCompileResult = {
+  graph: WorkflowGraph;
+  summary: WorkflowCompileSummary;
+};
+
+export type WorkflowCreateInput = {
+  source_prompt?: string;
+  graph?: WorkflowGraph;
+  status?: WorkflowStatus;
+};
+
+export type WorkflowUpdateInput = {
+  status?: WorkflowStatus;
+  /** Either recompiles the sentence or re-validates the graph; bumps version. */
+  source_prompt?: string;
+  graph?: WorkflowGraph;
+};
+
+export type WorkflowRunStatus =
+  | "queued"
+  | "running"
+  | "waiting_for_approval"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type WorkflowNodeRunStatus =
+  | "pending"
+  | "running"
+  | "waiting_for_approval"
+  | "succeeded"
+  | "failed"
+  | "skipped";
+
+export type WorkflowNodeRun = {
+  node_key: string;
+  kind: WorkflowNodeKind;
+  tool_name: string;
+  status: WorkflowNodeRunStatus;
+  attempt: number;
+  arguments: Record<string, unknown>;
+  output: string;
+  /**
+   * What authorised this node: "allow" for a standing grant or a read-only
+   * tool, "ask" for a human decision on this specific call, "agent" for an
+   * agent node, "" when it never reached a decision.
+   */
+  policy: string;
+  /** The parked approval card, when this node stopped for one. */
+  agent_tool_call_id: string | null;
+  error: string;
+  latency_ms: number;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type WorkflowRun = {
+  id: string;
+  workflow_id: string;
+  workflow_version: number;
+  /** "manual" or "schedule" — whether anybody was watching. */
+  trigger: string;
+  status: WorkflowRunStatus;
+  /** The chat run carrying this workflow's events and approval records. */
+  run_id: string | null;
+  error: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+};
+
+export type WorkflowRunDetail = WorkflowRun & { nodes: WorkflowNodeRun[] };
+
+/**
+ * A compile the validator refused, carrying every finding rather than the first.
+ *
+ * ADR 0007: "every check runs and every finding is collected, because the
+ * caller's next move is either to show a person the whole list or to hand it
+ * back to the model as a repair prompt, and both are worse one error at a time."
+ */
+export class WorkflowCompileError extends ApiError {
+  constructor(
+    message: string,
+    public readonly errors: WorkflowCompileFinding[],
+    public readonly warnings: WorkflowCompileFinding[],
+  ) {
+    super(message, 422);
+  }
+}
+
+function findings(value: unknown): WorkflowCompileFinding[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Partial<WorkflowCompileFinding>;
+    if (typeof row.message !== "string") return [];
+    return [
+      {
+        code: typeof row.code === "string" ? row.code : "",
+        message: row.message,
+        node: typeof row.node === "string" ? row.node : "",
+      },
+    ];
+  });
+}
+
+/** The error a workflow write failed with, keeping a compile report intact. */
+async function workflowFailure(response: Response): Promise<ApiError> {
+  let detail: unknown = "";
+  try {
+    detail = ((await response.clone().json()) as { detail?: unknown }).detail;
+  } catch {
+    detail = "";
+  }
+  if (response.status === 422 && detail && typeof detail === "object") {
+    const report = detail as { errors?: unknown; warnings?: unknown };
+    const errors = findings(report.errors);
+    if (errors.length > 0) {
+      return new WorkflowCompileError(
+        errors.map((item) => item.message).join("; "),
+        errors,
+        findings(report.warnings),
+      );
+    }
+  }
+  return new ApiError(
+    typeof detail === "string" && detail
+      ? detail
+      : `Request failed (${response.status})`,
+    response.status,
+  );
 }

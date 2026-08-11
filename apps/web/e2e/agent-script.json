@@ -82,5 +82,24 @@
         "text": "Inline $E = mc^2$ and display:\n\n$$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$\n"
       }
     ]
+  },
+  {
+    "match": "summarise these passages",
+    "steps": [
+      {
+        "call": {
+          "name": "create_document",
+          "arguments": {
+            "title": "Workflow Run Summary",
+            "kind": "markdown",
+            "content": "# Workflow Run Summary\n\nThe automation searched the workspace and filed this.\n"
+          }
+        }
+      },
+      {
+        "text": "Filed the summary as a document.",
+        "denied_text": "Understood \u2014 I wrote nothing."
+      }
+    ]
   }
 ]

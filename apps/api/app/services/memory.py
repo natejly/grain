@@ -5,10 +5,22 @@ import json
 import logging
 import operator
 from dataclasses import dataclass, field
-from functools import reduce
-from typing import Any, Dict, List, Optional, Sequence, Tuple, TypeVar
+from functools import reduce, wraps
+from typing import (
+    Any,
+    Callable,
+    Concatenate,
+    Dict,
+    List,
+    Optional,
+    ParamSpec,
+    Sequence,
+    Tuple,
+    TypeVar,
+)
 
 from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, defer
 
 from ..clock import utcnow
@@ -163,6 +175,52 @@ def _retire(db: Session, rows: Sequence[MemoryItem], replacement_id: str) -> Non
     db.flush()
 
 
+_ClaimArgs = ParamSpec("_ClaimArgs")
+
+
+def _retry_on_claim_collision(
+    write: Callable[Concatenate[Session, _ClaimArgs], MemoryItem],
+) -> Callable[Concatenate[Session, _ClaimArgs], MemoryItem]:
+    """Commit one claim on its own, and do it again if someone else got there.
+
+    The write it wraps is read-then-insert against
+    `UniqueConstraint('workspace_id', 'kind', 'normalized_key')`: two runs that
+    extract the same claim at the same moment both find no live row holding it
+    and both insert one. No lock prevents that — the row does not exist yet, so
+    there is nothing to lock — which leaves noticing the collision and doing the
+    work again as the only answer that is correct on Postgres and on SQLite
+    alike. The second pass finds the winner's row live, so the ordinary
+    supersession path applies: the older value is retired and the newer one
+    replaces it, which is what would have happened had the two turns arrived one
+    after the other.
+
+    Committing per claim is what makes the retry possible at all — the loser has
+    to be able to *see* the winner's row, and an uncommitted row is invisible to
+    it. It is also what keeps one contested claim from costing a turn everything
+    else it learned: `write_conversation_memory` rolls the session back when a
+    write raises, so a single collision used to discard the whole batch and say
+    so only in a log line.
+    """
+
+    @wraps(write)
+    def guarded(
+        db: Session, *args: _ClaimArgs.args, **kwargs: _ClaimArgs.kwargs
+    ) -> MemoryItem:
+        for last_attempt in (False, True):
+            try:
+                item = write(db, *args, **kwargs)
+                db.commit()
+                return item
+            except IntegrityError:
+                db.rollback()
+                if last_attempt:
+                    raise
+        raise AssertionError("the retry loop returns or raises on both passes")
+
+    return guarded
+
+
+@_retry_on_claim_collision
 def _upsert_item(
     db: Session,
     *,

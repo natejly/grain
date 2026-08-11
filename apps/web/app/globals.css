@@ -5107,3 +5107,869 @@ select:focus-visible {
   color: var(--text-dim);
   font-size: 10px;
 }
+
+/* ---- Workflows ----
+   Two panes: the automations you have on the left, one automation on the
+   right. The right-hand pane draws the graph as rows rather than as a canvas —
+   a workflow is a dozen steps run once in order, and the reader's question is
+   "what does it call, with what, in which order", which a list answers without
+   a layout engine.
+
+   The same rows carry a run. A node gains a state pill, its output and, when it
+   stopped for a person, the decision itself — so "what this does" and "what it
+   did" are one picture rather than two that can disagree. */
+.workflow-layout {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.workflow-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 14px 10px;
+}
+
+.workflow-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.workflow-empty {
+  padding: 10px 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* An unattended run that parked at 3am is useless if nobody can see it
+   waiting, so it sits above the list rather than inside whichever workflow
+   happens to own it. */
+.workflow-inbox {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px solid var(--clay);
+  border-radius: 10px;
+  background: var(--clay-muted);
+}
+
+.workflow-inbox-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.workflow-inbox-item {
+  display: grid;
+  gap: 2px;
+  padding: 6px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--surface-raised);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workflow-inbox-item:hover {
+  background: var(--surface-hover);
+}
+
+.workflow-inbox-item strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workflow-inbox-item span {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.workflow-items {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.workflow-item:hover {
+  background: var(--surface-hover);
+}
+
+.workflow-item.active {
+  background: var(--accent-muted);
+  color: var(--accent-text);
+}
+
+.workflow-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-item-meta {
+  display: flex;
+  gap: 8px;
+  padding: 0 8px 8px 30px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.workflow-chip {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.workflow-chip.active {
+  background: var(--green-muted);
+  color: var(--green);
+}
+
+.workflow-chip.disabled {
+  background: var(--red-muted);
+  color: var(--red);
+}
+
+.workflow-main {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 18px 22px 28px;
+}
+
+.workflow-main.empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workflow-head h1 {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.workflow-head p {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.workflow-head-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* The two notes above a workflow: what it does, and when it happens.
+   Mint only when the claim is safe to make — a schedule a ticker really can
+   fire, or a graph every step of which only reads. Clay for everything else,
+   because ADR 0007's objection is that "it will run every Monday" is a promise,
+   and a promise the system does not keep is worse than a missing feature. */
+.workflow-notes {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.workflow-note {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.workflow-note strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.workflow-note span {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.workflow-note.warn,
+.workflow-note.parks,
+.workflow-note.opaque {
+  border-color: var(--clay);
+  background: var(--clay-muted);
+}
+
+.workflow-note.warn strong,
+.workflow-note.parks strong,
+.workflow-note.opaque strong {
+  color: var(--amber);
+}
+
+.workflow-note.live,
+.workflow-note.unattended {
+  border-color: var(--green-border);
+  background: var(--green-muted);
+}
+
+.workflow-note.live strong,
+.workflow-note.unattended strong {
+  color: var(--green);
+}
+
+.workflow-source {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--accent-border);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.55;
+}
+
+.workflow-body {
+  display: grid;
+  align-items: start;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 250px;
+}
+
+.workflow-graph-pane,
+.workflow-runs-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.workflow-run-banner {
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+
+.workflow-run-banner strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.workflow-run-banner span {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.workflow-run-banner.waiting_for_approval {
+  border-color: var(--clay);
+  background: var(--clay-muted);
+}
+
+.workflow-run-banner.failed,
+.workflow-run-banner.cancelled {
+  border-color: var(--red-border);
+  background: var(--red-muted);
+}
+
+.workflow-run-banner.succeeded {
+  border-color: var(--green-border);
+  background: var(--green-muted);
+}
+
+.workflow-run-error {
+  color: var(--red);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+}
+
+.workflow-run-list {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-run-item {
+  display: grid;
+  width: 100%;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.workflow-run-item:hover {
+  background: var(--surface-hover);
+}
+
+.workflow-run-item.active {
+  background: var(--accent-muted);
+}
+
+.workflow-run-status {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.workflow-run-status.succeeded {
+  color: var(--green);
+}
+
+.workflow-run-status.failed,
+.workflow-run-status.cancelled {
+  color: var(--red);
+}
+
+.workflow-run-status.waiting_for_approval {
+  color: var(--amber);
+}
+
+.workflow-run-when {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* ---- Authoring ---- */
+.workflow-author {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 960px;
+}
+
+.workflow-compose {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.workflow-prompt {
+  min-height: 88px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  outline: none;
+  resize: vertical;
+}
+
+.workflow-prompt:focus {
+  border-color: var(--accent-border-strong);
+}
+
+.workflow-compose-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* A refused compile is the feature working, so it is a panel with every
+   finding in it rather than a toast with the first one. */
+.workflow-failure {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--red-border);
+  border-radius: 12px;
+  background: var(--red-muted);
+}
+
+.workflow-failure > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--red);
+}
+
+.workflow-failure > header > div {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+}
+
+.workflow-failure strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.workflow-failure > header span {
+  max-width: 68ch;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.workflow-finding-group {
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+
+.workflow-finding-where {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.workflow-finding strong {
+  display: block;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.workflow-finding p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.workflow-preview {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.workflow-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.workflow-preview-head strong {
+  display: block;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.workflow-preview-head span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.workflow-preview-facts {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.workflow-approval-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  font-size: 11.5px;
+}
+
+/* Three states, not two: "parks", "read-only", and the one an agent step
+   makes unavoidable — nobody can say, because it decides at run time. */
+.workflow-approval-note.parks,
+.workflow-approval-note.opaque {
+  background: var(--clay-muted);
+  color: var(--amber);
+}
+
+
+.workflow-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- The graph ---- */
+.workflow-graph {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-flow {
+  display: flex;
+  justify-content: center;
+  padding: 5px 0;
+  color: var(--border-strong);
+}
+
+.workflow-layer-nodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-layer-nodes > li {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.workflow-node {
+  display: grid;
+  height: 100%;
+  gap: 6px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-raised);
+}
+
+/* An agent step cannot list what it will call, and must not look as though it
+   can. The clay edge is the tell. */
+.workflow-node.agent {
+  border-color: var(--clay);
+}
+
+.workflow-node.ran.waiting_for_approval {
+  border-color: var(--clay);
+  background: var(--clay-muted);
+}
+
+.workflow-node.ran.failed {
+  border-color: var(--red-border);
+}
+
+.workflow-node.ran.succeeded {
+  border-color: var(--green-border);
+}
+
+.workflow-node.ran.skipped {
+  opacity: 0.62;
+}
+
+.workflow-node-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-node-head strong {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-node-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.workflow-node.agent .workflow-node-kind {
+  background: var(--clay-muted);
+  color: var(--amber);
+}
+
+.workflow-node-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.workflow-node-status.succeeded {
+  color: var(--green);
+}
+
+.workflow-node-status.failed {
+  color: var(--red);
+}
+
+.workflow-node-status.waiting_for_approval {
+  color: var(--amber);
+}
+
+.workflow-node-status.running {
+  color: var(--accent);
+}
+
+.workflow-node-tool {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--accent-text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  justify-self: start;
+}
+
+.workflow-node-prompt {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.workflow-node-why {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.workflow-node-after {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.workflow-node-caveat {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--clay-muted);
+  color: var(--amber);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.workflow-node-args {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.workflow-node-args > div {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(60px, auto) minmax(0, 1fr);
+}
+
+.workflow-node-args dt {
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+}
+
+/* Wraps rather than truncating. This is the surface a person reviews an
+   automation on, and an argument cut off at the card edge is the half of the
+   sentence that says which channel it posts to. */
+.workflow-node-args dd {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.workflow-node-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--amber);
+  font-size: 10.5px;
+}
+
+.workflow-node-output {
+  display: grid;
+  gap: 3px;
+}
+
+.workflow-node-label {
+  color: var(--text-dim);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.workflow-node-output pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--code-bg);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.workflow-node-error {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--red-muted);
+  color: var(--red);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.workflow-node-meta {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* ---- The decision, on the step that is waiting for it ---- */
+.workflow-approval {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid var(--clay);
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+
+.workflow-approval-lead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--amber);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.workflow-approval-preview {
+  max-height: 180px;
+  overflow: auto;
+}
+
+.workflow-approval-preview .diff,
+.workflow-approval-preview .proposal-note {
+  margin: 0;
+}
+
+.workflow-approval .remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.workflow-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .workflow-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .workflow-body {
+    grid-template-columns: 1fr;
+  }
+}

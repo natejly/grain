@@ -14,8 +14,11 @@ import { createFromMenu, openSettings, openView, rail, tabs } from "./shell";
 
 test("the rail is the places you work, and only those", async ({ page }) => {
   await page.goto("/");
-  await expect(rail(page).getByRole("button")).toHaveCount(3);
-  for (const label of ["Chat", "Documents", "Knowledge"]) {
+  await expect(rail(page).getByRole("button")).toHaveCount(4);
+  // Workflows earned a rail slot rather than a place behind Settings: half of
+  // what it does is operating a running thing, and an approval waiting since
+  // 3am is not something you go looking for in a configuration menu.
+  for (const label of ["Chat", "Documents", "Knowledge", "Workflows"]) {
     await expect(rail(page).getByRole("button", { name: new RegExp(`^${label}`) }))
       .toBeVisible();
   }
@@ -165,6 +168,7 @@ test("the Create menu offers every kind of thing", async ({ page }) => {
     "Sandbox",
     "Board",
     "Dashboard",
+    "Workflow",
   ]) {
     await expect(menu.getByRole("button", { name: thing, exact: true })).toBeVisible();
   }

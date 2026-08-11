@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List, Type, TypeVar, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..database import get_db
-from ..models import AgentToolCall, IdempotencyRecord, Run, Tool, ToolCall, ToolPolicy
+from ..models import AgentToolCall, Run, Tool, ToolCall, ToolPolicy
 from ..schemas import (
     AgentApprovalRequest,
     AgentToolCallOut,
@@ -23,8 +24,13 @@ from ..services.audit import record_audit
 from ..services.events import append_event
 from ..services.runs import deny_tool_call, execute_tool_call, resume_run
 from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key
 
 router = APIRouter(prefix="/api", tags=["tools"])
+
+#: The two tables that park a call on a human decision. They are separate models
+#: (one HTTP tool, one agent function call) but the gate is the same one.
+DecidableCall = TypeVar("DecidableCall", ToolCall, AgentToolCall)
 
 
 def _tool_call_out(call: ToolCall, tool: Tool, conversation_id: str) -> ToolCallOut:
@@ -57,6 +63,47 @@ def _agent_tool_call_out(call: AgentToolCall, conversation_id: str) -> AgentTool
         latency_ms=call.latency_ms,
         created_at=call.created_at,
     )
+
+
+def _claim_decision(
+    db: Session,
+    model: Type[DecidableCall],
+    *,
+    call_id: str,
+    workspace_id: str,
+    decision: str,
+    actor_id: str,
+) -> bool:
+    """Move one *proposed* call to its decision, and say whether we moved it.
+
+    The gate is the `WHERE status = 'proposed'` inside the UPDATE, not an `if`
+    in front of it. Two reviewers who both read `proposed` both pass an `if`,
+    both write, and both schedule the resume — so a denial is overwritten by an
+    approval that a reviewer raced, and the tool the human refused runs anyway.
+    The predicate here is evaluated by the database while the row is held for
+    writing, so exactly one caller sees rowcount 1 and the loser gets a 409;
+    that holds on Postgres row-level concurrency and on SQLite alike, and it
+    does not depend on `FOR UPDATE`.
+
+    Returning a bool rather than raising keeps the two routes free to describe
+    the conflict in their own words, and keeps the caller honest about the fact
+    that losing is an ordinary outcome.
+    """
+    # The cast is only about typing: an ORM-enabled UPDATE really does return a
+    # CursorResult, but Session.execute is annotated as the generic Result.
+    claimed = cast(
+        "CursorResult[Any]",
+        db.execute(
+            update(model)
+            .where(
+                model.id == call_id,
+                model.workspace_id == workspace_id,
+                model.status == "proposed",
+            )
+            .values(status=decision, decided_by=actor_id, decided_at=utcnow())
+        ),
+    ).rowcount
+    return bool(claimed)
 
 
 @router.get("/agent-tool-calls", response_model=List[AgentToolCallOut])
@@ -121,29 +168,31 @@ def decide_tool_call(
     )
     if run is None:
         raise HTTPException(status_code=404, detail="Tool call not found")
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "tool.decision",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="tool.decision",
+        key=key,
     )
     if replay:
         return _tool_call_out(call, tool, run.conversation_id)
-    if call.status != "proposed":
-        raise HTTPException(status_code=409, detail="Tool call already decided")
     if run.status != "waiting_for_approval":
         raise HTTPException(status_code=409, detail="Run is not awaiting this approval")
-    call.status = payload.decision
-    call.decided_by = actor.user_id
-    call.decided_at = utcnow()
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="tool.decision",
-            key=key,
-            resource_id=call.id,
-        )
+    if not _claim_decision(
+        db,
+        ToolCall,
+        call_id=call.id,
+        workspace_id=actor.workspace_id,
+        decision=payload.decision,
+        actor_id=actor.user_id,
+    ):
+        raise HTTPException(status_code=409, detail="Tool call already decided")
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="tool.decision",
+        key=key,
+        resource_id=call.id,
     )
     append_event(
         db,
@@ -271,23 +320,29 @@ def decide_agent_tool_call(
     )
     if run is None:
         raise HTTPException(status_code=404, detail="Tool call not found")
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "agent_tool.decision",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="agent_tool.decision",
+        key=key,
     )
     if replay:
         return _agent_tool_call_out(call, run.conversation_id)
-    if call.status != "proposed":
-        raise HTTPException(status_code=409, detail="Tool call already decided")
     if run.status != "waiting_for_approval":
         raise HTTPException(status_code=409, detail="Run is not awaiting this approval")
 
-    call.status = "approved" if payload.decision == "approved" else "denied"
-    call.decided_by = actor.user_id
-    call.decided_at = utcnow()
+    if not _claim_decision(
+        db,
+        AgentToolCall,
+        call_id=call.id,
+        workspace_id=actor.workspace_id,
+        decision="approved" if payload.decision == "approved" else "denied",
+        actor_id=actor.user_id,
+    ):
+        # Losing here is the whole point: the reviewer who was raced must not
+        # also schedule `resume_run`, or the tool the other reviewer denied is
+        # executed by the loser's background task.
+        raise HTTPException(status_code=409, detail="Tool call already decided")
     if payload.remember:
         # "Always allow" answers the question the card asked, and no other. A
         # card raised by a workflow node is asking about unattended execution, so
@@ -302,13 +357,12 @@ def decide_agent_tool_call(
             policy="allow" if payload.decision == "approved" else "deny",
             scope=policy_scope_for_run(db, run),
         )
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="agent_tool.decision",
-            key=key,
-            resource_id=call.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="agent_tool.decision",
+        key=key,
+        resource_id=call.id,
     )
     append_event(
         db,

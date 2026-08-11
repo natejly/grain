@@ -9,11 +9,12 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import IdempotencyRecord, MemoryItem
+from ..models import MemoryItem
 from ..schemas import MemoryItemOut
 from ..services.audit import record_audit
 from ..services.memory import tombstone_key
 from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key
 
 router = APIRouter(prefix="/api", tags=["memory"])
 
@@ -56,12 +57,11 @@ def forget_memory(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> None:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "memory.forget",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="memory.forget",
+        key=key,
     )
     if replay:
         return
@@ -77,13 +77,12 @@ def forget_memory(
     # a deleted row parked on a claim key and make that claim unlearnable.
     item.status = "deleted"
     item.normalized_key = tombstone_key(db, item)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="memory.forget",
-            key=key,
-            resource_id=item.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="memory.forget",
+        key=key,
+        resource_id=item.id,
     )
     record_audit(
         db,

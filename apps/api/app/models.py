@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    DDL,
     Boolean,
     DateTime,
     Float,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -1110,3 +1112,85 @@ class WorkflowNodeRun(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# A human decision on a tool call is written once.
+#
+# The routes claim a parked call with `UPDATE ... WHERE status = 'proposed'` so
+# that the database, not a Python `if`, picks the winner of two reviewers who
+# both loaded the same open card (api/tools.py). This trigger states the same
+# rule where nothing can route around it: once a row carries an answer, a later
+# *contradicting* answer does not land. The direction is deliberate — the
+# recorded decision survives — because the failure being prevented is an
+# approval quietly replacing a denial, after which the tool the human refused
+# runs anyway.
+#
+# Narrow on purpose. Only approved <-> denied is refused: `proposed -> approved`
+# is the decision itself, and `approved -> executing | succeeded | failed` is
+# the executor reporting on the very call that was approved.
+_DECIDABLE_TABLES = ("tool_calls", "agent_tool_calls")
+
+
+def _decision_is_final_sqlite(table: str) -> str:
+    """SQLite cannot rewrite NEW, so the row is put back immediately after.
+
+    That second UPDATE does not re-enter the trigger because SQLite leaves
+    `PRAGMA recursive_triggers` off, which is also why the guard is written as
+    AFTER rather than as a BEFORE ... RAISE(IGNORE): skipping the row would
+    report 0 rows matched and every ORM flush would raise instead of the write
+    simply having no effect.
+    """
+    return f"""
+    CREATE TRIGGER IF NOT EXISTS {table}_decision_is_final
+    AFTER UPDATE OF status ON {table}
+    FOR EACH ROW
+    WHEN OLD.status IN ('approved', 'denied')
+     AND NEW.status IN ('approved', 'denied')
+     AND NEW.status <> OLD.status
+    BEGIN
+        UPDATE {table}
+           SET status = OLD.status,
+               decided_by = OLD.decided_by,
+               decided_at = OLD.decided_at
+         WHERE id = OLD.id;
+    END
+    """
+
+
+def _decision_is_final_postgresql(table: str) -> str:
+    """Postgres rewrites NEW in place, so the row is only ever written once."""
+    return f"""
+    CREATE OR REPLACE FUNCTION {table}_decision_is_final() RETURNS trigger AS $$
+    BEGIN
+        IF OLD.status IN ('approved', 'denied')
+           AND NEW.status IN ('approved', 'denied')
+           AND NEW.status <> OLD.status THEN
+            NEW.status := OLD.status;
+            NEW.decided_by := OLD.decided_by;
+            NEW.decided_at := OLD.decided_at;
+        END IF;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE TRIGGER {table}_decision_is_final
+    BEFORE UPDATE OF status ON {table}
+    FOR EACH ROW EXECUTE FUNCTION {table}_decision_is_final();
+    """
+
+
+for _decidable in _DECIDABLE_TABLES:
+    _table = Base.metadata.tables[_decidable]
+    event.listen(
+        _table,
+        "after_create",
+        DDL(_decision_is_final_sqlite(_decidable)).execute_if(dialect="sqlite"),
+    )
+    event.listen(
+        _table,
+        "after_create",
+        DDL(_decision_is_final_postgresql(_decidable)).execute_if(
+            dialect="postgresql"
+        ),
+    )

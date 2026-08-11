@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import Dashboard, Dataset, DatasetVersion, IdempotencyRecord, Source, new_id
+from ..models import (
+    Dashboard,
+    Dataset,
+    DatasetVersion,
+    Source,
+    new_id,
+)
 from ..schemas import (
     DashboardCreate,
     DashboardOut,
@@ -30,6 +36,7 @@ from ..services.analytics import (
 )
 from ..services.audit import record_audit
 from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key, replayed_resource_gone
 
 router = APIRouter(prefix="/api", tags=["analytics"])
 
@@ -112,19 +119,23 @@ def create_dataset(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> DatasetOut:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "dataset.create",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="dataset.create",
+        key=key,
     )
     if replay:
-        dataset, version = current_dataset_version(
-            db,
-            workspace_id=actor.workspace_id,
-            dataset_id=replay.resource_id,
-        )
+        try:
+            dataset, version = current_dataset_version(
+                db,
+                workspace_id=actor.workspace_id,
+                dataset_id=replay.resource_id,
+            )
+        except AnalyticsValidationError:
+            # The dataset this key bought has been deleted since. Letting the
+            # lookup raise here answered a legitimate retry with a 500.
+            raise replayed_resource_gone() from None
         return _dataset_out(dataset, version)
     name = payload.name.strip()
     existing = db.scalar(
@@ -156,13 +167,12 @@ def create_dataset(
     except AnalyticsValidationError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="dataset.create",
-            key=key,
-            resource_id=dataset.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="dataset.create",
+        key=key,
+        resource_id=dataset.id,
     )
     record_audit(
         db,
@@ -192,12 +202,11 @@ def create_version(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> DatasetOut:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == f"dataset.version:{dataset_id}",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=f"dataset.version:{dataset_id}",
+        key=key,
     )
     # A dataset id from another workspace — or one that never existed — has to
     # come back as 404. Left unhandled this raised out of the route as a 500,
@@ -226,13 +235,12 @@ def create_version(
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     dataset.current_version = next_version
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation=f"dataset.version:{dataset_id}",
-            key=key,
-            resource_id=version.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation=f"dataset.version:{dataset_id}",
+        key=key,
+        resource_id=version.id,
     )
     record_audit(
         db,
@@ -292,12 +300,11 @@ def create_dashboard(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> DashboardOut:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "dashboard.create",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="dashboard.create",
+        key=key,
     )
     if replay:
         dashboard = db.scalar(
@@ -306,8 +313,9 @@ def create_dashboard(
                 Dashboard.workspace_id == actor.workspace_id,
             )
         )
-        if dashboard is not None:
-            return _dashboard_out(dashboard)
+        if dashboard is None:
+            raise replayed_resource_gone()
+        return _dashboard_out(dashboard)
     name = payload.name.strip()
     existing = db.scalar(
         select(Dashboard).where(
@@ -347,13 +355,12 @@ def create_dashboard(
         spec_json=payload.spec.model_dump_json(),
     )
     db.add(dashboard)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="dashboard.create",
-            key=key,
-            resource_id=dashboard.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="dashboard.create",
+        key=key,
+        resource_id=dashboard.id,
     )
     record_audit(
         db,

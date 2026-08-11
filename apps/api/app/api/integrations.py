@@ -14,7 +14,7 @@ from ..auth import Actor, get_actor, require_owner
 from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
-from ..models import IdempotencyRecord, IntegrationAccount, OAuthState, SyncJob
+from ..models import IntegrationAccount, OAuthState, SyncJob
 from ..schemas import (
     GarminCredentialsIn,
     IntegrationAccountOut,
@@ -30,6 +30,7 @@ from ..services.connectors.base import ConnectorError
 from ..services.connectors.sync_jobs import CONNECTOR_FOR_PROVIDER, run_sync_job
 from ..services.crypto import encrypt_secret
 from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key, replayed_resource_gone
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
@@ -131,17 +132,17 @@ def connect_garmin(
             status_code=400,
             detail="Set INTEGRATIONS_ENCRYPTION_KEY in .env to enable integrations.",
         )
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "integration.garmin",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="integration.garmin",
+        key=key,
     )
     if replay:
         existing = db.get(IntegrationAccount, replay.resource_id)
-        if existing:
-            return _account_out(existing)
+        if existing is None or existing.workspace_id != actor.workspace_id:
+            raise replayed_resource_gone()
+        return _account_out(existing)
     try:
         client = garmin_connector.login_with_credentials(
             payload.email, payload.password
@@ -170,13 +171,12 @@ def connect_garmin(
     account.access_token_enc = ""
     account.status = "connected"
     db.flush()
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="integration.garmin",
-            key=key,
-            resource_id=account.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="integration.garmin",
+        key=key,
+        resource_id=account.id,
     )
     record_audit(
         db,
@@ -269,12 +269,11 @@ def disconnect_integration(
     actor: Actor = Depends(require_owner),
     db: Session = Depends(get_db),
 ) -> None:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "integration.disconnect",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="integration.disconnect",
+        key=key,
     )
     if replay:
         return
@@ -288,13 +287,12 @@ def disconnect_integration(
         raise HTTPException(status_code=404, detail="Integration not found")
     db.execute(delete(SyncJob).where(SyncJob.account_id == account.id))
     db.delete(account)
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="integration.disconnect",
-            key=key,
-            resource_id=account_id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="integration.disconnect",
+        key=key,
+        resource_id=account_id,
     )
     record_audit(
         db,
@@ -316,17 +314,17 @@ def sync_integration(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> SyncJobOut:
-    replay = db.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == actor.workspace_id,
-            IdempotencyRecord.operation == "integration.sync",
-            IdempotencyRecord.key == key,
-        )
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="integration.sync",
+        key=key,
     )
     if replay:
         job = db.get(SyncJob, replay.resource_id)
-        if job:
-            return _job_out(job)
+        if job is None or job.workspace_id != actor.workspace_id:
+            raise replayed_resource_gone()
+        return _job_out(job)
     account = db.scalar(
         select(IntegrationAccount).where(
             IntegrationAccount.id == account_id,
@@ -350,13 +348,12 @@ def sync_integration(
     )
     db.add(job)
     db.flush()
-    db.add(
-        IdempotencyRecord(
-            workspace_id=actor.workspace_id,
-            operation="integration.sync",
-            key=key,
-            resource_id=job.id,
-        )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="integration.sync",
+        key=key,
+        resource_id=job.id,
     )
     db.commit()
     background_tasks.add_task(run_sync_job, job.id)
