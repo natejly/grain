@@ -7,12 +7,14 @@ import type {
   AdminMember,
   AdminSandboxSession,
   AdminStorage,
+  AdminUsage,
 } from "@workspace/api-client";
 import { ApiError } from "@workspace/api-client";
 import { RefreshCw, ShieldCheck, Square } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useWorkspaceSelection } from "../workspace-selection";
+import { UsagePanel } from "./admin-usage";
 import { describeError, formatBytes, formatRelative } from "./shared";
 
 /**
@@ -32,6 +34,8 @@ export type AdminViewProps = {
 };
 
 const AUDIT_PAGE = 25;
+/** Long enough to cover a billing month; the API allows 1–365. */
+const DEFAULT_USAGE_DAYS = 30;
 
 type AdminData = {
   members: AdminMember[];
@@ -39,6 +43,7 @@ type AdminData = {
   sandboxes: AdminSandboxSession[];
   mcpServers: AdminMcpServer[];
   storage: AdminStorage;
+  usage: AdminUsage;
 };
 
 /** A status → count map as a row of pills, in a stable order. */
@@ -87,17 +92,24 @@ export function AdminView({ setError }: AdminViewProps) {
   const [forbidden, setForbidden] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState("");
+  const [usageDays, setUsageDays] = useState(DEFAULT_USAGE_DAYS);
 
+  // The usage window is part of `load` rather than a fetch of its own: changing
+  // it re-runs the same six aggregates through the same 403 handling, and one
+  // path that can fail is easier to keep right than two. The old panels stay on
+  // screen while it re-fetches, because `setData` only fires on success.
   const load = useCallback(async () => {
     try {
-      const [members, activity, sandboxes, mcpServers, storage] = await Promise.all([
-        api.listAdminMembers(),
-        api.getAdminActivity(),
-        api.listAdminSandboxSessions(),
-        api.listAdminMcpServers(),
-        api.getAdminStorage(),
-      ]);
-      setData({ members, activity, sandboxes, mcpServers, storage });
+      const [members, activity, sandboxes, mcpServers, storage, usage] =
+        await Promise.all([
+          api.listAdminMembers(),
+          api.getAdminActivity(),
+          api.listAdminSandboxSessions(),
+          api.listAdminMcpServers(),
+          api.getAdminStorage(),
+          api.getAdminUsage(usageDays),
+        ]);
+      setData({ members, activity, sandboxes, mcpServers, storage, usage });
       setForbidden(false);
     } catch (caught) {
       // 403 is the API answering, not failing: this member is not an owner.
@@ -106,7 +118,7 @@ export function AdminView({ setError }: AdminViewProps) {
     } finally {
       setLoaded(true);
     }
-  }, [setError]);
+  }, [setError, usageDays]);
 
   useEffect(() => {
     void load();
@@ -130,6 +142,17 @@ export function AdminView({ setError }: AdminViewProps) {
       cancelled = true;
     };
   }, [offset, setError]);
+
+  // The usage ledger holds no text by design, so the costliest runs take their
+  // names from the Runs panel's own fetch rather than from a second request for
+  // prompts the accounting tables deliberately do not store.
+  const runPrompts = useMemo(
+    () =>
+      new Map(
+        (data?.activity.recent_runs ?? []).map((run) => [run.id, run.prompt_preview]),
+      ),
+    [data],
+  );
 
   async function kill(session: AdminSandboxSession) {
     if (!window.confirm("Stop this sandbox? Anything running inside it is lost.")) {
@@ -180,7 +203,7 @@ export function AdminView({ setError }: AdminViewProps) {
     );
   }
 
-  const { members, activity, sandboxes, mcpServers, storage } = data;
+  const { members, activity, sandboxes, mcpServers, storage, usage } = data;
   const live = sandboxes.filter((row) => ["running", "paused"].includes(row.status));
 
   return (
@@ -188,7 +211,7 @@ export function AdminView({ setError }: AdminViewProps) {
       <div className="page-heading">
         <div>
           <h1>Admin</h1>
-          <p>Members, runs, machines and storage for this workspace.</p>
+          <p>Members, runs, machines, spend and storage for this workspace.</p>
         </div>
         <button className="ghost-button" onClick={() => void load()}>
           <RefreshCw size={14} /> Refresh
@@ -196,6 +219,15 @@ export function AdminView({ setError }: AdminViewProps) {
       </div>
 
       <div className="admin-grid">
+        {/* First, and full width: it is the only panel here that is about money,
+            and the one whose numbers cost something to ignore. */}
+        <UsagePanel
+          usage={usage}
+          days={usageDays}
+          onDaysChange={setUsageDays}
+          prompts={runPrompts}
+        />
+
         <Panel title="Members and roles" count={members.length}>
           <table className="admin-table">
             <thead>

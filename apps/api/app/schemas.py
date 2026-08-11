@@ -162,6 +162,11 @@ class RunOut(ApiModel):
     conversation_id: str
     agent_id: str
     status: str
+    # Why a `waiting_for_approval` run is parked: `approval` for a proposed tool
+    # call, `budget` for the spend ceiling (ADR 0008), "" when it is not parked.
+    # The status alone cannot tell them apart, and they are resolved by different
+    # people doing different things.
+    paused_reason: str = ""
     created_at: datetime
 
 

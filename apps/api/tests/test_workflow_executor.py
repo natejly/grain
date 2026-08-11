@@ -1074,3 +1074,156 @@ def test_the_chat_sweep_leaves_a_workflows_backing_run_alone(
     assert backing.status == "completed"
     assert "workflow" not in backing.error
     assert len(first.calls) == 1
+
+
+def test_a_graph_over_the_spend_ceiling_parks_and_says_so(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0008's park, mirrored onto the graph.
+
+    The unattended risk in one test: a scheduled DAG reaches an agent node with
+    the workspace already at its ceiling. It must stop *before* the model call,
+    keep the node it already finished, and record that it is waiting on a spend
+    limit rather than on an approval — a graph that says "waiting for approval"
+    with no card to click sends its owner hunting for a button nobody wrote.
+    """
+    from app.clock import utcnow as _utcnow
+    from app.config import ModelPrice, Settings
+    from app.models import ModelUsage
+
+    reader = Probe("probe_read", reply="three pull requests")
+    install(monkeypatch, reader)
+
+    db.add(
+        ModelUsage(
+            workspace_id=identity.workspace_id,
+            operation="workflow_node",
+            model="priced-test-model",
+            total_tokens=1000,
+            cost_usd=9.0,
+            created_at=_utcnow(),
+        )
+    )
+    db.commit()
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        model_provider="scripted",
+        scripted_model_script="apps/api/tests/scripts/agent.json",
+        model_prices={"priced-test-model": ModelPrice(input=1.0, output=1.0)},
+        budget_usd_per_window=10.0,
+        unattended_budget_fraction=0.5,
+    )
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("gather", "probe_read"),
+                {
+                    "id": "think",
+                    "kind": "agent",
+                    "prompt": "Summarise: {{ gather.output }}",
+                    "description": "Write the summary.",
+                },
+            ],
+            [{"from": "gather", "to": "think"}],
+        ),
+        trigger="schedule",
+    )
+    executor.advance_run(db, workflow_run, settings=settings)
+
+    rows = nodes_of(db, workflow_run)
+    assert rows["gather"].status == "succeeded"
+    assert rows["think"].status == "waiting_for_approval"
+    assert workflow_run.status == "waiting_for_approval"
+    assert workflow_run.paused_reason == agent_loop.PAUSED_FOR_BUDGET
+
+    backing = db.get(Run, workflow_run.run_id)
+    assert backing is not None
+    assert backing.paused_reason == agent_loop.PAUSED_FOR_BUDGET
+    # Parked, not killed: the turn's state survives so raising the limit resumes
+    # this graph rather than re-running the node that already spent money.
+    assert backing.agent_state_json
+
+
+def test_raising_the_ceiling_resumes_the_parked_graph_where_it_stopped(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the park: an owner raises the limit and the DAG walks on.
+
+    Driven through `resume_run_after_budget`, the function the admin route
+    schedules, so the resume under test is the one that actually ships. The
+    still-too-low ceiling is checked first, because a release path that is more
+    generous than the enforcement path is the failure worth catching.
+    """
+    from app.models import ModelUsage, WorkspaceBudget
+    from app.services.runs import resume_run_after_budget
+
+    reader = Probe("probe_read", reply="three pull requests")
+    sink = Probe("probe_sink")
+    install(monkeypatch, reader, sink)
+
+    db.add(
+        ModelUsage(
+            workspace_id=identity.workspace_id,
+            operation="workflow_node",
+            model="unpriced",
+            total_tokens=5000,
+            cost_usd=None,
+            created_at=utcnow(),
+        )
+    )
+    db.add(
+        WorkspaceBudget(
+            workspace_id=identity.workspace_id,
+            window_hours=24,
+            tokens_per_window=1000,
+        )
+    )
+    db.commit()
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("gather", "probe_read"),
+                {
+                    "id": "think",
+                    "kind": "agent",
+                    "prompt": "Summarise: {{ gather.output }}",
+                    "description": "Write the summary.",
+                },
+                tool_node("sink", "probe_sink", {"text": "{{ think.output }}"}),
+            ],
+            [{"from": "gather", "to": "think"}, {"from": "think", "to": "sink"}],
+        ),
+        trigger="schedule",
+    )
+    executor.advance_run(db, workflow_run)
+    assert workflow_run.paused_reason == agent_loop.PAUSED_FOR_BUDGET
+    assert len(sink.calls) == 0
+
+    # Released while still over: the loop re-evaluates and parks it straight back.
+    resume_run_after_budget(str(workflow_run.run_id))
+    db.expire_all()
+    assert workflow_run.paused_reason == agent_loop.PAUSED_FOR_BUDGET
+    assert len(sink.calls) == 0
+
+    row = db.query(WorkspaceBudget).filter(
+        WorkspaceBudget.workspace_id == identity.workspace_id
+    ).one()
+    row.tokens_per_window = 10_000_000
+    db.commit()
+
+    resume_run_after_budget(str(workflow_run.run_id))
+    db.expire_all()
+    assert workflow_run.status == "succeeded", workflow_run.error
+    assert workflow_run.paused_reason == ""
+    rows = nodes_of(db, workflow_run)
+    assert rows["think"].status == "succeeded"
+    # The node that already ran did not run again.
+    assert len(reader.calls) == 1
+    assert len(sink.calls) == 1

@@ -104,6 +104,10 @@ class WorkflowRunOut(ApiModel):
     workflow_version: int
     trigger: str
     status: str
+    # approval | budget | "". A graph stopped by the spend ceiling and one
+    # waiting on a proposed write are both `waiting_for_approval`; only this
+    # says which, and only one of them has a card to click.
+    paused_reason: str = ""
     run_id: Optional[str]
     error: str
     started_at: Optional[datetime]

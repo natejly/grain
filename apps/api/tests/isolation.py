@@ -1359,6 +1359,19 @@ ROUTE_CASES: List[RouteCase] = [
     # aggregating rows it should not see, which is exactly what the leak scan
     # over every id and marker string catches.
     RouteCase("GET", "/api/admin/usage", SCOPED),
+    # The spend ceiling. Both take no id: the ceiling they read and write is the
+    # caller's own workspace's, named by `actor.workspace_id` and by nothing in
+    # the request. The PUT is the one that matters here — it lists and *releases*
+    # runs parked on budget, so a missing workspace filter would show one tenant
+    # another's parked runs and resume them. The leak scan over the victim's run
+    # ids is what would catch that.
+    RouteCase("GET", "/api/admin/budget", SCOPED),
+    RouteCase(
+        "PUT",
+        "/api/admin/budget",
+        SCOPED,
+        body={"window_hours": 24, "usd_per_window": 100.0},
+    ),
     # The one admin route that takes an id, and it names a live machine — same
     # verdict as DELETE /api/sandbox/{session_id} for the same reason.
     RouteCase(

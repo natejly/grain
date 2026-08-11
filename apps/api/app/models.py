@@ -195,6 +195,14 @@ class Run(Base):
     # Serialized agent-loop state, present only while a run is parked waiting for
     # a tool approval. See services/agent_loop.LoopState.
     agent_state_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Why a `waiting_for_approval` run is parked: `approval` for a proposed tool
+    # call, `budget` for the ADR 0008 spend ceiling, "" when it is not parked.
+    # A separate fact rather than a separate status, because every guard, sweep
+    # and filter in this app that reads `waiting_for_approval` means "waiting on
+    # a person" and is already right about a budget park — a second status would
+    # have needed each of them edited, and would have been wrong wherever one
+    # was missed.
+    paused_reason: Mapped[str] = mapped_column(String(16), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -1050,6 +1058,11 @@ class WorkflowRun(Base):
     trigger: Mapped[str] = mapped_column(String(16), default="manual")
     # queued | running | waiting_for_approval | succeeded | failed | cancelled
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    # Mirrors `Run.paused_reason`: approval | budget | "". Carried here as well
+    # as on the backing run because the workflow surface reads this table, and a
+    # graph stopped by a spend ceiling that renders as "waiting for approval"
+    # sends its owner looking for a card nobody wrote.
+    paused_reason: Mapped[str] = mapped_column(String(16), default="")
     # The chat Run backing agent-step nodes and carrying the approval + RunEvent
     # stream. Null until a node needs one.
     run_id: Mapped[Optional[str]] = mapped_column(
@@ -1175,6 +1188,41 @@ class ModelUsage(Base):
         Float, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class WorkspaceBudget(Base):
+    """One workspace's spend ceiling, when an owner has set one (ADR 0008).
+
+    A row here *replaces* the ceiling `Settings` configures, rather than
+    narrowing it. That is what makes "raise the limit and resume" a thing an
+    owner can do at 3am without a redeploy — which is the whole point of putting
+    the ceiling somewhere writable — and it is defensible because
+    `require_owner` in this product is the person paying the bill. A hosted
+    multi-tenant deployment that wants an operator cap the tenant cannot lift
+    should clamp with `min()` in `budget.effective_ceiling`; the ADR says so.
+
+    A null ceiling column means *no limit of that kind*, exactly as an unset
+    setting does. There is deliberately no third state meaning "inherit": the
+    row is the whole answer, so reading one is never a question about what is
+    configured somewhere else.
+    """
+
+    __tablename__ = "workspace_budgets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id"), unique=True, index=True
+    )
+    window_hours: Mapped[int] = mapped_column(Integer, default=24)
+    usd_per_window: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    tokens_per_window: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Who last moved the ceiling. Plain column, not a foreign key: the record of
+    # a limit change must outlive the account that made it.
+    updated_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
 
 
 # ---------------------------------------------------------------------------

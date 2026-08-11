@@ -747,6 +747,70 @@ export type AdminStorage = {
   graph_edge_count: number;
 };
 
+/**
+ * Model spend, and the two fields that say how far to trust it.
+ *
+ * `cost_usd` is summed over *priced* rows only. A call whose model has no rate
+ * in the deployment's MODEL_PRICES contributes its tokens and no cost, and is
+ * counted in `unpriced_calls` instead of being folded in as zero — so a reader
+ * that shows `cost_usd` without reading `unpriced_calls` next to it is showing a
+ * floor while implying a total. `pricing_configured` is false when MODEL_PRICES
+ * is empty, which is the shipped default: there, every cost here is zero by
+ * arithmetic and none of it may be rendered as money.
+ */
+export type AdminUsageTotals = {
+  calls: number;
+  input_tokens: number;
+  /** A subset of input_tokens, billed at its own rate — not an extra amount. */
+  cached_input_tokens: number;
+  output_tokens: number;
+  /** Likewise a subset of output_tokens. */
+  reasoning_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  priced_calls: number;
+  unpriced_calls: number;
+};
+
+/** One row of a breakdown: a model, a user, or an operation. */
+export type AdminUsageGroup = {
+  key: string;
+  /** The key itself for models and operations; a name or email for a user. */
+  label: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  unpriced_calls: number;
+};
+
+/** One run's spend — the runaway-loop question, asked in money. */
+export type AdminUsageRun = {
+  run_id: string;
+  conversation_id: string;
+  calls: number;
+  total_tokens: number;
+  cost_usd: number;
+  unpriced_calls: number;
+  last_call_at: string;
+};
+
+export type AdminUsage = {
+  window_days: number;
+  since: string;
+  totals: AdminUsageTotals;
+  by_model: AdminUsageGroup[];
+  by_user: AdminUsageGroup[];
+  by_operation: AdminUsageGroup[];
+  /** Ordered by cost, then tokens, so an unpriced run still surfaces. */
+  top_runs: AdminUsageRun[];
+  /** Models seen in this window with no configured rate. */
+  unpriced_models: string[];
+  /** False when MODEL_PRICES is empty: no cost figure can be anything but zero. */
+  pricing_configured: boolean;
+};
+
 function makeKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -1643,6 +1707,15 @@ export class WorkspaceApi {
 
   getAdminStorage(): Promise<AdminStorage> {
     return this.request("/api/admin/storage");
+  }
+
+  /**
+   * Token and cost accounting over a window. The API caps `days` at 365 and
+   * rejects anything outside 1–365, because every figure is an aggregate over
+   * the fastest-growing table in the schema.
+   */
+  getAdminUsage(days = 30): Promise<AdminUsage> {
+    return this.request(`/api/admin/usage?days=${days}`);
   }
 
   // --- Sandbox (server-side execution) --------------------------------------

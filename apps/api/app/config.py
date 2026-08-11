@@ -90,6 +90,28 @@ class Settings(BaseSettings):
     # nobody notices.
     model_prices: Dict[str, ModelPrice] = {}
 
+    # --- Spend ceiling (ADR 0008) ------------------------------------------
+    # A rolling per-workspace cap on model spend. Unset is unlimited, and that
+    # has to stay true: a deployment that upgrades into this release must not
+    # discover a cap nobody chose. Everything below is opt-in.
+    #
+    # The window is rolling, not calendar: "the last N hours", evaluated at the
+    # moment of the check. A calendar day would let a runaway loop spend the
+    # whole ceiling at 23:59 and the whole ceiling again a minute later.
+    budget_window_hours: int = Field(default=24, ge=1, le=8760)
+    # USD across the window, over every operation the workspace performed.
+    budget_usd_per_window: Optional[float] = Field(default=None, ge=0.0)
+    # Total tokens across the window. The ceiling that still works when there is
+    # no price list — see `_guard_budget` — and the only one that can bound a
+    # model this deployment cannot price.
+    budget_tokens_per_window: Optional[int] = Field(default=None, ge=0)
+    # What fraction of the ceiling unattended work (workflow nodes) may spend.
+    # A tighter default for automations without imposing an absolute one: a
+    # deployment with no ceiling still has no ceiling, and a deployment that
+    # sets one gets a scheduled DAG stopped at half of it, well before a person
+    # typing is. 1.0 makes the two equal.
+    unattended_budget_fraction: float = Field(default=0.5, gt=0.0, le=1.0)
+
     # --- Web search --------------------------------------------------------
     # OpenAI's hosted web_search tool, which runs on the provider side and comes
     # back with url_citation annotations. Those annotations go through the same
@@ -401,6 +423,37 @@ class Settings(BaseSettings):
         if self.scripted_model_script is None:
             raise ValueError(
                 "MODEL_PROVIDER=scripted requires SCRIPTED_MODEL_SCRIPT"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_budget(self) -> Settings:
+        """Refuse a money ceiling this deployment has no way of measuring.
+
+        `MODEL_PRICES` ships empty, so a deployment that sets only
+        `BUDGET_USD_PER_WINDOW` has asked to be stopped at a dollar figure that
+        every call rounds to zero — the ceiling would be configured, displayed,
+        and inert. That is the failure this guard exists to make impossible:
+        a limit that quietly does nothing is worse than no limit, because the
+        operator stops watching.
+
+        Three ways out, and the error names all three, because which one is
+        right depends on facts only the operator has: price the models, add a
+        token ceiling to bound the spend nobody can price, or drop the USD
+        ceiling and stop believing there is one.
+
+        Same structural gate as `_guard_model_provider` and `_guard_sandbox`,
+        for the same reason — "we will remember" has already failed here once.
+        """
+        if self.budget_usd_per_window is None:
+            return self
+        if not self.model_prices and self.budget_tokens_per_window is None:
+            raise ValueError(
+                "BUDGET_USD_PER_WINDOW is set but MODEL_PRICES is empty, so "
+                "every call records a null cost and the ceiling can never be "
+                "reached. Configure MODEL_PRICES, or set "
+                "BUDGET_TOKENS_PER_WINDOW to bound spend that has no price, or "
+                "unset BUDGET_USD_PER_WINDOW."
             )
         return self
 

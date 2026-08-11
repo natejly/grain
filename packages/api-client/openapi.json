@@ -171,6 +171,189 @@
         "title": "AdminAuditPage",
         "type": "object"
       },
+      "AdminBudgetCeilingOut": {
+        "description": "One ceiling. Nulls mean no limit of that kind, never zero.",
+        "properties": {
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "tokens_per_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Window"
+          },
+          "usd_per_window": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usd Per Window"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "usd_per_window",
+          "tokens_per_window",
+          "source"
+        ],
+        "title": "AdminBudgetCeilingOut",
+        "type": "object"
+      },
+      "AdminBudgetOut": {
+        "properties": {
+          "ceiling": {
+            "$ref": "#/components/schemas/AdminBudgetCeilingOut"
+          },
+          "enforced": {
+            "title": "Enforced",
+            "type": "boolean"
+          },
+          "pricing_configured": {
+            "title": "Pricing Configured",
+            "type": "boolean"
+          },
+          "resumed_run_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Resumed Run Ids",
+            "type": "array"
+          },
+          "runs_parked_on_budget": {
+            "items": {
+              "$ref": "#/components/schemas/AdminBudgetParkedRunOut"
+            },
+            "title": "Runs Parked On Budget",
+            "type": "array"
+          },
+          "spend": {
+            "$ref": "#/components/schemas/AdminBudgetSpendOut"
+          },
+          "unattended_ceiling": {
+            "$ref": "#/components/schemas/AdminBudgetCeilingOut"
+          },
+          "unattended_spend": {
+            "$ref": "#/components/schemas/AdminBudgetSpendOut"
+          }
+        },
+        "required": [
+          "ceiling",
+          "unattended_ceiling",
+          "spend",
+          "unattended_spend",
+          "enforced",
+          "pricing_configured",
+          "runs_parked_on_budget"
+        ],
+        "title": "AdminBudgetOut",
+        "type": "object"
+      },
+      "AdminBudgetParkedRunOut": {
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "conversation_id",
+          "created_at"
+        ],
+        "title": "AdminBudgetParkedRunOut",
+        "type": "object"
+      },
+      "AdminBudgetRequest": {
+        "description": "Replace this workspace's ceiling.\n\nReplace, not patch. An omitted field is *no limit of that kind*, so the body\nalways states the whole ceiling and there is no way to raise a limit while\nsilently keeping one you have forgotten about.",
+        "properties": {
+          "tokens_per_window": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Window"
+          },
+          "usd_per_window": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usd Per Window"
+          },
+          "window_hours": {
+            "default": 24,
+            "maximum": 8760.0,
+            "minimum": 1.0,
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "title": "AdminBudgetRequest",
+        "type": "object"
+      },
+      "AdminBudgetSpendOut": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "unpriced_calls": {
+            "title": "Unpriced Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "calls",
+          "cost_usd",
+          "total_tokens",
+          "unpriced_calls"
+        ],
+        "title": "AdminBudgetSpendOut",
+        "type": "object"
+      },
       "AdminMcpServerOut": {
         "description": "Health of a configured MCP server. Carries no part of its credentials:\n`secrets_encrypted` is never selected and `mcp_oauth_tokens` is never read.",
         "properties": {
@@ -3406,6 +3589,11 @@
             "title": "Id",
             "type": "string"
           },
+          "paused_reason": {
+            "default": "",
+            "title": "Paused Reason",
+            "type": "string"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -4312,6 +4500,11 @@
             "title": "Nodes",
             "type": "array"
           },
+          "paused_reason": {
+            "default": "",
+            "title": "Paused Reason",
+            "type": "string"
+          },
           "run_id": {
             "anyOf": [
               {
@@ -4393,6 +4586,11 @@
           },
           "id": {
             "title": "Id",
+            "type": "string"
+          },
+          "paused_reason": {
+            "default": "",
+            "title": "Paused Reason",
             "type": "string"
           },
           "run_id": {
@@ -4706,6 +4904,114 @@
           }
         },
         "summary": "List Audit Log",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/budget": {
+      "get": {
+        "description": "This workspace's spend ceiling, what it has spent against it, and what\nit is currently holding.",
+        "operationId": "get_budget_api_admin_budget_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBudgetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Budget",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Set the ceiling, and release whatever the new one no longer stops.\n\nRaising a limit and releasing the runs it was holding is one gesture on\npurpose. Splitting them would leave an owner who has fixed the problem\nstaring at a still-parked run, hunting for a second button \u2014 and the\ninteresting case, a raise that is still not enough, is not a special case\nhere: `budget.evaluate` is asked again per run, so a run that is still over\nis simply not released.\n\nThe re-check is the same predicate the loop enforces, called from the same\nmodule, so this route cannot be more generous than the ceiling itself.",
+        "operationId": "set_budget_api_admin_budget_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminBudgetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBudgetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Budget",
         "tags": [
           "admin"
         ]

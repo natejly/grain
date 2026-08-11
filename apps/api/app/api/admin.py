@@ -34,7 +34,8 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import Field
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
@@ -57,9 +58,17 @@ from ..models import (
     SandboxSession,
     Source,
     User,
+    WorkspaceBudget,
 )
 from ..schemas import ApiModel
+from ..services import budget
+from ..services.agent_loop import (
+    PAUSED_FOR_BUDGET,
+    WORKFLOW_SCOPE,
+    policy_scope_for_run,
+)
 from ..services.audit import record_audit
+from ..services.runs import resume_run_after_budget
 from ..services.sandbox import session as sessions
 from ..services.sandbox.types import SandboxError
 
@@ -833,4 +842,238 @@ def get_usage(
         top_runs=top_runs,
         unpriced_models=[str(model) for model in unpriced],
         pricing_configured=bool(settings.model_prices),
+    )
+
+
+# --------------------------------------------------------------------------
+# The spend ceiling (ADR 0008)
+#
+# `/usage` answers "what did this cost"; these two answer "what may it cost".
+# The panel they serve has to make three things visible at once, because an
+# owner looking at it is usually looking because something stopped:
+#
+# *The limit and the spend, side by side.* A ceiling with no current figure
+# beside it cannot be raised by the right amount.
+#
+# *Whether the limit can actually see the spend.* `unpriced_calls` is the number
+# that decides whether a dollar ceiling means anything here, and it is reported
+# next to the ceiling rather than one page away in /usage.
+#
+# *What is parked on it right now.* Raising a limit that releases nothing is
+# indistinguishable from raising one that releases six automations, and the
+# owner should not have to guess which they just did.
+
+
+# Bounds both the listing and the release. A workspace that has parked more runs
+# than this has a runaway the ceiling is doing its job on, and resuming a
+# thousand turns from one HTTP request would be its own outage — the remainder
+# stay parked and a second PUT takes the next batch.
+MAX_PARKED_RUNS = 50
+
+
+class AdminBudgetCeilingOut(ApiModel):
+    """One ceiling. Nulls mean no limit of that kind, never zero."""
+
+    window_hours: int
+    usd_per_window: Optional[float]
+    tokens_per_window: Optional[int]
+    # workspace — an owner set it here; settings — the deployment configured it.
+    source: str
+
+
+class AdminBudgetSpendOut(ApiModel):
+    calls: int
+    cost_usd: float
+    total_tokens: int
+    # Calls whose model had no configured rate. While this is above zero,
+    # `cost_usd` is a floor rather than the bill, and a USD ceiling alone cannot
+    # bound this workspace — see `budget.exceeds`.
+    unpriced_calls: int
+
+
+class AdminBudgetParkedRunOut(ApiModel):
+    run_id: str
+    conversation_id: str
+    created_at: datetime
+
+
+class AdminBudgetOut(ApiModel):
+    ceiling: AdminBudgetCeilingOut
+    # The same ceiling scaled by UNATTENDED_BUDGET_FRACTION — what a workflow
+    # node may spend, measured over unattended spend alone.
+    unattended_ceiling: AdminBudgetCeilingOut
+    spend: AdminBudgetSpendOut
+    unattended_spend: AdminBudgetSpendOut
+    # False when neither limit is set: this workspace has no ceiling at all.
+    enforced: bool
+    pricing_configured: bool
+    runs_parked_on_budget: List[AdminBudgetParkedRunOut]
+    # Populated by PUT only: runs the new ceiling released. Empty on GET.
+    resumed_run_ids: List[str] = []
+
+
+class AdminBudgetRequest(ApiModel):
+    """Replace this workspace's ceiling.
+
+    Replace, not patch. An omitted field is *no limit of that kind*, so the body
+    always states the whole ceiling and there is no way to raise a limit while
+    silently keeping one you have forgotten about.
+    """
+
+    window_hours: int = Field(default=24, ge=1, le=8760)
+    usd_per_window: Optional[float] = Field(default=None, ge=0.0)
+    tokens_per_window: Optional[int] = Field(default=None, ge=0)
+
+
+def _ceiling_out(ceiling: budget.Ceiling) -> AdminBudgetCeilingOut:
+    return AdminBudgetCeilingOut(
+        window_hours=ceiling.window_hours,
+        usd_per_window=ceiling.usd,
+        tokens_per_window=ceiling.tokens,
+        source=ceiling.source,
+    )
+
+
+def _spend_out(spend: budget.Spend) -> AdminBudgetSpendOut:
+    return AdminBudgetSpendOut(
+        calls=spend.calls,
+        cost_usd=round(spend.cost_usd, 6),
+        total_tokens=spend.total_tokens,
+        unpriced_calls=spend.unpriced_calls,
+    )
+
+
+def _parked_on_budget(db: Session, workspace_id: str) -> List[Run]:
+    """Runs this workspace's ceiling is currently holding.
+
+    Filtered on `paused_reason` as well as status, which is the whole reason
+    that column exists: a run parked on an approval is waiting on a decision, and
+    raising a spend limit must not touch it.
+    """
+    return list(
+        db.scalars(
+            select(Run)
+            .where(
+                Run.workspace_id == workspace_id,
+                Run.status == "waiting_for_approval",
+                Run.paused_reason == PAUSED_FOR_BUDGET,
+            )
+            .order_by(Run.created_at)
+            .limit(MAX_PARKED_RUNS)
+        )
+    )
+
+
+def _budget_out(
+    db: Session, *, workspace_id: str, settings: Settings, resumed: List[str]
+) -> AdminBudgetOut:
+    ceiling = budget.effective_ceiling(
+        db, workspace_id=workspace_id, settings=settings
+    )
+    since = utcnow() - timedelta(hours=ceiling.window_hours)
+    parked = _parked_on_budget(db, workspace_id)
+    return AdminBudgetOut(
+        ceiling=_ceiling_out(ceiling),
+        unattended_ceiling=_ceiling_out(
+            ceiling.scaled(settings.unattended_budget_fraction)
+        ),
+        spend=_spend_out(
+            budget.window_spend(db, workspace_id=workspace_id, since=since)
+        ),
+        unattended_spend=_spend_out(
+            budget.window_spend(
+                db,
+                workspace_id=workspace_id,
+                since=since,
+                operations=budget.UNATTENDED_OPERATIONS,
+            )
+        ),
+        enforced=not ceiling.unlimited,
+        pricing_configured=bool(settings.model_prices),
+        runs_parked_on_budget=[
+            AdminBudgetParkedRunOut(
+                run_id=run.id,
+                conversation_id=run.conversation_id,
+                created_at=run.created_at,
+            )
+            for run in parked
+        ],
+        resumed_run_ids=resumed,
+    )
+
+
+@router.get("/budget", response_model=AdminBudgetOut)
+def get_budget(
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AdminBudgetOut:
+    """This workspace's spend ceiling, what it has spent against it, and what
+    it is currently holding."""
+    return _budget_out(
+        db, workspace_id=actor.workspace_id, settings=settings, resumed=[]
+    )
+
+
+@router.put("/budget", response_model=AdminBudgetOut)
+def set_budget(
+    payload: AdminBudgetRequest,
+    background_tasks: BackgroundTasks,
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AdminBudgetOut:
+    """Set the ceiling, and release whatever the new one no longer stops.
+
+    Raising a limit and releasing the runs it was holding is one gesture on
+    purpose. Splitting them would leave an owner who has fixed the problem
+    staring at a still-parked run, hunting for a second button — and the
+    interesting case, a raise that is still not enough, is not a special case
+    here: `budget.evaluate` is asked again per run, so a run that is still over
+    is simply not released.
+
+    The re-check is the same predicate the loop enforces, called from the same
+    module, so this route cannot be more generous than the ceiling itself.
+    """
+    row = db.scalar(
+        select(WorkspaceBudget).where(
+            WorkspaceBudget.workspace_id == actor.workspace_id
+        )
+    )
+    if row is None:
+        row = WorkspaceBudget(workspace_id=actor.workspace_id)
+        db.add(row)
+    row.window_hours = payload.window_hours
+    row.usd_per_window = payload.usd_per_window
+    row.tokens_per_window = payload.tokens_per_window
+    row.updated_by = actor.user_id
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="workspace_budget.updated",
+        resource_type="workspace_budget",
+        resource_id=actor.workspace_id,
+        detail={
+            "window_hours": payload.window_hours,
+            "usd_per_window": payload.usd_per_window,
+            "tokens_per_window": payload.tokens_per_window,
+        },
+    )
+    db.commit()
+
+    resumed: List[str] = []
+    for run in _parked_on_budget(db, actor.workspace_id):
+        verdict = budget.evaluate(
+            db,
+            workspace_id=actor.workspace_id,
+            unattended=policy_scope_for_run(db, run) == WORKFLOW_SCOPE,
+            settings=settings,
+        )
+        if not verdict.allowed:
+            continue
+        resumed.append(run.id)
+        background_tasks.add_task(resume_run_after_budget, run.id)
+    return _budget_out(
+        db, workspace_id=actor.workspace_id, settings=settings, resumed=resumed
     )

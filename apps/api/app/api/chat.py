@@ -329,6 +329,9 @@ def cancel_run(
     if run.status in {"queued", "waiting_for_approval"}:
         run.cancel_requested = True
         run.status = "cancelled"
+        # Cancelling a parked run ends the park, whether it was waiting on an
+        # approval or on the spend ceiling.
+        run.paused_reason = ""
         append_event(
             db,
             workspace_id=actor.workspace_id,

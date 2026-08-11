@@ -139,3 +139,116 @@ ruff clean, mypy 107 files, pytest 1333 passed / 1 skipped / 3 xfailed with one
 failure that reproduces with these changes stashed (`test_doc_pending.py::
 test_approving_a_listed_edit_applies_it_and_finishes_the_run`, the other agent's),
 vitest 181, playwright 32.
+
+---
+
+## Spend ceiling (ADR 0008)
+
+### Plan
+
+- [ ] `config.py`: BUDGET_WINDOW_HOURS / BUDGET_USD_PER_WINDOW / BUDGET_TOKENS_PER_WINDOW /
+      UNATTENDED_BUDGET_FRACTION; boot guard refusing a USD ceiling with no prices and no
+      token ceiling.
+- [ ] `models.py`: `workspace_budgets` (owner-settable per-workspace ceiling), and
+      `paused_reason` on `runs` + `workflow_runs`.
+- [ ] alembic 0023.
+- [ ] `services/budget.py`: the single enforcement predicate. Never raises.
+- [ ] `agent_loop`: check immediately before the model step; park (not kill) with
+      `paused_reason="budget"`; `resume_after_budget`.
+- [ ] `workflows/executor.py`: mirror the reason onto the workflow run; handle the new outcome.
+- [ ] `services/runs.py`: `resume_run_after_budget`.
+- [ ] `api/admin.py`: GET/PUT `/api/admin/budget`, releasing runs the raise unblocks.
+- [ ] schemas: `paused_reason` on RunOut / WorkflowRunOut; `.env.example`.
+- [ ] `docs/adr/0008-spend-limits.md`.
+- [ ] tests + isolation RouteCases + mutation check.
+
+---
+
+## Model spend panel (web) — done
+
+Reaches `GET /api/admin/usage`, which nothing read until now.
+
+- [x] `packages/api-client`: `AdminUsage*` types + `getAdminUsage(days)` (additions only).
+- [x] `components/views/usage-format.ts`: the honesty rules and every number format,
+      away from JSX so a test can hold them still. 25 vitest cases.
+- [x] `components/views/admin-usage.tsx`: banner → totals → costliest runs → three
+      breakdowns, full width at the top of the admin grid.
+- [x] `admin.tsx`: usage joins the existing `Promise.all`, so the window selector and
+      Refresh share one fetch path and one 403 handler. Costly runs are named by
+      joining `top_runs.run_id` against the Runs panel's prompt previews — the ledger
+      stores no text by design.
+- [x] `globals.css`: `.usage-*`, tokens only.
+- [x] `e2e/usage.spec.ts`: 4 specs. Creates nothing, deletes nothing, arms no dialog.
+
+The rule, which is the point: `MODEL_PRICES` ships empty, so `pricing_configured` is
+false and every `cost_usd` sums to 0 while tokens are real. No component formats money
+itself; `readSpend` answers "Not priced" (unknown), "$x+" (floor) or "$x" (exact), and
+the panel never prints `$0.00` for a figure it did not measure. Bars are drawn from
+tokens unless every call in the window is priced, and the panel says which.
+
+### Gates
+
+tsc clean, eslint clean, vitest 206 passed (181 → +25), next build clean,
+playwright 36 passed (32 → +4). Screenshots reviewed in light and dark, empty and
+populated: `test-results/usage-*.png`.
+
+### What landed
+
+The design question the job asked to be decided deliberately — kill or park —
+is answered **park**, and the ADR argues it from state rather than from
+politeness: an agent three tool calls into a turn has created a document, moved
+a card and sent a message, and raising on the fourth leaves all three performed
+with the turn recorded as `failed`. `process_run` records exceptions by failing
+the run, so a budget exception would destroy the record of the automation in
+order to protect the invoice — the same shape of mistake the workflow-recovery
+work already found and fixed once.
+
+- **The park is the existing park.** `waiting_for_approval` with a new
+  `runs.paused_reason` column, *not* a new status. Six guards already read
+  `waiting_for_approval` as "waiting on a person" and are already right about a
+  budget park — `RECOVERABLE`, `TERMINAL_RUN_STATES`, the recovery sweep, the
+  SSE close condition, the cancel fast-path, the memory writer. A new status
+  makes correctness opt-in at seven sites; a column makes it inherited.
+  `workflow_runs` carries the reason too, because the workflow surface reads
+  that table.
+- **One predicate.** `budget.exceeds(ceiling, spend)` is pure. `_advance` calls
+  `budget.evaluate` as the last statement before `step(...)`, every iteration —
+  a runaway loop is a turn whose *sixth* step is the one worth refusing.
+- **Unpriced spend is never waved through.** A dollar ceiling with unpriced
+  calls in the window and no token ceiling beside it evaluates to *stop*. Not
+  because the workspace is over, but because it was asked to tell and cannot.
+  `Settings._guard_budget` refuses to boot the common shape of that mistake.
+- **Unattended work is checked twice**, against its own spend and half the
+  ceiling. Relative, so a deployment that configured nothing still has nothing.
+- **`PUT /api/admin/budget` raises and releases in one gesture**, re-asking the
+  same predicate per run, so a raise that is still not enough releases nothing.
+- Enforcement is at the agent loop and nowhere else. Embeddings, memory/graph
+  extraction, compile and codegen still *count* toward the ceiling and are not
+  gated by it — each is one call caused by one human action, and failing one
+  destroys work rather than deferring it. Stated in the ADR, not left to be found.
+
+### Mutation check
+
+Replaced the body of `budget.exceeds` with `return ""` (always permit) and ran
+the suite: **15 failed, 1352 passed** — six predicate/evaluate tests, seven
+in-loop enforcement tests, and both workflow tests. Restored; back to 1368
+passed. The predicate is load-bearing in every test that claims to exercise it.
+
+### Gates
+
+ruff clean, mypy 108 files, pytest 1368 passed / 1 skipped / 3 xfailed (was
+1335), openapi exports with 1 new path and 5 new schemas, alembic 0001->0023
+from empty and 0023 down/up clean.
+
+### Deferred, deliberately
+
+- **No web surface.** `paused_reason` is on `RunOut`/`WorkflowRunOut` and the
+  park emits `run.waiting_for_budget`, but nothing renders it. apps/web and
+  packages/api-client belong to another agent this session; a budget-parked run
+  currently shows as parked with no card.
+- **No alerting.** A 3am ceiling writes an event and stops a run; it emails
+  nobody.
+- **Tool spend is not bounded**, only model tokens.
+- **The workspace row replaces the deployment ceiling rather than clamping it.**
+  Correct for a workspace whose owner pays the bill; a hosted multi-tenant
+  deployment wants `min()` in `budget.effective_ceiling`, and the ADR says so.

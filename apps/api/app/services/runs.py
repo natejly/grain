@@ -11,7 +11,12 @@ from ..clock import utcnow
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import Message, Run, Tool, ToolCall, ToolGrant
-from .agent_loop import resume_agent_turn, run_agent_turn
+from .agent_loop import (
+    PAUSED_FOR_BUDGET,
+    resume_after_budget,
+    resume_agent_turn,
+    run_agent_turn,
+)
 from .audit import record_audit
 from .citations import summarize_citations, validate_citations
 from .events import append_event
@@ -229,6 +234,7 @@ def _fail_run(db, run_id: str, exc: Exception) -> None:
         return
     run.status = "failed"
     run.error = str(exc)[:1000]
+    run.paused_reason = ""
     run.lease_expires_at = None
     run.agent_state_json = None
     append_event(
@@ -262,6 +268,45 @@ def resume_run(run_id: str, tool_call_id: str, decision: str) -> None:
         result = resume_agent_turn(
             db, run, tool_call_id=tool_call_id, decision=decision
         )
+        if result is None:
+            return
+        _finish_run(run, answer=result.answer, evidence=result.evidence)
+    except Exception as exc:
+        _fail_run(db, run_id, exc)
+    finally:
+        db.close()
+
+
+def resume_run_after_budget(run_id: str) -> None:
+    """Continue a run parked on the spend ceiling, after an owner raised it.
+
+    The sibling of `resume_run`, and it guards on `paused_reason` as well as
+    status so a release can never be applied to a run parked on an *approval* —
+    that one is waiting on a decision this path does not have and must not
+    invent.
+
+    If the ceiling is still exceeded the loop parks it straight back; the
+    enforcement predicate is consulted in exactly one place and this is not it.
+    """
+    db = SessionLocal()
+    try:
+        run = db.get(Run, run_id)
+        if run is None or run.status != "waiting_for_approval":
+            return
+        if run.paused_reason != PAUSED_FOR_BUDGET:
+            return
+        run.lease_expires_at = utcnow() + timedelta(
+            seconds=get_settings().run_lease_seconds
+        )
+        append_event(
+            db,
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            event_type="run.started",
+            payload={"status": "running"},
+        )
+        db.commit()
+        result = resume_after_budget(db, run)
         if result is None:
             return
         _finish_run(run, answer=result.answer, evidence=result.evidence)

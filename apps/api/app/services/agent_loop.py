@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..models import AgentToolCall, Run, ToolPolicy, WorkflowRun
-from . import usage
+from . import budget, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .llm_tools import ToolContext, ToolResult, ToolSpec, build_registry
@@ -65,11 +65,29 @@ class Paused:
 
 
 @dataclass
+class BudgetPaused:
+    """The run is parked because the workspace reached its spend ceiling.
+
+    A separate outcome from `Paused` rather than a flag on it, because the two
+    are resumed by different people doing different things: an approval is
+    decided by whoever reads the card, and a ceiling is raised by an owner. A
+    caller that pattern-matches on the outcome cannot forget the difference.
+    """
+
+    reason: str
+    message: str
+
+
+@dataclass
 class Cancelled:
     text: str
 
 
-Outcome = Done | Paused | Cancelled
+Outcome = Done | Paused | BudgetPaused | Cancelled
+
+#: Why a `waiting_for_approval` run is parked. See `Run.paused_reason`.
+PAUSED_FOR_APPROVAL = "approval"
+PAUSED_FOR_BUDGET = "budget"
 
 
 @dataclass
@@ -272,6 +290,10 @@ def _render_result(result: ToolResult, evidence_offset: int) -> str:
 
 def _cancelled(db: Session, run: Run, state: LoopState) -> Cancelled:
     run.status = "cancelled"
+    # `paused_reason` describes a park, and this run is no longer parked. Cleared
+    # everywhere a run leaves the park so the column can never be read as a
+    # statement about a run that is not waiting for anybody.
+    run.paused_reason = ""
     run.lease_expires_at = None
     run.agent_state_json = None
     append_event(
@@ -326,6 +348,7 @@ def _park_for_approval(
     db.flush()
     call["tool_call_id"] = record.id
     run.status = "waiting_for_approval"
+    run.paused_reason = PAUSED_FOR_APPROVAL
     run.lease_expires_at = None
     run.agent_state_json = state.to_json()
     append_event(
@@ -359,6 +382,53 @@ def _park_for_approval(
     )
     db.commit()
     return Paused(tool_call_id=record.id)
+
+
+def _park_for_budget(
+    db: Session, run: Run, state: LoopState, verdict: budget.Verdict
+) -> BudgetPaused:
+    """Suspend the turn on the spend ceiling, exactly as an approval suspends it.
+
+    Deliberately the same three writes `_park_for_approval` makes — the status,
+    the cleared lease, the serialized `LoopState` — because that combination is
+    what every other part of this system already understands as "parked, waiting
+    on a person, resumable, do not sweep". ADR 0008 argues the case; the code's
+    version of the argument is that this function had almost nothing to invent.
+
+    What it does *not* write is an `AgentToolCall`. There is no proposed call
+    here and nothing to approve — the model had not been asked yet — so a row
+    claiming otherwise would put a card in the approval inbox that approves
+    nothing and would let the decision endpoint resume a run whose limit is
+    still exceeded.
+    """
+    run.status = "waiting_for_approval"
+    run.paused_reason = PAUSED_FOR_BUDGET
+    run.lease_expires_at = None
+    run.agent_state_json = state.to_json()
+    payload: Dict[str, Any] = {
+        "status": "waiting_for_approval",
+        "paused_reason": PAUSED_FOR_BUDGET,
+        "message": verdict.message(),
+        **verdict.payload(),
+    }
+    append_event(
+        db,
+        workspace_id=run.workspace_id,
+        run_id=run.id,
+        event_type="run.waiting_for_budget",
+        payload=payload,
+    )
+    record_audit(
+        db,
+        workspace_id=run.workspace_id,
+        actor_id=run.created_by,
+        action="run.budget_exceeded",
+        resource_type="run",
+        resource_id=run.id,
+        detail=verdict.payload(),
+    )
+    db.commit()
+    return BudgetPaused(reason=verdict.reason, message=verdict.message())
 
 
 def execute_agent_tool_call(
@@ -557,6 +627,19 @@ def _advance(
         if run.cancel_requested:
             return _cancelled(db, run, state)
 
+        # The ceiling, checked here and nowhere else on this path: the last
+        # statement before the expensive call. Every iteration, not once per
+        # turn — a runaway loop is exactly a turn whose *sixth* step is the one
+        # worth refusing, and a check outside the loop would wave it through.
+        verdict = budget.evaluate(
+            db,
+            workspace_id=run.workspace_id,
+            unattended=scope == WORKFLOW_SCOPE,
+            settings=settings,
+        )
+        if not verdict.allowed:
+            return _park_for_budget(db, run, state, verdict)
+
         final_round = state.iteration == MAX_ITERATIONS - 1
         buffer = DeltaBuffer(db, workspace_id=run.workspace_id, run_id=run.id)
         response: Any = None
@@ -717,8 +800,73 @@ def resume_agent_turn(
     if record is not None:
         record.decided_at = utcnow()
     run.status = "running"
+    run.paused_reason = ""
     run.agent_state_json = None
     db.commit()
+    return _continue(
+        db,
+        run,
+        state,
+        settings=settings,
+        model_step=model_step,
+        workflow_run=workflow_run,
+    )
+
+
+def resume_after_budget(
+    db: Session,
+    run: Run,
+    *,
+    settings: Optional[Settings] = None,
+    model_step: Optional[ModelStep] = None,
+) -> Optional[AgentResult]:
+    """Continue a turn parked on the spend ceiling, once the limit was raised.
+
+    The mirror of `resume_agent_turn` and deliberately thinner, because there is
+    no decision to apply: the turn stopped *before* asking the model, so its
+    `pending_calls` are empty and the state resumes exactly where it stopped.
+
+    Nothing here re-checks the ceiling, and that is not an omission. `_advance`
+    evaluates it at the top of every iteration, so a run released while still
+    over the limit simply parks again on the same evidence — one rule, one place,
+    and no way for the release path to hold a more generous opinion than the
+    enforcement path.
+    """
+    settings = settings or get_settings()
+    if not run.agent_state_json:
+        raise RuntimeError("Run has no saved agent state to resume")
+    state = LoopState.from_json(run.agent_state_json)
+    workflow_run = db.scalar(select(WorkflowRun).where(WorkflowRun.run_id == run.id))
+    run.status = "running"
+    run.paused_reason = ""
+    run.agent_state_json = None
+    db.commit()
+    return _continue(
+        db,
+        run,
+        state,
+        settings=settings,
+        model_step=model_step,
+        workflow_run=workflow_run,
+    )
+
+
+def _continue(
+    db: Session,
+    run: Run,
+    state: LoopState,
+    *,
+    settings: Settings,
+    model_step: Optional[ModelStep],
+    workflow_run: Optional[WorkflowRun],
+) -> Optional[AgentResult]:
+    """Walk a restored `LoopState` to its next stop, and hand the outcome on.
+
+    Shared by both resume doors so they cannot drift: the same registry, the same
+    policy scope, the same billing attribution, and the same rule about who owns
+    the terminal state.
+    """
+    from .workflows import executor as workflow_executor
 
     context = ToolContext(
         workspace_id=run.workspace_id,

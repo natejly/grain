@@ -299,21 +299,35 @@ def test_overlapping_session_creation_cannot_exceed_the_workspace_quota(
 ) -> None:
     """Two creates that overlap in the window `ensure_session` leaves open.
 
-    The rendezvous is a `threading.Barrier` *inside the provider's `create`* —
-    which is the window itself, since `ensure_session` counts, then calls the
-    provider, then inserts. Both callers are therefore guaranteed to have passed
-    the quota check before either can insert, so this is a forced interleaving
-    rather than a timing gamble: nothing sleeps, nothing reads a clock, and the
-    barrier either rendezvouses or the test fails loudly on its timeout.
+    The barrier sits inside the provider's `create`, which *used* to be the
+    window: `ensure_session` counted, called the provider, then inserted, so
+    both callers could pass the quota check before either inserted.
+
+    Claim-then-create closed that window, and closing it is what makes the
+    rendezvous impossible — the loser is now refused before the provider is ever
+    reached, so only one party arrives at the barrier. So the barrier is a
+    *probe*, not a synchronisation primitive: it opens the widest overlap the
+    implementation still allows, and a broken barrier is the fix working rather
+    than a failure. Treating it as fatal made this test fail roughly one run in
+    three and cost the suite 30 seconds of dead waiting each time, which is how
+    a real assertion gets re-run until it is green and eventually deleted.
+
+    The invariant is asserted below, and it is the same one either way: two
+    overlapping creates against a limit of one leave exactly one live session.
     """
     identity = create_identity()
     settings = _sandbox_settings(limit=1)
-    barrier = threading.Barrier(2, timeout=30)
+    barrier = threading.Barrier(2, timeout=2)
 
     class RendezvousProvider(FakeProvider):
         def create(self, spec):  # type: ignore[override]
             handle = super().create(spec)
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                # Only one caller reached the provider — the quota refused the
+                # other before it got here, which is the behaviour under test.
+                pass
             return handle
 
     provider = RendezvousProvider()

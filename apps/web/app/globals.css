@@ -5108,6 +5108,183 @@ select:focus-visible {
   font-size: 10px;
 }
 
+/* ---- Model spend ----
+   The one admin panel about money, so it spans the masonry instead of sitting
+   in a 320px column: a cost breakdown squeezed into a card is a list of
+   truncated model names.
+
+   Everything visual here carries the same caveat as the numbers. A cost the
+   deployment cannot compute is rendered muted and in words (".muted"), never as
+   a dollar figure, and the bars are drawn from whichever measure the panel says
+   it is drawing them from — tokens unless every call in the window is priced. */
+.usage-panel {
+  grid-column: 1 / -1;
+}
+
+.usage-window {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.usage-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--clay);
+  border-radius: 6px;
+  background: var(--clay-muted);
+  color: var(--amber);
+}
+
+.usage-notice.clear {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.usage-notice svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.usage-notice strong {
+  display: block;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.usage-notice p {
+  margin: 3px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.usage-models {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.usage-models span {
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.usage-models code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.usage-totals strong.muted {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.usage-caption {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.usage-runs h3,
+.usage-breakdown h3 {
+  margin: 0 0 6px;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.usage-runs .admin-table td {
+  max-width: 320px;
+}
+
+.usage-cost {
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* "Not priced" is a sentence, not a figure — it must not read as a number. */
+.usage-cost.muted {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: italic;
+}
+
+.usage-bar {
+  overflow: hidden;
+  height: 4px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+}
+
+.usage-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent-soft);
+}
+
+.usage-breakdowns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+/* Capped and scrollable like .admin-list: the API returns up to 25 rows per
+   axis, and three columns of 25 would make one card taller than the page it
+   sits on. */
+.usage-rows {
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.usage-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.usage-row-head strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-row-foot {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- Workflows ----
    Two panes: the automations you have on the left, one automation on the
    right. The right-hand pane draws the graph as rows rather than as a canvas —

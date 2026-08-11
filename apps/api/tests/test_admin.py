@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pytest
 from conftest import TEST_BASE_URL, Identity, authenticate, create_identity, issue_session
@@ -332,8 +332,18 @@ def fake_provider():
     reset_provider_cache()
 
 
-def admin_requests(session_id: str) -> List[Tuple[str, str]]:
-    """Every operation the admin router exposes, as (method, url).
+# A valid body for every admin route that requires one, keyed "METHOD path".
+# Without it a write route answers 422 to the sweeps below, and a 422 proves
+# nothing about the owner gate or about isolation — it only proves the request
+# was malformed. Keeping the bodies here rather than accepting 422 means a new
+# write route has to state what a legitimate call to it looks like.
+ADMIN_BODIES: Dict[str, Dict[str, object]] = {
+    "PUT /api/admin/budget": {"window_hours": 24},
+}
+
+
+def admin_requests(session_id: str) -> List[Tuple[str, str, Optional[Dict[str, object]]]]:
+    """Every operation the admin router exposes, as (method, url, body).
 
     Read off the app rather than listed by hand: a route added without the owner
     gate, or without a cross-tenant answer, then fails the sweeps below instead
@@ -344,8 +354,12 @@ def admin_requests(session_id: str) -> List[Tuple[str, str]]:
     whose paths are not reachable by attribute — the schema is the flattened,
     stable view of the same thing.
     """
-    requests: List[Tuple[str, str]] = [
-        (method.upper(), path.replace("{session_id}", session_id))
+    requests: List[Tuple[str, str, Optional[Dict[str, object]]]] = [
+        (
+            method.upper(),
+            path.replace("{session_id}", session_id),
+            ADMIN_BODIES.get(f"{method.upper()} {path}"),
+        )
         for path, operations in app.openapi()["paths"].items()
         if path.startswith("/api/admin")
         for method in operations
@@ -565,8 +579,8 @@ def test_killing_a_session_that_does_not_exist_is_a_404(owner: Fixture):
 
 def test_every_admin_route_refuses_a_plain_member(owner: Fixture, member: TestClient):
     session_id, _external = _plant_sandbox(owner.workspace_id, owner.user_id, "Alpha")
-    for method, url in admin_requests(session_id):
-        response = member.request(method, url)
+    for method, url, body in admin_requests(session_id):
+        response = member.request(method, url, json=body)
         assert response.status_code == 403, f"{method} {url} -> {response.status_code}"
         assert response.json()["detail"] == "Owner role required"
 
@@ -577,8 +591,8 @@ def test_a_member_can_still_use_the_rest_of_the_api(member: TestClient):
 
 
 def test_every_admin_route_refuses_an_anonymous_caller(anonymous_client, owner: Fixture):
-    for method, url in admin_requests(MISSING):
-        response = anonymous_client.request(method, url)
+    for method, url, body in admin_requests(MISSING):
+        response = anonymous_client.request(method, url, json=body)
         assert response.status_code == 401, f"{method} {url} -> {response.status_code}"
 
 
@@ -606,8 +620,8 @@ def test_admin_panels_show_nothing_from_another_workspace(
         "Admin owner",
         *owner.ids.values(),
     ]
-    for method, url in admin_requests(session_id):
-        response = stranger.client.request(method, url)
+    for method, url, body in admin_requests(session_id):
+        response = stranger.client.request(method, url, json=body)
         assert response.status_code in {200, 404}, f"{method} {url}: {response.text}"
         for marker in markers:
             assert marker not in response.text, f"{method} {url} leaked {marker!r}"
@@ -672,14 +686,14 @@ def test_no_admin_route_returns_a_secret(owner: Fixture):
         MCP_REFRESH_TOKEN,
         external_id,
     ]
-    for method, url in admin_requests(session_id):
+    for method, url, body in admin_requests(session_id):
         if method == "DELETE":
             # Skipped deliberately: killing the session here would race the
             # assertions above it. The killed row's shape is checked in
             # test_killing_a_session_goes_through_resolve_session, which reads
             # the same model.
             continue
-        response = owner.client.request(method, url)
+        response = owner.client.request(method, url, json=body)
         assert response.status_code == 200, f"{method} {url}: {response.text}"
         for secret in secrets:
             assert secret not in response.text, f"{method} {url} leaked a secret"

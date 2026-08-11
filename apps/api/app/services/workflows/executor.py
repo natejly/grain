@@ -73,7 +73,9 @@ from ...models import (
     WorkflowRun,
 )
 from ..agent_loop import (
+    PAUSED_FOR_APPROVAL,
     WORKFLOW_SCOPE,
+    BudgetPaused,
     Cancelled,
     Done,
     Outcome,
@@ -424,6 +426,10 @@ def _prepare(
         )
 
     workflow_run.status = "running"
+    # Both, because a *tool* node's approval resumes through here rather than
+    # through `agent_loop`, and a run that is running is not parked on anything.
+    workflow_run.paused_reason = ""
+    run.paused_reason = ""
     workflow_run.started_at = workflow_run.started_at or utcnow()
     run.status = "running"
     run.lease_expires_at = utcnow() + timedelta(seconds=settings.run_lease_seconds)
@@ -725,7 +731,9 @@ def _park(
     row.agent_tool_call_id = record.id
     row.status = "waiting_for_approval"
     workflow_run.status = "waiting_for_approval"
+    workflow_run.paused_reason = PAUSED_FOR_APPROVAL
     state.run.status = "waiting_for_approval"
+    state.run.paused_reason = PAUSED_FOR_APPROVAL
     state.run.lease_expires_at = None
     append_event(
         db,
@@ -824,6 +832,11 @@ def _mirror_agent_pause(
         )
     row.status = "waiting_for_approval"
     workflow_run.status = "waiting_for_approval"
+    # Carried up from the backing run rather than decided here: `agent_loop`
+    # knows whether the turn stopped on an approval or on the spend ceiling, and
+    # a graph that says "waiting for approval" when no approval exists sends its
+    # owner looking for a card nobody wrote.
+    workflow_run.paused_reason = state.run.paused_reason
     db.commit()
     return True
 
@@ -929,7 +942,10 @@ def resume_after_agent_turn(
     )
     if row is None:
         return workflow_run
-    if isinstance(outcome, Paused):
+    if isinstance(outcome, (Paused, BudgetPaused)):
+        # Parked again — on the agent's next write, or on the ceiling it has now
+        # reached. Either way the graph waits for a person, and `agent_loop` has
+        # already written which kind of waiting it is.
         return workflow_run
     if isinstance(outcome, Cancelled):
         _terminate(
@@ -1012,6 +1028,7 @@ def _terminate(db: Session, workflow_run: WorkflowRun, halt: _Halt) -> None:
         return
     current.status = halt.status
     current.error = f"{halt.code}: {halt.message}"[:2000]
+    current.paused_reason = ""
     current.finished_at = utcnow()
     _mark_skipped(db, current, halt)
     _close_backing_run(db, current, "cancelled" if halt.status == "cancelled" else "failed")
@@ -1126,6 +1143,7 @@ def _close_backing_run(db: Session, workflow_run: WorkflowRun, status: str) -> N
     if run is None or run.status in {"completed", "failed", "cancelled"}:
         return
     run.status = status
+    run.paused_reason = ""
     run.lease_expires_at = None
     run.agent_state_json = None
     if status != "completed":
