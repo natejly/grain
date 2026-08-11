@@ -16,10 +16,35 @@ feat/agentic-workspace as 24ab394 + 71941ee; everything since lives here.
 - [x] Phase 6: shared.ts View, navigation.ts Chat-group entry, agents.tsx view, workspace.tsx block, CSS
 - [x] Phase 7: chat composer AgentSelect (+ reset on "Agent is not available"); workflow node "Runs as" picker via updateWorkflow({graph})
 - [x] Gates: ruff, mypy, tsc, eslint, vitest (302), pnpm build, alembic 0031 upgrade x2 on scratch DB, openapi.json regenerated
-- [ ] Full pytest re-run after final edits (in flight)
-- [ ] Boot dev stack and verify at the seam (create agent → chat as it → assign to workflow node → run)
-- [ ] Commit worktree work on feat/agent-creator; coordinate merge with fieldnote session
+- [x] Full pytest re-run after final edits: 1558 passed, 1 skipped, 3 xfailed
+- [x] Boot dev stack (worktree ports 8020/3020) and verify at the seam
+- [x] Commit worktree work on feat/agent-creator (b3e9161)
+- [ ] Merge feat/agent-creator into feat/agentic-workspace once the fieldnote session's
+      approval-modes work lands (expected conflicts: models.py, schemas.py, main.py,
+      agent_loop.py, api-client index.ts — all additive on both sides; alembic must end
+      0031_agent_profiles → 0032_approval_modes with one head)
 
 ## Review
 
-(to be filled at completion)
+Landed across three commits: 24ab394 (contracts: Agent columns, migration 0031,
+registry_families + build_registry(allowed=)), 71941ee (workflow NodeSpec.agent +
+validate/executor + /api/agents router), b3e9161 (loop directives, GET /api/tools,
+api-client, Agents view, chat selector, workflow Runs-as picker, tests).
+
+Verified end to end against a real model (gpt-5.5): an authored "Haiku Bot" with
+instructions + allowed_tools=["search_sources"] answered chat in haiku with run.agent_id
+set; a workflow agent node assigned to it succeeded with arguments {"agent": "Haiku Bot"}
+and a haiku output; a graph naming a bogus agent id was refused at save with
+agent_unknown; screenshots confirm the Agents view, the composer select (Default /
+Research partner / Haiku Bot), and the canvas "Runs as" picker.
+
+Design notes for future sessions: allowed_tools_json "" = all tools, "[]" = none (repo
+"" = unset convention); the subset is a pure intersection under ToolPolicy, applied at
+build_registry; resolve_directives ignores Agent.enabled so parked runs resume with the
+directives they started with; per-node agent is persisted onto the backing run before
+each turn (that is what makes park/resume agree); the compiler never emits agent ids.
+Deliberate v1 exclusions: per-agent model override, per-conversation sticky selection.
+
+Multi-session coordination: this session shared the tree with two others; the split was
+negotiated by message, contracts were committed early to make clobbers recoverable, and
+the tree moved to per-session worktrees mid-build (this one: Dashbored-agent-creator).
