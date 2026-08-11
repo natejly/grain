@@ -13,6 +13,7 @@ from .api import (
     analytics,
     artifacts,
     audit,
+    bibliography,
     board_ops,
     chat,
     dbconnect,
@@ -102,6 +103,7 @@ app.include_router(artifacts.router)
 app.include_router(board_ops.router)
 app.include_router(doc_pending.router)
 app.include_router(projects.router)
+app.include_router(bibliography.router)
 app.include_router(sandbox.router)
 app.include_router(analytics.router)
 app.include_router(generated_apps.router)

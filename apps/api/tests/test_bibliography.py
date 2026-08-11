@@ -12,30 +12,20 @@ from app.services.projects.latex import BIBLIOGRAPHY_PATH, DEFAULT_ENTRY_PATH
 from app.services.projects.tools import registry_tools
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _mounted():
-    """Mount the bibliography router if the app has not already included it.
-
-    `app/main.py` is owned by another workflow in this repo, so the include line
-    lands there separately (see `wiring_needed`). Until it does the REST tests
-    below would 404 on routing rather than on anything they are testing, and
-    mounting the router permanently would make the tenant-isolation suite's
-    route-table check fail on cases that live in a file this task cannot touch.
-    So it is mounted on the real app — real middleware, real auth — and unmounted
-    again. Once main.py includes the router this fixture finds it and does nothing.
-    """
-    from app.api.bibliography import router
+def test_the_router_is_mounted_on_the_app():
+    """The REST tests below used to pass against a router this fixture module
+    mounted itself, which is exactly how three routes and the service behind them
+    shipped unreachable: `main.py` never included them, every request 404'd and
+    the operations were absent from openapi.json, so the generated client could
+    not have called them either. Assert the real app, not a test-local mount."""
     from app.main import app
 
-    if any(getattr(route, "path", "").startswith(router.prefix) for route in app.routes):
-        yield
-        return
-    original = list(app.router.routes)
-    app.include_router(router)
-    app.openapi_schema = None  # the schema is cached once built
-    yield
-    app.router.routes = original
-    app.openapi_schema = None
+    paths = app.openapi()["paths"]
+    assert {
+        "/api/bibliography/{project_id}/entries",
+        "/api/bibliography/{project_id}/validate",
+    } <= set(paths)
+    assert set(paths["/api/bibliography/{project_id}/entries"]) >= {"get", "post"}
 
 
 @pytest.fixture

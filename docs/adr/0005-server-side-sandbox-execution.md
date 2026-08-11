@@ -64,6 +64,34 @@ through a narrow provider interface (`app/services/sandbox/`).
   other write tool.
 - **Quotas are enforced before creation, not after billing.** Concurrent
   sessions per workspace, wall-clock per execution, and executions per run.
+- **The concurrency quota is a constraint, not a count.** A workspace's limit is
+  `N` numbered slots; a session that holds one records the number in
+  `sandbox_sessions.slot_index`, and `(workspace_id, slot_index)` is unique. A
+  create reserves its slot with an INSERT the database will refuse if the number
+  is taken, so the loser learns it lost from its own failed write, before
+  `provider.create` — the machine that would break the limit is never started and
+  never billed.
+
+  Counting cannot enforce this and no arrangement of counting can. A count
+  describes rows that were visible when it ran, so two overlapping creates can
+  each be told nothing is ahead of them; ranking committed claims by
+  `(created_at, id)` instead — which this replaced — only moves the flaw, because
+  the ordering key is stamped while the INSERT is being built and the row becomes
+  visible a round trip later, so the claim that sorts second can commit and be
+  admitted first, and then the claim that sorts first sees nothing ahead of it
+  and is admitted too. That was a real escape: two live machines against a quota
+  of one, reproduced deterministically in
+  `tests/test_stress_sandbox.py::test_a_claim_that_commits_out_of_order_cannot_take_a_second_slot`.
+
+  Uniqueness is chosen because it is the one serialisation primitive SQLite and
+  Postgres genuinely share: `SELECT ... FOR UPDATE` is a no-op on SQLite and
+  SQLite's single-writer lock has no counterpart on Postgres, but a unique index
+  refuses a duplicate on both, at any isolation level, however the transactions
+  interleave. NULL means "holds no slot" and NULLs never collide on either
+  engine, so killing, failing, or retiring a session hands the number straight
+  back. A claim whose creator died still stops holding its slot after
+  `CLAIM_TTL` — the next create in that workspace retires it, and the reaper
+  sweeps the rest — so one crash cannot cost a workspace a slot permanently.
 
 ## The provider ladder
 

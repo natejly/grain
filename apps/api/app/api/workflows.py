@@ -223,6 +223,11 @@ def _run_out(row: WorkflowRun) -> WorkflowRunOut:
         workflow_version=row.workflow_version,
         trigger=row.trigger,
         status=row.status,
+        # Copied explicitly, and the omission is why this needs a comment: the
+        # schema defaults it to "", so a forgotten field here reports "no reason"
+        # rather than failing, and a run held by the spend ceiling looked to the
+        # client exactly like an approval with no card to approve.
+        paused_reason=row.paused_reason,
         run_id=row.run_id,
         error=row.error,
         started_at=row.started_at,

@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Accepted. Supersedes the generated-app half of ADR 0003; its analytics half
+stands. Amended by ADR 0005, which adds a server-side execution sandbox beside
+this rendering one.
 
 ## Context
 

@@ -97,7 +97,7 @@ recording it. Most AI chat products cannot tell that story.
 | Workspace scoping on every artefact | built |
 | Read-only-by-default database access with four layers of enforcement | built |
 | Secrets encrypted at rest, never returned by the API | built |
-| Sandboxes with no network and no server-side execution | built |
+| Sandboxes with no network egress by default; server-side execution is opt-in and runs in a container with no network, a read-only root and all capabilities dropped (ADR 0005) | built |
 | MCP servers default to ask-before-running | built |
 
 That list is a compliance narrative already. It needs surfacing, not inventing.
@@ -106,14 +106,14 @@ That list is a compliance narrative already. It needs surfacing, not inventing.
 | Feature | Effort | Note |
 |---|---|---|
 | **RBAC** | partial | `Membership.role` exists but only owner/member, and `require_owner` is the only gate in the codebase. Needs a real permission model: roles → permissions → enforcement at `get_actor`, plus per-resource sharing. |
-| **Admin console** | new | User and member management, workspace list, seat usage, policy defaults set org-wide rather than per workspace. |
-| **Workflow creation** | new | The agent loop plus 32 tools is already the substrate — a workflow is a saved, parameterised, schedulable sequence. Highest-value enterprise feature, and the one with the most existing machinery behind it. |
+| **Admin console** | partial | `/api/admin` and a web view ship, covering usage and budget. Still missing: user and member management, workspace list, seat usage, policy defaults set org-wide rather than per workspace. |
+| **Workflow creation** | built | Compiled from a description into a DAG and executed on the agent run loop, on a schedule, at a `workflow` policy scope narrower than a workspace (ADR 0007). |
 | **Agent creator** | partial | `Agent` exists with name/instructions/enabled. Needs: per-agent tool allowlists (today `ToolPolicy` is per *workspace*), model and effort selection, skills, and a test harness per agent. |
-| **Monitoring and observability** | partial | `RunEvent` records every step and `AuditEvent` every action. Missing: token and cost accounting, latency percentiles, tool success rates, and a UI. **No cost tracking exists at all.** |
+| **Monitoring and observability** | partial | `RunEvent` records every step, `AuditEvent` every action, and `ModelUsage` every model call — tokens, model, operation and `cost_usd` (null, never zero, for an unpriced model), surfaced at `GET /api/admin/usage`. Missing: latency percentiles and tool success rates. |
 | **Prompt management + A/B testing** | new | Versioned prompts, assignment per workspace or per cohort, and outcome comparison. **Blocked on measurement** — see below. |
 | **SSO / SAML, SCIM provisioning** | new | Table stakes above ~200 seats. The OAuth work in flight is the foundation. |
 | **Data retention and residency controls** | new | Per-workspace retention windows, deletion guarantees, export. |
-| **Usage quotas and cost controls** | new | Per-workspace spend caps. Shares the accounting gap with student pricing. |
+| **Usage quotas and cost controls** | built | Per-workspace spend caps (`WorkspaceBudget`), per-window USD and token ceilings, unattended runs held to a narrower fraction, and a run *parked* rather than killed when it hits one (ADR 0008). |
 | **Compliance export** | partial | Audit data exists; needs an export path and a documented schema. |
 | **Private / VPC deployment** | partial | Container-deployable, but object storage and secrets management need finishing. |
 
@@ -139,7 +139,7 @@ clean labelled signal most products do not have. Approval rate per prompt varian
 a real metric, available today, with no annotation cost.
 
 **Build order for the enterprise measurement story:**
-1. Token and cost accounting per run (nothing exists — everything else depends on it)
+1. ~~Token and cost accounting per run~~ — **done** (`ModelUsage`, ADR 0008)
 2. Run observability UI over the existing `RunEvent` data
 3. Outcome metrics, starting with approval rate and regeneration rate
 4. Prompt versioning and assignment
@@ -166,10 +166,11 @@ Steps 1–3 are useful on their own. Steps 4–5 are worthless without them.
 
 ## Sequenced
 
-**Now** (both segments, shared)
-1. Finish auth and the cross-tenant isolation audit — nothing multi-user ships before it
-2. Hybrid retrieval — the eval baseline exists and the gap is measured
-3. Token and cost accounting — blocks student pricing *and* enterprise monitoring
+**Now** (both segments, shared) — all three have since shipped
+1. ~~Finish auth and the cross-tenant isolation audit~~ — done; the audit is a
+   standing test that fails when a route joins the app without a verdict
+2. ~~Hybrid retrieval~~ — done; BM25 + dense + RRF, on by default
+3. ~~Token and cost accounting~~ — done; `ModelUsage` plus enforced ceilings
 
 **Next** (student)
 4. Bibliography management and PDF/DOCX export — the two concrete asks the LaTeX

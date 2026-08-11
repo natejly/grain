@@ -67,6 +67,7 @@ export function Workspace() {
     setDraft,
     activeRun,
     runStatus,
+    budgetPark,
     provenance,
     setProvenance,
     loadingProvenance,
@@ -399,6 +400,7 @@ export function Workspace() {
             setDraft={setDraft}
             activeRun={activeRun}
             runStatus={runStatus}
+            budgetPark={budgetPark}
             submitPrompt={submitPrompt}
             cancelActiveRun={cancelActiveRun}
             regenerate={regenerate}

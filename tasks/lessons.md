@@ -253,3 +253,75 @@
   `frame-src` does, deliberately. Wrap `URL.createObjectURL` in an init script
   and inspect the Blob instead; reading a Blob is not a fetch. Do not widen the
   policy to make an assertion convenient.
+- Never `git stash` in a working tree another agent is editing. Diagnosing
+  whether a flake predated my changes, I stashed the whole tree — which also
+  reverted the web agent's in-flight `apps/web/**`, `packages/api-client` and
+  `tasks/todo.md` for the ~90s the baseline suite ran. The pop restored it
+  cleanly, but that was luck, not design. Use `git worktree add <tmp> HEAD` and
+  run the comparison there: it answers the same question, touches nothing shared,
+  and `git worktree remove --force` cleans up.
+- Before attributing a newly-failing test to your own change, measure a rate, not
+  a single run. `test_overlapping_session_creation_cannot_exceed_the_workspace_quota`
+  failed twice in a row on my branch and passed three times in a row at HEAD,
+  which reads as "I broke it". Ten runs in a HEAD worktree failed four times: a
+  pre-existing race, and the passing baseline was the coincidence. A test whose
+  passing path costs a 2s barrier timeout and whose failing path returns
+  immediately will always look correlated with whatever changed the suite's
+  timing.
+- A response model that declares a field with a default hides a serializer that
+  forgets it. `WorkflowRunOut.paused_reason: str = ""` is on the schema, in the
+  OpenAPI document and in the generated client — and `_run_out` builds the model
+  field by field and never copies the column, so every workflow run answers `""`
+  no matter what the database says. Nothing fails; the default fills the hole.
+  Rule: when a column reaches a UI through a hand-written `X_out()`, assert the
+  round trip (row → endpoint → field), not just the schema — and prefer
+  `model_validate(row)` over field-by-field construction for exactly this class
+  of omission. Found by reading a `budget` in sqlite next to a `""` in the JSON.
+- Prefer decisive evidence over a cached answer when the cache has no natural
+  expiry. Working around the above by memoising "is this run held by the
+  ceiling?" per run id was correct until a released run re-parked on an approval
+  between two polls: the memo had no reason to expire and the graph claimed to
+  be held forever. The reliable signal was structural — a budget park writes no
+  `AgentToolCall` — so a run with a proposed call is parked on a person, and the
+  fetched list only decides when there is no proposal at all.
+- A descendant selector reaches into a popover. `.budget-hold-foot p { flex: 1 1
+  240px }` was written for one paragraph beside a button, and the disclosure
+  panel rendered *inside* that foot is itself a column flex container — so the
+  "ask an owner" sentence inherited a 240px flex-basis along the vertical axis
+  and sat in a 266px box of whitespace. Every gate was green; only the
+  screenshot showed it. Scope layout rules meant for a component's own children
+  with `>`.
+- Fixing a serializer promotes a mirror column from decoration to contract.
+  `WorkflowRun.paused_reason` mirrors the backing run's, and every writer
+  maintained it except the resume path: `resume_after_agent_turn` returned early
+  on `Paused` because "agent_loop has already written which kind of waiting it
+  is" — true of the `Run`, false of the mirror. It never showed while `_run_out`
+  dropped the field; the moment the field reached the client, a graph released
+  from the ceiling that walked on to a write rendered the spend panel *instead
+  of* the approval card, so the proposal was on screen with nothing to decide it
+  with. Rule: when two rows must agree, the paths that change one and not the
+  other are the whole bug surface — enumerate the writers, not the readers. And
+  a status that does not change between two states (`waiting_for_approval` for
+  both parks) means the *reason* is the only thing carrying the difference, so
+  every transition between them has to move it.
+- Order a UI's signals by which one can go stale, not by which one is most
+  specific. The rule "a proposed `AgentToolCall` means a person is being waited
+  on" was already in the code, but *below* `paused_reason` — so it only guarded
+  against a stale fetched list and not against the stale field, which is the one
+  that actually lied. Structural evidence that cannot lag belongs first;
+  mirrored fields and cached lists belong behind it.
+- One failing e2e test is not one failure. The budget spec parked a real write
+  and saved a workflow before the assertion that failed, so its inline cleanup
+  never ran, and the residue produced two more failures in files that come later
+  in the suite order — a duplicate workflow row, and a workspace-wide
+  `create_document` proposal that put a second card in another spec's
+  `.document-pending`. Diagnose the *earliest* failure first and expect the rest
+  to evaporate; and put a shared-workspace spec's cleanup in `afterAll`, where a
+  failed assertion cannot skip it, rather than at the end of the test body.
+- A cleanup that only ever runs on a clean workspace is untested code. The new
+  `afterAll` sweep looked right and was half broken: `DELETE /api/conversations`
+  requires an `Idempotency-Key` and the two routes beside it do not, so that one
+  call 422'd into a response nobody read and the conversation survived. It was
+  only visible by injecting a deliberate failure into the spec and watching
+  which of the three leaked things came back. Make the mess on purpose before
+  believing the tidy-up.

@@ -5,6 +5,7 @@ import type {
   WorkflowNodeRunStatus,
   WorkflowRunStatus,
 } from "@workspace/api-client";
+import { PAUSED_FOR_APPROVAL, PAUSED_FOR_BUDGET } from "./budget-format";
 
 /**
  * Everything the workflow surface has to *say*, kept out of the components that
@@ -114,11 +115,61 @@ export function runIsSettled(status: string): boolean {
   return (RUN_TERMINAL as string[]).includes(status);
 }
 
-export function nodeStatusLabel(status: string): string {
+/**
+ * A graph stopped on spend is not a graph waiting for a decision.
+ *
+ * ADR 0008 made a budget park reuse `waiting_for_approval` — six guards already
+ * read that status as "stopped, waiting on a person, resumable" and are right
+ * about a budget park too — so the status alone can no longer name the state.
+ * `paused_reason` is what tells them apart, and getting it wrong here is not
+ * cosmetic: "Waiting for approval" sends its owner hunting for a card that was
+ * deliberately never written, which is exactly the undecidable-approval failure
+ * this surface has already been through once.
+ *
+ * The word is *held* rather than *waiting*: nobody can decide this one, and
+ * what unblocks it is a number, not a person's answer.
+ */
+export function isBudgetPark(status: string, pausedReason = ""): boolean {
+  return status === "waiting_for_approval" && pausedReason === PAUSED_FOR_BUDGET;
+}
+
+/**
+ * Three things can say why a run stopped, and this is the order they are
+ * believed in. The order is the whole content of this function, so it lives
+ * here where a test can pin it rather than inline in the view.
+ *
+ * 1. **A proposed `AgentToolCall` on the run.** Structural and decisive:
+ *    `_park_for_budget` writes none, so a run that has one is parked on a
+ *    person. It outranks the field because the field is a *mirror* — the API
+ *    copies the backing run's reason onto `WorkflowRun` — and a mirror can lag.
+ *    A graph released from the ceiling that walks on and parks on a write is
+ *    exactly that case, and believing the stale "budget" renders the spend
+ *    panel *instead of* the approval card: the proposal is on screen with
+ *    nothing to decide it with.
+ * 2. **`paused_reason` itself**, when the run carries one.
+ * 3. **The ceiling's own list of held runs**, for a run that reported no reason
+ *    at all — an older API, or a row written before the column existed.
+ */
+export function resolvePausedReason(
+  run: { status: string; paused_reason: string; run_id: string | null },
+  signals: { proposed: boolean; heldByBudget: boolean },
+): string {
+  if (signals.proposed) return PAUSED_FOR_APPROVAL;
+  if (run.paused_reason) return run.paused_reason;
+  if (run.status !== "waiting_for_approval" || !run.run_id) return "";
+  return signals.heldByBudget ? PAUSED_FOR_BUDGET : "";
+}
+
+const BUDGET_RUN_LABEL = "Held by the spend limit";
+const BUDGET_NODE_LABEL = "Held by the spend limit";
+
+export function nodeStatusLabel(status: string, pausedReason = ""): string {
+  if (isBudgetPark(status, pausedReason)) return BUDGET_NODE_LABEL;
   return NODE_STATUS_LABELS[status as WorkflowNodeRunStatus] ?? status;
 }
 
-export function runStatusLabel(status: string): string {
+export function runStatusLabel(status: string, pausedReason = ""): string {
+  if (isBudgetPark(status, pausedReason)) return BUDGET_RUN_LABEL;
   return RUN_STATUS_LABELS[status as WorkflowRunStatus] ?? status;
 }
 

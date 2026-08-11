@@ -68,6 +68,11 @@ _MAX_EXCERPT_CHARS = 600
 # when the block it belongs to could not be located. See `_annotations`.
 _Annotated = Tuple[Optional[int], Any]
 
+#: Marks a citation id as addressing a page rather than a Chunk row. Exported
+#: because the chunk route has to recognise one to refuse it for the right
+#: reason: the two ids share a namespace but not a store.
+WEB_CHUNK_PREFIX = "web:"
+
 
 @dataclass(frozen=True)
 class WebEvidence(Evidence):
@@ -327,8 +332,8 @@ def _evidence(
     excerpt = text[span[0] : span[1]].strip() if span is not None else ""
     digest = hashlib.sha256(url.encode("utf-8", "replace")).hexdigest()[:16]
     return WebEvidence(
-        chunk_id="web:" + digest,
-        source_id="web:" + digest,
+        chunk_id=WEB_CHUNK_PREFIX + digest,
+        source_id=WEB_CHUNK_PREFIX + digest,
         filename=title,
         ordinal=0,
         excerpt=(excerpt or title)[:_MAX_EXCERPT_CHARS],

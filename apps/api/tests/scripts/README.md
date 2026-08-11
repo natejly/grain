@@ -12,4 +12,9 @@ extracts from the exchange afterwards. A prompt no entry covers still answers �
 the double quotes the retrieved passages — so only tests that assert on the
 *model's* own output need an entry here. See `app/services/scripted_model.py`.
 
+The `probe_*` tools named in `steps` are not app tools. They are the fake
+registry `test_workflow_executor.py` installs, so an entry that calls one is
+scripting a *workflow* agent node — `file the probe summary` exists to make one
+reach a write and park on an approval.
+
 `apps/web/e2e/agent-script.json` is the browser suite's separate script.

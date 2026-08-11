@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import Callable, List, Optional, Tuple
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -155,38 +156,102 @@ def _holds_a_slot(now: datetime) -> ColumnElement[bool]:
     )
 
 
-def _claim_is_admitted(db: Session, row: SandboxSession, *, limit: int) -> bool:
-    """Is this committed claim inside the workspace's limit?
+def _release_slot(row: SandboxSession) -> None:
+    """Give the workspace its slot back. The caller commits.
 
-    The claim is already in the table, so this counts the slot holders that sort
-    *ahead* of it and admits the claim only if fewer than `limit` do. Every racer
-    runs the same comparison over the same committed rows and `(created_at, id)`
-    is a total order, so they all agree on which claims are the first `limit` —
-    the loser identifies itself and stands down.
-
-    This is why the check needs no lock. `SELECT ... FOR UPDATE` would be a no-op
-    on SQLite, and SQLite's single-writer lock would be a no-op on Postgres;
-    ranking committed rows is decided by the same data on both, and it stays
-    decided however the two transactions interleave, because each row is counted
-    only after it is visible to everyone.
+    Every transition out of "this row names, or is about to name, a machine"
+    passes through here, because a slot that is not released is a slot the
+    workspace never gets back: the unique index does not care that a row is
+    killed, only that it still names a number.
     """
-    ahead = db.scalar(
-        select(func.count())
-        .select_from(SandboxSession)
-        .where(SandboxSession.workspace_id == row.workspace_id)
-        .where(SandboxSession.id != row.id)
-        .where(_holds_a_slot(utcnow()))
-        .where(
-            or_(
-                SandboxSession.created_at < row.created_at,
-                and_(
-                    SandboxSession.created_at == row.created_at,
-                    SandboxSession.id < row.id,
-                ),
-            )
+    row.slot_index = None
+
+
+def _free_slots(db: Session, *, workspace_id: str, limit: int) -> List[int]:
+    """Slot numbers this workspace could try to claim, lowest first.
+
+    Two distinct jobs, and neither is the safety property — the unique index is
+    that. This picks *candidates*, so that the common case takes one INSERT
+    rather than `limit` of them, and it applies the one rule the index cannot
+    express: a workspace already holding `limit` slots gets no candidates even if
+    the numbers it holds are out of range, which is the state an operator leaves
+    behind by lowering the limit under live sessions. A stale read here can only
+    hand back a slot that has since been taken — and the INSERT refuses that.
+    """
+    held = list(
+        db.scalars(
+            select(SandboxSession.slot_index)
+            .where(SandboxSession.workspace_id == workspace_id)
+            .where(_holds_a_slot(utcnow()))
         )
     )
-    return (ahead or 0) < limit
+    if len(held) >= limit:
+        return []
+    # A live row with no slot number still spends the workspace's budget above;
+    # it just cannot reserve a number for anyone to collide with.
+    taken = {index for index in held if index is not None}
+    return [index for index in range(limit) if index not in taken]
+
+
+def _claim_a_slot(
+    db: Session,
+    *,
+    workspace_id: str,
+    limit: int,
+    build: Callable[[int], SandboxSession],
+) -> SandboxSession:
+    """Insert a claim that holds one of the workspace's `limit` slots.
+
+    **This is the quota.** Not the count above it — the INSERT. A workspace's
+    concurrency is expressed as `limit` numbered slots, `(workspace_id,
+    slot_index)` is unique, and so the second transaction to claim a number is
+    refused by the database itself. That is the property counting could never
+    have: a count answers a question about rows that were visible when it ran,
+    and two racers can both be told "nothing ahead of you" when neither has
+    committed yet. Ranking the committed claims instead — which is what this
+    replaced — moves the flaw rather than fixing it, because the ordering key is
+    stamped before the write and the write becomes visible after it, so the row
+    that sorts second can commit and be admitted first, and then the row that
+    sorts first sees nothing ahead of it and is admitted too.
+
+    Uniqueness is the one serialisation primitive both engines really share.
+    `SELECT ... FOR UPDATE` is a no-op on SQLite and SQLite's single-writer lock
+    is absent on Postgres, but a unique index refuses a duplicate on both,
+    whatever the isolation level and however the transactions interleave. The
+    loser learns it lost from an `IntegrityError` on its own INSERT — before the
+    provider is reached, so the machine that would have broken the limit is never
+    created and never billed.
+    """
+    # An abandoned claim stops counting at CLAIM_TTL, and now that a slot is a
+    # reservation rather than a tally, "stops counting" has to be written down:
+    # the row must give the number back or one crash costs the workspace a slot
+    # until the reaper next runs.
+    _retire_abandoned_claims(db, workspace_id=workspace_id)
+
+    conflict: Optional[IntegrityError] = None
+    for index in _free_slots(db, workspace_id=workspace_id, limit=limit):
+        row = build(index)
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            # Someone committed this number between the read above and here.
+            # Roll back — the failed INSERT left nothing behind — and try the
+            # next one; running out is what "at the limit" means.
+            db.rollback()
+            conflict = exc
+            continue
+        return row
+
+    if conflict is not None and len(_free_slots(db, workspace_id=workspace_id, limit=limit)) > 0:
+        # Every candidate was refused, yet the workspace is not full: the
+        # constraint that rejected the row was not the slot. Reporting that as a
+        # quota would send the operator to look at a dial that is fine.
+        raise SandboxError("The sandbox session could not be started.") from conflict
+    raise SandboxQuotaError(
+        f"This workspace already has {limit} sandbox sessions running "
+        f"(limit {limit}). Stop one before starting another."
+    )
 
 
 def ensure_session(
@@ -223,12 +288,10 @@ def ensure_session(
     #
     # Counting and then creating is not "first": the window between the two
     # contains a provider round trip, so every overlapping request read the same
-    # count, all of them passed, and all of them created a machine. The slot is
-    # therefore *claimed* first — one committed row — and the claim is then
-    # ranked against the other committed claims, which is a comparison every
-    # racer performs on the same rows and answers the same way. See
-    # `_claim_is_admitted` for why that needs neither `FOR UPDATE` nor SQLite's
-    # single-writer lock.
+    # count, all of them passed, and all of them created a machine. Nor is
+    # counting under any other arrangement — see `_claim_a_slot`, which reserves
+    # one of the workspace's numbered slots with an INSERT the database will
+    # refuse if the number is taken.
     limit = settings.sandbox_max_concurrent_per_workspace
     provider = get_provider(settings)
     spec = SandboxSpec(
@@ -241,42 +304,39 @@ def ensure_session(
         metadata=policy.session_metadata(workspace_id=workspace_id, user_id=user_id),
     )
 
-    session_id = new_id()
-    row = SandboxSession(
-        id=session_id,
-        workspace_id=workspace_id,
-        project_id=project_id,
-        created_by=user_id,
-        provider=provider.name,
-        # (provider, external_id) is unique and the column is not nullable, so
-        # the claim carries a placeholder that is obviously not a provider id
-        # until the provider supplies the real one.
-        external_id=f"pending:{session_id}",
-        template=spec.template,
-        label=label,
-        status=STARTING_STATUS,
-        # The policy is frozen onto the row here, and everything downstream reads
-        # it from the row. Re-deriving it from `settings` later would mean that
-        # relaxing the workspace default to `open` retroactively widens a machine
-        # that is *already holding someone's documents* — a sandbox created under
-        # `allowlist` must live and die under `allowlist`.
-        network_policy=spec.network,
-        allow_hosts_json=json.dumps(list(spec.allow_hosts)),
-    )
-
-    db.add(row)
-    db.commit()
-
-    if not _claim_is_admitted(db, row, limit=limit):
-        # Refused before the provider is touched, which is the whole point: the
-        # machine that would have broken the limit is never created, so it is
-        # never billed for.
-        db.delete(row)
-        db.commit()
-        raise SandboxQuotaError(
-            f"This workspace already has {limit} sandbox sessions running "
-            f"(limit {limit}). Stop one before starting another."
+    def _claim(slot_index: int) -> SandboxSession:
+        # A fresh id per attempt: the row that lost a slot is gone from the
+        # session as well as from the table, and reusing one that a failed flush
+        # touched is a subtlety nobody should have to hold in their head.
+        session_id = new_id()
+        return SandboxSession(
+            id=session_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            created_by=user_id,
+            provider=provider.name,
+            # (provider, external_id) is unique and the column is not nullable,
+            # so the claim carries a placeholder that is obviously not a provider
+            # id until the provider supplies the real one.
+            external_id=f"pending:{session_id}",
+            template=spec.template,
+            label=label,
+            status=STARTING_STATUS,
+            slot_index=slot_index,
+            # The policy is frozen onto the row here, and everything downstream
+            # reads it from the row. Re-deriving it from `settings` later would
+            # mean that relaxing the workspace default to `open` retroactively
+            # widens a machine that is *already holding someone's documents* — a
+            # sandbox created under `allowlist` must live and die under
+            # `allowlist`.
+            network_policy=spec.network,
+            allow_hosts_json=json.dumps(list(spec.allow_hosts)),
         )
+
+    # Raises SandboxQuotaError before the provider is touched, which is the whole
+    # point: the machine that would have broken the limit is never created, so it
+    # is never billed for.
+    row = _claim_a_slot(db, workspace_id=workspace_id, limit=limit, build=_claim)
 
     try:
         handle = provider.create(spec)
@@ -287,6 +347,9 @@ def ensure_session(
         row.status = "error"
         row.error = _describe(exc)
         row.external_id = f"error:{row.id}"
+        # There is no machine, so the slot goes straight back to the workspace
+        # rather than waiting out CLAIM_TTL.
+        _release_slot(row)
         db.commit()
         raise SandboxError(row.error) from exc
 
@@ -380,24 +443,41 @@ def kill_session(
         _with_provider(row, settings, "kill")
     row.status = "killed"
     row.killed_at = utcnow()
+    # The machine is gone, so the slot is free — this is what makes "stop one
+    # before starting another" true immediately rather than eventually.
+    _release_slot(row)
     db.commit()
     db.refresh(row)
     return row
 
 
-def _retire_abandoned_claims(db: Session) -> None:
+def _retire_abandoned_claims(db: Session, *, workspace_id: str = "") -> None:
     """Close out slot claims whose creator died before the provider answered.
 
-    `_holds_a_slot` already stops counting them, so this is not what protects the
-    quota — it is what stops the list of a workspace's sandboxes filling up with
-    rows that are permanently "starting" and explains, to whoever reads it, why.
+    Two callers, one statement. The reaper sweeps every workspace so the session
+    list does not fill up with rows that are permanently "starting"; a create
+    sweeps its own workspace first, because the slot a dead claim reserved is one
+    the constraint will keep refusing until the number is handed back. Letting a
+    crash cost a workspace a slot until the next sweep is exactly the failure
+    CLAIM_TTL exists to bound.
+
+    One `UPDATE ... WHERE`, so two racers running it concurrently is not a
+    problem: the second finds nothing left to retire, and neither can retire a
+    claim that is still inside its TTL.
     """
-    db.execute(
+    statement = (
         update(SandboxSession)
         .where(SandboxSession.status == STARTING_STATUS)
         .where(SandboxSession.created_at < utcnow() - CLAIM_TTL)
-        .values(status="error", error="The sandbox never finished starting.")
+        .values(
+            status="error",
+            error="The sandbox never finished starting.",
+            slot_index=None,
+        )
     )
+    if workspace_id:
+        statement = statement.where(SandboxSession.workspace_id == workspace_id)
+    db.execute(statement)
     db.commit()
 
 

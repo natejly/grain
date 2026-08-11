@@ -8,7 +8,8 @@ import pytest
 
 from app.database import SessionLocal
 from app.models import AgentToolCall, Run, ToolPolicy
-from app.services.agent_loop import run_agent_turn
+from app.services.agent_loop import resolve_policy, run_agent_turn
+from app.services.llm_tools import ToolSpec
 
 
 class FakeResponse:
@@ -196,6 +197,129 @@ def test_tool_policy_endpoints_round_trip(client):
     assert len(matches) == 1
     assert matches[0]["policy"] == "deny"
 
+    db = SessionLocal()
+    try:
+        db.query(ToolPolicy).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _write_tool(name: str) -> ToolSpec:
+    """A tool whose default is to ask, so a grant is the only thing allowing it."""
+    return ToolSpec(
+        name=name,
+        description="",
+        parameters={},
+        executor=lambda db, context, args: None,  # never called
+        read_only=False,
+    )
+
+
+def test_a_standing_grant_is_listed_with_the_scope_it_was_given_in(client):
+    """Two rows can name one tool. A list that cannot tell them apart is a list
+    that cannot be acted on: revoking chat and revoking unattended execution are
+    different decisions."""
+    for scope in ("chat", "workflow"):
+        assert (
+            client.put(
+                "/api/tool-policies",
+                json={"tool_name": "send_it", "policy": "allow", "scope": scope},
+            ).status_code
+            == 200
+        )
+    rows = [row for row in client.get("/api/tool-policies").json() if row["tool_name"] == "send_it"]
+    assert {row["scope"] for row in rows} == {"chat", "workflow"}
+    assert all(row["policy"] == "allow" for row in rows)
+    # A grant is unattended write authority; a review of one needs its age.
+    assert all(row["created_at"] and row["updated_at"] for row in rows)
+
+    _clear_policies()
+
+
+def test_revoking_a_grant_makes_the_next_turn_ask_again(client):
+    """The point of the route. `resolve_policy` is the single decision point and
+    reads the table on every call, so deleting the row is felt by the next tool
+    call rather than the next deploy."""
+    db = SessionLocal()
+    try:
+        workspace_id = client.get("/api/bootstrap").json()["identity"]["workspace_id"]
+        spec = _write_tool("send_it")
+        client.put(
+            "/api/tool-policies", json={"tool_name": "send_it", "policy": "allow"}
+        )
+        assert (
+            resolve_policy(db, workspace_id=workspace_id, spec=spec, scope="chat")
+            == "allow"
+        )
+
+        revoked = client.delete("/api/tool-policies/send_it", params={"scope": "chat"})
+        assert revoked.status_code == 204
+
+        db.expire_all()
+        assert (
+            resolve_policy(db, workspace_id=workspace_id, spec=spec, scope="chat")
+            == "ask"
+        )
+        assert not [
+            row
+            for row in client.get("/api/tool-policies").json()
+            if row["tool_name"] == "send_it"
+        ]
+    finally:
+        db.close()
+    _clear_policies()
+
+
+def test_revoking_one_scope_leaves_the_other_standing(client):
+    """A revoke that quietly took both would be as wrong as one that took
+    neither: the two grants answer different questions."""
+    for scope in ("chat", "workflow"):
+        client.put(
+            "/api/tool-policies",
+            json={"tool_name": "send_it", "policy": "allow", "scope": scope},
+        )
+
+    assert client.delete("/api/tool-policies/send_it", params={"scope": "chat"}).status_code == 204
+
+    rows = [row for row in client.get("/api/tool-policies").json() if row["tool_name"] == "send_it"]
+    assert [row["scope"] for row in rows] == ["workflow"]
+
+    db = SessionLocal()
+    try:
+        workspace_id = client.get("/api/bootstrap").json()["identity"]["workspace_id"]
+        spec = _write_tool("send_it")
+        assert (
+            resolve_policy(db, workspace_id=workspace_id, spec=spec, scope="workflow")
+            == "allow"
+        )
+    finally:
+        db.close()
+    _clear_policies()
+
+
+def test_a_revoke_must_name_its_scope_and_must_name_a_real_grant(client):
+    client.put("/api/tool-policies", json={"tool_name": "send_it", "policy": "allow"})
+
+    # No scope: refused, rather than guessing at one of the two.
+    assert client.delete("/api/tool-policies/send_it").status_code == 422
+    # Right tool, wrong scope: nothing to revoke, and the chat grant is untouched.
+    assert (
+        client.delete("/api/tool-policies/send_it", params={"scope": "workflow"}).status_code
+        == 404
+    )
+    unknown = client.delete("/api/tool-policies/never_granted", params={"scope": "chat"})
+    assert unknown.status_code == 404
+    assert [
+        row["scope"]
+        for row in client.get("/api/tool-policies").json()
+        if row["tool_name"] == "send_it"
+    ] == ["chat"]
+
+    _clear_policies()
+
+
+def _clear_policies() -> None:
     db = SessionLocal()
     try:
         db.query(ToolPolicy).delete()

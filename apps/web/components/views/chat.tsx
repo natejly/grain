@@ -17,6 +17,8 @@ import { FormEvent, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { BudgetHold } from "./budget";
+import type { BudgetPark } from "./budget-format";
 
 export type ToolDecision = (
   call: AgentToolCall,
@@ -32,6 +34,12 @@ export type ChatViewProps = {
   setDraft: (value: string) => void;
   activeRun: string | null;
   runStatus: string;
+  /**
+   * Set while the streamed run is parked on the spend ceiling. It is not an
+   * approval and has no `AgentToolCall` behind it, so it gets its own panel
+   * rather than a tool card with different words in it.
+   */
+  budgetPark: BudgetPark | null;
   submitPrompt: (event?: FormEvent) => Promise<void>;
   cancelActiveRun: () => Promise<void>;
   regenerate: () => Promise<void>;
@@ -239,6 +247,7 @@ export function ChatView({
   setDraft,
   activeRun,
   runStatus,
+  budgetPark,
   submitPrompt,
   cancelActiveRun,
   regenerate,
@@ -315,6 +324,12 @@ export function ChatView({
             {liveCalls.map((call) => (
               <ToolCallCard key={call.id} call={call} decide={decideAgentCall} />
             ))}
+            {/* Sits where a tool card would, and is deliberately not one: the
+                run parked before it asked the model anything, so there is no
+                proposed call and an approve/deny pair would decide nothing. */}
+            {activeRun && budgetPark && (
+              <BudgetHold park={budgetPark} menuId="chat-spend-ceiling" />
+            )}
             {activeRun && runStatus && (
               <div className="run-status">
                 <span className="thinking-dots">

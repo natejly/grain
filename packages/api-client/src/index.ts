@@ -93,6 +93,16 @@ export type Run = {
   conversation_id: string;
   agent_id: string;
   status: string;
+  /**
+   * Why a `waiting_for_approval` run stopped: `approval` for a proposed write,
+   * `budget` for the spend ceiling, `""` when it is not parked at all.
+   *
+   * ADR 0008 made a budget park reuse the approval status on purpose, so this
+   * is the *only* field that tells the two apart — and only one of them has a
+   * card to click. A reader that branches on `status` alone will offer an
+   * approve/deny decision for a run with nothing to approve.
+   */
+  paused_reason: string;
   created_at: string;
 };
 
@@ -809,6 +819,65 @@ export type AdminUsage = {
   unpriced_models: string[];
   /** False when MODEL_PRICES is empty: no cost figure can be anything but zero. */
   pricing_configured: boolean;
+};
+
+/**
+ * The spend ceiling (ADR 0008): what a workspace *may* spend, next to what it
+ * already has.
+ *
+ * Every limit is nullable and null means **no limit of that kind**, never zero
+ * — a zero ceiling stops the next call, and rendering an absent limit as `$0`
+ * would tell an owner their workspace is capped when nothing is capping it.
+ */
+export type AdminBudgetCeiling = {
+  window_hours: number;
+  usd_per_window: number | null;
+  tokens_per_window: number | null;
+  /** `workspace` — an owner set it here; `settings` — the deployment did. */
+  source: string;
+};
+
+/** What one window has already cost. Same shape `readSpend` reads elsewhere. */
+export type AdminBudgetSpend = {
+  calls: number;
+  cost_usd: number;
+  total_tokens: number;
+  /**
+   * Calls whose model had no rate. Above zero, `cost_usd` is a floor and a USD
+   * ceiling standing alone cannot bound this workspace at all.
+   */
+  unpriced_calls: number;
+};
+
+export type AdminBudgetParkedRun = {
+  run_id: string;
+  conversation_id: string;
+  created_at: string;
+};
+
+export type AdminBudget = {
+  ceiling: AdminBudgetCeiling;
+  /** The same ceiling scaled by UNATTENDED_BUDGET_FRACTION, for workflows. */
+  unattended_ceiling: AdminBudgetCeiling;
+  spend: AdminBudgetSpend;
+  unattended_spend: AdminBudgetSpend;
+  /** False when neither limit is set: this workspace has no ceiling at all. */
+  enforced: boolean;
+  pricing_configured: boolean;
+  runs_parked_on_budget: AdminBudgetParkedRun[];
+  /** Populated by the PUT only: runs the new ceiling released. Empty on GET. */
+  resumed_run_ids: string[];
+};
+
+/**
+ * Replace, not patch. An omitted limit is *no limit of that kind*, so the body
+ * always states the whole ceiling and there is no way to raise one number while
+ * silently keeping a second one you have forgotten about.
+ */
+export type AdminBudgetInput = {
+  window_hours: number;
+  usd_per_window: number | null;
+  tokens_per_window: number | null;
 };
 
 function makeKey(): string {
@@ -1718,6 +1787,35 @@ export class WorkspaceApi {
     return this.request(`/api/admin/usage?days=${days}`);
   }
 
+  /**
+   * The spend ceiling, the spend against it, and the runs it is holding.
+   *
+   * Owner-only like the rest of `/api/admin`, and a member who is not an owner
+   * gets a 403 with "Owner role required". That answer is worth catching rather
+   * than shouting about: it is what tells a surface to offer "ask an owner"
+   * instead of a control the caller cannot use.
+   */
+  getAdminBudget(): Promise<AdminBudget> {
+    return this.request("/api/admin/budget");
+  }
+
+  /**
+   * Set the ceiling — and release whatever the new one no longer stops.
+   *
+   * One gesture, because they are one intention: the API re-evaluates every
+   * parked run against the same predicate the loop enforces and resumes the
+   * ones that now fit, reporting them in `resumed_run_ids`. A raise that is
+   * still not enough is not a special case; those runs simply stay parked.
+   */
+  setAdminBudget(input: AdminBudgetInput): Promise<AdminBudget> {
+    // No idempotency key: the route stores an absolute ceiling rather than
+    // applying a delta, so replaying the same body is the same state.
+    return this.request("/api/admin/budget", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+
   // --- Sandbox (server-side execution) --------------------------------------
   // Every method here names a session by its workspace-scoped row id. There is
   // no method that takes a provider id, because the API accepts none.
@@ -2061,6 +2159,13 @@ export type WorkflowRun = {
   /** "manual" or "schedule" — whether anybody was watching. */
   trigger: string;
   status: WorkflowRunStatus;
+  /**
+   * Mirrors `Run.paused_reason`, carried up from the backing run by the
+   * executor: `approval` | `budget` | `""`. A graph stopped by the spend
+   * ceiling and one waiting on a proposed write are both
+   * `waiting_for_approval`, and only this says which.
+   */
+  paused_reason: string;
   /** The chat run carrying this workflow's events and approval records. */
   run_id: string | null;
   error: string;

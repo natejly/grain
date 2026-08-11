@@ -11,6 +11,7 @@ import {
   Bot,
   CircleCheck,
   CircleDashed,
+  CirclePause,
   LoaderCircle,
   ShieldQuestion,
   SkipForward,
@@ -21,6 +22,7 @@ import { Fragment, type ReactNode } from "react";
 import {
   argumentRows,
   compileWarningTitle,
+  isBudgetPark,
   layerGraph,
   nodeStatusLabel,
   upstreamOf,
@@ -57,9 +59,19 @@ export type WorkflowGraphViewProps = {
   warnings?: Record<string, WorkflowCompileFinding[]>;
   /** Rendered inside a parked node, so the decision sits on the step itself. */
   renderApproval?: (node: WorkflowNodeRun) => ReactNode;
+  /**
+   * The watched run's `paused_reason`, when one is being watched.
+   *
+   * It belongs to the run rather than the node — the executor mirrors the park
+   * onto the workflow run and leaves the node row saying only
+   * `waiting_for_approval` — so a node cannot tell on its own whether it is
+   * waiting for a decision or held by the ceiling, and is told from here.
+   */
+  pausedReason?: string;
 };
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({ status, pausedReason }: { status: string; pausedReason: string }) {
+  const held = isBudgetPark(status, pausedReason);
   const Icon =
     status === "succeeded"
       ? CircleCheck
@@ -68,14 +80,16 @@ function StatusPill({ status }: { status: string }) {
         : status === "running"
           ? LoaderCircle
           : status === "waiting_for_approval"
-            ? ShieldQuestion
+            ? held
+              ? CirclePause
+              : ShieldQuestion
             : status === "skipped"
               ? SkipForward
               : CircleDashed;
   return (
-    <span className={`workflow-node-status ${status}`}>
+    <span className={`workflow-node-status ${held ? "budget" : status}`}>
       <Icon size={13} className={status === "running" ? "spin" : undefined} />
-      {nodeStatusLabel(status)}
+      {nodeStatusLabel(status, pausedReason)}
     </span>
   );
 }
@@ -85,6 +99,7 @@ export function WorkflowGraphView({
   nodeRuns,
   warnings,
   renderApproval,
+  pausedReason = "",
 }: WorkflowGraphViewProps) {
   const layers = layerGraph(graph);
   const byId = new Map(graph.nodes.map((node) => [node.id, node]));
@@ -136,7 +151,9 @@ export function WorkflowGraphView({
                           {node.kind === "agent" ? "Assistant" : "Tool"}
                         </span>
                         <strong>{node.id}</strong>
-                        {run && <StatusPill status={run.status} />}
+                        {run && (
+                          <StatusPill status={run.status} pausedReason={pausedReason} />
+                        )}
                       </header>
 
                       {node.kind === "tool" ? (

@@ -451,6 +451,34 @@ def test_a_web_source_is_anchored_validated_and_reported_before_completion(clien
     assert [item["url"] for item in citations] == [None, "https://example.com/bridge"]
     assert citations[1]["filename"] == "Bridge reopening"
 
+    # And it survives the response model. `Citation` used to declare no `url`,
+    # so FastAPI dropped it on the way out and every web citation reached the
+    # browser as an address-less title: the run stored provenance the product
+    # could not show. The stored payload above proves nothing about that.
+    conversation_id = _conversation_of(run_id)
+    served = client.get(f"/api/conversations/{conversation_id}/messages").json()
+    assistant = [row for row in served if row["run_id"] == run_id and row["role"] == "assistant"]
+    assert [item["url"] for item in assistant[0]["citations"]] == [
+        None,
+        "https://example.com/bridge",
+    ]
+
+    # A web citation's chunk id addresses no Chunk row, and the route says so
+    # rather than answering "provenance not found" as if the index had lost it.
+    missing = client.get(f"/api/chunks/{assistant[0]['citations'][1]['chunk_id']}")
+    assert missing.status_code == 404
+    assert "url" in missing.json()["detail"]
+
+
+def _conversation_of(run_id: str) -> str:
+    db = SessionLocal()
+    try:
+        run = db.get(Run, run_id)
+        assert run is not None
+        return run.conversation_id
+    finally:
+        db.close()
+
 
 def test_a_fabricated_marker_is_still_caught_when_web_sources_are_present(client):
     """Adding a class of source must not widen what counts as a valid citation."""

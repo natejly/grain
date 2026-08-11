@@ -141,6 +141,13 @@ class Citation(BaseModel):
     ordinal: int
     excerpt: str
     score: float
+    #: Set only for a web source, whose provenance is a page rather than an
+    #: indexed passage. `chunk_id` is then a synthetic "web:<digest>" that names
+    #: no Chunk row, so this URL is the only address a reader can follow — and
+    #: without the field declared here FastAPI strips it from the response and
+    #: the citation becomes unverifiable, which is the one thing this product
+    #: promises its citations never are.
+    url: Optional[str] = None
 
 
 class MessageOut(ApiModel):
@@ -242,6 +249,11 @@ class ToolPolicyOut(ApiModel):
     #: Which situation this verdict answers for. Two rows can name the same tool,
     #: so a client that drops this field cannot tell them apart.
     scope: str
+    #: When the grant was first made, and when its verdict last changed. A
+    #: standing "always allow" is unattended write authority; reviewing one means
+    #: knowing how old it is, not just that it exists.
+    created_at: datetime
+    updated_at: datetime
 
 
 class ToolPolicyRequest(BaseModel):

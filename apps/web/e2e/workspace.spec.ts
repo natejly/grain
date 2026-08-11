@@ -196,6 +196,11 @@ test("a parked write is decidable from the Documents view", async ({ page }) => 
   await expect(panel.locator(".diff-line.add")).toHaveText(
     "+Page the on-call engineer in the payments rotation.",
   );
+  // The panel is a diff, two buttons and the document underneath it, and every
+  // assertion above passes just as well when they are stacked unreadably. It is
+  // also the panel a leaked proposal from another spec doubles up, so the shot
+  // is where a second card would be seen rather than only counted.
+  await page.screenshot({ path: "test-results/document-parked-write.png", fullPage: true });
 
   await panel.getByRole("button", { name: "Approve" }).click();
   await expect(page.locator(".document-pending")).toHaveCount(0);

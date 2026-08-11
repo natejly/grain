@@ -578,6 +578,18 @@ class SandboxSession(Base):
     __table_args__ = (
         UniqueConstraint("provider", "external_id"),
         Index("ix_sandbox_sessions_workspace_status", "workspace_id", "status"),
+        # The concurrency quota, enforced by the database rather than by counting.
+        # A row that holds one of a workspace's slots names it here, and this
+        # index is what refuses the second holder of the same slot — see
+        # `sandbox.session._claim_a_slot` for why a count cannot do that job.
+        # NULL is "holds no slot" and repeats freely, on both SQLite and
+        # Postgres, so releasing a slot is writing NULL.
+        Index(
+            "uq_sandbox_sessions_workspace_slot",
+            "workspace_id",
+            "slot_index",
+            unique=True,
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -592,6 +604,11 @@ class SandboxSession(Base):
     # running -> paused (resumable) -> killed (terminal). "error" records a
     # provider failure at creation so the UI can explain it rather than retry.
     status: Mapped[str] = mapped_column(String(16), default="running")
+    # Which of this workspace's numbered concurrency slots the row holds, or NULL
+    # for a row that holds none (killed, errored, or a claim that was retired).
+    # Unique per workspace, so two rows cannot hold the same slot however their
+    # transactions interleave.
+    slot_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # open | allowlist | none. Recorded per session, not just per workspace, so
     # changing the workspace default cannot retroactively widen a live sandbox.
     network_policy: Mapped[str] = mapped_column(String(16), default="open")

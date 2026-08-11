@@ -307,6 +307,160 @@ def test_quota_counts_only_this_workspace(db, workspaces):
         )
 
 
+def test_a_slot_is_held_by_one_row_at_a_time_and_returned_when_it_dies(
+    db, workspaces, monkeypatch
+):
+    """The quota is `limit` numbered slots, and the numbers are the enforcement.
+
+    Two rows of one workspace may not name the same slot — the unique index
+    refuses the second, which is what makes the limit hold under concurrency
+    rather than under the assumption that everybody counted at the right moment.
+    So the numbers are asserted here directly: what is claimed, what is released,
+    and by whom.
+    """
+    owner, _ = workspaces
+    settings = _settings(sandbox_max_concurrent_per_workspace=2)
+    _install(monkeypatch, _RecordingProvider())
+
+    first = ensure_session(
+        db,
+        workspace_id=owner.workspace_id,
+        user_id=owner.user_id,
+        settings=settings,
+        project_id="a",
+    )
+    second = ensure_session(
+        db,
+        workspace_id=owner.workspace_id,
+        user_id=owner.user_id,
+        settings=settings,
+        project_id="b",
+    )
+    assert {first.slot_index, second.slot_index} == {0, 1}
+
+    # Pausing keeps the slot: a paused sandbox is a snapshot the provider still
+    # stores and still charges for, so it has not stopped costing the workspace
+    # anything.
+    pause_session(
+        db, workspace_id=owner.workspace_id, session_id=first.id, settings=settings
+    )
+    db.refresh(first)
+    assert first.slot_index == 0
+
+    # Killing returns it, and the next create takes the number back.
+    kill_session(
+        db, workspace_id=owner.workspace_id, session_id=first.id, settings=settings
+    )
+    db.refresh(first)
+    assert first.slot_index is None
+    third = ensure_session(
+        db,
+        workspace_id=owner.workspace_id,
+        user_id=owner.user_id,
+        settings=settings,
+        project_id="c",
+    )
+    assert third.slot_index == 0
+
+    # And another workspace's slot 0 is not this workspace's slot 0.
+    _, neighbour = workspaces
+    theirs = ensure_session(
+        db,
+        workspace_id=neighbour.workspace_id,
+        user_id=neighbour.user_id,
+        settings=settings,
+    )
+    assert theirs.slot_index == 0
+
+
+def _abandoned_claim(workspace_id: str, *, age: timedelta) -> SandboxSession:
+    """A claim from a process that died before the provider answered."""
+    return SandboxSession(
+        workspace_id=workspace_id,
+        provider="fake",
+        external_id=f"pending:abandoned-{age.total_seconds()}",
+        status="starting",
+        slot_index=0,
+        created_at=utcnow() - age,
+    )
+
+
+def test_an_abandoned_claim_gives_its_slot_back_after_the_ttl(
+    db, workspaces, monkeypatch
+):
+    """One crash must not cost a workspace a slot forever.
+
+    A slot is a reservation now, so "the claim stops counting after CLAIM_TTL"
+    has to be written to the row rather than merely left out of a count — the
+    unique index does not know what a TTL is. It is the create that needs the
+    slot which retires the dead claim, so recovery does not wait for the next
+    sweep of the reaper.
+    """
+    owner, _ = workspaces
+    settings = _settings(sandbox_max_concurrent_per_workspace=1)
+    provider = _RecordingProvider()
+    _install(monkeypatch, provider)
+
+    stuck = _abandoned_claim(owner.workspace_id, age=timedelta(minutes=1))
+    db.add(stuck)
+    db.commit()
+
+    # Inside the TTL the claim holds the workspace's only slot: the process that
+    # made it may still be waiting on the provider, and a machine may yet exist.
+    with pytest.raises(SandboxQuotaError):
+        ensure_session(
+            db,
+            workspace_id=owner.workspace_id,
+            user_id=owner.user_id,
+            settings=settings,
+            project_id="second",
+        )
+    assert provider.created == []
+
+    stuck.created_at = utcnow() - session_module.CLAIM_TTL - timedelta(seconds=1)
+    db.commit()
+
+    revived = ensure_session(
+        db,
+        workspace_id=owner.workspace_id,
+        user_id=owner.user_id,
+        settings=settings,
+        project_id="second",
+    )
+    assert revived.slot_index == 0
+    assert revived.status == "running"
+
+    # The dead claim is retired rather than left "starting" forever, so the
+    # session list explains itself to whoever reads it.
+    db.refresh(stuck)
+    assert stuck.status == "error"
+    assert stuck.slot_index is None
+    assert "never finished starting" in stuck.error
+
+
+def test_the_reaper_still_retires_abandoned_claims(db, workspaces, monkeypatch):
+    """The sweep is the other half: a workspace nobody creates in again must not
+    keep a permanently "starting" row, and the reaper is what notices."""
+    owner, _ = workspaces
+    settings = _settings()
+    _install(monkeypatch, _RecordingProvider())
+
+    fresh = _abandoned_claim(owner.workspace_id, age=timedelta(minutes=1))
+    dead = _abandoned_claim(owner.workspace_id, age=session_module.CLAIM_TTL * 2)
+    dead.slot_index = 1
+    db.add_all([fresh, dead])
+    db.commit()
+
+    reap_idle(db, settings=settings)
+
+    db.refresh(fresh)
+    db.refresh(dead)
+    # A claim inside its TTL is none of the reaper's business — the create it
+    # belongs to may be one provider round trip from finishing.
+    assert (fresh.status, fresh.slot_index) == ("starting", 0)
+    assert (dead.status, dead.slot_index) == ("error", None)
+
+
 # --- failures leave a trace ----------------------------------------------
 
 

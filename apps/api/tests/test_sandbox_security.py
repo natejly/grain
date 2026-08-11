@@ -786,6 +786,10 @@ def _production(**overrides: Any) -> Settings:
         app_env="production",
         model_provider="openai",
         openai_api_key="test-key",
+        # Every dev-only default has a boot guard; this helper is about the
+        # sandbox one, so the others are satisfied rather than tripped.
+        email_sender="smtp",
+        smtp_host="smtp.example.com",
     )
     base.update(overrides)
     return Settings(**base)

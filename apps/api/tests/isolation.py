@@ -859,6 +859,13 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase(
         "DELETE", "/api/sources/{source_id}", DENY, path_ids={"source_id": "source"}
     ),
+    RouteCase(
+        "GET",
+        "/api/sources/{source_id}/content",
+        DENY,
+        path_ids={"source_id": "source"},
+        note="the original bytes, so a leak here is the file itself and not an id",
+    ),
     RouteCase("GET", "/api/chunks/{chunk_id}", DENY, path_ids={"chunk_id": "chunk"}),
     # -- tools -------------------------------------------------------------
     RouteCase("GET", "/api/tool-calls", SCOPED),
@@ -883,6 +890,18 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/tool-policies",
         SCOPED,
         body={"tool_name": "search_sources", "policy": "allow"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/tool-policies/{tool_name}",
+        DENY,
+        path_literals={"tool_name": "search_sources"},
+        # A tool name is a global string, not a tenant id, so the foreign thing
+        # being aimed at is the *row*: both tenants hold (search_sources, chat)
+        # and neither holds (search_sources, workflow). Asking for the workflow
+        # one must 404 — a route that dropped either filter would instead find a
+        # row and return 204, and the tamper digest would show B's grant gone.
+        query={"scope": "workflow"},
     ),
     # -- audit / graph / memory -------------------------------------------
     RouteCase("GET", "/api/audit-events", SCOPED),
@@ -1007,6 +1026,26 @@ ROUTE_CASES: List[RouteCase] = [
         DENY,
         path_ids={"project_id": "project"},
         query={"path": "index.tsx"},
+    ),
+    # -- bibliography ------------------------------------------------------
+    RouteCase(
+        "GET",
+        "/api/bibliography/{project_id}/entries",
+        DENY,
+        path_ids={"project_id": "project"},
+    ),
+    RouteCase(
+        "GET",
+        "/api/bibliography/{project_id}/validate",
+        DENY,
+        path_ids={"project_id": "project"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/bibliography/{project_id}/entries",
+        DENY,
+        path_ids={"project_id": "project"},
+        body={"entry_type": "misc", "key": "planted", "fields": {"title": "by A"}},
     ),
     # -- analytics ---------------------------------------------------------
     RouteCase("GET", "/api/datasets", SCOPED),

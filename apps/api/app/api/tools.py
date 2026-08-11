@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, List, Type, TypeVar, cast
+from typing import Any, List, Literal, Type, TypeVar, cast
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -257,11 +257,20 @@ def list_tool_policies(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[ToolPolicy]:
+    """Every standing verdict this workspace has recorded, in both scopes.
+
+    This is the only way a grant becomes visible again. "Always allow" is one
+    click on an approval card and it removes the approval park permanently, so a
+    surface that lists what has been granted — and the DELETE below that takes it
+    back — is what keeps that click reversible.
+    """
     return list(
         db.scalars(
             select(ToolPolicy)
             .where(ToolPolicy.workspace_id == actor.workspace_id)
-            .order_by(ToolPolicy.tool_name.asc())
+            # Scope breaks the tie: two rows can name the same tool, and a list
+            # whose order changes between reads is a list a UI cannot diff.
+            .order_by(ToolPolicy.tool_name.asc(), ToolPolicy.scope.asc())
         )
     )
 
@@ -291,6 +300,51 @@ def set_tool_policy(
     )
     db.commit()
     return row
+
+
+@router.delete("/tool-policies/{tool_name}", status_code=204)
+def revoke_tool_policy(
+    tool_name: str,
+    scope: Literal["chat", "workflow"] = Query(...),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> None:
+    """Delete one standing verdict, restoring the tool's own default.
+
+    Deleting is not the same as PUT-ing `ask`, which is why this exists rather
+    than leaving revocation to the setter. A row saying `ask` is still an
+    override — it pins a read-only tool to asking forever, and it keeps
+    occupying the (workspace, tool, scope) key that `resolve_policy` consults
+    first. Removing the row is what actually returns the tool to
+    `ToolSpec.read_only`, and it is the only operation that makes the list above
+    shrink, which is how a person confirms a grant is gone.
+
+    `scope` is required for the same reason `resolve_policy` refuses to default
+    it: the only value a default could take is one of the two, and revoking the
+    grant the caller did not mean would leave the other standing while the UI
+    reports success. Missing means "say which", not "guess".
+    """
+    row = db.scalar(
+        select(ToolPolicy).where(
+            ToolPolicy.workspace_id == actor.workspace_id,
+            ToolPolicy.tool_name == tool_name,
+            ToolPolicy.scope == scope,
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Tool policy not found")
+    previous = row.policy
+    db.delete(row)
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="tool_policy.revoked",
+        resource_type="tool_policy",
+        resource_id=tool_name,
+        detail={"policy": previous, "scope": scope},
+    )
+    db.commit()
 
 
 @router.post(

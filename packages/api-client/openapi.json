@@ -1,6 +1,64 @@
 {
   "components": {
     "schemas": {
+      "AddEntryOut": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "entry": {
+            "title": "Entry",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "key",
+          "entry",
+          "created"
+        ],
+        "title": "AddEntryOut",
+        "type": "object"
+      },
+      "AddEntryRequest": {
+        "properties": {
+          "entry_type": {
+            "title": "Entry Type",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "object"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry_type",
+          "key"
+        ],
+        "title": "AddEntryRequest",
+        "type": "object"
+      },
       "AdminActivityOut": {
         "properties": {
           "pending_approvals": {
@@ -1219,6 +1277,84 @@
         "title": "AuthSessionOut",
         "type": "object"
       },
+      "BibEntryOut": {
+        "properties": {
+          "defined_in": {
+            "title": "Defined In",
+            "type": "string"
+          },
+          "entry_type": {
+            "title": "Entry Type",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "object"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "line": {
+            "title": "Line",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "entry_type",
+          "fields",
+          "defined_in",
+          "line",
+          "truncated"
+        ],
+        "title": "BibEntryOut",
+        "type": "object"
+      },
+      "BibliographyOut": {
+        "properties": {
+          "bib_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Bib Files",
+            "type": "array"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/BibEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "bib_files",
+          "entries",
+          "problems"
+        ],
+        "title": "BibliographyOut",
+        "type": "object"
+      },
       "BoardCardOut": {
         "properties": {
           "body": {
@@ -1487,6 +1623,17 @@
           "source_id": {
             "title": "Source Id",
             "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
           }
         },
         "required": [
@@ -2274,6 +2421,24 @@
         "title": "DbTableOut",
         "type": "object"
       },
+      "DefinedOut": {
+        "properties": {
+          "defined_in": {
+            "title": "Defined In",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "defined_in"
+        ],
+        "title": "DefinedOut",
+        "type": "object"
+      },
       "DevOverrideOut": {
         "description": "Whether the local one-click sign-in override is available.\n\nPublic and unauthenticated on purpose: the login screen has to know whether\nto render the button before any session exists. Outside development/test,\nor when DEV_USER is unset, `enabled` is always false.",
         "properties": {
@@ -2425,6 +2590,32 @@
           "created_at"
         ],
         "title": "DocumentVersionOut",
+        "type": "object"
+      },
+      "DuplicateOut": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "defined_in": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Defined In",
+            "type": "array"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "defined_in",
+          "count"
+        ],
+        "title": "DuplicateOut",
         "type": "object"
       },
       "GarminCredentialsIn": {
@@ -2806,6 +2997,37 @@
           "role"
         ],
         "title": "Identity",
+        "type": "object"
+      },
+      "IncompleteOut": {
+        "properties": {
+          "defined_in": {
+            "title": "Defined In",
+            "type": "string"
+          },
+          "entry_type": {
+            "title": "Entry Type",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "entry_type",
+          "defined_in",
+          "missing"
+        ],
+        "title": "IncompleteOut",
         "type": "object"
       },
       "IntegrationAccountOut": {
@@ -4101,6 +4323,11 @@
       },
       "ToolPolicyOut": {
         "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
           "policy": {
             "title": "Policy",
             "type": "string"
@@ -4112,12 +4339,19 @@
           "tool_name": {
             "title": "Tool Name",
             "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
           }
         },
         "required": [
           "tool_name",
           "policy",
-          "scope"
+          "scope",
+          "created_at",
+          "updated_at"
         ],
         "title": "ToolPolicyOut",
         "type": "object"
@@ -4154,6 +4388,27 @@
           "policy"
         ],
         "title": "ToolPolicyRequest",
+        "type": "object"
+      },
+      "UndefinedOut": {
+        "properties": {
+          "cited_in": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cited In",
+            "type": "array"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "cited_in"
+        ],
+        "title": "UndefinedOut",
         "type": "object"
       },
       "ValidationError": {
@@ -4194,6 +4449,85 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "ValidationOut": {
+        "properties": {
+          "bib_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Bib Files",
+            "type": "array"
+          },
+          "cited_but_undefined": {
+            "items": {
+              "$ref": "#/components/schemas/UndefinedOut"
+            },
+            "title": "Cited But Undefined",
+            "type": "array"
+          },
+          "defined_but_uncited": {
+            "items": {
+              "$ref": "#/components/schemas/DefinedOut"
+            },
+            "title": "Defined But Uncited",
+            "type": "array"
+          },
+          "duplicate_keys": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateOut"
+            },
+            "title": "Duplicate Keys",
+            "type": "array"
+          },
+          "entry_count": {
+            "title": "Entry Count",
+            "type": "integer"
+          },
+          "missing_required_fields": {
+            "items": {
+              "$ref": "#/components/schemas/IncompleteOut"
+            },
+            "title": "Missing Required Fields",
+            "type": "array"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "tex_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tex Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "project_id",
+          "ok",
+          "bib_files",
+          "tex_files",
+          "entry_count",
+          "cited_but_undefined",
+          "defined_but_uncited",
+          "duplicate_keys",
+          "missing_required_fields",
+          "problems"
+        ],
+        "title": "ValidationOut",
         "type": "object"
       },
       "VerifyEmailIn": {
@@ -6603,6 +6937,188 @@
         "summary": "List Workspaces",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/bibliography/{project_id}/entries": {
+      "get": {
+        "operationId": "list_entries_api_bibliography__project_id__entries_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BibliographyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Entries",
+        "tags": [
+          "bibliography"
+        ]
+      },
+      "post": {
+        "operationId": "add_entry_api_bibliography__project_id__entries_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddEntryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddEntryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Entry",
+        "tags": [
+          "bibliography"
+        ]
+      }
+    },
+    "/api/bibliography/{project_id}/validate": {
+      "get": {
+        "operationId": "validate_api_bibliography__project_id__validate_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate",
+        "tags": [
+          "bibliography"
         ]
       }
     },
@@ -11311,6 +11827,63 @@
         ]
       }
     },
+    "/api/sources/{source_id}/content": {
+      "get": {
+        "description": "Stream one source's original bytes.\n\nEvery file this workspace holds \u2014 an uploaded PDF, a chart a sandbox run\nplotted \u2014 has a row, a size and a listing, and until now no way to open it.\nA matplotlib figure the agent draws was stored and then invisible.",
+        "operationId": "get_source_content_api_sources__source_id__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Source Content",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
     "/api/tool-calls": {
       "get": {
         "operationId": "list_tool_calls_api_tool_calls_get",
@@ -11445,6 +12018,7 @@
     },
     "/api/tool-policies": {
       "get": {
+        "description": "Every standing verdict this workspace has recorded, in both scopes.\n\nThis is the only way a grant becomes visible again. \"Always allow\" is one\nclick on an approval card and it removes the approval park permanently, so a\nsurface that lists what has been granted \u2014 and the DELETE below that takes it\nback \u2014 is what keeps that click reversible.",
         "operationId": "list_tool_policies_api_tool_policies_get",
         "parameters": [
           {
@@ -11548,6 +12122,71 @@
           }
         },
         "summary": "Set Tool Policy",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
+    "/api/tool-policies/{tool_name}": {
+      "delete": {
+        "description": "Delete one standing verdict, restoring the tool's own default.\n\nDeleting is not the same as PUT-ing `ask`, which is why this exists rather\nthan leaving revocation to the setter. A row saying `ask` is still an\noverride \u2014 it pins a read-only tool to asking forever, and it keeps\noccupying the (workspace, tool, scope) key that `resolve_policy` consults\nfirst. Removing the row is what actually returns the tool to\n`ToolSpec.read_only`, and it is the only operation that makes the list above\nshrink, which is how a person confirms a grant is gone.\n\n`scope` is required for the same reason `resolve_policy` refuses to default\nit: the only value a default could take is one of the two, and revoking the\ngrant the caller did not mean would leave the other standing while the UI\nreports success. Missing means \"say which\", not \"guess\".",
+        "operationId": "revoke_tool_policy_api_tool_policies__tool_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_name",
+            "required": true,
+            "schema": {
+              "title": "Tool Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "enum": [
+                "chat",
+                "workflow"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Tool Policy",
         "tags": [
           "tools"
         ]

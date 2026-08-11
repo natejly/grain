@@ -74,6 +74,7 @@ from ...models import (
 )
 from ..agent_loop import (
     PAUSED_FOR_APPROVAL,
+    PAUSED_FOR_BUDGET,
     WORKFLOW_SCOPE,
     BudgetPaused,
     Cancelled,
@@ -944,8 +945,20 @@ def resume_after_agent_turn(
         return workflow_run
     if isinstance(outcome, (Paused, BudgetPaused)):
         # Parked again — on the agent's next write, or on the ceiling it has now
-        # reached. Either way the graph waits for a person, and `agent_loop` has
-        # already written which kind of waiting it is.
+        # reached. The status is unchanged, so only the *reason* moved, and it
+        # has to be re-mirrored: a run released from the ceiling that walks on
+        # and parks on a write is the one case where this column would otherwise
+        # keep the reason of the previous park. The workflow surface reads this
+        # table, so a stale "budget" renders the spend-limit panel over a
+        # proposal that has an Approve button and nobody can reach it.
+        #
+        # Taken from the outcome rather than re-read from the backing run: the
+        # two variants of the pause *are* the two reasons, so the branch cannot
+        # drift from the state it describes.
+        workflow_run.paused_reason = (
+            PAUSED_FOR_BUDGET if isinstance(outcome, BudgetPaused) else PAUSED_FOR_APPROVAL
+        )
+        db.commit()
         return workflow_run
     if isinstance(outcome, Cancelled):
         _terminate(

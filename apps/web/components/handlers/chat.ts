@@ -19,6 +19,7 @@ import type {
   SetStateAction,
 } from "react";
 import { api } from "../api";
+import { readBudgetPark, type BudgetPark } from "../views/budget-format";
 import { describeError, type View } from "../views/shared";
 
 export type ChatHandlerDeps = {
@@ -37,6 +38,7 @@ export type ChatHandlerDeps = {
   setAgentCalls: Dispatch<SetStateAction<AgentToolCall[]>>;
   setActiveRun: Dispatch<SetStateAction<string | null>>;
   setRunStatus: Dispatch<SetStateAction<string>>;
+  setBudgetPark: Dispatch<SetStateAction<BudgetPark | null>>;
   setDraft: Dispatch<SetStateAction<string>>;
   setActiveProject: Dispatch<SetStateAction<WorkspaceProject | null>>;
   setActiveDocument: Dispatch<SetStateAction<WorkspaceDocument | null>>;
@@ -66,6 +68,7 @@ export function createChatHandlers({
   setAgentCalls,
   setActiveRun,
   setRunStatus,
+  setBudgetPark,
   setDraft,
   setActiveProject,
   setActiveDocument,
@@ -243,9 +246,33 @@ export function createChatHandlers({
     const temporaryId = `streaming-${runId}`;
     setActiveRun(runId);
     setRunStatus("Starting");
+    setBudgetPark(null);
     try {
       for await (const event of api.streamRun(runId)) {
-        if (event.event === "run.started") setRunStatus("Searching sources");
+        if (event.event === "run.started") {
+          // Also the *release*: `resume_run_after_budget` emits run.started on
+          // the same run, on this same still-open stream, the moment an owner
+          // raises the ceiling. Clearing the park here is what turns the hold
+          // card back into a running turn without anybody reloading.
+          setBudgetPark(null);
+          setRunStatus("Searching sources");
+        }
+        /**
+         * The spend ceiling stopped the turn before its next model call.
+         *
+         * A park is not a failure and not an approval: there is no
+         * `AgentToolCall`, so no card is coming, and the run stays open and
+         * resumable. The status line is cleared because the thinking dots would
+         * claim work is happening — the panel this raises says what is actually
+         * true, which is that nothing will happen until the ceiling moves.
+         */
+        if (event.event === "run.waiting_for_budget") {
+          const park = readBudgetPark(event.data);
+          if (park) {
+            setBudgetPark(park);
+            setRunStatus("");
+          }
+        }
         if (event.event === "retrieval.completed") {
           const count = Number(event.data.count || 0);
           setRunStatus(count ? `Using ${count} source passages` : "No matching source");
@@ -338,6 +365,10 @@ export function createChatHandlers({
     } finally {
       setActiveRun((current) => (current === runId ? null : current));
       setRunStatus("");
+      // The stream only ends once the run is terminal, and a parked run is not
+      // terminal — so reaching here means this run is finished, cancelled or
+      // disconnected, and a hold card for it would outlive the hold.
+      setBudgetPark(null);
     }
   }
 

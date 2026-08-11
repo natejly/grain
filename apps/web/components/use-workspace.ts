@@ -35,6 +35,7 @@ import { createInfraHandlers } from "./handlers/infra";
 import { createIntegrationHandlers } from "./handlers/integrations";
 import { createMcpHandlers } from "./handlers/mcp";
 import { createSourceHandlers } from "./handlers/sources";
+import type { BudgetPark } from "./views/budget-format";
 import { baseName, describeError, isTabular, type View } from "./views/shared";
 
 /**
@@ -68,6 +69,14 @@ export function useWorkspace() {
   const [draft, setDraft] = useState("");
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState("");
+  /**
+   * The spend ceiling that stopped the turn being streamed, if one did.
+   *
+   * Held here rather than in the chat view because it is run state, not view
+   * state: the run is still open and still resumable, and the card has to
+   * survive every re-render until the run either resumes or is cancelled.
+   */
+  const [budgetPark, setBudgetPark] = useState<BudgetPark | null>(null);
   const [provenance, setProvenance] = useState<ProvenanceChunk | null>(null);
   const [loadingProvenance, setLoadingProvenance] = useState(false);
   const [editing, setEditing] = useState<string | "new" | null>(null);
@@ -364,6 +373,7 @@ export function useWorkspace() {
     setAgentCalls,
     setActiveRun,
     setRunStatus,
+    setBudgetPark,
     setDraft,
     setActiveProject,
     setActiveDocument,
@@ -438,6 +448,7 @@ export function useWorkspace() {
     setDraft,
     activeRun,
     runStatus,
+    budgetPark,
     provenance,
     setProvenance,
     loadingProvenance,

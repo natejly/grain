@@ -2,7 +2,15 @@
 
 ## Status
 
-Accepted
+Accepted in part; the generated-app half is **superseded by ADR 0004**.
+
+The analytics half below still holds exactly as written. The second paragraph of
+the decision — declarative manifests, "generated packages, HTML, JavaScript, and
+server code are never executed" — does not: ADR 0004 replaced it with generated
+HTML/JS executed inside an opaque-origin sandboxed iframe, and ADR 0005 added a
+server-side execution sandbox beside it. That paragraph is left unedited because
+an ADR records what was decided at the time; this status line is how a reader
+learns it no longer describes the system.
 
 ## Decision
 

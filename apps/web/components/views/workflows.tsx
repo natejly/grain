@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { BudgetHold } from "./budget";
 import { ProposalDiff } from "./document-pending";
 import { describeError, formatRelative } from "./shared";
 import {
@@ -33,6 +34,8 @@ import {
   describeReviewability,
   describeSchedule,
   groupFindings,
+  isBudgetPark,
+  resolvePausedReason,
   runIsSettled,
   runStatusLabel,
 } from "./workflow-format";
@@ -379,6 +382,62 @@ export function WorkflowsView({
   const active = workflows.find((item) => item.id === activeId) ?? null;
   const runs = runsByWorkflow[activeId] ?? [];
 
+  /**
+   * Backing runs this workspace's ceiling is currently holding, by run id.
+   *
+   * The last of the three signals `resolvePausedReason` weighs, and the only
+   * one that costs a request: it is read for a run that reported no
+   * `paused_reason` at all — an older API, or a row from before the column.
+   *
+   * Rather than infer a budget park from the *absence* of an approval — an
+   * absence that also means "the record is older than the last fifty", which is
+   * a different sentence and a different next step — this asks the one endpoint
+   * that reports the truth: `GET /api/admin/budget` lists the runs the ceiling
+   * is holding, by id. It is owner-only, so a member falls through to the
+   * approval card exactly as before; and when the reason does arrive with the
+   * run, the branch above answers and this request is never made.
+   */
+  const [heldByBudget, setHeldByBudget] = useState<Set<string>>(new Set());
+  /** Runs already asked about while parked, so the poll asks once, not always. */
+  const askedHeld = useRef(new Set<string>());
+  const readHeld = useCallback(async () => {
+    try {
+      const budget = await api.getAdminBudget();
+      setHeldByBudget(new Set(budget.runs_parked_on_budget.map((run) => run.run_id)));
+    } catch {
+      // 403 for a member, or the ceiling is unreachable. Either way there is
+      // nothing extra to say, and the approval path is unchanged.
+    }
+  }, []);
+
+  /**
+   * Is there a call waiting on a decision against this backing run?
+   *
+   * The signal `resolvePausedReason` believes first: `_park_for_budget` writes no
+   * `AgentToolCall` at all, so a run that has a proposed one is parked on a
+   * person, whatever a field or a list said a moment ago. The map is replaced
+   * wholesale on every poll of a parked run, so it cannot go stale the way the
+   * two answers it outranks can.
+   */
+  const hasProposal = useCallback(
+    (runId: string | null): boolean =>
+      Boolean(runId) &&
+      Object.values(approvals).some(
+        (call) => call.run_id === runId && call.status === "proposed",
+      ),
+    [approvals],
+  );
+
+  /** What stopped this run. The precedence lives in `workflow-format`. */
+  const pausedReasonOf = useCallback(
+    (run: Pick<WorkflowRun, "status" | "paused_reason" | "run_id">): string =>
+      resolvePausedReason(run, {
+        proposed: hasProposal(run.run_id),
+        heldByBudget: Boolean(run.run_id) && heldByBudget.has(run.run_id!),
+      }),
+    [heldByBudget, hasProposal],
+  );
+
   const load = useCallback(async () => {
     try {
       const rows = await api.listWorkflows();
@@ -397,12 +456,22 @@ export function WorkflowsView({
         }),
       );
       setRunsByWorkflow(Object.fromEntries(scanned));
+      // One question for the whole inbox: is anything in it held by the
+      // ceiling rather than waiting for a decision? Asked only when something
+      // is stopped and did not say why.
+      if (
+        scanned.some(([, runs]) =>
+          runs.some((run) => run.status === "waiting_for_approval" && !run.paused_reason),
+        )
+      ) {
+        await readHeld();
+      }
     } catch (caught) {
       setError(describeError(caught, "Could not load workflows"));
     } finally {
       setLoaded(true);
     }
-  }, [setError]);
+  }, [setError, readHeld]);
 
   useEffect(() => {
     void load();
@@ -468,6 +537,22 @@ export function WorkflowsView({
           const calls = await api.listAgentToolCalls();
           setApprovals(Object.fromEntries(calls.map((call) => [call.id, call])));
         }
+        // Asked only for a run that is stopped and did not say why — never on
+        // the happy path, and never for a run whose reason arrived with it.
+        //
+        // Once per park, not once per poll: this function *is* the body of a
+        // 1.2-second interval, and an approval park has an empty reason too
+        // (the same serializer drops it), so an unguarded call here would put
+        // a request a second behind every open parked run. The memo is cleared
+        // when the run moves on, so a second park asks again.
+        if (detail.status === "waiting_for_approval" && !detail.paused_reason) {
+          if (!askedHeld.current.has(detail.id)) {
+            askedHeld.current.add(detail.id);
+            await readHeld();
+          }
+        } else {
+          askedHeld.current.delete(detail.id);
+        }
         // A finished run is where its writes have actually landed — the
         // decision only authorised them. Told once per run, so the shell's
         // lists catch up without a poll turning into a refresh storm.
@@ -479,7 +564,7 @@ export function WorkflowsView({
         setError(describeError(caught, "Could not open that run"));
       }
     },
-    [setError],
+    [setError, readHeld],
   );
 
   // A run that has not settled is a run worth re-reading: nodes go from running
@@ -600,6 +685,11 @@ export function WorkflowsView({
       ) ?? null
     );
   }
+  // One question asked once: is the open run stopped on money rather than on a
+  // decision? Everything that renders differently for it reads this.
+  const heldOnBudget = Boolean(
+    runDetail && isBudgetPark(runDetail.status, pausedReasonOf(runDetail)),
+  );
   const schedule = active ? describeSchedule(active, schedulingEnabled) : null;
   const reviewability = describeReviewability(
     active?.graph ?? { nodes: [] },
@@ -641,6 +731,11 @@ export function WorkflowsView({
               >
                 <strong>{workflow.name}</strong>
                 <span>
+                  {/* The inbox holds two different stops. One wants your
+                      decision; the other wants a bigger number, and calling
+                      both "waiting for you" is what sends an owner looking for
+                      a card that was never written. */}
+                  {runStatusLabel(parked.status, pausedReasonOf(parked))} ·{" "}
                   {parked.trigger === "schedule" ? "Scheduled run" : "Manual run"} ·{" "}
                   {formatRelative(parked.created_at)}
                 </span>
@@ -676,7 +771,9 @@ export function WorkflowsView({
                     <span>
                       {workflow.trigger_kind === "schedule" ? "Scheduled" : "Manual"}
                     </span>
-                    {latest && <span>{runStatusLabel(latest.status)}</span>}
+                    {latest && (
+                      <span>{runStatusLabel(latest.status, pausedReasonOf(latest))}</span>
+                    )}
                     {latest && <span>{formatRelative(latest.created_at)}</span>}
                   </div>
                 </li>
@@ -777,8 +874,14 @@ export function WorkflowsView({
                 )}
               </div>
               {runDetail && (
-                <div className={`workflow-run-banner ${runDetail.status}`}>
-                  <strong>{runStatusLabel(runDetail.status)}</strong>
+                <div
+                  className={`workflow-run-banner ${
+                    heldOnBudget ? "budget" : runDetail.status
+                  }`}
+                >
+                  <strong>
+                    {runStatusLabel(runDetail.status, pausedReasonOf(runDetail))}
+                  </strong>
                   <span>
                     {runDetail.trigger === "schedule"
                       ? "Started by the schedule, with nobody watching."
@@ -794,11 +897,27 @@ export function WorkflowsView({
               <WorkflowGraphView
                 graph={active.graph}
                 nodeRuns={runDetail ? nodeRuns : undefined}
-                renderApproval={(node) =>
-                  node.status === "waiting_for_approval" ? (
+                pausedReason={runDetail ? pausedReasonOf(runDetail) : ""}
+                renderApproval={(node) => {
+                  if (node.status !== "waiting_for_approval") return null;
+                  // Both parks land the node on the same status, and only the
+                  // run says which. A budget park wrote no `AgentToolCall`, so
+                  // the approval card would render its "the approval record is
+                  // older than the last fifty" fallback — a sentence about a
+                  // record that does not exist and never will.
+                  if (heldOnBudget) {
+                    return (
+                      <BudgetHold
+                        park={null}
+                        menuId={`workflow-spend-ceiling-${node.node_key}`}
+                        onReleased={() => void openRun(runDetail!.id)}
+                      />
+                    );
+                  }
+                  return (
                     <ApprovalCard node={node} call={approvalFor(node)} decide={decide} />
-                  ) : null
-                }
+                  );
+                }}
               />
             </section>
 
@@ -825,8 +944,14 @@ export function WorkflowsView({
                         }
                         onClick={() => void openRun(item.id)}
                       >
-                        <span className={`workflow-run-status ${item.status}`}>
-                          {runStatusLabel(item.status)}
+                        <span
+                          className={`workflow-run-status ${
+                            isBudgetPark(item.status, pausedReasonOf(item))
+                              ? "budget"
+                              : item.status
+                          }`}
+                        >
+                          {runStatusLabel(item.status, pausedReasonOf(item))}
                         </span>
                         <span className="workflow-run-when">
                           {item.trigger === "schedule" ? "Scheduled" : "Manual"} ·{" "}

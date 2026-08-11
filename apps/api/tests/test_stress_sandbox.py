@@ -20,18 +20,21 @@ from __future__ import annotations
 
 import os
 import threading
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from conftest import create_identity
+from sqlalchemy import event
 
+from app.clock import utcnow
 from app.database import SessionLocal
 from app.models import SandboxSession
 from app.services.sandbox import local_exec
 from app.services.sandbox import session as session_service
 from app.services.sandbox.fake import FakeProvider
 from app.services.sandbox.subprocess_provider import SubprocessProvider
-from app.services.sandbox.types import SandboxError, SandboxSpec
+from app.services.sandbox.types import SandboxError, SandboxQuotaError, SandboxSpec
 
 SPEC = SandboxSpec(workspace_id="stress")
 
@@ -294,28 +297,50 @@ def test_clip_of_zero_reports_everything_as_clipped() -> None:
 # Quota
 
 
-def test_overlapping_session_creation_cannot_exceed_the_workspace_quota(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Two creates that overlap in the window `ensure_session` leaves open.
+@pytest.fixture
+def quota_tenant():
+    """A tenant of its own, whose sandbox rows are removed when the test ends.
 
-    The barrier sits inside the provider's `create`, which *used* to be the
-    window: `ensure_session` counted, called the provider, then inserted, so
-    both callers could pass the quota check before either inserted.
-
-    Claim-then-create closed that window, and closing it is what makes the
-    rendezvous impossible — the loser is now refused before the provider is ever
-    reached, so only one party arrives at the barrier. So the barrier is a
-    *probe*, not a synchronisation primitive: it opens the widest overlap the
-    implementation still allows, and a broken barrier is the fix working rather
-    than a failure. Treating it as fatal made this test fail roughly one run in
-    three and cost the suite 30 seconds of dead waiting each time, which is how
-    a real assertion gets re-run until it is green and eventually deleted.
-
-    The invariant is asserted below, and it is the same one either way: two
-    overlapping creates against a limit of one leave exactly one live session.
+    `FakeProvider` hands out deterministic external ids (`fake-1`) and
+    `(provider, external_id)` is unique table-wide, so a live row left behind by
+    one quota test collides with the very first create of the next one — in this
+    file and in every later module that runs on the fake provider.
     """
     identity = create_identity()
+    yield identity
+    db = SessionLocal()
+    try:
+        db.query(SandboxSession).filter(
+            SandboxSession.workspace_id == identity.workspace_id
+        ).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_overlapping_session_creation_cannot_exceed_the_workspace_quota(
+    quota_tenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two real threads, overlapping wherever the implementation lets them.
+
+    This one races; the test below it does not, and the pair is deliberate. A
+    thread test can only ever sample the interleavings the scheduler happens to
+    produce, so it is kept for what it does prove — that the invariant survives
+    genuine concurrency, on whatever schedule the machine feels like — and the
+    exact interleaving that broke the quota is pinned deterministically next
+    door. Neither is a substitute for the other: this one would have caught the
+    defect roughly four runs in ten, which is indistinguishable from a flake and
+    is precisely how it survived being diagnosed twice.
+
+    The barrier is a *probe*, not a synchronisation primitive. It sits inside
+    `provider.create`, and the loser is refused before it ever reaches the
+    provider, so on a correct implementation only one party arrives and the
+    barrier breaks. A broken barrier is therefore the fix working. What is
+    asserted is the invariant itself: two overlapping creates against a limit of
+    one leave exactly one live session.
+    """
+    identity = quota_tenant
     settings = _sandbox_settings(limit=1)
     barrier = threading.Barrier(2, timeout=2)
 
@@ -366,10 +391,194 @@ def test_overlapping_session_creation_cannot_exceed_the_workspace_quota(
         ]
     finally:
         db.close()
-    assert len(live) <= 1, (
-        f"{len(live)} live sandbox sessions survived a quota of 1 — "
-        "ensure_session counts and then creates with nothing serialising the two "
-        "(session.py:166 vs session.py:227)"
+    assert len(live) == 1, (
+        f"{len(live)} live sandbox sessions survived a quota of 1 — the slot the "
+        "winner holds did not stop the loser from taking one too "
+        "(session._claim_a_slot)"
+    )
+
+
+def test_a_claim_that_commits_out_of_order_cannot_take_a_second_slot(
+    quota_tenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The race, constructed rather than waited for.
+
+    Two overlapping creates both insert a claim row and both commit it. What
+    decides the outcome is not who *started* first but the relationship between
+    two orders: the order the rows carry (their `created_at`) and the order they
+    reach the table. Those two can invert, on either engine, because the ordering
+    key is computed in the process — while the parameters of the INSERT are being
+    built — and the row becomes visible only at COMMIT, a round trip later:
+
+        A: created_at := t1   B: created_at := t0 (t0 < t1)
+        A: INSERT, COMMIT     …
+        A: counts rows ahead of t1 → none committed → admitted
+                              B: INSERT, COMMIT
+                              B: counts rows ahead of t0 → A sorts *after* t0
+                                 → none ahead → admitted
+
+    Both are admitted, both reach the provider, and the workspace holds two live
+    machines against a quota of one. Under SQLite the two writes are serialised
+    and it happens anyway: serialising the writes does not order the timestamps
+    they were stamped with before the lock was taken.
+
+    So this test does not race for that interleaving — it states it. The
+    `before_insert` hook stamps the winner with the later key and the loser with
+    the earlier one, and the calls then run one after another, which is the
+    committed sequence the race produces and the only sequence SQLite can
+    produce. No barrier, no sleep, no coin flip: the second call is either
+    refused before `provider.create` or the quota is broken.
+    """
+    identity = quota_tenant
+    settings = _sandbox_settings(limit=1)
+    provider = FakeProvider()
+    monkeypatch.setattr(session_service, "get_provider", lambda _settings: provider)
+
+    # Both keys are in the past, so a `starting` claim is inside CLAIM_TTL and the
+    # ordering under test is the only thing that is unusual about them.
+    now = utcnow()
+    keys = [now - timedelta(seconds=1), now - timedelta(seconds=2)]
+
+    def _stamp(_mapper, _connection, target: SandboxSession) -> None:
+        if keys:
+            target.created_at = keys.pop(0)
+
+    event.listen(SandboxSession, "before_insert", _stamp)
+    try:
+        db = SessionLocal()
+        try:
+            first = session_service.ensure_session(
+                db,
+                workspace_id=identity.workspace_id,
+                user_id=identity.user_id,
+                settings=settings,
+                project_id="winner",
+            )
+            assert first.status == "running"
+
+            # The loser's claim sorts *ahead* of the winner's and commits second.
+            with pytest.raises(SandboxQuotaError):
+                session_service.ensure_session(
+                    db,
+                    workspace_id=identity.workspace_id,
+                    user_id=identity.user_id,
+                    settings=settings,
+                    project_id="loser",
+                )
+        finally:
+            db.close()
+    finally:
+        event.remove(SandboxSession, "before_insert", _stamp)
+
+    assert [call for call, _args in provider.calls if call == "create"] == ["create"], (
+        "the over-limit machine was created at the provider before being refused"
+    )
+
+    db = SessionLocal()
+    try:
+        live = [
+            row
+            for row in db.query(SandboxSession)
+            .filter(SandboxSession.workspace_id == identity.workspace_id)
+            .all()
+            if row.status in session_service.LIVE_STATUSES
+        ]
+    finally:
+        db.close()
+    assert len(live) == 1, (
+        f"{len(live)} live sandbox sessions survived a quota of 1 — a claim that "
+        "commits out of created_at order is admitted alongside the one already "
+        "holding the slot"
+    )
+
+
+def test_a_slot_taken_between_the_read_and_the_insert_refuses_the_second_holder(
+    quota_tenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The read is advisory. The INSERT is the quota — so break the read.
+
+    `ensure_session` looks up which slots are free and then inserts a claim on
+    one of them, and those are two statements: a racer can commit the slot in
+    between, which makes the answer the first statement gave already false by the
+    time the second runs. That gap cannot be closed by looking harder — any check
+    before a write is a check about the past — so what has to hold is that the
+    write itself is refused.
+
+    The gap is opened here rather than raced for. A `before_flush` listener fires
+    once, after `ensure_session` has decided slot 0 is free and before its INSERT
+    reaches the database, and commits a rival session into slot 0 from another
+    connection. That is precisely the interleaving two processes produce, and it
+    is the one no amount of counting survives.
+
+    This is the test that holds the unique index in place. The deterministic race
+    test above passes without it — the loser is turned away by the count long
+    before the constraint is consulted — which is exactly the kind of gap that
+    lets a "load-bearing" mutation check come back green over a broken quota.
+    """
+    identity = quota_tenant
+    settings = _sandbox_settings(limit=1)
+    provider = FakeProvider()
+    monkeypatch.setattr(session_service, "get_provider", lambda _settings: provider)
+
+    db = SessionLocal()
+    fired: list[bool] = []
+
+    def _rival_commits_first(session, _flush_context, _instances) -> None:
+        if fired or not any(isinstance(obj, SandboxSession) for obj in session.new):
+            return
+        fired.append(True)
+        rival = SessionLocal()
+        try:
+            rival.add(
+                SandboxSession(
+                    workspace_id=identity.workspace_id,
+                    created_by=identity.user_id,
+                    provider="fake",
+                    external_id="rival-box",
+                    status="running",
+                    slot_index=0,
+                )
+            )
+            rival.commit()
+        finally:
+            rival.close()
+
+    event.listen(db, "before_flush", _rival_commits_first)
+    try:
+        with pytest.raises(SandboxQuotaError):
+            session_service.ensure_session(
+                db,
+                workspace_id=identity.workspace_id,
+                user_id=identity.user_id,
+                settings=settings,
+                project_id="loser",
+            )
+    finally:
+        event.remove(db, "before_flush", _rival_commits_first)
+        db.close()
+
+    assert fired, "the rival never committed — the test did not open the window"
+    assert provider.calls == [], (
+        "the loser reached the provider: the machine that breaks the limit was "
+        "created before anything refused it"
+    )
+
+    db = SessionLocal()
+    try:
+        live = [
+            row
+            for row in db.query(SandboxSession)
+            .filter(SandboxSession.workspace_id == identity.workspace_id)
+            .all()
+            if row.status in session_service.LIVE_STATUSES
+        ]
+    finally:
+        db.close()
+    assert [row.external_id for row in live] == ["rival-box"], (
+        f"{len(live)} live sandbox sessions survived a quota of 1 — the claim was "
+        "admitted onto a slot another row had already committed"
     )
 
 

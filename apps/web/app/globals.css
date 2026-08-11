@@ -6150,3 +6150,226 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- The spend ceiling (ADR 0008) ----
+   A run stopped by the budget is stopped in the same status as one waiting for
+   an approval, so the *visual* difference has to carry what the status cannot.
+   The approval card is filled clay — a decision is owed and the fill says so.
+   This one is outlined instead: nothing is owed, nobody can decide it, and what
+   releases it is a number. Same warm family, deliberately quieter. */
+.budget-hold {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--clay);
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+
+.budget-hold-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.budget-hold-head > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--amber);
+}
+
+.budget-hold-head strong {
+  display: block;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.budget-hold-head p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.budget-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.budget-facts dt {
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.budget-facts dd {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* An unmeasurable cost is written in words and never as a dollar figure, so it
+   is sized and coloured as prose rather than as a number. */
+.budget-facts dd.muted {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.budget-hold-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Direct child only. The popover is a *descendant* of this foot and is itself a
+   column flex container, so an unscoped `p` here handed its paragraph a 240px
+   flex-basis along the vertical axis — a four-line sentence in a 266px panel. */
+.budget-hold-foot > p {
+  flex: 1 1 240px;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.budget-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+/* The popover holds a form rather than a list of options, so it needs room the
+   default disclosure panel does not give. */
+.budget-disclosure .disclosure-menu {
+  width: min(340px, 80vw);
+  gap: 0;
+  padding: 12px;
+}
+
+.budget-menu-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.budget-form {
+  display: grid;
+  gap: 10px;
+}
+
+.budget-form-lead {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.budget-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+}
+
+.budget-fields label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.budget-fields input {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-warning,
+.budget-problem,
+.budget-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.budget-warning {
+  color: var(--amber);
+}
+
+.budget-warning svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.budget-problem {
+  color: var(--red);
+}
+
+.budget-note {
+  color: var(--text-muted);
+}
+
+.budget-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---- The ceiling on the Admin screen ----
+   Full width beside Model spend, because the two are the same question asked
+   twice and a ceiling read apart from its spend gets raised by the wrong
+   amount. */
+.budget-panel {
+  grid-column: 1 / -1;
+}
+
+.budget-panel .budget-form {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.budget-stats strong.muted {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.budget-parked h3 {
+  margin: 0 0 6px;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ---- Budget states on the workflow surface ----
+   Outlined rather than filled, for the same reason the chat panel is: this one
+   is not waiting for a decision. */
+.workflow-run-banner.budget {
+  border-color: var(--clay);
+  background: var(--surface-raised);
+}
+
+.workflow-run-status.budget,
+.workflow-node-status.budget {
+  color: var(--amber);
+}

@@ -6,8 +6,10 @@ import {
   describeReviewability,
   describeSchedule,
   groupFindings,
+  isBudgetPark,
   layerGraph,
   nodeStatusLabel,
+  resolvePausedReason,
   runIsSettled,
   upstreamOf,
 } from "../components/views/workflow-format";
@@ -160,6 +162,47 @@ describe("status vocabulary", () => {
     expect(runIsSettled("cancelled")).toBe(true);
     expect(runIsSettled("waiting_for_approval")).toBe(false);
     expect(runIsSettled("running")).toBe(false);
+  });
+});
+
+describe("resolvePausedReason", () => {
+  const parked = { status: "waiting_for_approval", paused_reason: "", run_id: "r1" };
+  const nothing = { proposed: false, heldByBudget: false };
+
+  it("reads the field when the run carries one", () => {
+    expect(resolvePausedReason({ ...parked, paused_reason: "budget" }, nothing)).toBe("budget");
+    expect(resolvePausedReason({ ...parked, paused_reason: "approval" }, nothing)).toBe(
+      "approval",
+    );
+  });
+
+  it("falls back to the ceiling's list only when no reason arrived", () => {
+    expect(resolvePausedReason(parked, { proposed: false, heldByBudget: true })).toBe("budget");
+    expect(resolvePausedReason(parked, nothing)).toBe("");
+  });
+
+  it("ignores the ceiling's list for a run that is not parked at all", () => {
+    expect(
+      resolvePausedReason(
+        { status: "running", paused_reason: "", run_id: "r1" },
+        { proposed: false, heldByBudget: true },
+      ),
+    ).toBe("");
+  });
+
+  // The regression. A budget park writes no `AgentToolCall`, so a proposed one
+  // proves a person is being waited on — and it has to beat a `paused_reason`
+  // that still says "budget", because that column is a mirror of the backing
+  // run's and lagged by exactly one park when a released graph walked on to a
+  // write. Believing it put the spend panel where the Approve button belonged.
+  it("lets a proposed call outrank a stale budget reason", () => {
+    expect(
+      resolvePausedReason({ ...parked, paused_reason: "budget" }, {
+        proposed: true,
+        heldByBudget: true,
+      }),
+    ).toBe("approval");
+    expect(isBudgetPark("waiting_for_approval", "approval")).toBe(false);
   });
 });
 

@@ -1,5 +1,17 @@
 [
   {
+    "match": "file the probe summary",
+    "steps": [
+      {
+        "call": {
+          "name": "probe_write",
+          "arguments": { "text": "filed" }
+        }
+      },
+      { "text": "Filed the summary." }
+    ]
+  },
+  {
     "match": "project atlas is led by dana reyes",
     "memories": [
       {

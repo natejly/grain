@@ -525,6 +525,20 @@ class Settings(BaseSettings):
                 "or test. Cross-site cookies need SameSite=None, which browsers "
                 "only accept with Secure."
             )
+        # The default, and the one dev setting whose failure is *silent*. The
+        # console sender outside development logs "email suppressed" and returns,
+        # while the route still answers with the deliberately-uninformative
+        # acknowledgement that hides whether an address exists — so password
+        # reset and email verification are broken and every observable signal
+        # says they worked. Its siblings above fail at boot; so does this.
+        if self.email_sender == "console":
+            raise ValueError(
+                "EMAIL_SENDER=console requires APP_ENV to be development or "
+                "test — outside it, password reset and email verification mail "
+                "is silently dropped. Deploy with EMAIL_SENDER=smtp."
+            )
+        if self.email_sender == "smtp" and not self.smtp_host.strip():
+            raise ValueError("EMAIL_SENDER=smtp requires SMTP_HOST")
         return self
 
     @property

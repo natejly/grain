@@ -420,9 +420,14 @@ def test_session_tokens_are_stored_only_as_hashes():
 
 
 def _settings_kwargs(**overrides) -> dict:
-    # A production-shaped Settings needs the production model provider, since
-    # the scripted double has a guard of its own.
-    base = {"model_provider": "openai", "openai_api_key": "test-key"}
+    # A production-shaped Settings needs the production model provider and a
+    # real mail transport, since each dev-only default has a guard of its own.
+    base = {
+        "model_provider": "openai",
+        "openai_api_key": "test-key",
+        "email_sender": "smtp",
+        "smtp_host": "smtp.example.com",
+    }
     base.update(overrides)
     return base
 
@@ -477,6 +482,32 @@ def test_dev_login_is_404_when_disabled(anonymous_client):
 def test_an_insecure_session_cookie_cannot_be_configured_outside_development():
     with pytest.raises(ValueError, match="SESSION_COOKIE_SECURE"):
         Settings(**_settings_kwargs(app_env="production", session_cookie_secure=False))
+
+
+def test_the_console_email_sender_cannot_be_left_on_outside_development():
+    """The most dangerous of these guards, because its failure is silent.
+
+    EMAIL_SENDER is `console` by default. Outside development that sender logs
+    "email suppressed" and returns, while the reset route still answers with the
+    same deliberately-uninformative acknowledgement it gives for an address that
+    does not exist — so a deploy with everything else correct has broken password
+    reset and email verification, and no observable signal says so. It fails at
+    boot like its siblings instead.
+    """
+    with pytest.raises(ValueError, match="EMAIL_SENDER"):
+        Settings(**_settings_kwargs(app_env="production", email_sender="console"))
+    for env in ("development", "test"):
+        assert Settings(
+            **_settings_kwargs(app_env=env, email_sender="console")
+        ).email_sender == "console"
+
+    # And an SMTP sender with nowhere to send fails the same way rather than
+    # dialling the empty string on the first reset request.
+    with pytest.raises(ValueError, match="SMTP_HOST"):
+        Settings(
+            **_settings_kwargs(app_env="production", email_sender="smtp", smtp_host=" ")
+        )
+    assert Settings(**_settings_kwargs(app_env="production")).email_sender == "smtp"
 
 
 def test_the_dev_seed_refuses_to_run_outside_development():

@@ -5,9 +5,12 @@ explicit tool approval, a rebuildable knowledge graph, bounded analytical
 dashboards, and immutable published app snapshots.
 
 The expansion phases retain the original safety gates: the graph is a disposable
-projection rather than a second system of record, analytics accept a typed query
-contract rather than arbitrary SQL, and generated apps render declarative static
-snapshots rather than executing generated dependencies or server code. See the
+projection rather than a second system of record, and analytics accept a typed
+query contract rather than arbitrary SQL. The third gate changed shape rather
+than holding: generated apps used to be declarative snapshots that executed
+nothing, and since ADR 0004 they are generated HTML/JS executed in an
+opaque-origin sandboxed iframe with no cookies, no parent access and no network.
+See the
 [implementation plan](.cursor/plans/agentic_knowledge_workspace_619562a2.plan.md).
 
 The API requires an OpenAI key: `OPENAI_API_KEY` must be set or the API refuses
@@ -20,9 +23,11 @@ never exposed through `NEXT_PUBLIC_*`, the bootstrap response, or browser storag
 - Persistent conversations and immutable, resumable SSE run events
 - Idempotent conversation, message, upload, cancellation, deletion, and approval mutations
 - Markdown, text, PDF, CSV, and JSON ingestion with bounded extraction
-- Workspace-scoped lexical retrieval, cited answers, and exact passage provenance
+- Workspace-scoped hybrid retrieval (BM25 + dense, fused by reciprocal rank),
+  cited answers, and exact passage provenance
 - Tombstone-first source deletion and derived-chunk cleanup
-- Per-agent grants for an allowlisted HTTPS GET tool
+- Roughly fifty agent tools governed by `ToolPolicy`, with standing grants scoped
+  to chat or to unattended workflows, listable and revocable
 - Durable approval/denial, SSRF checks, response limits, and audit history
 - Rebuildable workspace-scoped entity graph with passage provenance, typed
   relations, and bounded multi-hop walks
@@ -30,8 +35,10 @@ never exposed through `NEXT_PUBLIC_*`, the bootstrap response, or browser storag
 - Declarative table, bar, line, and donut dashboards
 - Private or public app releases with immutable snapshots and rollback
 - An agent loop with tool approval behind every chat turn, backed by OpenAI
-- Responsive dark Next.js workspace across chat, sources, graph, dashboards, apps,
-  approvals, and activity
+- Responsive Next.js workspace on a cream-and-mint light theme, with a dark theme
+  that follows the OS or an explicit toggle, across chat, sources, graph,
+  dashboards, apps, sandbox, workflows, projects, documents, boards, MCP,
+  integrations, data connections, approvals, admin, and activity
 
 ## Quick start
 

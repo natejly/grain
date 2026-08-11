@@ -1227,3 +1227,92 @@ def test_raising_the_ceiling_resumes_the_parked_graph_where_it_stopped(
     # The node that already ran did not run again.
     assert len(reader.calls) == 1
     assert len(sink.calls) == 1
+
+
+def test_a_released_graph_that_parks_on_a_write_stops_saying_it_is_held_by_money(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two parks in sequence, which is where the mirror used to go stale.
+
+    `WorkflowRun.paused_reason` mirrors the backing run's, and `status` does not
+    change between a budget park and the approval park that follows it — so the
+    only thing that moves is the reason, and a resume that forgot to move it left
+    the graph claiming to be held by a ceiling that had just been raised. That is
+    not cosmetic: the surface renders the spend panel *instead of* the approval
+    card, so the proposed write is on the screen with no way to decide it, which
+    is the undecidable-approval failure ADR 0007 exists to prevent.
+
+    The two signals asserted together are the invariant: a proposed
+    `AgentToolCall` exists (a budget park writes none), so the reason must read
+    `approval` on the backing run and on the graph alike.
+    """
+    from app.models import ModelUsage, WorkspaceBudget
+    from app.services.runs import resume_run_after_budget
+
+    reader = Probe("probe_read", reply="three pull requests")
+    writer = Probe("probe_write", read_only=False)
+    install(monkeypatch, reader, writer)
+
+    db.add(
+        ModelUsage(
+            workspace_id=identity.workspace_id,
+            operation="workflow_node",
+            model="unpriced",
+            total_tokens=5000,
+            cost_usd=None,
+            created_at=utcnow(),
+        )
+    )
+    db.add(
+        WorkspaceBudget(
+            workspace_id=identity.workspace_id,
+            window_hours=24,
+            tokens_per_window=1000,
+        )
+    )
+    db.commit()
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("gather", "probe_read"),
+                {
+                    "id": "think",
+                    "kind": "agent",
+                    # Scripted to call `probe_write`, which is write-capable, so
+                    # the released turn parks again — on a person this time.
+                    "prompt": "File the probe summary: {{ gather.output }}",
+                    "description": "File the summary.",
+                },
+            ],
+            [{"from": "gather", "to": "think"}],
+        ),
+        trigger="schedule",
+    )
+    executor.advance_run(db, workflow_run)
+    assert workflow_run.status == "waiting_for_approval"
+    assert workflow_run.paused_reason == agent_loop.PAUSED_FOR_BUDGET
+
+    row = db.query(WorkspaceBudget).filter(
+        WorkspaceBudget.workspace_id == identity.workspace_id
+    ).one()
+    row.tokens_per_window = 10_000_000
+    db.commit()
+
+    resume_run_after_budget(str(workflow_run.run_id))
+    db.expire_all()
+
+    proposed = db.query(AgentToolCall).filter(
+        AgentToolCall.run_id == workflow_run.run_id,
+        AgentToolCall.status == "proposed",
+    ).all()
+    assert len(proposed) == 1 and proposed[0].name == "probe_write"
+    assert not writer.calls, "the write must not have happened before a decision"
+
+    backing = db.get(Run, workflow_run.run_id)
+    assert backing is not None
+    assert backing.paused_reason == agent_loop.PAUSED_FOR_APPROVAL
+    assert workflow_run.status == "waiting_for_approval"
+    assert workflow_run.paused_reason == agent_loop.PAUSED_FOR_APPROVAL

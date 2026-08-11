@@ -3,6 +3,7 @@
 import type {
   AdminActivity,
   AdminAuditPage,
+  AdminBudget,
   AdminMcpServer,
   AdminMember,
   AdminSandboxSession,
@@ -15,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useWorkspaceSelection } from "../workspace-selection";
 import { UsagePanel } from "./admin-usage";
+import { BudgetPanel } from "./budget";
 import { describeError, formatBytes, formatRelative } from "./shared";
 
 /**
@@ -44,6 +46,7 @@ type AdminData = {
   mcpServers: AdminMcpServer[];
   storage: AdminStorage;
   usage: AdminUsage;
+  budget: AdminBudget;
 };
 
 /** A status → count map as a row of pills, in a stable order. */
@@ -100,7 +103,7 @@ export function AdminView({ setError }: AdminViewProps) {
   // screen while it re-fetches, because `setData` only fires on success.
   const load = useCallback(async () => {
     try {
-      const [members, activity, sandboxes, mcpServers, storage, usage] =
+      const [members, activity, sandboxes, mcpServers, storage, usage, budget] =
         await Promise.all([
           api.listAdminMembers(),
           api.getAdminActivity(),
@@ -108,8 +111,9 @@ export function AdminView({ setError }: AdminViewProps) {
           api.listAdminMcpServers(),
           api.getAdminStorage(),
           api.getAdminUsage(usageDays),
+          api.getAdminBudget(),
         ]);
-      setData({ members, activity, sandboxes, mcpServers, storage, usage });
+      setData({ members, activity, sandboxes, mcpServers, storage, usage, budget });
       setForbidden(false);
     } catch (caught) {
       // 403 is the API answering, not failing: this member is not an owner.
@@ -203,7 +207,7 @@ export function AdminView({ setError }: AdminViewProps) {
     );
   }
 
-  const { members, activity, sandboxes, mcpServers, storage, usage } = data;
+  const { members, activity, sandboxes, mcpServers, storage, usage, budget } = data;
   const live = sandboxes.filter((row) => ["running", "paused"].includes(row.status));
 
   return (
@@ -226,6 +230,17 @@ export function AdminView({ setError }: AdminViewProps) {
           days={usageDays}
           onDaysChange={setUsageDays}
           prompts={runPrompts}
+        />
+
+        {/* Directly under the spend, because the two are one question asked
+            twice: what did this cost, and what may it cost. A ceiling read on
+            a different screen from the figure it bounds gets raised by the
+            wrong amount. */}
+        <BudgetPanel
+          budget={budget}
+          onSaved={(saved) =>
+            setData((current) => (current ? { ...current, budget: saved } : current))
+          }
         />
 
         <Panel title="Members and roles" count={members.length}>
