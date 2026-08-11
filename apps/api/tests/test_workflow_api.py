@@ -19,7 +19,14 @@ import pytest
 from conftest import Identity, create_identity
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from test_workflow_executor import Probe, authorize, graph, install, tool_node
+from test_workflow_executor import (
+    Probe,
+    authorize,
+    graph,
+    install,
+    manual_node,
+    tool_node,
+)
 
 from app.database import SessionLocal
 from app.main import app
@@ -275,6 +282,90 @@ def test_a_run_that_parks_is_visible_as_parked(
     # And the approval it is waiting on is an ordinary card in the inbox.
     inbox = client.get("/api/agent-tool-calls").json()
     assert nodes["send"]["agent_tool_call_id"] in {row["id"] for row in inbox}
+
+
+def test_the_decision_endpoint_carries_manual_values_into_the_run(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manual node parks like an approval; the decision endpoint that chat uses
+    resumes it, and the values ride in `inputs` to become the node's output that a
+    downstream step reads — the whole loop, over HTTP."""
+    ship = Probe("probe_ship")
+    install(monkeypatch, ship)
+    created = client.post(
+        "/api/workflows",
+        json={
+            "graph": graph(
+                [
+                    manual_node("collect", "Which version ships?", [{"name": "version"}]),
+                    tool_node(
+                        "ship", "probe_ship", {"text": "{{ collect.output.version }}"}
+                    ),
+                ],
+                [{"from": "collect", "to": "ship"}],
+            )
+        },
+    ).json()
+    run_id = client.post(
+        f"/api/workflows/{created['id']}/run", json={"payload": {}}
+    ).json()["id"]
+
+    parked = client.get(f"/api/workflows/runs/{run_id}").json()
+    assert parked["status"] == "waiting_for_approval"
+    collect = {node["node_key"]: node for node in parked["nodes"]}["collect"]
+    call_id = collect["agent_tool_call_id"]
+    assert call_id
+
+    decided = client.post(
+        f"/api/agent-tool-calls/{call_id}/decision",
+        json={"decision": "approved", "remember": False, "inputs": {"version": "2.0.1"}},
+        headers={"Idempotency-Key": "api-manual-approve-1"},
+    )
+    assert decided.status_code == 200, decided.text
+
+    body = client.get(f"/api/workflows/runs/{run_id}").json()
+    assert body["status"] == "succeeded", body["error"]
+    nodes = {node["node_key"]: node for node in body["nodes"]}
+    assert nodes["collect"]["output"] == {"version": "2.0.1"}
+    assert nodes["ship"]["arguments"] == {"text": "2.0.1"}
+    assert ship.calls == [{"text": "2.0.1"}]
+
+
+def test_a_manual_submission_that_violates_a_field_is_refused(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The person is waiting on the request, so an invalid submission 422s in
+    front of them and the run stays parked and answerable."""
+    install(monkeypatch, Probe("probe_ship"))
+    created = client.post(
+        "/api/workflows",
+        json={
+            "graph": graph(
+                [
+                    manual_node(
+                        "collect",
+                        "Which version ships?",
+                        [{"name": "version", "type": "string", "required": True}],
+                    )
+                ]
+            )
+        },
+    ).json()
+    run_id = client.post(
+        f"/api/workflows/{created['id']}/run", json={"payload": {}}
+    ).json()["id"]
+    parked = client.get(f"/api/workflows/runs/{run_id}").json()
+    call_id = parked["nodes"][0]["agent_tool_call_id"]
+
+    refused = client.post(
+        f"/api/agent-tool-calls/{call_id}/decision",
+        json={"decision": "approved", "remember": False, "inputs": {}},
+        headers={"Idempotency-Key": "api-manual-invalid-1"},
+    )
+    assert refused.status_code == 422, refused.text
+    assert client.get(f"/api/workflows/runs/{run_id}").json()["status"] == (
+        "waiting_for_approval"
+    )
 
 
 def test_a_failed_run_reports_the_node_that_failed(

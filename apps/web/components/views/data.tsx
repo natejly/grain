@@ -3,7 +3,6 @@
 import {
   ChevronDown,
   ChevronRight,
-  Database,
   KeyRound,
   Plus,
   Table2,
@@ -345,11 +344,7 @@ export function DataView({
 
       {connections.length === 0 && !adding ? (
         <div className="empty-state">
-          <Database size={22} />
-          <p>
-            No databases connected. Add one and the agent can inspect its schema and
-            query it.
-          </p>
+          <p>No databases connected.</p>
         </div>
       ) : (
         <div className="mcp-list">

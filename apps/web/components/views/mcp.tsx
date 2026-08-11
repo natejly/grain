@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, KeyRound, Plug, Plus, RefreshCw, Trash2, Unlink, X } from "lucide-react";
+import { Check, KeyRound, Plus, RefreshCw, Trash2, Unlink, X } from "lucide-react";
 import type { McpAuthStatus, McpServer, McpServerInput } from "@workspace/api-client";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../api";
@@ -319,8 +319,7 @@ export function McpView({
 
       {servers.length === 0 && !adding ? (
         <div className="empty-state">
-          <Plug size={22} />
-          <p>No MCP servers yet. Add one to give the agent its tools.</p>
+          <p>No MCP servers yet.</p>
         </div>
       ) : (
         <div className="mcp-list">

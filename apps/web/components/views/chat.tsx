@@ -18,6 +18,7 @@ import type {
   AgentToolCall,
   Citation,
   CitationCheck,
+  GeneratedApp,
   Message,
   Source,
 } from "@workspace/api-client";
@@ -25,6 +26,7 @@ import { FormEvent, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { ChatDashboardEmbeds } from "../chat-dashboard-embed";
 import { ArtifactImages } from "../source-image";
 import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
@@ -40,6 +42,13 @@ export type ChatViewProps = {
   messages: Message[];
   sources: Source[];
   agentCalls: AgentToolCall[];
+  /**
+   * The workspace's generated apps, so a message that links to a published one
+   * can show it rather than only naming it. Passed in rather than fetched here
+   * because the embed must only ever appear for an app the shell already knows
+   * about — see `chat-dashboard-embed.tsx`.
+   */
+  apps: GeneratedApp[];
   draft: string;
   setDraft: (value: string) => void;
   activeRun: string | null;
@@ -288,6 +297,7 @@ export function ChatView({
   messages,
   sources,
   agentCalls,
+  apps,
   draft,
   setDraft,
   activeRun,
@@ -324,8 +334,7 @@ export function ChatView({
       <div className={`message-scroll ${messages.length === 0 ? "empty" : ""}`}>
         {messages.length === 0 ? (
           <div className="welcome">
-            <h1>New conversation</h1>
-            <p>Ask a question about your sources.</p>
+            <p>No messages yet.</p>
           </div>
         ) : (
           <div className="message-column">
@@ -353,6 +362,13 @@ export function ChatView({
                     <p>{message.content}</p>
                   )}
                 </div>
+                {/* Unconditionally rendered, and that is the point: it returns
+                    null when the message names no app, so its position in this
+                    subtree never changes. A conditional here would take the
+                    iframe out of the tree and put it back — which reloads the
+                    frame — the first time a streamed message crossed the line
+                    between naming an app and not. */}
+                <ChatDashboardEmbeds content={message.content} apps={apps} />
                 {message.citation_report && (
                   <CitationVerdictNote report={message.citation_report} />
                 )}

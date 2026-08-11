@@ -32,13 +32,22 @@ never exposed through `NEXT_PUBLIC_*`, the bootstrap response, or browser storag
 - Rebuildable workspace-scoped entity graph with passage provenance, typed
   relations, and bounded multi-hop walks
 - Immutable CSV/JSON dataset versions and bounded DuckDB aggregations
-- Declarative table, bar, line, and donut dashboards
+- Declarative table, bar, line, and donut dashboards, with parameterised
+  templates bound to a dataset's real columns and per-user pinned tiles on a
+  twelve-column home grid
 - Private or public app releases with immutable snapshots and rollback
+- Workflow automations compiled from a sentence into a reviewable DAG, with
+  typed run inputs validated before the first node executes
+- Documents in a folder tree, with agent edits proposed for inline review and a
+  chat thread per document
 - An agent loop with tool approval behind every chat turn, backed by OpenAI
 - Responsive Next.js workspace on a cream-and-mint light theme, with a dark theme
-  that follows the OS or an explicit toggle, across chat, sources, graph,
-  dashboards, apps, sandbox, workflows, projects, documents, boards, MCP,
-  integrations, data connections, approvals, admin, and activity
+  that follows the OS or an explicit toggle. The rail holds the places you work
+  — chat, files (files, projects, boards, dashboards), knowledge (sources,
+  memory, graph) and workflows — and a top-right menu holds the places you
+  configure and audit: connections (databases, MCP, integrations), activity and
+  admin. Creating is an action in the corner rather than a destination, and the
+  sandbox is a capability the agent uses, not a page you visit
 
 ## Quick start
 
@@ -102,8 +111,9 @@ boot it outside `APP_ENV=development` or `test`.
 ## Code execution (optional)
 
 The agent can run Python and shell commands — cleaning a spreadsheet, fitting a
-model, drawing a chart — in a sandbox that is not this host. It is off unless you
-turn it on:
+model, drawing a chart — in a sandbox that is not this host. There is no Sandbox
+page to visit: you ask for the chart in chat, and the figure comes back on the
+tool card in the conversation that asked. It is off unless you turn it on:
 
 ```dotenv
 SANDBOX_ENABLED=1

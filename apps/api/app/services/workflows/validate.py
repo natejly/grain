@@ -24,6 +24,12 @@ The checks, and why each one is here:
 - **References point upstream.** A node reading `{{ later.output }}` compiles
   fine under every check above and reads an empty value at run time. This is the
   check that catches it.
+- **Declared inputs are coherent, and every `{{ input.x }}` names one.** A
+  graph that declares no inputs keeps the old free-form payload; one that
+  declares any is held to its declaration, so the form a UI renders and the
+  references the graph actually reads are the same set. The sharpest of these
+  is `input_required_unattended`: a *scheduled* workflow with a required input
+  and no default can never fire, because there is nobody at 3am to type it.
 """
 from __future__ import annotations
 
@@ -41,13 +47,18 @@ from ..llm_tools import ToolSpec
 from .dag import (
     INPUT_NAMESPACE,
     MAX_EDGES,
+    MAX_INPUTS,
     MAX_NODES,
     NODE_KEY_RE,
+    TRIGGER_INPUT_NAMES,
     WHOLE_REFERENCE_RE,
+    InputSpec,
     NodeSpec,
     WorkflowGraph,
+    input_fields,
     references,
 )
+from .inputs import property_schema
 
 
 @dataclass(frozen=True)
@@ -337,11 +348,14 @@ def validate_graph(
     edges = _check_edges(graph, ids, report)
     cyclic = _check_acyclic(ids, edges, report)
     _check_trigger(graph, report)
+    declared = _check_inputs(graph, report)
     for node in graph.nodes:
         _check_node_kind(node, registry, report)
     ancestors = {} if cyclic else _ancestors(ids, edges)
     for node in graph.nodes:
-        _check_references(node, ids, ancestors, cyclic=cyclic, report=report)
+        _check_references(
+            node, ids, ancestors, cyclic=cyclic, declared=declared, report=report
+        )
     return report
 
 
@@ -395,6 +409,13 @@ def _check_size(graph: WorkflowGraph, report: CompileReport) -> None:
             CompileError(
                 "graph_too_large",
                 f"{len(graph.edges)} edges exceeds the {MAX_EDGES}-edge ceiling",
+            )
+        )
+    if len(graph.inputs) > MAX_INPUTS:
+        report.errors.append(
+            CompileError(
+                "graph_too_large",
+                f"{len(graph.inputs)} inputs exceeds the {MAX_INPUTS}-input ceiling",
             )
         )
 
@@ -499,9 +520,137 @@ def _ancestors(ids: List[str], edges: List[Tuple[str, str]]) -> Dict[str, Set[st
     return ancestors
 
 
+def _check_inputs(
+    graph: WorkflowGraph, report: CompileReport
+) -> Optional[Set[str]]:
+    """The input declaration, and whether references are checked against it.
+
+    Returns the declared names, or **None** when the graph declares nothing —
+    which is the old free-form payload and must keep working, because graphs
+    compiled before inputs existed are stored in `workflows.graph_json` and are
+    re-validated against the live registry at every run start. Turning an
+    undeclared `{{ input.repo }}` into an error would fail those runs with
+    `graph_stale` on a graph nobody edited.
+    """
+    if not graph.inputs:
+        return None
+    seen: Set[str] = set()
+    for spec in graph.inputs:
+        if not NODE_KEY_RE.match(spec.name):
+            report.errors.append(
+                CompileError(
+                    "input_name_invalid",
+                    "input names must be lowercase slugs matching "
+                    f"{NODE_KEY_RE.pattern}, got “{spec.name}”",
+                )
+            )
+            continue
+        if spec.name in TRIGGER_INPUT_NAMES:
+            report.errors.append(
+                CompileError(
+                    "input_name_reserved",
+                    f"“{spec.name}” is supplied by the trigger itself and cannot "
+                    "be declared",
+                )
+            )
+            continue
+        if spec.name in seen:
+            report.errors.append(
+                CompileError("input_name_duplicate", f"duplicate input “{spec.name}”")
+            )
+            continue
+        seen.add(spec.name)
+        _check_input_values(spec, report)
+        _check_input_supply(graph, spec, report)
+    return seen
+
+
+def _check_input_values(spec: InputSpec, report: CompileReport) -> None:
+    """A default and its choices must satisfy the declaration they sit in.
+
+    The default is checked against the *same* schema `inputs.bind` will check a
+    run's payload against, so a default that compiles is a default that binds —
+    the `cron_error`/`cron_matches` rule applied one module over. A default
+    outside its own `choices` is the failure this catches most often, and it is
+    a form that opens with an invalid selection.
+
+    Choices are checked against the type alone, because checking them against
+    the full property schema would ask each one to be a member of the enum it is
+    defining.
+    """
+    if spec.default is not None:
+        failure = next(
+            iter(Draft202012Validator(property_schema(spec)).iter_errors(spec.default)),
+            None,
+        )
+        if failure is not None:
+            report.errors.append(
+                CompileError(
+                    "input_default_invalid",
+                    f"input “{spec.name}” has a default that {failure.message}",
+                )
+            )
+    typed = Draft202012Validator({"type": spec.type})
+    for choice in spec.choices:
+        failure = next(iter(typed.iter_errors(choice)), None)
+        if failure is not None:
+            report.errors.append(
+                CompileError(
+                    "input_choice_invalid",
+                    f"input “{spec.name}” offers a choice that {failure.message}",
+                )
+            )
+
+
+def _check_input_supply(
+    graph: WorkflowGraph, spec: InputSpec, report: CompileReport
+) -> None:
+    """Every declared input must have a value by the time a node reads one.
+
+    This is the invariant that makes run-start binding worth anything: after
+    `inputs.bind`, every declared name is present. Without it, `{{ input.note }}`
+    on an omitted optional input raises `reference_unresolved` at whatever node
+    happens to mention it — mid-DAG, which is the failure this whole feature
+    exists to move forward. There are exactly two ways to break the invariant and
+    each has its own repair.
+
+    An **optional** input with no default has nothing to fall back to, so
+    "optional" would mean "sometimes this graph reads a value that is not
+    there". A default of `""` says the same thing and says it in the form.
+
+    A **required** input with no default is fine when a person is filling in a
+    form and impossible when a cron fires it at 09:00 on Monday with nobody
+    present. That one does not fail once; it fails every Monday, in a run list
+    nobody reads. Compile time is the last moment somebody is watching.
+    """
+    if spec.default is not None:
+        return
+    if not spec.required:
+        report.errors.append(
+            CompileError(
+                "input_optional_without_default",
+                f"input “{spec.name}” is optional but has no default, so a run "
+                f"that omits it leaves “{{{{ {INPUT_NAMESPACE}.{spec.name} }}}}” "
+                "with nothing to read; give it a default or make it required",
+            )
+        )
+    elif graph.trigger.kind == "schedule":
+        report.errors.append(
+            CompileError(
+                "input_required_unattended",
+                f"input “{spec.name}” is required and has no default, so a "
+                "scheduled run has no way to supply it; give it a default",
+            )
+        )
+
+
 def _check_node_kind(
     node: NodeSpec, registry: Mapping[str, ToolSpec], report: CompileReport
 ) -> None:
+    if node.kind == "manual":
+        _check_manual(node, report)
+        return
+
     if node.kind == "agent":
         if not node.prompt.strip():
             report.errors.append(
@@ -558,6 +707,114 @@ def _check_node_kind(
     _check_arguments(node, spec, report)
 
 
+def _check_manual(node: NodeSpec, report: CompileReport) -> None:
+    """A manual node pauses the run for a person; it collects, it never calls.
+
+    The three shape checks say the same thing three ways: a manual node runs no
+    tool. A `tool` left on it would be a tool nobody ever calls, and `arguments`
+    would be arguments nobody ever reads — a graph that looks like it does more
+    than it does, which is exactly the review lie `extra="forbid"` exists to stop
+    one field up. Its `fields` are held to the same standard a workflow's own
+    inputs are, because they bind through the same `inputs.bind` at resume.
+
+    The `manual_requires_person` warning is why this is here at all: it makes
+    `CompiledWorkflow.requires_approval` true, so a scheduler is told before it
+    fires unattended that this graph will park for a human who may never come.
+    """
+    if not node.prompt.strip():
+        report.errors.append(
+            CompileError(
+                "manual_missing_prompt",
+                "a manual node needs a prompt — the question shown to the person",
+                node.id,
+            )
+        )
+    if node.tool:
+        report.errors.append(
+            CompileError(
+                "manual_unexpected_tool",
+                f"a manual node runs no tool; drop “{node.tool}” or use "
+                'kind="tool" to call it',
+                node.id,
+            )
+        )
+    if node.arguments:
+        report.errors.append(
+            CompileError(
+                "manual_unexpected_arguments",
+                "a manual node collects `fields`, not tool arguments",
+                node.id,
+            )
+        )
+    seen: Set[str] = set()
+    for spec in node.fields:
+        if not NODE_KEY_RE.match(spec.name):
+            report.errors.append(
+                CompileError(
+                    "manual_field_invalid",
+                    "manual field names must be lowercase slugs matching "
+                    f"{NODE_KEY_RE.pattern}, got “{spec.name}”",
+                    node.id,
+                )
+            )
+            continue
+        if spec.name in seen:
+            report.errors.append(
+                CompileError(
+                    "manual_duplicate_field",
+                    f"duplicate manual field “{spec.name}”",
+                    node.id,
+                )
+            )
+            continue
+        seen.add(spec.name)
+        _check_manual_field(spec, node, report)
+    report.warnings.append(
+        CompileError(
+            "manual_requires_person",
+            "this node pauses the run for a person to proceed or reject",
+            node.id,
+        )
+    )
+
+
+def _check_manual_field(
+    spec: InputSpec, node: NodeSpec, report: CompileReport
+) -> None:
+    """A manual field's default and choices must satisfy its own declaration.
+
+    Mirrors `_check_input_values`: the value an approver submits is checked at
+    resume against the very schema `property_schema` emits here, so a default or
+    choice that fails this check is one that would refuse the submission at the
+    moment a person is waiting on it — the worst moment to learn the field was
+    malformed. Every such failure is one `manual_field_invalid`.
+    """
+    if spec.default is not None:
+        failure = next(
+            iter(Draft202012Validator(property_schema(spec)).iter_errors(spec.default)),
+            None,
+        )
+        if failure is not None:
+            report.errors.append(
+                CompileError(
+                    "manual_field_invalid",
+                    f"manual field “{spec.name}” has a default that {failure.message}",
+                    node.id,
+                )
+            )
+    typed = Draft202012Validator({"type": spec.type})
+    for choice in spec.choices:
+        failure = next(iter(typed.iter_errors(choice)), None)
+        if failure is not None:
+            report.errors.append(
+                CompileError(
+                    "manual_field_invalid",
+                    f"manual field “{spec.name}” offers a choice that {failure.message}",
+                    node.id,
+                )
+            )
+
+
 def _unknown_tool_message(name: str, registry: Mapping[str, ToolSpec]) -> str:
     """Name the mistake and, when it is a near miss, name the fix.
 
@@ -612,10 +869,12 @@ def _check_references(
     ancestors: Dict[str, Set[str]],
     *,
     cyclic: bool,
+    declared: Optional[Set[str]],
     report: CompileReport,
 ) -> None:
-    """Every `{{ ... }}` names a real, upstream node — or the trigger payload."""
+    """Every `{{ ... }}` names a real, upstream node — or a declared input."""
     known = set(ids)
+    _check_input_references(node, declared, report)
     for name in references([node.arguments, node.prompt, node.description]):
         if name == INPUT_NAMESPACE:
             continue
@@ -639,6 +898,35 @@ def _check_references(
                     node.id,
                 )
             )
+
+
+def _check_input_references(
+    node: NodeSpec, declared: Optional[Set[str]], report: CompileReport
+) -> None:
+    """`{{ input.x }}` names something the run will actually be asked for.
+
+    Skipped entirely when the graph declares no inputs — that is the free-form
+    payload this feature grew out of, and it is still legal. Once a graph
+    declares anything, the declaration is the contract: an undeclared reference
+    is a field missing from the form, and the run that discovers it discovers it
+    as a `reference_unresolved` partway through a graph that has already done
+    real work.
+    """
+    if declared is None:
+        return
+    for name in input_fields([node.arguments, node.prompt, node.description]):
+        if name in declared or name in TRIGGER_INPUT_NAMES:
+            continue
+        close = difflib.get_close_matches(name, sorted(declared), n=3, cutoff=0.6)
+        suffix = f"; did you mean {', '.join(close)}?" if close else ""
+        report.errors.append(
+            CompileError(
+                "reference_unknown_input",
+                f"“{{{{ {INPUT_NAMESPACE}.{name} }}}}” is not a declared input of "
+                f"this workflow{suffix}",
+                node.id,
+            )
+        )
 
 
 def edges_of(graph: WorkflowGraph) -> List[Tuple[str, str]]:

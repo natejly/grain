@@ -215,7 +215,6 @@ export function AdminView({ setError }: AdminViewProps) {
       <div className="page-heading">
         <div>
           <h1>Admin</h1>
-          <p>Members, runs, machines, spend and storage for this workspace.</p>
         </div>
         <button className="ghost-button" onClick={() => void load()}>
           <RefreshCw size={14} /> Refresh

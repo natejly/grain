@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createFromMenu, openSettings, openView } from "./shell";
+import { openSettings, openView } from "./shell";
 
 test("upload, cited answer, provenance, graph, and deletion", async ({
   page,
@@ -56,7 +56,7 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
   });
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
-  await openView(page, "Documents", /Dashboards/);
+  await openView(page, "Files", /^Dashboards/);
   await page.getByRole("button", { name: "Add dashboard" }).first().click();
 
   await page.getByLabel("Dashboard name").fill("E2E revenue app");
@@ -149,19 +149,22 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
     timeout: 20_000,
   });
 
-  await openView(page, "Documents", /Documents/);
-  await page.getByRole("button", { name: /Launch Runbook/ }).click();
+  await openView(page, "Files", /^Files/);
+  // Anchored: a file row in the tree is named "<title> <kind>" and its move
+  // menu is named "Move <title>", so an unanchored match finds both.
+  await page.getByRole("button", { name: /^Launch Runbook/ }).click();
   const body = page.locator(".document-source");
   await expect(body).toHaveValue(/Step two: run the migrations\./);
   await expect(body).not.toHaveValue(/smoke-test/);
 });
 
 async function openPlaybook(page: Page) {
-  await openView(page, "Documents", /Documents/);
-  await page.getByRole("button", { name: /Rollback Playbook/ }).click();
+  await openView(page, "Files", /^Files/);
+  // Anchored, for the same reason as Launch Runbook above.
+  await page.getByRole("button", { name: /^Rollback Playbook/ }).click();
 }
 
-test("a parked write is decidable from the Documents view", async ({ page }) => {
+test("a parked write is decidable from the Files view", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "New thread" }).click();
   const composer = chatComposer(page);
@@ -357,72 +360,20 @@ test("a chart the agent draws is visible in the conversation", async ({ page }) 
   await expect(page.getByText("sandbox-png-1.png")).toHaveCount(0);
 });
 
-test("the sandbox console shows the figure the code drew", async ({ page }) => {
-  await page.goto("/");
-  await createFromMenu(page, "Sandbox");
-  await expect(page.locator(".sandbox-items li").first()).toBeVisible({
-    timeout: 30_000,
-  });
-
-  await page.locator("textarea.sandbox-source").fill(
-    [
-      "import struct, zlib",
-      "w, h = 120, 90",
-      'row = b"\\x00" + bytes((200, 90, 60)) * w',
-      "def chunk(kind, body):",
-      '    return (struct.pack(">I", len(body)) + kind + body',
-      '            + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff))',
-      'png = (b"\\x89PNG\\r\\n\\x1a\\n"',
-      '       + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))',
-      '       + chunk(b"IDAT", zlib.compress(row * h))',
-      '       + chunk(b"IEND", b""))',
-      'open("panel.png", "wb").write(png)',
-      'print("drew a", w, "x", h, "figure")',
-    ].join("\n"),
-  );
-  await page.locator(".sandbox-editor").getByRole("button", { name: "Run" }).click();
-
-  // `.last()` throughout: the panel reuses this workspace's live sandbox, so
-  // the run the chat test made is above this one in the same console — which is
-  // itself worth seeing, because it means one machine, two surfaces.
-  const mine = page.locator(".sandbox-exec").last();
-  await expect(mine.locator(".sandbox-stdout")).toContainText("drew a 120 x 90 figure", {
-    timeout: 60_000,
-  });
-  const figure = mine.locator("img.artifact-image");
-  await expect(figure).toBeVisible({ timeout: 20_000 });
-  await expect.poll(() => decoded(figure), { timeout: 15_000 }).toBe(true);
-  // The console does not follow its own output, so the shot has to be taken
-  // where the figure is — a screenshot of the scroll position the panel happens
-  // to be in proves nothing about the thing it is meant to show.
-  await figure.scrollIntoViewIfNeeded();
-  await page.locator(".sandbox-layout").screenshot({
-    path: "test-results/sandbox-artifact.png",
-  });
-
-  // And after a reload, because the descriptors live on the execution row.
-  await page.reload();
-  await openView(page, "Documents", /Sandbox/);
-  const again = page.locator(".sandbox-exec").last().locator("img.artifact-image");
-  await expect(again).toBeVisible({ timeout: 30_000 });
-  await expect.poll(() => decoded(again), { timeout: 15_000 }).toBe(true);
-
-  // Every live machine, not just this test's: the chat test's `run_python` and
-  // the navigation spec both leave one running, and three is the workspace's
-  // concurrency limit. Leaving them up would make whichever spec runs next fail
-  // with a 429 that has nothing to do with itself.
-  const stop = page.locator(".sandbox-policy-actions").getByRole("button", {
-    name: "Stop",
-  });
-  for (const item of await page.locator(".sandbox-item").all()) {
-    await item.click();
-    if (await stop.isVisible()) await stop.click();
-  }
-  await expect(page.locator(".sandbox-status.running")).toHaveCount(0);
-
-  await openView(page, "Knowledge", /Sources/);
-  const row = page.locator(".source-row", { hasText: "sandbox-png-1.png" });
-  page.once("dialog", (dialog) => dialog.accept());
-  await row.getByRole("button", { name: /^Delete sandbox-png-1\.png$/ }).click();
-  await expect(page.getByText("sandbox-png-1.png")).toHaveCount(0);
-});
+/**
+ * There is no "the sandbox console shows the figure the code drew" test any
+ * more, and its absence is deliberate rather than a gap.
+ *
+ * The console was a *destination* — a page you visited to operate a machine —
+ * and a capability is not a destination. What that test uniquely proved is
+ * proved above by the test that precedes it: `persist_artifacts` is the same
+ * code path whether the run came from the panel's Run button or from the
+ * agent's `run_python`, and the assertion that matters — that a figure reaches
+ * a user's screen and survives a reload — is made against the surface a user
+ * now actually has.
+ *
+ * It also took the "stop every live machine" cleanup with it, which is now
+ * unnecessary rather than missing: the agent's tools reuse one session per
+ * workspace through `ensure_session`, so nothing in this suite creates a second
+ * one, and the server reaps idle sessions on its own timer.
+ */

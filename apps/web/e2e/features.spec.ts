@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { openSettings, openView } from "./shell";
 
 /**
- * A sweep across the views that had no browser coverage: Documents, Boards,
+ * A sweep across the views that had no browser coverage: Files, Boards,
  * Projects, Databases, MCP, Integrations and the 3D graph. The existing spec
  * covers chat, sources, dashboards and the approval flow.
  *
@@ -24,7 +24,7 @@ function watchForErrors(page: Page): string[] {
 test("documents: create, edit, live preview, and version history", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Documents", /Documents/);
+  await openView(page, "Files", /^Files/);
 
   await page.getByRole("button", { name: "New document" }).click();
   await page.getByPlaceholder("Title").fill("Feature Sweep Notes");
@@ -58,7 +58,7 @@ test("documents: create, edit, live preview, and version history", async ({ page
 test("boards: create a board, add cards, and manage columns", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Documents", /Boards/);
+  await openView(page, "Files", /^Boards/);
 
   await page.getByPlaceholder("New board name").fill("Sweep Board");
   await page.locator(".board-new").getByRole("button", { name: /Create/ }).click();
@@ -89,7 +89,7 @@ test("boards: create a board, add cards, and manage columns", async ({ page }) =
 test("projects: a web project seeds files and bundles a live preview", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Documents", /Projects/);
+  await openView(page, "Files", /^Projects/);
 
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByPlaceholder("Project name").fill("Sweep App");

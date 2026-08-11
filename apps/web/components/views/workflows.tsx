@@ -2,10 +2,13 @@
 
 import {
   WorkflowCompileError,
+  WorkflowInputError,
   type AgentToolCall,
   type Workflow,
   type WorkflowCompileFinding,
   type WorkflowCompileResult,
+  type WorkflowGraphNode,
+  type WorkflowInputSpec,
   type WorkflowNodeRun,
   type WorkflowRun,
   type WorkflowRunDetail,
@@ -21,25 +24,30 @@ import {
   Sparkles,
   Trash2,
   TriangleAlert,
+  UserRound,
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api } from "../api";
 import { BudgetHold } from "./budget";
 import { ProposalDiff } from "./document-pending";
 import { describeError, formatRelative } from "./shared";
 import {
+  attributeProblems,
   compileErrorTitle,
   describeReviewability,
   describeSchedule,
   groupFindings,
+  inputLabel,
   isBudgetPark,
   resolvePausedReason,
   runIsSettled,
   runStatusLabel,
+  type InputProblem,
 } from "./workflow-format";
 import { WorkflowGraphView } from "./workflow-graph";
+import { WorkflowInputForm } from "./workflow-inputs";
 
 /**
  * Workflow automations, end to end: describe one in English, read the graph the
@@ -87,6 +95,15 @@ export type WorkflowsViewProps = {
  */
 const INBOX_WORKFLOWS = 25;
 const RUNS_PER_WORKFLOW = 20;
+
+/**
+ * Ties the header's "Run now" to the input form lower down the page.
+ *
+ * One button, in one place, whether or not the graph takes parameters — the
+ * alternative was a Run button that moved when a workflow happened to declare
+ * an input, which is a worse answer to "how do I start this".
+ */
+const RUN_FORM_ID = "workflow-run-form";
 
 type RunMap = Record<string, WorkflowRun[]>;
 
@@ -267,6 +284,11 @@ function AuthorPanel({
             </p>
           )}
 
+          {/* Declared parameters are part of "what is this" — a plan that asks
+              for a repository name is a different plan from one that hardcodes
+              one, and that has to be readable before it is saved. */}
+          <InputDeclaration specs={preview.summary.inputs ?? preview.graph.inputs ?? []} />
+
           <WorkflowGraphView graph={preview.graph} warnings={warnings} />
 
           <div className="workflow-preview-actions">
@@ -280,6 +302,30 @@ function AuthorPanel({
         </section>
       )}
     </section>
+  );
+}
+
+/** The parameters a compiled graph will ask for, before it is saved. */
+function InputDeclaration({ specs }: { specs: WorkflowInputSpec[] }) {
+  if (specs.length === 0) return null;
+  return (
+    <dl className="workflow-input-declaration">
+      {specs.map((spec) => (
+        <div key={spec.name}>
+          <dt>{inputLabel(spec)}</dt>
+          <dd>
+            <span className="workflow-input-type">{spec.type}</span>
+            {spec.required ? "required" : "optional"}
+            {spec.default !== null && spec.default !== undefined
+              ? ` · defaults to ${JSON.stringify(spec.default)}`
+              : ""}
+            {spec.choices.length > 0
+              ? ` · one of ${spec.choices.map((choice) => String(choice)).join(", ")}`
+              : ""}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -363,6 +409,108 @@ function ApprovalCard({
   );
 }
 
+/**
+ * The card a manual node shows while the run is paused for a person.
+ *
+ * A manual node is not asking about a write somebody is about to make — it is
+ * the write, in the sense that its answer *is* the node's output. So this shows
+ * the author's question and, when the node declares fields, the same input form
+ * a run starts from, then turns Proceed into an approval that carries the typed
+ * values and Reject into a denial that cancels the run.
+ *
+ * The form owns its own validation (`WorkflowInputForm` over the node's
+ * fields), and Proceed is its submit button by `form={formId}` — so a value the
+ * browser can see is wrong is caught before the decision is ever sent, exactly
+ * as the run form catches it before a run is started. With no fields there is
+ * nothing to type, so Proceed sends an empty object outright.
+ */
+function ManualNodeCard({
+  node,
+  run,
+  call,
+  decide,
+}: {
+  node: WorkflowGraphNode;
+  run: WorkflowNodeRun;
+  call: AgentToolCall | null;
+  decide: (
+    callId: string,
+    decision: "approved" | "denied",
+    remember: boolean,
+    inputs?: Record<string, unknown>,
+  ) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const formId = useId();
+  // Mirrors ApprovalCard: the node parks its own call and stores the id, but a
+  // record aged out of the last fifty leaves only the backing conversation.
+  const callId = run.agent_tool_call_id ?? call?.id ?? "";
+  const fields = node.fields ?? [];
+
+  async function settle(
+    decision: "approved" | "denied",
+    inputs?: Record<string, unknown>,
+  ) {
+    if (!callId || busy) return;
+    setBusy(true);
+    try {
+      await decide(callId, decision, false, inputs);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="workflow-approval">
+      <p className="workflow-approval-lead">
+        <UserRound size={14} />
+        {node.prompt || "This step is waiting for a person to proceed or reject."}
+      </p>
+      {callId ? (
+        <>
+          {fields.length > 0 && (
+            <WorkflowInputForm
+              formId={formId}
+              specs={fields}
+              remoteProblems={[]}
+              onRun={(payload) => void settle("approved", payload)}
+              disabled={busy}
+            />
+          )}
+          <div className="workflow-approval-actions">
+            <button
+              className="ghost-button"
+              disabled={busy}
+              onClick={() => void settle("denied")}
+            >
+              <CircleSlash size={14} /> Reject
+            </button>
+            {fields.length > 0 ? (
+              <button className="primary-button" type="submit" form={formId} disabled={busy}>
+                <Check size={14} /> Proceed
+              </button>
+            ) : (
+              <button
+                className="primary-button"
+                disabled={busy}
+                onClick={() => void settle("approved", {})}
+              >
+                <Check size={14} /> Proceed
+              </button>
+            )}
+          </div>
+        </>
+      ) : (
+        <p className="workflow-node-meta">
+          The approval record for this step is older than the last fifty and
+          could not be loaded. It is still decidable from the conversation this
+          run created.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function WorkflowsView({
   setError,
   composeRequested = false,
@@ -378,6 +526,8 @@ export function WorkflowsView({
   const [schedulingEnabled, setSchedulingEnabled] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** The API's last refusal of a run payload, one entry per offending input. */
+  const [inputProblems, setInputProblems] = useState<InputProblem[]>([]);
 
   const active = workflows.find((item) => item.id === activeId) ?? null;
   const runs = runsByWorkflow[activeId] ?? [];
@@ -559,12 +709,18 @@ export function WorkflowsView({
         if (runIsSettled(detail.status) && !settled.current.has(detail.id)) {
           settled.current.add(detail.id);
           changed.current?.();
+          // And the list beside it, once, for the same reason. The interval
+          // that keeps that list current is torn down by this very status
+          // change, so the last row it wrote is the second-to-last state the
+          // run was in — a run reading "Succeeded" in the banner and "Queued"
+          // in the list two inches away, indefinitely.
+          void refreshRuns(detail.workflow_id).catch(() => undefined);
         }
       } catch (caught) {
         setError(describeError(caught, "Could not open that run"));
       }
     },
-    [setError, readHeld],
+    [setError, readHeld, refreshRuns],
   );
 
   // A run that has not settled is a run worth re-reading: nodes go from running
@@ -584,6 +740,7 @@ export function WorkflowsView({
     setComposing(false);
     setActiveId(workflow.id);
     setRunDetail(null);
+    setInputProblems([]);
   }
 
   async function saved(workflow: Workflow) {
@@ -592,6 +749,7 @@ export function WorkflowsView({
     setComposing(false);
     setActiveId(workflow.id);
     setRunDetail(null);
+    setInputProblems([]);
   }
 
   async function setStatus(workflow: Workflow, status: WorkflowStatus) {
@@ -606,17 +764,26 @@ export function WorkflowsView({
     }
   }
 
-  async function run(workflow: Workflow) {
+  async function run(workflow: Workflow, payload: Record<string, unknown>) {
     setBusy(true);
+    setInputProblems([]);
     try {
-      const started = await api.runWorkflow(workflow.id);
+      const started = await api.runWorkflow(workflow.id, payload);
       setRunsByWorkflow((current) => ({
         ...current,
         [workflow.id]: [started, ...(current[workflow.id] ?? [])],
       }));
       await openRun(started.id);
     } catch (caught) {
-      setError(describeError(caught, "Could not start that run"));
+      // The refusal a form can answer: the graph is fine, a field is not, and
+      // the server named which. Anything else is still an error banner.
+      if (caught instanceof WorkflowInputError) {
+        setInputProblems(
+          attributeProblems(caught.problems, workflow.graph.inputs ?? []),
+        );
+      } else {
+        setError(describeError(caught, "Could not start that run"));
+      }
     } finally {
       setBusy(false);
     }
@@ -645,9 +812,10 @@ export function WorkflowsView({
     callId: string,
     decision: "approved" | "denied",
     remember: boolean,
+    inputs?: Record<string, unknown>,
   ) {
     try {
-      await api.decideAgentToolCall(callId, decision, remember);
+      await api.decideAgentToolCall(callId, decision, remember, inputs);
       if (runDetail) await openRun(runDetail.id);
       if (watchedWorkflow) await refreshRuns(watchedWorkflow);
       onWorkspaceChanged?.();
@@ -812,8 +980,9 @@ export function WorkflowsView({
             <div className="workflow-head-actions">
               <button
                 className="primary-button"
+                type="submit"
+                form={RUN_FORM_ID}
                 disabled={busy || active.status === "disabled"}
-                onClick={() => void run(active)}
               >
                 <Play size={14} /> Run now
               </button>
@@ -860,6 +1029,18 @@ export function WorkflowsView({
           {active.source_prompt && (
             <blockquote className="workflow-source">{active.source_prompt}</blockquote>
           )}
+
+          {/* Remounted per workflow: the draft is that graph's declaration
+              pre-filled with that graph's defaults, and carrying it across a
+              selection would put one workflow's answers in another's boxes. */}
+          <WorkflowInputForm
+            key={active.id}
+            formId={RUN_FORM_ID}
+            specs={active.graph.inputs ?? []}
+            remoteProblems={inputProblems}
+            disabled={busy || active.status === "disabled"}
+            onRun={(payload) => void run(active, payload)}
+          />
 
           <div className="workflow-body">
             <section className="workflow-graph-pane">
@@ -911,6 +1092,24 @@ export function WorkflowsView({
                         park={null}
                         menuId={`workflow-spend-ceiling-${node.node_key}`}
                         onReleased={() => void openRun(runDetail!.id)}
+                      />
+                    );
+                  }
+                  // A manual node parks on the same status as a write, but its
+                  // decision is a person answering a question, not authorising
+                  // a call — so it gets a card that asks the question and, if it
+                  // declares fields, collects them. The graph, not the run row,
+                  // is what says which kind of park this is.
+                  const graphNode = active.graph.nodes?.find(
+                    (candidate) => candidate.id === node.node_key,
+                  );
+                  if (graphNode?.kind === "manual") {
+                    return (
+                      <ManualNodeCard
+                        node={graphNode}
+                        run={node}
+                        call={approvalFor(node)}
+                        decide={decide}
                       />
                     );
                   }

@@ -6,10 +6,14 @@ import type {
   Board,
   Bootstrap,
   Conversation,
+  Dashboard,
+  DashboardPin,
+  DashboardTemplate,
   Dataset,
   DbConnection,
   DocumentSummary,
   DocumentVersion,
+  Folder,
   GeneratedApp,
   IntegrationProvider,
   KnowledgeGraph,
@@ -29,12 +33,14 @@ import { createBoardHandlers } from "./handlers/boards";
 import { createChatHandlers } from "./handlers/chat";
 import { createDashboardHandlers } from "./handlers/dashboards";
 import { createDocumentHandlers } from "./handlers/documents";
+import { createFolderHandlers } from "./handlers/folders";
 import { createGraphHandlers } from "./handlers/graph";
 import { createInfraHandlers } from "./handlers/infra";
 import { createIntegrationHandlers } from "./handlers/integrations";
 import { createMcpHandlers } from "./handlers/mcp";
 import { createSourceHandlers } from "./handlers/sources";
 import type { BudgetPark } from "./views/budget-format";
+import type { DashboardResultState } from "./views/dashboard-grid";
 import { baseName, describeError, isTabular, type View } from "./views/shared";
 
 /**
@@ -56,6 +62,7 @@ export function useWorkspace() {
   const [integrations, setIntegrations] = useState<IntegrationProvider[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [activeDocument, setActiveDocument] = useState<WorkspaceDocument | null>(null);
   const [documentVersions, setDocumentVersions] = useState<DocumentVersion[]>([]);
   const [boards, setBoards] = useState<Board[]>([]);
@@ -91,6 +98,24 @@ export function useWorkspace() {
   const datasetAttempts = useRef(new Set<string>());
 
   /**
+   * The dashboards the agent authors, and this user's curation of them.
+   *
+   * `dashboardResults` is keyed by dashboard id and lives here rather than in
+   * the grid so that navigating away and back does not re-run six queries; the
+   * ref beside it is what stops two tiles mounted in the same commit both
+   * deciding nothing has been fetched yet.
+   */
+  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [dashboardTemplates, setDashboardTemplates] = useState<DashboardTemplate[]>([]);
+  const [dashboardPins, setDashboardPins] = useState<DashboardPin[]>([]);
+  const [dashboardResults, setDashboardResults] = useState<
+    Record<string, DashboardResultState>
+  >({});
+  const requestedDashboards = useRef(new Set<string>());
+  /** A dashboard the rail asked for; the grid scrolls to it and outlines it. */
+  const [focusedDashboard, setFocusedDashboard] = useState<string | null>(null);
+
+  /**
    * Drives the Activity badge, so it has to count the approvals that actually
    * happen: `AgentToolCall`s parked by the agent loop. It counted legacy
    * `ToolCall`s until now, and nothing outside the dev seed creates the `Tool`
@@ -101,9 +126,20 @@ export function useWorkspace() {
     [agentCalls],
   );
 
-  const dashboards = useMemo(
+  /**
+   * The generated *apps* — code the sandbox builds and publishes. Named apart
+   * from `dashboards` above because they are two different things that the
+   * product used to call by one name: an app is a program in an iframe, a
+   * dashboard is a query and a shape the server draws.
+   */
+  const dashboardApps = useMemo(
     () => apps.filter((app) => app.app_type === "code"),
     [apps],
+  );
+
+  const pinnedIds = useMemo(
+    () => new Set(dashboardPins.map((pin) => pin.dashboard.id)),
+    [dashboardPins],
   );
 
   const refreshSecondary = useCallback(async () => {
@@ -141,14 +177,33 @@ export function useWorkspace() {
     setMcpServers(nextMcp);
   }, []);
 
+  /** Everything the home screen reads: what exists, what is bindable, what is pinned. */
+  const refreshDashboards = useCallback(async () => {
+    const [nextDashboards, nextTemplates, nextPins] = await Promise.all([
+      api.listDashboards(),
+      api.listDashboardTemplates(),
+      api.listDashboardPins(),
+    ]);
+    setDashboards(nextDashboards);
+    setDashboardTemplates(nextTemplates);
+    setDashboardPins(nextPins);
+  }, []);
+
   const refreshArtifacts = useCallback(async () => {
-    const [nextDocuments, nextBoards] = await Promise.all([
+    const [nextDocuments, nextFolders, nextBoards] = await Promise.all([
       api.listDocuments(),
+      api.listFolders(),
       api.listBoards(),
+      // Rides along because a dashboard is an artifact of a turn like any
+      // other: the agent's `create_dashboard` lands here, and this is what a
+      // chat run calls when it finishes. Without it a chart the assistant just
+      // made is missing from the list until the page is reloaded.
+      refreshDashboards(),
     ]);
     setDocuments(nextDocuments);
+    setFolders(nextFolders);
     setBoards(nextBoards);
-  }, []);
+  }, [refreshDashboards]);
 
   const refreshInfra = useCallback(async () => {
     const [nextConnections, nextProjects] = await Promise.all([
@@ -358,6 +413,8 @@ export function useWorkspace() {
     activeDocumentRef,
   });
 
+  const folderHandlers = createFolderHandlers({ setError, setFolders, setDocuments });
+
   const boardHandlers = createBoardHandlers({ setError, setBoards });
 
   const infraHandlers = createInfraHandlers({
@@ -421,6 +478,10 @@ export function useWorkspace() {
   const dashboardHandlers = createDashboardHandlers({
     setError,
     setApps,
+    setDashboards,
+    setDashboardPins,
+    setDashboardResults,
+    requested: requestedDashboards,
     refreshSecondary,
   });
 
@@ -446,6 +507,7 @@ export function useWorkspace() {
     integrations,
     mcpServers,
     documents,
+    folders,
     activeDocument,
     documentVersions,
     boards,
@@ -475,10 +537,18 @@ export function useWorkspace() {
     endRef,
     fileInputRef,
     pendingApprovals,
+    dashboardApps,
     dashboards,
+    dashboardTemplates,
+    dashboardPins,
+    dashboardResults,
+    pinnedIds,
+    focusedDashboard,
+    setFocusedDashboard,
     loadWorkspace,
     refreshOffScreenWork,
     ...documentHandlers,
+    ...folderHandlers,
     ...boardHandlers,
     ...infraHandlers,
     ...mcpHandlers,

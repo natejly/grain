@@ -609,6 +609,22 @@ class Settings(BaseSettings):
         return seen
 
     @property
+    def mcp_stdio_allowed(self) -> bool:
+        """Whether stdio MCP servers may be registered and spawned.
+
+        A stdio server is an arbitrary command this API launches as its own
+        user, with its own filesystem and .env — the same isolation-free
+        execution _guard_sandbox refuses for SANDBOX_PROVIDER=subprocess, and
+        letting any workspace member name that command is remote code execution
+        on the API host. An http server, by contrast, is reached over the
+        network behind OAuth. So stdio is confined to development/test and
+        production registers http servers. This is a property rather than a
+        settable flag on purpose: there is no environment variable that makes
+        arbitrary-command execution safe to expose to a workspace member.
+        """
+        return self.is_dev_env
+
+    @property
     def sandbox_ready(self) -> bool:
         if not self.sandbox_enabled:
             return False

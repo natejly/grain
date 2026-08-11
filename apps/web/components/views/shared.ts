@@ -11,7 +11,6 @@ export type View =
   | "boards"
   | "data"
   | "projects"
-  | "sandbox"
   | "mcp"
   | "activity"
   | "admin"
@@ -44,31 +43,38 @@ export function isTabular(filename: string): boolean {
 }
 
 /**
- * What each document format is called on screen.
+ * What each document format is called on screen, in the order they are offered.
  *
- * The stored value for the second one is still "latex" — the API, the agent's
- * tools and every existing row use it, and renaming the wire value would be a
- * migration for a word. The *label* had to change: a "latex" document is
- * markdown with KaTeX maths and produces no PDF, so users who picked it
- * expecting one reported the TeX compiler as broken. "LaTeX" now names only
- * the LaTeX project kind, which really does compile.
+ * Two formats, and they differ in what the reader sees: markdown is rendered
+ * (headings, lists, and $…$ maths through KaTeX), plain text is not touched at
+ * all. There is deliberately no "LaTeX" here — the format that used to carry
+ * that name rendered exactly like markdown and compiled nothing, so people who
+ * chose it expecting a PDF reported the TeX compiler as broken. "LaTeX" now
+ * names only the project kind, which really does compile.
  */
 export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
   markdown: "Markdown",
-  latex: "Markdown + math",
+  text: "Plain text",
 };
 
+/**
+ * The long form of each view's name, for the topbar.
+ *
+ * There is no "sandbox" entry because there is no sandbox destination: running
+ * code is something the agent does on your behalf, and what it produced shows
+ * up on the tool card that produced it. The service and its API are still
+ * there — nothing about this file turned them off.
+ */
 export const PAGE_TITLES: Record<View, string> = {
   chat: "Chat",
   sources: "Sources",
   memory: "Memory",
   graph: "Graph",
   dashboards: "Dashboards",
-  documents: "Documents",
+  documents: "Files",
   boards: "Boards",
   data: "Databases",
   projects: "Projects",
-  sandbox: "Sandbox",
   integrations: "Integrations",
   mcp: "MCP servers",
   activity: "Activity",

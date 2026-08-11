@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
-import type { Workflow, WorkflowGraph, WorkflowGraphNode } from "@workspace/api-client";
+import type {
+  Workflow,
+  WorkflowGraph,
+  WorkflowGraphNode,
+  WorkflowInputSpec,
+} from "@workspace/api-client";
 import {
   argumentRows,
+  attributeProblems,
   compileErrorTitle,
+  compileWarningTitle,
   describeReviewability,
   describeSchedule,
+  draftFromInputs,
   groupFindings,
   isBudgetPark,
   layerGraph,
   nodeStatusLabel,
+  readInputForm,
   resolvePausedReason,
   runIsSettled,
   upstreamOf,
@@ -220,6 +229,28 @@ describe("compile findings", () => {
     expect(compileErrorTitle("some_future_code")).toBe("Some future code");
   });
 
+  it("names every way a manual step can fail to compile", () => {
+    expect(compileErrorTitle("manual_missing_prompt")).toBe(
+      "A manual step has no question to ask the person",
+    );
+    expect(compileErrorTitle("manual_unexpected_tool")).toBe("A manual step also named a tool");
+    expect(compileErrorTitle("manual_unexpected_arguments")).toBe(
+      "A manual step carries tool arguments",
+    );
+    expect(compileErrorTitle("manual_field_invalid")).toBe(
+      "A manual step declares an unusable field",
+    );
+    expect(compileErrorTitle("manual_duplicate_field")).toBe(
+      "Two of a manual step's fields share a name",
+    );
+  });
+
+  it("warns that a manual step will pause the run for a person", () => {
+    expect(compileWarningTitle("manual_requires_person")).toBe(
+      "This step pauses for a person before the run goes on",
+    );
+  });
+
   it("groups by step and reads the whole-graph problems first", () => {
     const grouped = groupFindings([
       { code: "tool_unknown", message: "no such tool", node: "post" },
@@ -255,6 +286,173 @@ describe("describeReviewability", () => {
     const note = describeReviewability(graph([node("a"), node("b")]), false);
     expect(note.tone).toBe("unattended");
     expect(note.headline).toContain("runs unattended");
+  });
+
+  it("says a graph with a manual step pauses for a person, not writes", () => {
+    // A manual node makes `requires_approval` true too, but the write headline
+    // would name a write that never comes. The pause gets its own sentence.
+    const note = describeReviewability(
+      graph([node("gather"), node("ask", { kind: "manual", tool: "", prompt: "Ready?" })]),
+      true,
+    );
+    expect(note.tone).toBe("parks");
+    expect(note.headline).toBe("Pauses for a person before it goes on");
+  });
+
+  it("prefers the manual headline over the opaque agent one", () => {
+    // A graph with both a manual node and an agent node reads its own tools at
+    // run time, but the manual pause is the concrete, known-in-advance stop, so
+    // it is named ahead of the agent's unknowable one.
+    const note = describeReviewability(
+      graph([
+        node("ask", { kind: "manual", tool: "", prompt: "Ready?" }),
+        node("summarise", { kind: "agent", tool: "", prompt: "go" }),
+      ]),
+      false,
+    );
+    expect(note.tone).toBe("parks");
+    expect(note.headline).toBe("Pauses for a person before it goes on");
+  });
+});
+
+describe("the run form", () => {
+  function input(extra: Partial<WorkflowInputSpec> = {}): WorkflowInputSpec {
+    return {
+      name: "repo",
+      type: "string",
+      label: "",
+      description: "",
+      required: true,
+      default: null,
+      choices: [],
+      ...extra,
+    };
+  }
+
+  describe("draftFromInputs", () => {
+    it("pre-fills the declared default, because a schedule runs on it", () => {
+      expect(
+        draftFromInputs([
+          input({ default: "acme/api" }),
+          input({ name: "dry", type: "boolean", default: true }),
+          input({ name: "tags", type: "array", default: ["a"] }),
+        ]),
+      ).toEqual({ repo: "acme/api", dry: true, tags: '[\n  "a"\n]' });
+    });
+
+    it("leaves a field with no default empty rather than inventing one", () => {
+      expect(draftFromInputs([input()])).toEqual({ repo: "" });
+    });
+  });
+
+  describe("readInputForm", () => {
+    it("sends a string as typed", () => {
+      expect(readInputForm([input()], { repo: "acme/api" })).toEqual({
+        payload: { repo: "acme/api" },
+        problems: [],
+      });
+    });
+
+    it("names the input that was left empty", () => {
+      const { payload, problems } = readInputForm([input({ label: "Repository" })], {
+        repo: "",
+      });
+      expect(payload).toEqual({});
+      expect(problems).toEqual([{ input: "repo", message: "This one is required." }]);
+    });
+
+    it("omits an optional empty field rather than sending an empty string", () => {
+      // "" is a value, and the server type-checks it: sent for a number input
+      // it comes back refused, about a field the person deliberately skipped.
+      expect(
+        readInputForm([input({ name: "limit", type: "number", required: false })], {
+          limit: "",
+        }),
+      ).toEqual({ payload: {}, problems: [] });
+    });
+
+    it("turns a number field into a number, and says so when it cannot", () => {
+      const spec = input({ name: "limit", type: "number" });
+      expect(readInputForm([spec], { limit: "12.5" }).payload).toEqual({ limit: 12.5 });
+      expect(readInputForm([spec], { limit: "many" }).problems).toEqual([
+        { input: "limit", message: "Enter a number." },
+      ]);
+    });
+
+    it("refuses a decimal for an integer input rather than rounding it", () => {
+      // The server rejects rather than coerces, so a form that rounded here
+      // would run something nobody typed.
+      expect(
+        readInputForm([input({ name: "limit", type: "integer" })], { limit: "2.5" })
+          .problems[0].message,
+      ).toContain("whole number");
+    });
+
+    it("parses a JSON field and checks it is the shape that was declared", () => {
+      const spec = input({ name: "tags", type: "array" });
+      expect(readInputForm([spec], { tags: '["a","b"]' }).payload).toEqual({
+        tags: ["a", "b"],
+      });
+      expect(readInputForm([spec], { tags: "{}" }).problems[0].message).toContain("not a list");
+      expect(readInputForm([spec], { tags: "[" }).problems[0].message).toContain(
+        "not valid JSON",
+      );
+    });
+
+    it("reads a choice back as the declared value, not as its label", () => {
+      // The server refuses "5" where it declared 5 — it rejects rather than
+      // coerces — so a select that posted its option text would make every
+      // numeric enum unrunnable from the UI.
+      const spec = input({ name: "size", type: "integer", choices: [5, 10] });
+      expect(readInputForm([spec], { size: "10" }).payload).toEqual({ size: 10 });
+    });
+
+    it("always sends a boolean, because an unticked box is false, not absent", () => {
+      const spec = input({ name: "dry", type: "boolean" });
+      expect(readInputForm([spec], {}).payload).toEqual({ dry: false });
+      expect(readInputForm([spec], { dry: true }).payload).toEqual({ dry: true });
+    });
+
+    it("collects every problem, not the first", () => {
+      const problems = readInputForm(
+        [input(), input({ name: "limit", type: "number" })],
+        { repo: "", limit: "nope" },
+      ).problems;
+      expect(problems.map((problem) => problem.input)).toEqual(["repo", "limit"]);
+    });
+  });
+
+  describe("attributeProblems", () => {
+    it("puts the server's sentence next to the box that caused it", () => {
+      expect(
+        attributeProblems(
+          ["input “limit”: 'x' is not of type 'integer'"],
+          [input(), input({ name: "limit", type: "integer" })],
+        ),
+      ).toEqual([
+        { input: "limit", message: "input “limit”: 'x' is not of type 'integer'" },
+      ]);
+    });
+
+    it("reads a required failure, which quotes the name differently", () => {
+      expect(
+        attributeProblems(["'repo' is a required property"], [input()])[0].input,
+      ).toBe("repo");
+    });
+
+    it("gives a longer name the problem before a shorter one it contains", () => {
+      expect(
+        attributeProblems(
+          ["input “repo_owner”: too short"],
+          [input({ name: "repo" }), input({ name: "repo_owner" })],
+        )[0].input,
+      ).toBe("repo_owner");
+    });
+
+    it("still shows a sentence that names no declared input", () => {
+      const attributed = attributeProblems(["something else went wrong"], [input()]);
+      expect(attributed).toEqual([{ input: "", message: "something else went wrong" }]);
+    });
   });
 });
 

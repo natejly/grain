@@ -79,15 +79,16 @@ def test_edit_replaces_exactly_once_and_snapshots_the_prior_content(workspace):
             title="Notes",
             content="alpha\nbeta\ngamma",
         )
-        _updated, diff, count = documents.edit_document(
+        outcome = documents.edit_document(
             db,
             workspace_id=workspace["workspace_id"],
             document_id=doc.id,
             find="beta",
             replace="BETA",
         )
-        assert count == 1
-        assert "-beta" in diff and "+BETA" in diff
+        assert outcome.replacements == 1
+        assert not outcome.partial
+        assert "-beta" in outcome.diff and "+BETA" in outcome.diff
         db.refresh(doc)
         assert doc.content == "alpha\nBETA\ngamma"
 
@@ -118,7 +119,7 @@ def test_ambiguous_edit_is_refused(workspace):
                 replace="y",
             )
         # replace_all is the explicit opt-in.
-        _doc, _diff, count = documents.edit_document(
+        outcome = documents.edit_document(
             db,
             workspace_id=workspace["workspace_id"],
             document_id=doc.id,
@@ -126,7 +127,7 @@ def test_ambiguous_edit_is_refused(workspace):
             replace="y",
             replace_all=True,
         )
-        assert count == 3
+        assert outcome.replacements == 3
     finally:
         db.close()
 
@@ -194,25 +195,34 @@ def test_documents_are_addressable_by_title(workspace):
         db.close()
 
 
-def test_latex_kind_is_accepted_and_bad_kinds_are_not(workspace):
+def test_the_two_kinds_are_text_and_markdown_and_latex_is_not_one(workspace):
+    """"latex" is not a document kind and must not become one again.
+
+    It named a format that rendered identically to markdown and compiled
+    nothing, which is why migration 0026 rewrote every row to "markdown". A
+    document that must become a PDF is a *project*, and `test_latex.py` pins
+    that side: `normalize_kind("markdown")` raises there for the same reason
+    this raises here.
+    """
     db = SessionLocal()
     try:
-        doc = documents.create_document(
+        plain = documents.create_document(
             db,
             workspace_id=workspace["workspace_id"],
-            title="Paper",
-            content=r"The identity $e^{i\pi} + 1 = 0$.",
-            kind="latex",
+            title="Verbatim",
+            content=r"$e^{i\pi} + 1 = 0$ stays literal here.",
+            kind="text",
         )
-        assert doc.kind == "latex"
-        with pytest.raises(documents.DocumentError):
-            documents.create_document(
-                db,
-                workspace_id=workspace["workspace_id"],
-                title="Bad",
-                content="",
-                kind="pdf",
-            )
+        assert plain.kind == "text"
+        for rejected in ("latex", "pdf", "Markdown", ""):
+            with pytest.raises(documents.DocumentError, match="kind must be one of"):
+                documents.create_document(
+                    db,
+                    workspace_id=workspace["workspace_id"],
+                    title=f"Bad {rejected}",
+                    content="",
+                    kind=rejected,
+                )
     finally:
         db.close()
 
@@ -533,5 +543,195 @@ def test_board_tools_round_trip_through_the_registry(workspace):
         snapshot = json.loads(specs["read_board"].executor(db, context, {}).content)
         todo = next(c for c in snapshot["columns"] if c["name"] == "Todo")
         assert [card["title"] for card in todo["cards"]] == ["Written by the agent"]
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------
+# Reviewing a proposal one hunk at a time
+
+
+def test_segments_cover_the_document_and_rebuild_it_exactly():
+    """Every reviewable state must be reachable, and none may corrupt the file.
+
+    Rebuilding with every hunk accepted has to give the proposal back byte for
+    byte, and with none accepted has to give the original back byte for byte —
+    including the trailing newline, which `splitlines` would silently eat.
+    """
+    before = "one\ntwo\nthree\nfour\nfive\n"
+    after = "one\nTWO\nthree\nfour\nFIVE\nsix\n"
+    segments = documents.segment_revision(before, after)
+
+    assert documents.hunk_count(segments) == 2
+    everything = set(range(2))
+    assert documents.apply_segments(segments, everything) == after
+    assert documents.apply_segments(segments, set()) == before
+    # The untouched stretches really are the document's own lines, in order.
+    covered = [line for s in segments for line in s.before]
+    assert covered == before.split("\n")
+
+
+def test_accepting_one_hunk_leaves_the_other_alone():
+    before = "keep\ndrop me\nkeep\nalso drop\n"
+    after = "keep\nkept instead\nkeep\nalso kept\n"
+    segments = documents.segment_revision(before, after)
+    assert documents.hunk_count(segments) == 2
+    assert documents.apply_segments(segments, {0}) == "keep\nkept instead\nkeep\nalso drop\n"
+    assert documents.apply_segments(segments, {1}) == "keep\ndrop me\nkeep\nalso kept\n"
+
+
+def test_a_stale_hunk_index_is_refused_rather_than_guessed():
+    with pytest.raises(documents.DocumentError, match="cannot be applied"):
+        documents.select_hunks([0, 7], 2)
+    with pytest.raises(documents.DocumentError, match="No changes were accepted"):
+        documents.select_hunks([], 2)
+    # None is "the whole proposal", which is what every ordinary approval sends.
+    assert documents.select_hunks(None, 2) is None
+
+
+def test_a_partial_edit_says_so_in_the_version_history(workspace):
+    """The undo list must not describe a change that was only half applied.
+
+    Three changes proposed, one accepted: the document holds exactly that one,
+    and the version row says which fraction landed and who is owed it. A row
+    reading "Agent edit" here would be a lie the restore button cannot correct.
+    """
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db,
+            workspace_id=workspace["workspace_id"],
+            title="Runbook",
+            content="one\ntwo\nthree\n",
+        )
+        outcome = documents.edit_document(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            find="one\ntwo\nthree\n",
+            replace="ONE\ntwo\nTHREE\n",
+            summary="Shout the ends",
+            accepted_hunks=[0],
+            created_by="reviewer-1",
+        )
+        assert outcome.partial
+        assert (outcome.applied_hunks, outcome.total_hunks) == (1, 2)
+        db.refresh(doc)
+        assert doc.content == "ONE\ntwo\nthree\n"
+
+        version = documents.list_versions(
+            db, workspace_id=workspace["workspace_id"], document_id=doc.id
+        )[0]
+        assert version.summary == "Shout the ends — 1 of 2 proposed changes applied"
+        assert version.created_by == "reviewer-1"
+        # And the snapshot is still the *whole* prior document, so restoring
+        # undoes the accepted hunk rather than half of it.
+        assert version.content == "one\ntwo\nthree\n"
+    finally:
+        db.close()
+
+
+def test_a_wholly_accepted_edit_does_not_claim_to_be_partial(workspace):
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db,
+            workspace_id=workspace["workspace_id"],
+            title="Whole",
+            content="a\nb\n",
+        )
+        outcome = documents.edit_document(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            find="a\nb\n",
+            replace="A\nB\n",
+            summary="Shout",
+            accepted_hunks=[0],
+        )
+        assert not outcome.partial
+        version = documents.list_versions(
+            db, workspace_id=workspace["workspace_id"], document_id=doc.id
+        )[0]
+        assert version.summary == "Shout"
+    finally:
+        db.close()
+
+
+def test_the_tool_tells_the_model_it_was_overruled(workspace):
+    """A partial approval that reads as a full one is a re-proposal loop.
+
+    The model has to learn that the rejected hunks were rejected, or the next
+    turn proposes them again and the reviewer is on a treadmill.
+    """
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db,
+            workspace_id=workspace["workspace_id"],
+            title="Overruled",
+            content="one\ntwo\nthree\n",
+        )
+        context = ToolContext(
+            workspace_id=workspace["workspace_id"],
+            user_id=workspace["user_id"],
+            conversation_id="",
+        )
+        specs = registry_tools(db, context)
+        result = specs["edit_document"].executor(
+            db,
+            context,
+            {
+                "document_id": doc.id,
+                "find": "one\ntwo\nthree\n",
+                "replace": "ONE\ntwo\nTHREE\n",
+                "accepted_hunks": [1],
+            },
+        )
+        assert "accepted 1 of 2" in result.content
+        assert "Do not re-propose the rejected parts." in result.content
+        db.refresh(doc)
+        assert doc.content == "one\ntwo\nTHREE\n"
+    finally:
+        db.close()
+
+
+def test_document_tools_fall_back_to_the_document_the_user_is_looking_at(workspace):
+    """"Tighten this paragraph" has to resolve without the model naming a file.
+
+    A turn started from the chat panel beside a document carries that document
+    on the ToolContext. Without the fallback the model must call list_documents
+    and choose, which is exactly the step it gets wrong when two titles are
+    similar.
+    """
+    db = SessionLocal()
+    try:
+        open_doc = documents.create_document(
+            db, workspace_id=workspace["workspace_id"], title="Open", content="here\n"
+        )
+        other = documents.create_document(
+            db, workspace_id=workspace["workspace_id"], title="Other", content="there\n"
+        )
+        context = ToolContext(
+            workspace_id=workspace["workspace_id"],
+            user_id=workspace["user_id"],
+            conversation_id="",
+            document_id=open_doc.id,
+        )
+        specs = registry_tools(db, context)
+        assert "here" in specs["read_document"].executor(db, context, {}).content
+
+        specs["edit_document"].executor(
+            db, context, {"find": "here", "replace": "HERE"}
+        )
+        db.refresh(open_doc)
+        db.refresh(other)
+        assert open_doc.content == "HERE\n"
+        # A named target still wins over the open document.
+        specs["edit_document"].executor(
+            db, context, {"title": "Other", "find": "there", "replace": "THERE"}
+        )
+        db.refresh(other)
+        assert other.content == "THERE\n"
     finally:
         db.close()

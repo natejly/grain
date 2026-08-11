@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
+from app.config import Settings
 from app.database import SessionLocal
 from app.models import McpServer, McpTool
 from app.services.llm_tools import ToolContext
@@ -122,6 +124,85 @@ def test_refresh_caches_tools_and_registry_exposes_them(client):
         db.query(McpTool).filter(McpTool.name == "explode").update({"enabled": False})
         db.commit()
         assert "mcp__echo__explode" not in registry_tools(db, context)
+    finally:
+        db.query(McpTool).delete()
+        db.query(McpServer).delete()
+        db.commit()
+        db.close()
+
+
+def _production_stdio(monkeypatch) -> None:
+    """Make the app behave as a non-dev deployment for the stdio gate only.
+
+    Building a real production Settings is impractical here — its validators
+    demand an OpenAI key, SMTP, a secure cookie — and would also flip unrelated
+    behaviour. The one fact under test is that stdio is disallowed, so patch the
+    single policy the endpoint and spawn path both consult.
+    """
+    monkeypatch.setattr(
+        Settings, "mcp_stdio_allowed", property(lambda self: False)
+    )
+
+
+def test_stdio_registration_is_refused_outside_development(client, monkeypatch):
+    _production_stdio(monkeypatch)
+    refused = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "local-exec",
+            "transport": "stdio",
+            "command": "/bin/sh",
+            "args": ["-c", "id"],
+            "url": "",
+            "secrets": {},
+        },
+        headers={"Idempotency-Key": "stdio-prod-" + os.urandom(6).hex()},
+    )
+    assert refused.status_code == 403
+    assert "development" in refused.json()["detail"]
+    # Only stdio is gated: an http server still registers under the same policy.
+    allowed = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "remote-ok",
+            "transport": "http",
+            "command": "",
+            "args": [],
+            "url": "https://mcp.example.com",
+            "secrets": {},
+        },
+        headers={"Idempotency-Key": "http-prod-" + os.urandom(6).hex()},
+    )
+    assert allowed.status_code == 201
+    db = SessionLocal()
+    try:
+        db.query(McpServer).filter(McpServer.name == "remote-ok").delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_stdio_spawn_is_refused_for_a_stale_row_outside_development(client, monkeypatch):
+    """A stdio row that predates the gate must not spawn — refresh errors, not runs."""
+    identity = client.get("/api/bootstrap").json()["identity"]
+    db = SessionLocal()
+    try:
+        server = McpServer(
+            workspace_id=identity["workspace_id"],
+            name="stale-stdio",
+            transport="stdio",
+            command=sys.executable,
+            args_json=json.dumps([FIXTURE]),
+        )
+        db.add(server)
+        db.commit()
+
+        _production_stdio(monkeypatch)
+        with pytest.raises(McpError):
+            refresh_server_tools(db, server)
+        db.refresh(server)
+        assert server.status == "error"
+        assert "development" in server.last_error
     finally:
         db.query(McpTool).delete()
         db.query(McpServer).delete()

@@ -77,12 +77,19 @@ def _park_run(client) -> tuple[str, str]:
 
 @pytest.fixture(autouse=True)
 def _no_resume(monkeypatch):
-    """Capture the resume hand-off instead of running a model-backed turn."""
+    """Capture the resume hand-off instead of running a model-backed turn.
+
+    The amendment — the hunks a reviewer accepted, when they took only part of a
+    document edit — is captured as a fourth element so a test can assert what the
+    background task was actually handed. It is None for every decision that was
+    not a partial approval, which is all of them below bar one. The fifth element
+    is the manual-node `inputs` a person typed, None for every tool decision here.
+    """
     calls = []
     monkeypatch.setattr(
         "app.api.tools.resume_run",
-        lambda run_id, tool_call_id, decision: calls.append(
-            (run_id, tool_call_id, decision)
+        lambda run_id, tool_call_id, decision, amendment=None, inputs=None: calls.append(
+            (run_id, tool_call_id, decision, amendment, inputs)
         ),
     )
     yield calls
@@ -103,7 +110,7 @@ def test_approve_resumes_the_run_and_remembers_the_policy(client, _no_resume):
     )
     assert response.status_code == 200
     assert response.json()["status"] == "approved"
-    assert _no_resume == [(run_id, call_id, "approved")]
+    assert _no_resume == [(run_id, call_id, "approved", None, None)]
 
     db = SessionLocal()
     try:
@@ -127,7 +134,7 @@ def test_deny_without_remember_leaves_the_policy_asking(client, _no_resume):
     assert response.status_code == 200
     assert response.json()["status"] == "denied"
     # Denials resume too, so the model can answer around the refusal.
-    assert _no_resume == [(run_id, call_id, "denied")]
+    assert _no_resume == [(run_id, call_id, "denied", None, None)]
 
     db = SessionLocal()
     try:
@@ -169,7 +176,7 @@ def test_replayed_idempotency_key_does_not_resume_twice(client, _no_resume):
     )
     assert first.status_code == 200
     assert second.status_code == 200
-    assert _no_resume == [(run_id, call_id, "approved")]
+    assert _no_resume == [(run_id, call_id, "approved", None, None)]
 
 
 def test_unknown_tool_call_is_not_found(client, _no_resume):

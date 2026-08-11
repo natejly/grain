@@ -980,20 +980,13 @@ select:focus-visible {
 .welcome {
   width: min(640px, 100%);
   padding-bottom: 40px;
-}
-
-.welcome h1 {
-  margin: 0 0 9px;
-  color: var(--text);
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  text-align: center;
 }
 
 .welcome > p {
   margin: 0;
-  color: var(--text-muted);
-  font-size: 13px;
+  color: var(--text-dim);
+  font-size: 12px;
 }
 
 .message-column {
@@ -3681,6 +3674,101 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
+/* The folder tree.
+
+   Indentation is an inline style rather than nested padding, because a tree
+   rendered with real nesting loses half its usable width by the third level in
+   a 240px sidebar. The row is a grid of "name, then actions" so the actions
+   button never moves as titles change length, and it is revealed on hover and
+   on focus — focus, not only hover, or the menu is unreachable by keyboard. */
+.file-tree {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.file-tree-head {
+  display: flex;
+  padding: 0 6px 8px;
+}
+
+.file-tree-head .ghost-button {
+  width: 100%;
+  justify-content: flex-start;
+  font-size: 11px;
+}
+
+.tree-root,
+.tree-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tree-folder {
+  min-width: 0;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.tree-menu-trigger {
+  flex: none;
+  opacity: 0;
+}
+
+.tree-row:hover .tree-menu-trigger,
+.tree-menu-trigger:focus-visible,
+.tree-menu-trigger[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.tree-empty {
+  padding: 5px 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.tree-rename {
+  padding-block: 4px;
+}
+
+/* A heading inside a popover — "Move to" above the destinations. Not a
+   <button>, so it must not look like one. */
+.disclosure-note {
+  margin: 6px 8px 2px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .document-editor {
   display: flex;
   flex-direction: column;
@@ -3805,6 +3893,20 @@ select:focus-visible {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 4px 0;
+}
+
+/* A plain-text document, shown as typed. Monospace and pre-wrap are the whole
+   promise of the kind: no markdown pass, so a line starting with "#" is a line
+   starting with "#". `pre-wrap` rather than `pre` because a long line should
+   reach the reader rather than the horizontal scrollbar. */
+.document-plain {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
 }
 
 /* ---- Kanban boards ---- */
@@ -4666,282 +4768,11 @@ select:focus-visible {
   line-height: 1.5;
 }
 
-/* Sandbox — server-side execution (ADR 0005).
-
-   The policy banner is the reason this section exists at its size: a user has
-   to be able to tell, without reading, whether the machine they are about to
-   paste data into can reach the internet. So the banner is the first thing
-   under the header, it is tinted by policy, and `open` is the one that gets the
-   warning colour rather than the calm one. */
-
-.sandbox-layout {
-  display: grid;
-  grid-template-columns: 250px minmax(0, 1fr);
-  height: 100%;
-  min-height: 0;
-}
-
-.sandbox-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-  padding: 14px 10px;
-}
-
-.sandbox-sidebar-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 6px 8px;
-  color: var(--text-dim);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.sandbox-empty {
-  padding: 10px 6px;
-  color: var(--text-dim);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.sandbox-items {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sandbox-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.sandbox-item:hover {
-  background: var(--surface-hover);
-}
-
-.sandbox-item.active {
-  background: var(--accent-muted);
-  color: var(--text);
-}
-
-.sandbox-item-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sandbox-status {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-}
-
-.sandbox-status.running {
-  background: var(--green-muted);
-  color: var(--green);
-}
-
-.sandbox-status.paused {
-  background: var(--amber-muted);
-  color: var(--amber);
-}
-
-.sandbox-status.killed {
-  background: var(--surface-hover);
-  color: var(--text-dim);
-}
-
-.sandbox-status.error {
-  background: var(--red-muted);
-  color: var(--red);
-}
-
-.sandbox-item-meta {
-  display: flex;
-  gap: 8px;
-  padding: 0 8px 8px 30px;
-  color: var(--text-dim);
-  font-size: 10px;
-}
-
-.sandbox-item-error {
-  margin: 0 8px 8px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--red-muted);
-  color: var(--red);
-  font-size: 10px;
-  line-height: 1.4;
-}
-
-.sandbox-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
-.sandbox-main.empty {
-  align-items: center;
-  justify-content: center;
-}
-
-.sandbox-policy {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--border);
-}
-
-.sandbox-policy > div {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.sandbox-policy strong {
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.sandbox-policy span {
-  font-size: 11px;
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-/* Open egress is the risky default, so it reads as a caution rather than as
-   chrome — see ADR 0005 on exfiltration being the real cost of this feature. */
-.sandbox-policy.open {
-  background: var(--amber-muted);
-  color: var(--amber);
-}
-
-.sandbox-policy.allowlist {
-  background: var(--accent-muted);
-  color: var(--accent-text);
-}
-
-.sandbox-policy.none {
-  background: var(--green-muted);
-  color: var(--green);
-}
-
-.sandbox-policy-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.sandbox-console {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 14px 18px;
-  background: var(--bg);
-}
-
-.sandbox-exec {
-  margin-bottom: 14px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface);
-  overflow: hidden;
-}
-
-.sandbox-exec-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--code-bg);
-}
-
-.sandbox-exec-kind {
-  flex: none;
-  color: var(--accent);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
-}
-
-.sandbox-exec-source {
-  flex: 1;
-  margin: 0;
-  min-width: 0;
-  color: var(--text);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.sandbox-exec-meta {
-  flex: none;
-  color: var(--text-dim);
-  font-size: 10px;
-}
-
-/* stdout and stderr are tinted differently on purpose: a merged stream makes
-   "printed nothing and warned twice" look identical to "printed twice". */
-.sandbox-stdout,
-.sandbox-stderr,
-.sandbox-exec-error {
-  margin: 0;
-  padding: 10px 12px;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.sandbox-stdout {
-  color: var(--text);
-}
-
-.sandbox-stderr {
-  background: var(--amber-muted);
-  color: var(--amber);
-}
-
-.sandbox-exec-error {
-  background: var(--red-muted);
-  color: var(--red);
-}
-
-.sandbox-exec-quiet {
-  margin: 0;
-  padding: 10px 12px;
-  color: var(--text-dim);
-  font-size: 11px;
-}
-
-/* Figures a tool call or an execution produced. One rule for both homes — the
-   sandbox console and the chat transcript — because it is one idea. The light
-   backing plate matters: a matplotlib figure has a transparent background, so
-   on the dark theme a chart drawn in black ink on nothing is invisible. */
+/* Figures a tool call produced. This is now where a chart the agent drew is
+   *seen* — the sandbox console that used to be its other home is gone, because
+   running code is a capability rather than a place to visit. The light backing
+   plate matters: a matplotlib figure has a transparent background, so on the
+   dark theme a chart drawn in black ink on nothing is invisible. */
 .artifact-images {
   display: grid;
   gap: 10px;
@@ -4966,77 +4797,6 @@ select:focus-visible {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
-}
-
-.sandbox-running {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.sandbox-editor {
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.sandbox-editor-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 18px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.sandbox-editor-head label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-}
-
-.sandbox-editor-head .field-hint {
-  flex: 1;
-  margin-top: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sandbox-editor-head .primary-button {
-  margin-left: auto;
-}
-
-.sandbox-source {
-  height: 168px;
-  padding: 12px 18px;
-  border: 0;
-  background: var(--surface);
-  color: var(--text);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  resize: vertical;
-  outline: none;
-  tab-size: 2;
-}
-
-@media (max-width: 900px) {
-  .sandbox-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .sandbox-sidebar {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
 }
 
 /* ---- Admin ----
@@ -5982,44 +5742,147 @@ select:focus-visible {
   gap: 8px;
 }
 
-/* ---- The graph ---- */
-.workflow-graph {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+/* ---- The graph, on a dot-grid canvas ----
+   React Flow owns the viewport and nothing else: the rows come from
+   `layerGraph`, the same topological walk the executor runs in. Every colour
+   the library can paint is redirected at a token below, because its own
+   stylesheet ships a palette that is right in neither theme. */
+.workflow-canvas {
+  height: clamp(360px, 56vh, 620px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
 }
 
-.workflow-flow {
+/* A stopped run holds a decision, and a parked step's card quotes the write it
+   is asking about — so it is several times the height of a chip. The canvas
+   grows to hold it; the page this sits on scrolls, and the canvas does not. */
+.workflow-canvas.stopped {
+  height: clamp(520px, 76vh, 820px);
+}
+
+.workflow-canvas .react-flow {
+  --xy-background-color: var(--bg);
+  --xy-background-pattern-color: var(--border);
+  --xy-edge-stroke: var(--graph-edge);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-edge-stroke-width: 1.4;
+  --xy-connectionline-stroke: var(--graph-edge);
+  --xy-attribution-background-color: var(--tint);
+  --xy-node-border: none;
+  --xy-node-color: var(--text);
+}
+
+/* Set as an SVG attribute by the library, so it cannot read a custom property
+   there — the arrowhead is recoloured from here instead. */
+.workflow-canvas .react-flow__arrowhead polyline {
+  fill: var(--graph-edge);
+  stroke: var(--graph-edge);
+}
+
+.workflow-canvas .react-flow__attribution a {
+  color: var(--text-dim);
+}
+
+/* Connection points exist so edges have somewhere to land; nothing here
+   connects anything, so they are geometry rather than controls. */
+.workflow-canvas .react-flow__handle {
+  border: 0;
+  background: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workflow-canvas-controls {
   display: flex;
-  justify-content: center;
-  padding: 5px 0;
-  color: var(--border-strong);
-}
-
-.workflow-layer-nodes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.workflow-layer-nodes > li {
-  flex: 1 1 260px;
-  min-width: 0;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
 }
 
 .workflow-node {
+  position: relative;
   display: grid;
-  height: 100%;
-  gap: 6px;
-  padding: 11px 12px;
   border: 1px solid var(--border);
   border-radius: 11px;
   background: var(--surface-raised);
+}
+
+/* The chip: everything readable at a glance, and the control that opens the
+   rest. A button, so the detail is one Tab away and not only one hover. */
+.workflow-node-summary {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-node-caret {
+  color: var(--text-dim);
+  transition: transform 120ms ease;
+}
+
+.workflow-node.open .workflow-node-caret {
+  transform: rotate(180deg);
+}
+
+.workflow-node.open {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Hangs below the chip rather than growing it: a node that changed size on
+   hover would shove the row beneath it sideways every time a pointer crossed
+   the canvas. */
+.workflow-node-detail {
+  position: absolute;
+  z-index: 2;
+  top: 100%;
+  right: -1px;
+  left: -1px;
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+  gap: 6px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 11px 11px;
+  background: var(--surface-raised);
+}
+
+/* The step that stopped the run gets a bigger card, because what it holds is a
+   decision rather than a description — and a diff cut off mid-word is not
+   something anyone should be asked to approve. It grows rightwards over its
+   neighbours, which it already outranks. Bounded in height all the same: a
+   failed step's output has no length limit, and an unbounded node would make
+   the canvas zoom out until nothing on it could be read. */
+.workflow-node.ran.waiting_for_approval > .workflow-node-detail,
+.workflow-node.ran.failed > .workflow-node-detail {
+  right: auto;
+  width: 340px;
+  max-height: 460px;
+}
+
+/* Two lines of an assistant step's prompt on the chip; all of it when open. */
+.workflow-node-gist {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 /* An agent step cannot list what it will call, and must not look as though it
@@ -6184,12 +6047,8 @@ select:focus-visible {
   font-size: 10.5px;
 }
 
-.workflow-node-output {
-  display: grid;
-  gap: 3px;
-}
-
 .workflow-node-label {
+  margin: 0;
   color: var(--text-dim);
   font-size: 9.5px;
   font-weight: 600;
@@ -6197,7 +6056,7 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
-.workflow-node-output pre {
+.workflow-node-output {
   max-height: 180px;
   margin: 0;
   overflow: auto;
@@ -6269,6 +6128,166 @@ select:focus-visible {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* ---- The run form ----
+   A workflow's declared inputs. The submit button is the header's "Run now",
+   tied here by `form=`, so a run starts from the same place whether or not the
+   graph takes parameters. With nothing declared the form is empty and shows
+   nothing — the button still works, and posts an empty payload. */
+.workflow-inputs {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.workflow-inputs.bare {
+  display: contents;
+}
+
+.workflow-inputs-head {
+  display: grid;
+  gap: 2px;
+  grid-column: 1 / -1;
+}
+
+.workflow-inputs-head strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.workflow-inputs-head span {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.workflow-inputs-alert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--red-muted);
+  color: var(--red);
+  font-size: 11.5px;
+  grid-column: 1 / -1;
+  line-height: 1.5;
+}
+
+.workflow-input {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
+}
+
+.workflow-input > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workflow-input-optional {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: lowercase;
+}
+
+.workflow-input input[type="text"],
+.workflow-input select,
+.workflow-input textarea {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.workflow-input-json {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  resize: vertical;
+}
+
+/* Element selectors, matching the rule above rather than undercutting it: the
+   base border is set by `.workflow-input input[type="text"]`, which outranks a
+   bare `[aria-invalid]` — so the shorter version of this rule parsed fine, sat
+   below its rival in the file, and painted nothing at all. */
+.workflow-input input[aria-invalid="true"],
+.workflow-input select[aria-invalid="true"],
+.workflow-input textarea[aria-invalid="true"] {
+  border-color: var(--red-border);
+}
+
+.workflow-input-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.workflow-input-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.workflow-input-error {
+  margin: 0;
+  color: var(--red);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+/* The same declaration, read-only, in the compile preview: a plan that asks
+   for a repository name is a different plan from one that hardcodes one. */
+.workflow-input-declaration {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.workflow-input-declaration > div {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
+}
+
+.workflow-input-declaration dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workflow-input-declaration dd {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.workflow-input-type {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10px;
 }
 
 @media (max-width: 900px) {
@@ -6507,4 +6526,546 @@ select:focus-visible {
 .workflow-run-status.budget,
 .workflow-node-status.budget {
   color: var(--amber);
+}
+
+/* ==========================================================================
+   Dashboards — the pinned home screen, its catalogue, and its charts
+   ==========================================================================
+
+   One accent and no second hue, which is a palette constraint and also the
+   right answer: nothing below asks colour to tell two series apart. Bars draw
+   one measure at a time, several measures become several figures, and the
+   donut's ring is one accent stepped by opacity with the identity carried by
+   its legend. */
+
+.pinned-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 14px 0 4px;
+}
+
+.pinned-heading {
+  padding: 0 10px 6px;
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pinned-item {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pinned-item > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pinned-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.pinned-item.active {
+  background: var(--accent-muted);
+  color: var(--accent-text);
+}
+
+.page-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ---- The grid ----
+   `--tile-row` is mirrored by GRID_ROW_HEIGHT in dashboard-format.ts, and the
+   gap by GRID_GAP: the drag maths converts pixels to cells and would snap to
+   the wrong cell if these two drifted apart. */
+.dashboard-grid {
+  --tile-row: 76px;
+  width: min(1060px, 100%);
+  margin: 0 auto 30px;
+  display: grid;
+  grid-auto-rows: var(--tile-row);
+  gap: 12px;
+}
+
+.dashboard-grid-empty {
+  width: min(1060px, 100%);
+  margin: 0 auto 30px;
+  padding: 28px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.dashboard-pin-tile {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.dashboard-pin-tile.held {
+  z-index: 3;
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px var(--tint);
+}
+
+.dashboard-pin-tile.focused {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-border-strong);
+  outline-offset: 1px;
+}
+
+.dashboard-pin-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 8px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-pin-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.dashboard-pin-title strong {
+  display: block;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-pin-title span {
+  display: block;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-grip {
+  width: 22px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: grab;
+  touch-action: none;
+}
+
+.tile-grip:hover,
+.tile-grip:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.dashboard-pin-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+/* Bottom-right, sized for a finger as well as a cursor, and reachable by Tab
+   because a grid that can only be resized by dragging cannot be resized at
+   all by a keyboard. */
+.tile-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-top: 1px solid var(--border-strong);
+  border-left: 1px solid var(--border-strong);
+  border-radius: 6px 0 6px 0;
+  background: var(--surface-raised);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.tile-resize:hover,
+.tile-resize:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+/* ---- Charts ---- */
+
+.dashboard-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chart-figure {
+  margin: 0;
+}
+
+.chart-figure figcaption {
+  padding: 2px 6px 4px;
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chart-figure .mini-chart {
+  min-height: 0;
+  padding: 4px 8px 8px;
+}
+
+.chart-empty,
+.chart-error {
+  margin: 0;
+  padding: 16px 10px;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-align: center;
+}
+
+.chart-error {
+  color: var(--red);
+}
+
+.line-chart {
+  width: 100%;
+  height: 92px;
+  padding: 0 8px;
+}
+
+.line-chart polyline {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.line-chart circle {
+  fill: var(--accent);
+}
+
+.line-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 10px 6px;
+  color: var(--text-muted);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.donut-layout {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px 8px;
+}
+
+.donut-chart {
+  width: 96px;
+  height: 96px;
+  flex: none;
+  /* Twelve o'clock, clockwise: a ring that starts at three reads as an arc
+     that lost its beginning. */
+  transform: rotate(-90deg);
+}
+
+.donut-chart circle {
+  stroke: var(--accent);
+}
+
+.donut-legend {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.donut-legend li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 8px;
+}
+
+.donut-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.donut-legend span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.donut-legend strong {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- The catalogue dropdown ---- */
+
+.dashboard-catalog-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dashboard-catalog-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dashboard-catalog-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dashboard-catalog-open:hover {
+  background: var(--surface-hover);
+}
+
+.dashboard-catalog-open strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-catalog-open span {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disclosure-empty {
+  margin: 0;
+  padding: 10px 8px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* ---- Templates ---- */
+
+.dashboard-templates,
+.dashboard-apps {
+  width: min(1060px, 100%);
+  margin: 0 auto 30px;
+}
+
+.dashboard-templates h2,
+.dashboard-apps h2 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.section-note {
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.dashboard-template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.dashboard-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.dashboard-template-head strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dashboard-template-head span {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.dashboard-template-card .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dashboard-template-card .field > span {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.dashboard-template-card .field em {
+  color: var(--text-dim);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.dashboard-template-columns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* Every finding at once, because fixing them one resubmit at a time is how a
+   legible refusal becomes an illegible loop. */
+.dashboard-bind-refusal {
+  margin: 0;
+  padding: 8px 10px 8px 24px;
+  border: 1px solid var(--red-border);
+  border-radius: 6px;
+  background: var(--red-muted);
+  color: var(--red);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.dashboard-bind-ok {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--green-border);
+  border-radius: 6px;
+  background: var(--green-muted);
+  color: var(--green);
+  font-size: 9px;
+}
+
+/* ---- A published dashboard inside a conversation ---- */
+
+.chat-dashboards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+
+.chat-dashboard {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.chat-dashboard figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+}
+
+.chat-dashboard figcaption a {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-text);
+  font-size: 9px;
+  text-decoration: none;
+}
+
+.sandbox-frame.chat-embed {
+  width: 100%;
+  height: 300px;
+  border: 0;
+  background: var(--sandbox-bg);
+}
+
+@media (max-width: 900px) {
+  /* Twelve columns in 380px of phone is a column of slivers, so the grid
+     collapses to one tile per row and the arrangement is simply not shown —
+     rather than shown wrong. */
+  .dashboard-grid {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dashboard-pin-tile {
+    min-height: 220px;
+  }
+
+  .tile-grip,
+  .tile-resize {
+    display: none;
+  }
+
+  .donut-layout {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }

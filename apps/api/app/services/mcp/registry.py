@@ -63,7 +63,20 @@ def unpack_secrets(server: McpServer) -> Dict[str, str]:
     return {str(k): str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
 
 
-def server_config(server: McpServer) -> ServerConfig:
+def server_config(
+    server: McpServer, settings: Optional[Settings] = None
+) -> ServerConfig:
+    settings = settings or get_settings()
+    if server.transport == "stdio" and not settings.mcp_stdio_allowed:
+        # The registration endpoint refuses new stdio servers outside
+        # development, but a row could predate that gate or be inserted directly;
+        # this is the boundary that actually runs the command, so it refuses too.
+        # Both callers turn an McpError into a visible "error" status rather than
+        # a spawn, so a stale stdio row is inert instead of live RCE.
+        raise McpError(
+            "stdio MCP servers run on the API host and are disabled outside "
+            "development"
+        )
     secrets = unpack_secrets(server)
     try:
         args = json.loads(server.args_json)

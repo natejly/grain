@@ -365,3 +365,41 @@
   self-contained, and it also surfaced a latent flake — a reload assertion that
   silently depended on which conversation the shell happens to open. Assert
   through an explicit selection, not through someone else's default.
+- "The tree is yours" is a claim to verify, not to trust. A session that started
+  on a clean `git status` found, an hour in, 40 modified files it had not
+  touched — a second agent working on generated-app backends and workflow
+  inputs, editing `views/chat.tsx`, `globals.css` and `schemas.py` in the same
+  minutes. Nothing crashed; both sets of edits happened to land in different
+  regions of the same files, which is luck and not a mechanism. The tell is
+  cheap and should be routine before a large change: `find apps packages -type f
+  -newermt "<session start>"` and compare against what you have written. If it
+  is not empty, stop before touching a shared file — a whole-file Write by
+  either side silently destroys the other's work, and the loser finds out from a
+  test failure that names the wrong culprit.
+- Sequence a multi-part feature backend-first when the parts share a service.
+  Parts 2 and 3 here both needed `documents.py` and the approval path, and doing
+  the whole backend before any UI meant that when the session had to stop early,
+  what existed was a complete, migrated, tested API rather than three half-wired
+  vertical slices. The frontend is the resumable half; the schema is not.
+- A partial approval must not be written over the model's own arguments.
+  `AgentToolCall.arguments_json` is the record of what was *asked for*; the
+  hunks a human accepted are the record of what was *allowed*, and they belong
+  on the audit row and in the resume payload (`LoopState.pending_calls[0]
+  ["amendment"]`), merged into the arguments only on the way to the executor.
+  Conflating them loses the ability to say what the model proposed.
+- A lint warning is a symptom; read what it points at before calling it
+  pre-existing. Three separate track reports this session dismissed the same two
+  `no-unused-vars` warnings as "pre-existing, in another agent's file". They were
+  neither pre-existing nor cosmetic: at the baseline commit both symbols were
+  *used*, and a stray trim pass had deleted the UI that consumed them — the
+  "Live" pill on the audit log and the model-provider pill in the header — while
+  leaving the destructured prop and the entire CSS rule behind. An unused
+  variable beside live CSS for a class nobody renders is the signature of an
+  accidental deletion, not of dead code. The check costs one command:
+  `git show HEAD:<file> | grep <symbol>`. If the symbol was used at HEAD and is
+  unused now, a feature was removed, and nobody wrote that down.
+- "Pre-existing" and "another agent's" are claims with an owner, and copying them
+  from a sibling report launders them into fact. Each of the three reports plausibly
+  read it from the previous one. Verify against the commit, not against the
+  neighbouring summary — a shared tree makes attribution *harder* to inherit,
+  not easier.

@@ -150,6 +150,11 @@ class Conversation(Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     title: Mapped[str] = mapped_column(String(200), default="New conversation")
+    #: The document this thread is about, for a conversation opened beside one.
+    #: Empty for an ordinary chat. A scoped thread is deliberately kept out of
+    #: the Chat rail: it belongs to the document, is created and deleted with
+    #: it, and its turns are handed the document's text.
+    document_id: Mapped[str] = mapped_column(String(36), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -385,8 +390,32 @@ class AgentToolCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class Folder(Base):
+    """Where a file is filed. Nests, and holds nothing of its own.
+
+    A folder is a label on documents, not a container of them: the row carries
+    no content, and `Document.title` stays unique per *workspace* rather than
+    per folder. That is deliberate — the agent resolves a document by name
+    (`documents.find_by_title`), so letting two folders each hold a "Notes"
+    would make "edit Notes" a question the model cannot answer.
+    """
+
+    __tablename__ = "folders"
+    __table_args__ = (Index("ix_folders_workspace_parent", "workspace_id", "parent_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    # Empty means the top level. Empty rather than NULL because every query here
+    # groups by it, and NULL does not group with itself in SQL.
+    parent_id: Mapped[str] = mapped_column(String(36), default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class Document(Base):
-    """A text document the agent can read and edit: markdown or LaTeX."""
+    """A document the agent can read and edit: plain text, or markdown+maths."""
 
     __tablename__ = "documents"
 
@@ -395,6 +424,10 @@ class Document(Base):
     title: Mapped[str] = mapped_column(String(200))
     kind: Mapped[str] = mapped_column(String(16), default="markdown")
     content: Mapped[str] = mapped_column(Text, default="")
+    #: The folder this file sits in; empty is the top level, which is where
+    #: everything written before folders existed — and everything the agent
+    #: writes — lands. Filing is the user's job, so no tool sets this.
+    folder_id: Mapped[str] = mapped_column(String(36), default="", index=True)
     created_by: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -411,6 +444,9 @@ class DocumentVersion(Base):
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
     content: Mapped[str] = mapped_column(Text, default="")
     summary: Mapped[str] = mapped_column(String(300), default="")
+    #: Who caused this snapshot. Empty for rows written before the column
+    #: existed, and for a workflow with no human behind it.
+    created_by: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -966,6 +1002,15 @@ class DatasetVersion(Base):
 
 
 class Dashboard(Base):
+    """One saved view over one dataset: a query and how to draw its answer.
+
+    A dashboard is small on purpose. It holds a single visualization rather than
+    a canvas of them, because the thing a user arranges is their *home screen* —
+    see `DashboardPin`, where the grid lives — and a dashboard is one tile on it.
+    That keeps the object the agent authors the same size as the object the user
+    moves, so "make me a chart of X" produces exactly one new thing.
+    """
+
     __tablename__ = "dashboards"
     __table_args__ = (UniqueConstraint("workspace_id", "name"),)
 
@@ -976,6 +1021,89 @@ class Dashboard(Base):
     name: Mapped[str] = mapped_column(String(160))
     description: Mapped[str] = mapped_column(String(500), default="")
     spec_json: Mapped[str] = mapped_column(Text)
+    # Set when this dashboard was produced by binding a template. Kept with the
+    # bindings that produced it because the stored spec names the *dataset's*
+    # columns, not the template's: without the map, a spec grouping by
+    # "territory" cannot be traced back to a template that declared "region",
+    # and re-binding the definition to next quarter's data is guesswork.
+    #
+    # Deliberately not a ForeignKey. Deleting a template must not take the
+    # working dashboards it produced off anyone's screen, so the delete clears
+    # this column instead of cascading — and a constraint that the application
+    # satisfies by nulling the value buys nothing over the index, at the cost of
+    # a SQLite table rewrite in the migration that adds it.
+    template_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    bindings_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class DashboardTemplate(Base):
+    """A dashboard definition that is not yet pointed at any data.
+
+    The point of a template is the *contract*, not the layout. `required_columns`
+    declares the shape a dataset must have for this definition to mean anything —
+    column names and types — and `spec_json` is written against those declared
+    names rather than against any real dataset's. Binding supplies the map from
+    declared name to actual column, and a binding that does not satisfy the
+    contract is refused there and then (see services/dashboards/binding.py).
+
+    That is the whole reason the contract is stored rather than inferred. A
+    template whose requirements were read off whichever dataset it was first
+    built from would accept any dataset that happened to parse, and the mismatch
+    would surface as an empty chart on Monday morning instead of as an error at
+    the moment somebody asked for something impossible.
+    """
+
+    __tablename__ = "dashboard_templates"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    required_columns_json: Mapped[str] = mapped_column(Text)
+    spec_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class DashboardPin(Base):
+    """One tile on one person's home screen.
+
+    Per *user*, not per workspace. A workspace's dashboards are shared — the
+    agent authors them and anyone may run them — but which of them you keep in
+    front of you, and where, is a personal arrangement: two people watching the
+    same workspace should not fight over one layout, and one of them tidying
+    their screen should not rearrange everybody else's.
+
+    The grid geometry lives here rather than on the dashboard for the same
+    reason. `grid_x`/`grid_w` are columns on a fixed 12-column grid and
+    `grid_y`/`grid_h` are rows, which is the vocabulary every grid layout in the
+    web app already speaks; storing them as integers rather than pixels is what
+    lets the same arrangement render on a laptop and a wide monitor.
+    """
+
+    __tablename__ = "dashboard_pins"
+    __table_args__ = (
+        # One pin per person per dashboard: pinning is a fact, not a log, so a
+        # second pin of the same dashboard has to update the first rather than
+        # put a duplicate tile on the screen.
+        UniqueConstraint("user_id", "dashboard_id"),
+        Index("ix_dashboard_pins_workspace_user", "workspace_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    dashboard_id: Mapped[str] = mapped_column(ForeignKey("dashboards.id"), index=True)
+    grid_x: Mapped[int] = mapped_column(Integer, default=0)
+    grid_y: Mapped[int] = mapped_column(Integer, default=0)
+    grid_w: Mapped[int] = mapped_column(Integer, default=6)
+    grid_h: Mapped[int] = mapped_column(Integer, default=4)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

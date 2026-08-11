@@ -4,8 +4,8 @@
 `compiler` is the model call around them. `executor` walks a compiled graph on
 the run/event/approval machinery in `services/agent_loop.py` — ADR 0007 records
 why that substrate rather than a second orchestration runtime beside it — with
-`refs` resolving `{{ node.output }}` at run time and `schedule` deciding what a
-cron fires.
+`refs` resolving `{{ node.output }}` at run time, `inputs` binding a run's
+parameters before the first node, and `schedule` deciding what a cron fires.
 
 `executor` and `schedule` are imported as modules rather than re-exported
 symbol by symbol: `agent_loop` imports the executor lazily to resume a parked
@@ -14,7 +14,7 @@ an import list that has to be kept in step.
 """
 from __future__ import annotations
 
-from . import executor, refs, schedule
+from . import executor, inputs, refs, schedule
 from .compiler import (
     WORKFLOW_INSTRUCTIONS,
     CompiledWorkflow,
@@ -24,7 +24,15 @@ from .compiler import (
     render_tool_catalogue,
     summarize,
 )
-from .dag import EdgeSpec, NodeSpec, TriggerSpec, WorkflowGraph, references
+from .dag import (
+    EdgeSpec,
+    InputSpec,
+    NodeSpec,
+    TriggerSpec,
+    WorkflowGraph,
+    input_fields,
+    references,
+)
 from .validate import (
     CompileError,
     CompileReport,
@@ -43,6 +51,7 @@ __all__ = [
     "CompiledWorkflow",
     "CompilerStep",
     "EdgeSpec",
+    "InputSpec",
     "NodeSpec",
     "TriggerSpec",
     "WorkflowCompileError",
@@ -52,6 +61,8 @@ __all__ = [
     "cron_error",
     "cron_matches",
     "executor",
+    "input_fields",
+    "inputs",
     "parse_graph",
     "references",
     "refs",

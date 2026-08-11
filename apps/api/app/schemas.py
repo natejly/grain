@@ -130,6 +130,10 @@ class ConversationCreate(BaseModel):
 class ConversationOut(ApiModel):
     id: str
     title: str
+    #: The document this thread belongs to, or empty for an ordinary chat.
+    #: `GET /api/conversations` only ever returns the empty case; the field is
+    #: here because `POST /api/documents/{id}/conversation` returns the other.
+    document_id: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -256,6 +260,19 @@ class AgentApprovalRequest(BaseModel):
     # "Always allow this tool" — persists the decision as a workspace policy so
     # future calls to the same tool skip the prompt.
     remember: bool = False
+    # A partial approval of a document edit: the indices of the hunks the
+    # reviewer accepted, in the order `GET /api/documents-pending` returned
+    # them. Omitted means the whole proposal, which is what every other tool
+    # and every all-or-nothing card sends. Rejecting every hunk is a denial and
+    # must be sent as one, so an empty list is refused rather than quietly
+    # applying nothing under an "approved" decision.
+    accepted_hunks: Optional[List[int]] = Field(default=None, min_length=1)
+    # The values a person typed at a workflow `manual` node, keyed by field name.
+    # They ride the same decision the Proceed button sends, become that node's
+    # output object, and are read downstream as `{{ node.output.field }}`. Only a
+    # manual node's parked call reads them; an ordinary tool approval ignores the
+    # field, exactly as a tool approval ignores `accepted_hunks`.
+    inputs: Optional[Dict[str, Any]] = None
 
 
 class ToolArtifact(ApiModel):
@@ -342,11 +359,39 @@ class ToolPolicyRequest(BaseModel):
     scope: Literal["chat", "workflow"] = "chat"
 
 
+class FolderOut(ApiModel):
+    id: str
+    name: str
+    #: Empty is the top level. See `models.Folder.parent_id` for why not null.
+    parent_id: str
+    updated_at: datetime
+
+
+class FolderRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    parent_id: str = ""
+
+
+class FolderUpdateRequest(BaseModel):
+    """Rename, move, or both. Omitted means "leave it"; `parent_id: ""` is a move
+    to the top level, which is why neither field can default to a usable value.
+    """
+
+    name: Optional[str] = Field(default=None, max_length=120)
+    parent_id: Optional[str] = None
+
+
+class DocumentFolderRequest(BaseModel):
+    #: Always supplied. Empty files the document at the top level.
+    folder_id: str = ""
+
+
 class DocumentSummaryOut(ApiModel):
     id: str
     title: str
     kind: str
     characters: int
+    folder_id: str
     updated_at: datetime
 
 
@@ -355,13 +400,15 @@ class DocumentOut(ApiModel):
     title: str
     kind: str
     content: str
+    folder_id: str
     updated_at: datetime
 
 
 class DocumentRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = ""
-    kind: Literal["markdown", "latex"] = "markdown"
+    kind: Literal["text", "markdown"] = "markdown"
+    folder_id: str = ""
 
 
 class DocumentContentRequest(BaseModel):
@@ -614,6 +661,8 @@ class DashboardOut(ApiModel):
     description: str
     dataset_id: str
     spec: DashboardSpec
+    template_id: str = ""
+    bindings: Dict[str, str] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -621,6 +670,87 @@ class DashboardOut(ApiModel):
 class DashboardRunOut(BaseModel):
     dashboard: DashboardOut
     result: DatasetQueryResult
+
+
+class DashboardColumnRequirement(BaseModel):
+    """One column a template requires of whatever dataset it is bound to."""
+
+    name: str = Field(min_length=1, max_length=160)
+    type: Literal["boolean", "integer", "number", "string", "date", "datetime"]
+    description: str = Field(default="", max_length=240)
+
+
+class DashboardTemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=500)
+    required_columns: List[DashboardColumnRequirement] = Field(
+        min_length=1, max_length=20
+    )
+    spec: DashboardSpec
+
+
+class DashboardTemplateOut(ApiModel):
+    id: str
+    name: str
+    description: str
+    required_columns: List[DashboardColumnRequirement]
+    spec: DashboardSpec
+    created_at: datetime
+    updated_at: datetime
+
+
+class DashboardTemplateBind(BaseModel):
+    """Point a template at real data.
+
+    `column_bindings` maps a name the template *declared* to a column the dataset
+    actually has. A declared name absent from the map binds to the identical name
+    in the dataset, so the common case — a dataset that already speaks the
+    template's vocabulary — needs no map at all.
+    """
+
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=500)
+    dataset_id: str
+    column_bindings: Dict[str, str] = Field(default_factory=dict)
+
+
+class DashboardPinUpdate(BaseModel):
+    """Where a tile sits. Every field optional: pinning without a position puts
+    the tile at the bottom of the grid, which is what "pin this" means before
+    anyone has dragged anything."""
+
+    grid_x: Optional[int] = Field(default=None, ge=0, le=11)
+    grid_y: Optional[int] = Field(default=None, ge=0, le=200)
+    grid_w: Optional[int] = Field(default=None, ge=1, le=12)
+    grid_h: Optional[int] = Field(default=None, ge=1, le=12)
+
+
+class DashboardPinOut(ApiModel):
+    dashboard: DashboardOut
+    grid_x: int
+    grid_y: int
+    grid_w: int
+    grid_h: int
+    pinned_at: datetime
+
+
+class DashboardLayoutTile(BaseModel):
+    dashboard_id: str
+    grid_x: int = Field(ge=0, le=11)
+    grid_y: int = Field(ge=0, le=200)
+    grid_w: int = Field(ge=1, le=12)
+    grid_h: int = Field(ge=1, le=12)
+
+
+class DashboardLayoutUpdate(BaseModel):
+    """A whole home screen in one write.
+
+    Dragging a tile moves its neighbours, so a layout save that took one tile at
+    a time would leave the grid inconsistent between requests — and a save that
+    failed halfway would leave two tiles claiming one cell.
+    """
+
+    tiles: List[DashboardLayoutTile] = Field(max_length=60)
 
 
 class GeneratedAppCreate(BaseModel):

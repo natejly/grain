@@ -2,6 +2,7 @@ import type {
   Workflow,
   WorkflowCompileFinding,
   WorkflowGraph,
+  WorkflowInputSpec,
   WorkflowNodeRunStatus,
   WorkflowRunStatus,
 } from "@workspace/api-client";
@@ -202,11 +203,17 @@ const COMPILE_ERROR_TITLES: Record<string, string> = {
   arguments_invalid: "The arguments do not match what the tool accepts",
   reference_unknown_node: "A step reads from a step that does not exist",
   reference_not_upstream: "A step reads from a step that runs later",
+  manual_missing_prompt: "A manual step has no question to ask the person",
+  manual_unexpected_tool: "A manual step also named a tool",
+  manual_unexpected_arguments: "A manual step carries tool arguments",
+  manual_field_invalid: "A manual step declares an unusable field",
+  manual_duplicate_field: "Two of a manual step's fields share a name",
 };
 
 const COMPILE_WARNING_TITLES: Record<string, string> = {
   tool_write_capable: "This step writes, so it will park for approval",
   tool_schema_invalid: "This tool's own schema is unreadable, so its arguments went unchecked",
+  manual_requires_person: "This step pauses for a person before the run goes on",
 };
 
 export function compileErrorTitle(code: string): string {
@@ -261,6 +268,18 @@ export function describeReviewability(
   graph: Pick<WorkflowGraph, "nodes">,
   requiresApproval: boolean,
 ): ReviewabilityNote {
+  // A manual node also makes `requires_approval` true, but for a different
+  // reason than a write: it stops to be answered, not because it is about to
+  // act. Saying "before it writes" about a graph whose only park is a manual
+  // node would name a write that never comes, so the human-in-the-loop pause
+  // gets its own headline.
+  if (graph.nodes.some((node) => node.kind === "manual")) {
+    return {
+      tone: "parks",
+      headline: "Pauses for a person before it goes on",
+      text: "A manual step here stops the run for someone to proceed or reject before the steps after it run.",
+    };
+  }
   if (requiresApproval) {
     return {
       tone: "parks",
@@ -282,6 +301,168 @@ export function describeReviewability(
     headline: "Read-only — runs unattended",
     text: "Every step names a tool that only reads, so nothing here needs a decision.",
   };
+}
+
+// --- The run form -----------------------------------------------------------
+// A workflow's declared inputs are a form, and a form is text. Everything below
+// is the boundary between the two: text in, typed JSON out, and every failure
+// carrying the name of the field that caused it.
+//
+// This deliberately does *not* reimplement the server's validation. The server
+// owns "is this payload acceptable" and answers with a list; what a browser
+// owns, and a server cannot, is "can this form produce a payload at all" — an
+// unparseable number, malformed JSON, a required box left empty. Those are the
+// only checks here, and each one is a question about the textbox rather than
+// about the workflow.
+
+/** One problem, tied to the input that caused it. `input` is "" for the form. */
+export type InputProblem = { input: string; message: string };
+
+/** What the form holds while it is being typed into: text, or a checkbox. */
+export type InputDraft = Record<string, string | boolean>;
+
+/** How a declared value is shown in a textbox, before anyone edits it. */
+function draftValue(spec: WorkflowInputSpec, value: unknown): string | boolean {
+  if (spec.type === "boolean") return value === true;
+  if (value === null || value === undefined) return "";
+  if (spec.type === "object" || spec.type === "array") {
+    return JSON.stringify(value, null, 2);
+  }
+  return String(value);
+}
+
+/**
+ * The form's starting state: every declared default, pre-filled.
+ *
+ * Pre-filling is not decoration. A default is what a *scheduled* run uses when
+ * nobody is there to type one, so showing it is showing what the automation
+ * does on its own — and an empty box beside "required" would suggest the run
+ * cannot start, when it can.
+ */
+export function draftFromInputs(specs: WorkflowInputSpec[]): InputDraft {
+  const draft: InputDraft = {};
+  for (const spec of specs) draft[spec.name] = draftValue(spec, spec.default);
+  return draft;
+}
+
+/** Options for a `choices` field, keyed by their display text. */
+export function choiceOptions(spec: WorkflowInputSpec): { value: string; label: string }[] {
+  return spec.choices.map((choice) => ({
+    value: String(choice),
+    label: String(choice),
+  }));
+}
+
+function parseScalar(
+  spec: WorkflowInputSpec,
+  raw: string,
+): { value: unknown } | { message: string } {
+  if (spec.type === "number" || spec.type === "integer") {
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) {
+      return { message: "Enter a number." };
+    }
+    if (spec.type === "integer" && !Number.isInteger(parsed)) {
+      return { message: "Enter a whole number, with no decimal part." };
+    }
+    return { value: parsed };
+  }
+  if (spec.type === "object" || spec.type === "array") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      return { message: "This is not valid JSON." };
+    }
+    const wanted = spec.type === "array" ? Array.isArray(parsed) : isPlainObject(parsed);
+    if (!wanted) {
+      return {
+        message:
+          spec.type === "array"
+            ? "This is valid JSON, but not a list."
+            : "This is valid JSON, but not an object.",
+      };
+    }
+    return { value: parsed };
+  }
+  return { value: raw };
+}
+
+function isPlainObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The typed payload this form describes, or every reason it cannot make one.
+ *
+ * A `choices` field reads back the *declared* choice rather than the option
+ * text, so an enum of numbers stays an enum of numbers: the server rejects
+ * `"5"` where it declared `5` rather than coercing it, and a select that
+ * silently posted strings would make every numeric enum unusable.
+ *
+ * An optional field left empty is omitted rather than sent as `""`, because
+ * `""` is a value: the server would type-check it and, for a number, refuse.
+ */
+export function readInputForm(
+  specs: WorkflowInputSpec[],
+  draft: InputDraft,
+): { payload: Record<string, unknown>; problems: InputProblem[] } {
+  const payload: Record<string, unknown> = {};
+  const problems: InputProblem[] = [];
+  for (const spec of specs) {
+    const held = draft[spec.name];
+    if (spec.type === "boolean") {
+      payload[spec.name] = held === true;
+      continue;
+    }
+    const raw = typeof held === "string" ? held : "";
+    if (raw === "") {
+      if (spec.required) {
+        problems.push({ input: spec.name, message: "This one is required." });
+      }
+      continue;
+    }
+    if (spec.choices.length > 0) {
+      const chosen = spec.choices.find((choice) => String(choice) === raw);
+      if (chosen === undefined) {
+        problems.push({ input: spec.name, message: "Pick one of the offered values." });
+        continue;
+      }
+      payload[spec.name] = chosen;
+      continue;
+    }
+    const read = parseScalar(spec, raw);
+    if ("message" in read) problems.push({ input: spec.name, message: read.message });
+    else payload[spec.name] = read.value;
+  }
+  return { payload, problems };
+}
+
+/**
+ * The server's refusal, put back next to the boxes that caused it.
+ *
+ * `inputs.bind` writes one sentence per problem and names the input inside it —
+ * `input “repo”: …`, or `'repo' is a required property` for a missing one — so
+ * the field is recovered by looking for a declared name in the sentence rather
+ * than by parsing a quoting convention that is not part of any contract. A
+ * sentence that names none is still shown; it is attributed to the form.
+ */
+export function attributeProblems(
+  problems: string[],
+  specs: WorkflowInputSpec[],
+): InputProblem[] {
+  return problems.map((message) => {
+    // Longest name first, so `repo` cannot claim a problem about `repo_owner`.
+    const named = [...specs]
+      .sort((a, b) => b.name.length - a.name.length)
+      .find((spec) => new RegExp(`\\b${spec.name}\\b`).test(message));
+    return { input: named?.name ?? "", message };
+  });
+}
+
+/** What the form calls a field. Never the slug, unless that is all there is. */
+export function inputLabel(spec: WorkflowInputSpec): string {
+  return spec.label || spec.name;
 }
 
 export type ScheduleNote = {

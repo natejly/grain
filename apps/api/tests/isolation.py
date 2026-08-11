@@ -53,10 +53,13 @@ from app.models import (
     Chunk,
     Conversation,
     Dashboard,
+    DashboardPin,
+    DashboardTemplate,
     Dataset,
     DbConnection,
     Document,
     DocumentVersion,
+    Folder,
     GeneratedApp,
     GraphEdge,
     GraphEntity,
@@ -281,11 +284,21 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["tool_policy"] = policy.id
 
+        folder = Folder(
+            workspace_id=workspace_id,
+            name=f"{label} secret folder",
+            created_by=user_id,
+        )
+        db.add(folder)
+        db.flush()
+        ids["folder"] = folder.id
+
         document = Document(
             workspace_id=workspace_id,
             title=f"{label} brief",
             kind="markdown",
             content=f"{label} secret document body",
+            folder_id=folder.id,
             created_by=user_id,
         )
         db.add(document)
@@ -487,6 +500,55 @@ def build_tenant(label: str) -> Tenant:
         db.add(dashboard)
         db.flush()
         ids["dashboard"] = dashboard.id
+
+        # A template whose declared shape the tenant's own dataset satisfies, so
+        # a cross-tenant bind fails for the reason under test (the template is
+        # not yours) rather than incidentally, because the shape did not fit.
+        template = DashboardTemplate(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} template",
+            description=f"{label} secret template",
+            required_columns_json=json.dumps(
+                [
+                    {"name": "region", "type": "string", "description": ""},
+                    {"name": "amount", "type": "number", "description": ""},
+                ]
+            ),
+            spec_json=json.dumps(
+                {
+                    "visualization": "bar",
+                    "query": {
+                        "group_by": "region",
+                        "metrics": [
+                            {"field": "amount", "operation": "sum", "label": "total"}
+                        ],
+                        "limit": 10,
+                    },
+                    "x_field": "region",
+                    "y_fields": ["total"],
+                }
+            ),
+        )
+        db.add(template)
+        db.flush()
+        ids["dashboard_template"] = template.id
+
+        # This tenant's owner has already arranged their home screen. Pins are
+        # per user, so this row is what a foreign unpin or layout save would
+        # have to move — and what the tamper digest proves nothing moved.
+        pin = DashboardPin(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            dashboard_id=dashboard.id,
+            grid_x=0,
+            grid_y=0,
+            grid_w=6,
+            grid_h=4,
+        )
+        db.add(pin)
+        db.flush()
+        ids["dashboard_pin"] = pin.id
 
         slug = f"{label.lower()}-{new_id()[:8]}"
         app_row = GeneratedApp(
@@ -939,9 +1001,44 @@ ROUTE_CASES: List[RouteCase] = [
     ),
     RouteCase(
         "POST",
+        "/api/documents/{document_id}/conversation",
+        DENY,
+        path_ids={"document_id": "document"},
+    ),
+    RouteCase(
+        "POST",
         "/api/documents/{document_id}/versions/{version_id}/restore",
         DENY,
         path_ids={"document_id": "document", "version_id": "document_version"},
+    ),
+    # -- folders -----------------------------------------------------------
+    RouteCase("GET", "/api/folders", SCOPED),
+    # Naming another tenant's folder as the parent must refuse rather than
+    # create an orphan under an id the caller cannot see.
+    RouteCase(
+        "POST",
+        "/api/folders",
+        SCOPED,
+        body={"name": "mine", "parent_id": ""},
+        body_ids={"parent_id": "folder"},
+        note="a foreign parent id answers 422; the folder is never created",
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/folders/{folder_id}",
+        DENY,
+        path_ids={"folder_id": "folder"},
+        body={"name": "renamed by A"},
+    ),
+    RouteCase(
+        "DELETE", "/api/folders/{folder_id}", DENY, path_ids={"folder_id": "folder"}
+    ),
+    RouteCase(
+        "PUT",
+        "/api/documents/{document_id}/folder",
+        DENY,
+        path_ids={"document_id": "document"},
+        body={"folder_id": ""},
     ),
     # -- boards ------------------------------------------------------------
     RouteCase("GET", "/api/boards", SCOPED),
@@ -1086,6 +1183,76 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/dashboards/{dashboard_id}/run",
         DENY,
         path_ids={"dashboard_id": "dashboard"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/dashboards/{dashboard_id}",
+        DENY,
+        path_ids={"dashboard_id": "dashboard"},
+    ),
+    RouteCase("GET", "/api/dashboard-templates", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/dashboard-templates",
+        SCOPED,
+        body={
+            "name": "mine",
+            "description": "",
+            "required_columns": [{"name": "region", "type": "string"}],
+            "spec": {
+                "visualization": "table",
+                "query": {"group_by": "region", "limit": 10},
+                "x_field": "region",
+                "y_fields": ["count"],
+            },
+        },
+        note="a definition names no dataset, so there is no foreign id to plant",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/dashboard-templates/{template_id}",
+        DENY,
+        path_ids={"template_id": "dashboard_template"},
+    ),
+    # The template is the foreign resource here and the dataset is the caller's
+    # own, so a 404 can only mean "that template is not yours" — which is what
+    # makes this case bite. Reversing it would be answered by the dataset lookup
+    # and prove nothing about templates.
+    RouteCase(
+        "POST",
+        "/api/dashboard-templates/{template_id}/bind",
+        DENY,
+        path_ids={"template_id": "dashboard_template"},
+        body={"name": "stolen", "description": "", "dataset_id": "", "column_bindings": {}},
+        body_ids={"dataset_id": "dataset"},
+        note="binds another tenant's definition",
+    ),
+    # -- dashboard pins (per user, not per workspace) -----------------------
+    RouteCase("GET", "/api/dashboard-pins", SCOPED),
+    RouteCase(
+        "PUT",
+        "/api/dashboards/{dashboard_id}/pin",
+        DENY,
+        path_ids={"dashboard_id": "dashboard"},
+        body={"grid_x": 0, "grid_y": 0, "grid_w": 6, "grid_h": 4},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/dashboards/{dashboard_id}/pin",
+        DENY,
+        path_ids={"dashboard_id": "dashboard"},
+    ),
+    RouteCase(
+        "PUT",
+        "/api/dashboard-pins/layout",
+        DENY,
+        body={
+            "tiles": [
+                {"dashboard_id": "", "grid_x": 0, "grid_y": 0, "grid_w": 6, "grid_h": 4}
+            ]
+        },
+        body_ids={"tiles.0.dashboard_id": "dashboard"},
+        note="moves a tile on another tenant's home screen",
     ),
     # -- database connections ---------------------------------------------
     RouteCase("GET", "/api/db/connections", SCOPED),

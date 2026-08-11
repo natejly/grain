@@ -26,6 +26,12 @@ and `POST /api/agent-tool-calls/{id}/decision` resumes it. One park, one resume,
 one row. An unattended run with nobody present therefore waits rather than
 proceeding, which is the containment the whole design rests on.
 
+**A run's inputs are judged before its first node.** `inputs.bind` applies the
+declared defaults and type-checks the payload in `_prepare`, so a workflow
+parameterised wrongly fails having done nothing rather than having done half of
+something. Mid-DAG is too late for the same reason 3am is too late to discover a
+hallucinated tool.
+
 **One node failing does not corrupt the run.** Every failure path rolls back,
 writes a terminal status and a legible error, and marks the nodes that never got
 to run as `skipped`. The run record is always readable afterwards.
@@ -89,8 +95,9 @@ from ..agent_loop import (
 from ..audit import record_audit
 from ..events import append_event
 from ..llm_tools import ToolContext, ToolSpec, build_registry
-from . import refs
-from .dag import NodeSpec, WorkflowGraph
+from . import inputs, refs
+from .dag import InputSpec, NodeSpec, WorkflowGraph
+from .inputs import InputBindingError
 from .validate import parse_graph, topological_order, validate_graph
 
 logger = logging.getLogger(__name__)
@@ -107,6 +114,13 @@ RECOVERABLE = ("queued", "running")
 #: How much of a node's output travels into the next node's arguments. A tool
 #: that returns a 10MB document must not turn the graph into a memory profile.
 MAX_OUTPUT_CHARS = 100_000
+
+#: The `AgentToolCall.name` a `manual` node parks under. It names no real tool —
+#: a manual node runs nothing — so the sentinel is what lets the shared resume
+#: path tell "a person answered a prompt" from "a person approved a tool call",
+#: which decide the same endpoint but finish differently. Underscored so it can
+#: never collide with a tool a registry actually publishes.
+MANUAL_TOOL_NAME = "__manual__"
 
 #: How many times a process may die on the *same* node before the run is failed
 #: instead of resumed. Without a bound, a node that reliably kills its process —
@@ -426,6 +440,20 @@ def _prepare(
             + report.render(),
         )
 
+    # Before the first node, never during. A run that fails on node six because
+    # input two was a string has already done five nodes of real work — sent the
+    # email, opened the pull request — and no amount of a clear error afterwards
+    # takes that back. This is the same argument compile-time validation makes,
+    # at the one moment the values themselves finally exist.
+    try:
+        payload = inputs.bind(graph, _json_object(workflow_run.input_json))
+    except inputs.InputBindingError as exc:
+        raise _Halt("failed", "inputs_invalid", "; ".join(exc.problems)) from exc
+    # Stored back so the run record answers "what did this actually run with",
+    # defaults included. Re-binding an already-bound payload is a no-op, which is
+    # what makes this safe on the resume and recovery paths.
+    workflow_run.input_json = json.dumps(payload, default=str)
+
     workflow_run.status = "running"
     # Both, because a *tool* node's approval resumes through here rather than
     # through `agent_loop`, and a run that is running is not parked on anything.
@@ -442,7 +470,7 @@ def _prepare(
         registry=tools,
         context=context,
         run=run,
-        payload=_json_object(workflow_run.input_json),
+        payload=payload,
         settings=settings,
     )
 
@@ -558,6 +586,8 @@ def _execute_node(
     """Run one node. True means the run parked and this advance is over."""
     if node.kind == "agent":
         return _execute_agent_node(db, workflow_run, node, row, state)
+    if node.kind == "manual":
+        return _execute_manual_node(db, workflow_run, node, row, state)
     return _execute_tool_node(db, workflow_run, node, row, state)
 
 
@@ -599,7 +629,18 @@ def _execute_tool_node(
             node.id,
         )
     if policy == "ask":
-        _park(db, workflow_run, node, row, spec, state, arguments)
+        raw_arguments = json.dumps(arguments, default=str)
+        _park(
+            db,
+            workflow_run,
+            node,
+            row,
+            state,
+            name=spec.name,
+            arguments_json=raw_arguments,
+            preview=describe_proposal(db, state.context, spec, raw_arguments),
+            description=spec.description,
+        )
         return True
 
     _run_tool(db, workflow_run, node, row, spec, state, arguments, tool_call_id=None)
@@ -706,25 +747,33 @@ def _park(
     workflow_run: WorkflowRun,
     node: NodeSpec,
     row: WorkflowNodeRun,
-    spec: ToolSpec,
     state: _State,
-    arguments: Mapping[str, Any],
+    *,
+    name: str,
+    arguments_json: str,
+    preview: str,
+    description: str,
 ) -> None:
-    """Suspend the run on an approval, exactly as `agent_loop` suspends a turn.
+    """Suspend the run on a human decision, exactly as `agent_loop` suspends a turn.
 
     The row written here is an ordinary `AgentToolCall(status="proposed")` on an
     ordinary `Run` in `waiting_for_approval`, so the approval inbox, the audit
     trail and `POST /api/agent-tool-calls/{id}/decision` all work unchanged. The
     backing run's `agent_state_json` stays empty, and that absence is what tells
     the resume path a workflow node parked rather than a model turn.
+
+    It parks two shapes of decision behind one row: a `tool` node's approval,
+    where `name` is the real tool, and a `manual` node's pause, where `name` is
+    the `__manual__` sentinel and there is no tool to run — only a person to ask.
+    The caller supplies the name, preview and description so this function owns
+    the suspend and nothing about what is being decided.
     """
-    raw_arguments = json.dumps(arguments, default=str)
     record = AgentToolCall(
         workspace_id=workflow_run.workspace_id,
         run_id=state.run.id,
-        name=spec.name,
-        arguments_json=raw_arguments[:4000],
-        proposal_preview=describe_proposal(db, state.context, spec, raw_arguments),
+        name=name,
+        arguments_json=arguments_json[:4000],
+        proposal_preview=preview,
         status="proposed",
     )
     db.add(record)
@@ -744,7 +793,7 @@ def _park(
         payload={
             "tool_call_id": record.id,
             "tool_name": record.name,
-            "description": spec.description,
+            "description": description,
             "arguments": record.arguments_json,
             "preview": record.proposal_preview,
             "workflow_run_id": workflow_run.id,
@@ -843,6 +892,124 @@ def _mirror_agent_pause(
 
 
 # --------------------------------------------------------------------------
+# Manual nodes
+# --------------------------------------------------------------------------
+
+
+def _execute_manual_node(
+    db: Session,
+    workflow_run: WorkflowRun,
+    node: NodeSpec,
+    row: WorkflowNodeRun,
+    state: _State,
+) -> bool:
+    """Park the run for a person. Always parks — that is the whole node.
+
+    A manual node has no tool to resolve and no policy to consult: its entire
+    behaviour is the pause. It reuses `_park`, so it writes the same proposed
+    `AgentToolCall` a tool approval writes and resumes through the same endpoint —
+    under the `__manual__` sentinel, because there is no tool and the resume path
+    finishes a manual node from the submitted values rather than by executing a
+    call. `prompt` is resolved here so a step can ask about an upstream result
+    (`"Ship {{ build.output.version }}?"`), just as an agent node's prompt is.
+    """
+    try:
+        prompt = refs.resolve(
+            node.prompt, outputs=state.outputs, payload=state.payload
+        )
+    except refs.ReferenceResolutionError as exc:
+        raise _Halt("failed", "reference_unresolved", str(exc), node.id) from exc
+
+    request = {"prompt": str(prompt), "fields": [field.name for field in node.fields]}
+    raw_arguments = json.dumps(request, default=str)
+    row.arguments_json = raw_arguments[:MAX_OUTPUT_CHARS]
+    row.policy = "manual"
+    db.commit()
+    _park(
+        db,
+        workflow_run,
+        node,
+        row,
+        state,
+        name=MANUAL_TOOL_NAME,
+        arguments_json=raw_arguments,
+        preview=_manual_preview(str(prompt), node.fields),
+        description=node.description or str(prompt),
+    )
+    return True
+
+
+def _manual_preview(prompt: str, fields: List[InputSpec]) -> str:
+    """The card a person reads before proceeding: the question, then the ask.
+
+    Built rather than delegated to `describe_proposal` because a manual node has
+    no tool to describe — the reviewer's decision is about the prompt and the
+    fields, so those are what the card shows.
+    """
+    lines = [prompt]
+    if fields:
+        lines.append("")
+        lines.append("Provide:")
+        for field in fields:
+            label = field.label or field.name
+            lines.append(f"• {label}" + ("" if field.required else " (optional)"))
+    return "\n".join(lines)
+
+
+def _bind_manual(node: NodeSpec, submitted: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """A manual node's submitted values, judged by its declared `fields`.
+
+    Reuses the run-start input machinery over a graph whose inputs *are* this
+    node's fields, so a step's collected values are checked by exactly the rule a
+    workflow's own parameters are — one copy of "required means required" and "a
+    choice list is an enum", not a second that can drift from it. Raises
+    `inputs.InputBindingError` with every problem, which the decision endpoint
+    renders as a 422 and the resume path turns into a legible halt.
+    """
+    schema_graph = WorkflowGraph(name=node.id, inputs=list(node.fields), nodes=[node])
+    bound = inputs.bind(schema_graph, dict(submitted or {}))
+    # `bind` keeps undeclared keys (its schema is additionalProperties:True, open on
+    # purpose for the scheduler's `scheduled_for`). A manual node's output is the
+    # contract `{field: value}` that every downstream `{{ node.output.field }}`
+    # reads, so project it down to declared fields — an approver cannot smuggle
+    # extra keys in, and a fields-less node yields exactly `{}`.
+    return {field.name: bound[field.name] for field in node.fields if field.name in bound}
+
+
+def check_manual_inputs(
+    db: Session,
+    workflow_run: WorkflowRun,
+    *,
+    tool_call_id: str,
+    submitted: Optional[Mapping[str, Any]],
+) -> None:
+    """Raise `inputs.InputBindingError` if a manual submission does not fit.
+
+    The decision endpoint's synchronous guard: a person answering a manual step
+    is waiting on that request, so values that violate the node's `fields` must
+    fail in front of them, not in the background task that resumes the run — the
+    same reason `_hunk_amendment` validates a partial approval before claiming it.
+    Best-effort on a graph that no longer parses or a row that has vanished; the
+    resume path re-binds and is the authority, this only moves the common failure
+    forward in time.
+    """
+    row = db.scalar(
+        select(WorkflowNodeRun).where(
+            WorkflowNodeRun.workflow_run_id == workflow_run.id,
+            WorkflowNodeRun.agent_tool_call_id == tool_call_id,
+        )
+    )
+    if row is None:
+        return
+    graph, _ = parse_graph(_json_object(workflow_run.graph_json))
+    if graph is None:
+        return
+    node = next((item for item in graph.nodes if item.id == row.node_key), None)
+    if node is not None and node.kind == "manual":
+        _bind_manual(node, submitted)
+
+
+# --------------------------------------------------------------------------
 # Resumption, through the existing decision endpoint
 # --------------------------------------------------------------------------
 
@@ -853,14 +1020,19 @@ def resume_after_decision(
     *,
     tool_call_id: str,
     decision: str,
+    inputs: Optional[Mapping[str, Any]] = None,
     settings: Optional[Settings] = None,
 ) -> WorkflowRun:
-    """A human decided on a call a *tool* node parked on. Called by `agent_loop`.
+    """A human decided on a call a *tool* or *manual* node parked on. Called by
+    `agent_loop`.
 
     Approval executes the call and the walk continues; denial ends the run. A
     denial is not a failure of the automation — it is the gate doing its job —
     so the run lands in `cancelled` with the node that was refused named in the
     error, which reads correctly in a run list.
+
+    `inputs` carries the values a person typed at a manual node; it is ignored
+    for a tool node, whose parked call has its arguments already.
     """
     settings = settings or get_settings()
     row = db.scalar(
@@ -871,6 +1043,10 @@ def resume_after_decision(
     )
     if row is None or row.status != "waiting_for_approval":
         return workflow_run
+    if row.kind == "manual":
+        return _resume_manual(
+            db, workflow_run, row, decision=decision, inputs=inputs, settings=settings
+        )
     if decision != "approved":
         row.status = "failed"
         row.error = "the approver denied this call"
@@ -911,6 +1087,88 @@ def resume_after_decision(
             json.loads(row.arguments_json or "{}"),
             tool_call_id=tool_call_id,
         )
+    except _Halt as halt:
+        _terminate(db, workflow_run, halt)
+        return workflow_run
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("workflow run %s failed on resume", workflow_run.id, exc_info=True)
+        _terminate(db, workflow_run, _Halt("failed", "executor_error", str(exc)[:1000]))
+        return workflow_run
+    return advance_run(db, workflow_run, settings=settings)
+
+
+def _resume_manual(
+    db: Session,
+    workflow_run: WorkflowRun,
+    row: WorkflowNodeRun,
+    *,
+    decision: str,
+    inputs: Optional[Mapping[str, Any]],
+    settings: Settings,
+) -> WorkflowRun:
+    """A person answered a manual node's prompt. Proceed writes the values; reject
+    ends the run.
+
+    Rejection is a person declining to continue, not a machine failing, so the run
+    lands in `cancelled` with `manual_rejected` — the shape a denied tool approval
+    also takes, which a run list reads as "stopped on purpose" rather than "broke".
+
+    Proceeding binds the submitted values against the node's `fields` a second
+    time. The endpoint already 422'd an invalid submission, so this can only fail
+    on a graph that changed under a parked run — and a run that stored unchecked
+    values as `{{ node.output.field }}` for every downstream node to read is the
+    corruption the double-check is here to refuse. The bound object becomes the
+    node's output and `advance_run` walks on, resolving those fields for the rest
+    of the graph.
+    """
+    if decision != "approved":
+        row.status = "failed"
+        row.error = "a person rejected this step"
+        db.commit()
+        _terminate(
+            db,
+            workflow_run,
+            _Halt(
+                "cancelled",
+                "manual_rejected",
+                f"“{row.node_key}” was rejected",
+                row.node_key,
+            ),
+        )
+        return workflow_run
+
+    try:
+        state = _prepare(db, workflow_run, settings=settings, registry=None)
+        node = state.nodes.get(row.node_key)
+        if node is None or node.kind != "manual":
+            raise _Halt(
+                "failed",
+                "graph_stale",
+                f"“{row.node_key}” is no longer a manual step in this graph",
+                row.node_key,
+            )
+        # Move the row off `waiting_for_approval` before consuming the decision,
+        # exactly as the tool path does. `_prepare` already committed the run as
+        # `running`; without this flip a crash here would leave the node parked
+        # while its AgentToolCall is already decided, so every recovery sweep would
+        # re-bail at the still-parked row and the run would strand until it aged
+        # out. Marked `running`, recovery instead re-offers the manual step (the
+        # human's transient answer is gone, so re-asking is the honest recovery).
+        row.status = "running"
+        db.commit()
+        try:
+            values = _bind_manual(node, inputs)
+        except InputBindingError as exc:
+            raise _Halt(
+                "failed",
+                "manual_field_invalid",
+                "; ".join(exc.problems),
+                row.node_key,
+            ) from exc
+        row.status = "succeeded"
+        row.output_json = json.dumps(values, default=str)[:MAX_OUTPUT_CHARS]
+        row.finished_at = utcnow()
+        db.commit()
     except _Halt as halt:
         _terminate(db, workflow_run, halt)
         return workflow_run

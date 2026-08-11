@@ -1,5 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createFromMenu, openView, rail } from "./shell";
+
+const API = "http://127.0.0.1:8010";
 
 /**
  * The whole workflow loop, driven the way a user drives it: describe an
@@ -32,6 +34,100 @@ function watchForErrors(page: Page): string[] {
   return failures;
 }
 
+/**
+ * A graph with declared parameters, stored through the API.
+ *
+ * The scripted compiler always emits the same two-node graph and it takes no
+ * inputs, so a parameterised workflow cannot be reached by describing one — and
+ * arranging a precondition is not the thing under test. `POST /api/workflows`
+ * puts a hand-written graph through `compile_document`, the same validator the
+ * model's output goes through, so this is a graph the compiler would accept and
+ * not a row smuggled past it.
+ */
+const PARAMETERISED = {
+  name: "Parameterised search",
+  description: "Looks something up, with the something supplied at run time.",
+  trigger: { kind: "manual", cron: "", timezone: "UTC" },
+  inputs: [
+    {
+      name: "query",
+      type: "string",
+      label: "Search for",
+      description: "The words to look for in this workspace's sources.",
+      required: true,
+      default: null,
+      choices: [],
+    },
+    {
+      name: "scope",
+      type: "string",
+      label: "Scope",
+      description: "",
+      required: false,
+      default: "everything",
+      choices: ["everything", "recent"],
+    },
+  ],
+  nodes: [
+    {
+      id: "find",
+      kind: "tool",
+      description: "",
+      tool: "search_sources",
+      arguments: { query: "{{ input.query }} ({{ input.scope }})" },
+      prompt: "",
+    },
+  ],
+  edges: [],
+};
+
+const PARAMETERISED_NAME = PARAMETERISED.name;
+const PARAMETERISED_CONVERSATION = `Workflow: ${PARAMETERISED_NAME}`;
+
+/** Store a graph the way the compiler would, from inside the signed-in page. */
+async function storeWorkflow(page: Page, graph: unknown) {
+  const status = await page.evaluate(
+    async ({ api, body }) => {
+      const me = await fetch(`${api}/api/auth/me`, { credentials: "include" }).then(
+        (response) => response.json(),
+      );
+      const response = await fetch(`${api}/api/workflows`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": me.csrf_token },
+        body: JSON.stringify(body),
+      });
+      return { code: response.status, detail: await response.text() };
+    },
+    { api: API, body: { graph, status: "active", source_prompt: "" } },
+  );
+  // Named rather than asserted bare: a 422 here is the graph being wrong, and
+  // the report says which field, which is the only useful thing to read.
+  expect(status.detail).toContain(PARAMETERISED_NAME);
+  expect(status.code).toBe(201);
+}
+
+/**
+ * Fails when `target` never comes to rest inside the canvas that clips it.
+ *
+ * Retried, because the canvas brings a stopped step into frame with a short
+ * animation and re-runs it when the approval card finishes loading and grows.
+ * The claim being made is that the decision ends up reachable, not that it is
+ * reachable on the first frame — asserting the latter measures a tween.
+ */
+async function expectInsideCanvas(page: Page, target: Locator) {
+  await expect(async () => {
+    const frame = await page.locator(".workflow-canvas").first().boundingBox();
+    const box = await target.boundingBox();
+    expect(frame, "the canvas has no box").not.toBeNull();
+    expect(box, "the target has no box").not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(frame!.y);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(frame!.y + frame!.height);
+    expect(box!.x).toBeGreaterThanOrEqual(frame!.x);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(frame!.x + frame!.width);
+  }).toPass({ timeout: 10_000 });
+}
+
 const WORKFLOW_NAME = "Scripted workflow";
 const WORKFLOW_DOCUMENT = "Workflow Run Summary";
 const WORKFLOW_CONVERSATION = `Workflow: ${WORKFLOW_NAME}`;
@@ -62,15 +158,36 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   await expect(preview).toBeVisible({ timeout: 30_000 });
   const nodes = preview.locator(".workflow-node");
   await expect(nodes).toHaveCount(2);
-  // A tool node names its tool and its arguments, which is the whole point of
-  // the tool/agent split — a reader can see exactly what it will call.
+  // The canvas really is a canvas: a dot grid and a viewport, not a list.
+  await expect(
+    preview.getByRole("group", { name: `${WORKFLOW_NAME} steps` }),
+  ).toBeVisible();
+  await expect(preview.locator(".react-flow__background")).toBeVisible();
+  await expect(preview.locator(".react-flow__edge")).toHaveCount(1);
+  await expect(preview.getByRole("button", { name: "Fit the whole graph" })).toBeVisible();
+  // A tool node names its tool on the chip, which is the whole point of the
+  // tool/agent split — a reader can see what it will call without opening it.
   await expect(preview.getByText("search_sources")).toBeVisible();
-  await expect(preview.locator(".workflow-node.tool dt", { hasText: "query" })).toBeVisible();
-  // An agent node cannot, and says so rather than looking like one that can.
-  await expect(preview.locator(".workflow-node.agent")).toBeVisible();
-  await expect(preview.getByText(/Chooses its own tools when it runs/)).toBeVisible();
+  // And everything else it carries is one hover away, on the node itself.
+  const toolNode = preview.locator(".workflow-node.tool");
+  // Nothing is hovered yet, and this asserts a closed chip — so park the
+  // pointer somewhere harmless rather than wherever the last click left it.
+  await page.mouse.move(0, 0);
+  await expect(toolNode.locator("dt")).toHaveCount(0);
+  await toolNode.hover();
+  await expect(toolNode.locator("dt", { hasText: "query" })).toBeVisible();
+  await expect(toolNode.getByRole("button")).toHaveAttribute("aria-expanded", "true");
   await page.locator(".workflow-author").screenshot({
     path: "test-results/workflow-preview.png",
+  });
+  // An agent node cannot list its calls, and says so rather than looking like
+  // one that can — briefly on the chip, and in full when it is opened.
+  const agentNode = preview.locator(".workflow-node.agent");
+  await expect(agentNode).toBeVisible();
+  await agentNode.hover();
+  await expect(preview.getByText(/Chooses its own tools when it runs/)).toBeVisible();
+  await page.locator(".workflow-canvas").screenshot({
+    path: "test-results/workflow-preview-open.png",
   });
 
   await preview.getByRole("button", { name: "Save workflow" }).click();
@@ -101,6 +218,11 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   await expect(approval.locator(".workflow-approval-preview")).toContainText(
     WORKFLOW_DOCUMENT,
   );
+  // The decision must be *decidable*, which `toBeVisible` does not check: the
+  // canvas clips its overflow, so a parked chip in the bottom row can render an
+  // Approve button with a real bounding box that is nonetheless painted outside
+  // the frame and can never be clicked. This asserts where it actually landed.
+  await expectInsideCanvas(page, approval.getByRole("button", { name: "Approve" }));
   // Two shots: the whole shell, so the "Waiting for you" inbox and the run
   // banner can be looked at in context, and the graph pane close up.
   await page.screenshot({ path: "test-results/workflow-parked.png", fullPage: true });
@@ -136,7 +258,7 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   await expect(page.locator(".workflow-item")).toHaveCount(0);
 
   // The approved write really happened, and is this spec's to clean up.
-  await openView(page, "Documents", /^Documents/);
+  await openView(page, "Files", /^Files/);
   await page.getByText(WORKFLOW_DOCUMENT).click();
   // Confirm()-gated like every other destructive action here, so the handler
   // has to be armed before the click. It is consumed by this dialog, which is
@@ -149,6 +271,80 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   // inbox to land in. It is still a stray thread once the workflow is gone.
   await page.reload();
   const thread = page.getByRole("button", { name: `Delete ${WORKFLOW_CONVERSATION}` });
+  page.once("dialog", (dialog) => dialog.accept());
+  await thread.click();
+  await expect(thread).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test("workflows: a declared input is a form, and a refusal names the field", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const errors = watchForErrors(page);
+  await page.goto("/");
+  await storeWorkflow(page, PARAMETERISED);
+
+  await openView(page, "Workflows");
+  await page.getByRole("button", { name: PARAMETERISED_NAME }).first().click();
+  await expect(page.getByRole("heading", { name: PARAMETERISED_NAME })).toBeVisible();
+
+  // The declaration is a form: labelled by what the author wrote, not by the
+  // slug, and a `choices` input is a select rather than a box to mistype into.
+  const search = page.getByRole("textbox", { name: "Search for" });
+  await expect(search).toBeVisible();
+  const scope = page.getByRole("combobox", { name: "Scope" });
+  await expect(scope).toHaveValue("everything");
+  await expect(scope.getByRole("option")).toHaveCount(3);
+
+  // Refused, and the refusal is next to the box rather than in a banner about
+  // the run. Nothing was sent: the form could not produce a payload.
+  await page.getByRole("button", { name: "Run now" }).click();
+  await expect(page.locator(".workflow-inputs-alert")).toContainText("Search for");
+  await expect(page.locator(".workflow-input-error")).toContainText("required");
+  await expect(search).toHaveAttribute("aria-invalid", "true");
+  // And the box *looks* refused. `aria-invalid` is what a screen reader hears;
+  // a border colour is what everyone else gets, and the two are set in
+  // different places — the first version of that rule was outranked by the one
+  // giving every box its resting border, and painted nothing.
+  const invalidBorder = await search.evaluate(
+    (element) => getComputedStyle(element).borderColor,
+  );
+  const restingBorder = await page
+    .getByRole("combobox", { name: "Scope" })
+    .evaluate((element) => getComputedStyle(element).borderColor);
+  expect(invalidBorder).not.toBe(restingBorder);
+  await expect(page.locator(".workflow-run-item")).toHaveCount(0);
+  await page.locator(".workflow-inputs").screenshot({
+    path: "test-results/workflow-inputs-refused.png",
+  });
+
+  // Answered, and the run starts — with the value that was typed, resolved
+  // into the argument the tool is actually called with.
+  await search.fill("quarterly revenue");
+  await scope.selectOption("recent");
+  await page.getByRole("button", { name: "Run now" }).click();
+  await expect(page.locator(".workflow-run-banner")).toContainText("Succeeded", {
+    timeout: 60_000,
+  });
+  await expect(page.locator(".workflow-inputs-alert")).toHaveCount(0);
+  // The list beside the run agrees with the banner. It is kept current by a
+  // poll that this very status change switches off, so the last thing it wrote
+  // was the state before this one — and nothing else was going to correct it.
+  await expect(page.locator(".workflow-run-item").first()).toContainText("Succeeded");
+  const node = page.locator(".workflow-node.tool");
+  await node.hover();
+  await expect(node.locator("dd")).toContainText("quarterly revenue (recent)");
+  await page.screenshot({ path: "test-results/workflow-inputs-ran.png", fullPage: true });
+
+  // --- Put the shared workspace back -------------------------------------
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: `Delete ${PARAMETERISED_NAME}` }).click();
+  await expect(page.locator(".workflow-item")).toHaveCount(0);
+
+  await page.reload();
+  const thread = page.getByRole("button", { name: `Delete ${PARAMETERISED_CONVERSATION}` });
   page.once("dialog", (dialog) => dialog.accept());
   await thread.click();
   await expect(thread).toHaveCount(0);

@@ -208,13 +208,22 @@ export type ToolPolicy = {
   policy: "ask" | "allow" | "deny";
 };
 
-export type DocumentKind = "markdown" | "latex";
+/**
+ * "markdown" is rendered, maths and all; "text" is shown exactly as typed.
+ *
+ * There is no "latex" document. There used to be, and it rendered identically
+ * to markdown and compiled nothing — LaTeX that produces a PDF is a *project*
+ * kind (`ProjectKind`), which is a different feature with a different editor.
+ */
+export type DocumentKind = "text" | "markdown";
 
 export type DocumentSummary = {
   id: string;
   title: string;
   kind: DocumentKind;
   characters: number;
+  /** The folder this file is in; "" is the top level. */
+  folder_id: string;
   updated_at: string;
 };
 
@@ -223,6 +232,20 @@ export type WorkspaceDocument = {
   title: string;
   kind: DocumentKind;
   content: string;
+  folder_id: string;
+  updated_at: string;
+};
+
+/**
+ * A place to put files. The server returns the whole tree in one list — it is
+ * capped at a couple of hundred rows — and the parent link is what makes it a
+ * tree; "" is the top level, and is deliberately not `null`, so "no parent" has
+ * one spelling in the wire format, the database and the client.
+ */
+export type Folder = {
+  id: string;
+  name: string;
+  parent_id: string;
   updated_at: string;
 };
 
@@ -506,6 +529,10 @@ export type Dashboard = {
   description: string;
   dataset_id: string;
   spec: DashboardSpec;
+  /** The template this was bound from, or "" for one the agent wrote directly. */
+  template_id?: string;
+  /** Declared column name → the dataset column it was bound to. Empty if none. */
+  bindings?: Record<string, string>;
   created_at: string;
   updated_at: string;
 };
@@ -513,6 +540,55 @@ export type Dashboard = {
 export type DashboardRun = {
   dashboard: Dashboard;
   result: DatasetQueryResult;
+};
+
+/** One column a template requires of whatever dataset it is bound to. */
+export type DashboardColumnRequirement = {
+  name: string;
+  type: DatasetColumn["type"];
+  description?: string;
+};
+
+/**
+ * A dashboard definition with no data yet: what it needs, and what it draws.
+ *
+ * The requirements are the whole point. A template that declares `region:
+ * string, amount: number` can be bound to any dataset that has those shapes
+ * under some names, and refused — legibly, naming the column — by any dataset
+ * that does not.
+ */
+export type DashboardTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  required_columns: DashboardColumnRequirement[];
+  spec: DashboardSpec;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * A dashboard on *this* user's home screen, and where it sits.
+ *
+ * A workspace shares its dashboards and does not share your home screen: the
+ * pin, and every coordinate on it, belongs to one person.
+ */
+export type DashboardPin = {
+  dashboard: Dashboard;
+  grid_x: number;
+  grid_y: number;
+  grid_w: number;
+  grid_h: number;
+  pinned_at: string;
+};
+
+/** One tile's placement on the 12-column grid. */
+export type DashboardLayoutTile = {
+  dashboard_id: string;
+  grid_x: number;
+  grid_y: number;
+  grid_w: number;
+  grid_h: number;
 };
 
 export type AppRelease = {
@@ -1339,15 +1415,28 @@ export class WorkspaceApi {
     return this.request("/api/agent-tool-calls");
   }
 
-  /** Approve or deny a parked agent tool call; `remember` stores it as a policy. */
+  /**
+   * Approve or deny a parked agent tool call; `remember` stores it as a policy.
+   *
+   * `inputs` carries the values a person typed into a paused manual node, which
+   * the server validates against that node's declared fields and turns into its
+   * output. It rides only when supplied and is ignored for a real tool
+   * approval, so the two decisions travel one endpoint without a second shape.
+   */
   decideAgentToolCall(
     toolCallId: string,
     decision: "approved" | "denied",
     remember = false,
+    inputs?: Record<string, unknown>,
   ): Promise<AgentToolCall> {
     return this.request(
       `/api/agent-tool-calls/${toolCallId}/decision`,
-      { method: "POST", body: JSON.stringify({ decision, remember }) },
+      {
+        method: "POST",
+        body: JSON.stringify(
+          inputs === undefined ? { decision, remember } : { decision, remember, inputs },
+        ),
+      },
       true,
     );
   }
@@ -1366,6 +1455,48 @@ export class WorkspaceApi {
     });
   }
 
+  listFolders(): Promise<Folder[]> {
+    return this.request("/api/folders");
+  }
+
+  createFolder(name: string, parentId = ""): Promise<Folder> {
+    return this.request(
+      "/api/folders",
+      { method: "POST", body: JSON.stringify({ name, parent_id: parentId }) },
+      true,
+    );
+  }
+
+  /**
+   * Rename, move, or both. An omitted field is left alone, which is why the
+   * body is built from what the caller actually passed: sending `parent_id`
+   * as undefined-turned-null would mean "move this to the top level".
+   */
+  updateFolder(
+    folderId: string,
+    changes: { name?: string; parent_id?: string },
+  ): Promise<Folder> {
+    return this.request(
+      `/api/folders/${folderId}`,
+      { method: "PATCH", body: JSON.stringify(changes) },
+      true,
+    );
+  }
+
+  /** 409 with a sentence if the folder still holds files; it never cascades. */
+  deleteFolder(folderId: string): Promise<void> {
+    return this.request(`/api/folders/${folderId}`, { method: "DELETE" }, true);
+  }
+
+  /** File a document, or return it to the top level with an empty folder id. */
+  moveDocument(documentId: string, folderId: string): Promise<WorkspaceDocument> {
+    return this.request(
+      `/api/documents/${documentId}/folder`,
+      { method: "PUT", body: JSON.stringify({ folder_id: folderId }) },
+      true,
+    );
+  }
+
   listDocuments(): Promise<DocumentSummary[]> {
     return this.request("/api/documents");
   }
@@ -1378,10 +1509,11 @@ export class WorkspaceApi {
     title: string,
     content = "",
     kind: DocumentKind = "markdown",
+    folderId = "",
   ): Promise<WorkspaceDocument> {
     return this.request("/api/documents", {
       method: "POST",
-      body: JSON.stringify({ title, content, kind }),
+      body: JSON.stringify({ title, content, kind, folder_id: folderId }),
     });
   }
 
@@ -1758,6 +1890,95 @@ export class WorkspaceApi {
     });
   }
 
+  deleteDashboard(dashboardId: string): Promise<void> {
+    return this.request(`/api/dashboards/${dashboardId}`, { method: "DELETE" }, true);
+  }
+
+  // --- Dashboard templates --------------------------------------------------
+  // The two writes below go through `workflowWrite`, and throw
+  // `WorkflowCompileError`, on purpose rather than by accident. A template that
+  // will not compile and a graph that will not compile are the same mistake — a
+  // declared contract the supplied thing does not satisfy — and the API returns
+  // the identical body for both (`api/dashboards.py:_bind_failure` says so in
+  // as many words). One error shape, one renderer, one repair prompt; a second
+  // near-identical class here would be a second thing to keep in step.
+
+  listDashboardTemplates(): Promise<DashboardTemplate[]> {
+    return this.request("/api/dashboard-templates");
+  }
+
+  createDashboardTemplate(payload: {
+    name: string;
+    description?: string;
+    required_columns: DashboardColumnRequirement[];
+    spec: DashboardSpec;
+  }): Promise<DashboardTemplate> {
+    return this.workflowWrite("/api/dashboard-templates", "POST", payload);
+  }
+
+  deleteDashboardTemplate(templateId: string): Promise<void> {
+    return this.request(
+      `/api/dashboard-templates/${templateId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /** Point a template at real data, or be told exactly what the data lacks. */
+  bindDashboardTemplate(
+    templateId: string,
+    payload: {
+      name: string;
+      description?: string;
+      dataset_id: string;
+      column_bindings?: Record<string, string>;
+    },
+  ): Promise<Dashboard> {
+    return this.workflowWrite(
+      `/api/dashboard-templates/${templateId}/bind`,
+      "POST",
+      payload,
+    );
+  }
+
+  // --- Pins — the caller's own home screen, and nobody else's ---------------
+
+  listDashboardPins(): Promise<DashboardPin[]> {
+    return this.request("/api/dashboard-pins");
+  }
+
+  /**
+   * Pin, or move a pin. Omitting the placement puts the tile below everything
+   * already there, which is what "pin this" means before anyone has dragged.
+   */
+  pinDashboard(
+    dashboardId: string,
+    placement: Partial<Omit<DashboardLayoutTile, "dashboard_id">> = {},
+  ): Promise<DashboardPin> {
+    return this.request(
+      `/api/dashboards/${dashboardId}/pin`,
+      { method: "PUT", body: JSON.stringify(placement) },
+      true,
+    );
+  }
+
+  unpinDashboard(dashboardId: string): Promise<void> {
+    return this.request(
+      `/api/dashboards/${dashboardId}/pin`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /** The whole grid in one write, because dragging one tile moves its neighbours. */
+  saveDashboardLayout(tiles: DashboardLayoutTile[]): Promise<DashboardPin[]> {
+    return this.request(
+      "/api/dashboard-pins/layout",
+      { method: "PUT", body: JSON.stringify({ tiles }) },
+      true,
+    );
+  }
+
   listApps(): Promise<GeneratedApp[]> {
     return this.request("/api/apps");
   }
@@ -2005,16 +2226,22 @@ export class WorkspaceApi {
     return this.request(`/api/workflows/${workflowId}`, { method: "DELETE" }, true);
   }
 
-  /** Start a run now. 202: the graph executes on a background task. */
+  /**
+   * Start a run now. 202: the graph executes on a background task.
+   *
+   * Routed through `workflowWrite` rather than `request` for the same reason
+   * the compile is: a payload that does not satisfy the graph's declared inputs
+   * comes back as a *list* of problems, one per field, and `request` keeps only
+   * a string. A form that can only say "Request failed (422)" cannot put the
+   * error next to the box that caused it.
+   */
   runWorkflow(
     workflowId: string,
     payload: Record<string, unknown> = {},
   ): Promise<WorkflowRun> {
-    return this.request(
-      `/api/workflows/${workflowId}/run`,
-      { method: "POST", body: JSON.stringify({ payload }) },
-      true,
-    );
+    return this.workflowWrite(`/api/workflows/${workflowId}/run`, "POST", {
+      payload,
+    });
   }
 
   listWorkflowRuns(workflowId: string, limit = 50): Promise<WorkflowRun[]> {
@@ -2106,13 +2333,40 @@ export class WorkspaceApi {
 
 export type WorkflowTriggerKind = "manual" | "schedule";
 export type WorkflowStatus = "draft" | "active" | "disabled";
-export type WorkflowNodeKind = "tool" | "agent";
+export type WorkflowNodeKind = "tool" | "agent" | "manual";
 
 export type WorkflowTrigger = {
   kind: WorkflowTriggerKind;
   /** Five fields, or "" for a manual trigger. No @daily nicknames. */
   cron: string;
   timezone: string;
+};
+
+/** JSON Schema's own type names, which is what the declaration stores. */
+export type WorkflowInputType =
+  | "string"
+  | "number"
+  | "integer"
+  | "boolean"
+  | "object"
+  | "array";
+
+/**
+ * One declared parameter of a workflow: what a run must supply, and how to ask.
+ *
+ * This is the form. `type` decides the control, `choices` turns it into a
+ * select, `label`/`description` are what the field says to a person, and
+ * `default` pre-fills it — and, for a scheduled run with nobody there to type
+ * one, *is* the value. `default: null` means no default, not "defaults to null".
+ */
+export type WorkflowInputSpec = {
+  name: string;
+  type: WorkflowInputType;
+  label: string;
+  description: string;
+  required: boolean;
+  default: unknown;
+  choices: unknown[];
 };
 
 export type WorkflowGraphNode = {
@@ -2124,6 +2378,12 @@ export type WorkflowGraphNode = {
   arguments: Record<string, unknown>;
   /** Agent nodes only. Which tools it calls is decided at run time. */
   prompt: string;
+  /**
+   * Manual nodes only. The fields a person is asked to fill when the run
+   * pauses; their submitted values become this node's output object. Absent on
+   * a row written before manual nodes existed, and on the other two kinds.
+   */
+  fields?: WorkflowInputSpec[];
 };
 
 /** Spelled from/to on the wire, which is why this is not {source,target}. */
@@ -2133,6 +2393,13 @@ export type WorkflowGraph = {
   name: string;
   description: string;
   trigger: WorkflowTrigger;
+  /**
+   * Optional on the wire, and not because the API omits it — a compile always
+   * emits the key. `Workflow.graph` is the JSON that was stored when the
+   * workflow was saved, so a row written before inputs existed arrives without
+   * it, and a required field here would make the type lie about those rows.
+   */
+  inputs?: WorkflowInputSpec[];
   nodes: WorkflowGraphNode[];
   edges: WorkflowGraphEdge[];
 };
@@ -2167,6 +2434,8 @@ export type WorkflowCompileSummary = {
   name: string;
   description: string;
   trigger: WorkflowTrigger;
+  /** The whole declaration, not a count, so a preview can draw the run form. */
+  inputs?: WorkflowInputSpec[];
   node_count: number;
   edge_count: number;
   requires_approval: boolean;
@@ -2216,7 +2485,12 @@ export type WorkflowNodeRun = {
   status: WorkflowNodeRunStatus;
   attempt: number;
   arguments: Record<string, unknown>;
-  output: string;
+  /**
+   * A scalar tool result comes back as a string; a `manual` node's output is
+   * the JSON object of collected fields. Both are stored server-side as JSON
+   * and returned parsed, so this is whichever shape the node produced.
+   */
+  output: unknown;
   /**
    * What authorised this node: "allow" for a standing grant or a read-only
    * tool, "ask" for a human decision on this specific call, "agent" for an
@@ -2272,6 +2546,19 @@ export class WorkflowCompileError extends ApiError {
   }
 }
 
+/**
+ * A run the API refused because its payload does not satisfy the declaration.
+ *
+ * Separate from `WorkflowCompileError` because it is a different moment with a
+ * different fix: the graph is fine, the form is not. `problems` is the server's
+ * own list, one sentence per offending field, each naming its input.
+ */
+export class WorkflowInputError extends ApiError {
+  constructor(public readonly problems: string[]) {
+    super(problems.join("; ") || "Those inputs are not valid", 422);
+  }
+}
+
 function findings(value: unknown): WorkflowCompileFinding[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
@@ -2297,7 +2584,14 @@ async function workflowFailure(response: Response): Promise<ApiError> {
     detail = "";
   }
   if (response.status === 422 && detail && typeof detail === "object") {
-    const report = detail as { errors?: unknown; warnings?: unknown };
+    const report = detail as { errors?: unknown; warnings?: unknown; inputs?: unknown };
+    // `POST /run` refuses with `{inputs: [...]}` and nothing else, so this is
+    // unambiguous — a compile report never carries the key.
+    if (Array.isArray(report.inputs)) {
+      return new WorkflowInputError(
+        report.inputs.filter((item): item is string => typeof item === "string"),
+      );
+    }
     const errors = findings(report.errors);
     if (errors.length > 0) {
       return new WorkflowCompileError(

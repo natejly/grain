@@ -5,22 +5,10 @@ import type { IntegrationProvider } from "@workspace/api-client";
 import { FormEvent, useState } from "react";
 import { describeError, formatRelative } from "./shared";
 
-const PROVIDER_LABELS: Record<string, { name: string; blurb: string }> = {
-  google: {
-    name: "Google (Gmail)",
-    blurb: "Read-only Gmail sync. Emails become searchable sources and a metadata dataset.",
-  },
-  strava: {
-    name: "Strava",
-    blurb:
-      "OAuth activity sync. Activities become a queryable dataset for chat and dashboards.",
-  },
-  garmin: {
-    name: "Garmin Connect",
-    blurb:
-      "Credential-based sync via the unofficial Garmin Connect API (python-garminconnect). " +
-      "Your password is used once to log in and is never stored — only an encrypted session token.",
-  },
+const PROVIDER_LABELS: Record<string, string> = {
+  google: "Google (Gmail)",
+  strava: "Strava",
+  garmin: "Garmin Connect",
 };
 
 export type IntegrationsViewProps = {
@@ -74,16 +62,12 @@ export function IntegrationsView({
       <div className="page-heading">
         <div>
           <h1>Integrations</h1>
-          <p>Synced data lands as sources and datasets.</p>
         </div>
       </div>
 
       <div className="integration-grid">
         {integrations.map((item) => {
-          const label = PROVIDER_LABELS[item.provider] || {
-            name: item.provider,
-            blurb: "",
-          };
+          const name = PROVIDER_LABELS[item.provider] || item.provider;
           return (
             <article className="integration-card" key={item.provider}>
               <div className="integration-card-head">
@@ -91,7 +75,7 @@ export function IntegrationsView({
                   <Plug size={18} />
                 </div>
                 <div>
-                  <strong>{label.name}</strong>
+                  <strong>{name}</strong>
                   <span>
                     {item.account
                       ? `${item.account.external_account || "connected"} · ${item.account.status}`
@@ -101,7 +85,6 @@ export function IntegrationsView({
                   </span>
                 </div>
               </div>
-              <p>{label.blurb}</p>
               {!item.configured && !item.account && (
                 <small>
                   Set the client credentials and INTEGRATIONS_ENCRYPTION_KEY in{" "}

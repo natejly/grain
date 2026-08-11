@@ -12,7 +12,6 @@ import {
   Network,
   Plug,
   ShieldCheck,
-  Terminal,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -29,14 +28,22 @@ import type { View } from "./shared";
  *
  * What changed here is that "Create" stopped being a place. Creating is an
  * action, so it left the rail for a menu in the top right that actually makes
- * the thing; the *documents* that used to hide behind it are a destination in
- * their own right, and they took their siblings' tab strip with them. Knowledge
- * stays on the rail on purpose: a user who could not find their memories is not
+ * the thing; the *files* that used to hide behind it are a destination in their
+ * own right, and they took their siblings' tab strip with them. Knowledge stays
+ * on the rail on purpose: a user who could not find their memories is not
  * helped by moving them further away.
+ *
+ * Sandbox left for a different reason, and it is the sharper one: a sandbox is
+ * a *capability*, not a destination. You do not visit it any more than you
+ * visit the database — you ask for a chart and you get one, and the figure
+ * appears on the tool card in the conversation that asked. A rail entry for it
+ * was inviting users to go and operate a machine, which is the agent's job; it
+ * also invited them, whenever SANDBOX_ENABLED was false, to start a machine
+ * that 502s. The service, its tools and its API are untouched.
  */
 export type GroupId =
   | "chat"
-  | "documents"
+  | "files"
   | "workflows"
   | "knowledge"
   | "connections"
@@ -75,15 +82,21 @@ export const NAV_GROUPS: NavGroup[] = [
     surface: "rail",
     items: [{ view: "chat", label: "Chat", icon: MessageSquare }],
   },
+  /**
+   * "Files", not "Documents". The group has held Projects, Boards and
+   * Dashboards for as long as it has existed, so its old name described one of
+   * its four tabs and mislabelled the other three — and now that the first tab
+   * is a folder tree rather than a flat list, "Files" is also what the thing
+   * itself is.
+   */
   {
-    id: "documents",
-    label: "Documents",
+    id: "files",
+    label: "Files",
     icon: FileText,
     surface: "rail",
     items: [
-      { view: "documents", label: "Documents", icon: FileText },
+      { view: "documents", label: "Files", icon: FileText },
       { view: "projects", label: "Projects", icon: Braces },
-      { view: "sandbox", label: "Sandbox", icon: Terminal },
       { view: "boards", label: "Boards", icon: KanbanSquare },
       { view: "dashboards", label: "Dashboards", icon: BarChart3 },
     ],
@@ -103,8 +116,8 @@ export const NAV_GROUPS: NavGroup[] = [
    * On the rail, and the argument had two sides.
    *
    * Against: the rail is deliberately short, and a workflow is a thing you
-   * *make*, which would put it among Documents' siblings. But nobody looking
-   * for automation looks under "Documents", and only half of what this surface
+   * *make*, which would put it among Files' siblings. But nobody looking for
+   * automation looks under "Files", and only half of what this surface
    * does is making. The other half is operating — watching a run, and answering
    * the approval an unattended run parked on. Settings is where you go rarely
    * and on purpose; an approval that has been waiting since 3am is the opposite
@@ -175,7 +188,6 @@ export type CreateActionId =
   | "document"
   | "project"
   | "latex"
-  | "sandbox"
   | "board"
   | "dashboard"
   | "workflow";
@@ -195,9 +207,10 @@ export type CreateAction = {
   view: View;
   icon: LucideIcon;
   /**
-   * What to ask for before creating, or "" for the things that need nothing
-   * said first: a sandbox is a machine, and a dashboard collects its name,
-   * datasets and prompt in the editor it opens.
+   * What to ask for before creating, or "" for the things that name themselves
+   * later: a dashboard collects its name, datasets and prompt in the editor it
+   * opens, and a workflow is named by the compiler from the sentence it was
+   * asked for.
    */
   prompt: string;
 };
@@ -212,6 +225,14 @@ export type CreateAction = {
  * of the same name, which renders KaTeX maths and produces no PDF, and
  * reported the TeX compiler as broken. In this menu the word now means one
  * thing — TeX in, PDF out.
+ *
+ * There is no "Folder" here, and that is not an oversight. Every entry in this
+ * menu makes something with contents; a folder is only the place contents go,
+ * and the one thing worth saying when you make one — *which folder it goes in*
+ * — is a question a menu in the top-right corner has no way to ask. It is made
+ * in the tree, where the answer is whatever you were pointing at. "Sandbox" is
+ * gone for the harder reason: it was never a thing you make, it was a machine
+ * you were being asked to operate.
  */
 export const CREATE_ACTIONS: CreateAction[] = (
   [
@@ -230,7 +251,6 @@ export const CREATE_ACTIONS: CreateAction[] = (
       view: "projects",
       prompt: "Document name",
     },
-    { id: "sandbox", label: "Sandbox", noun: "sandbox", view: "sandbox", prompt: "" },
     { id: "board", label: "Board", noun: "board", view: "boards", prompt: "Board name" },
     {
       id: "dashboard",

@@ -100,6 +100,22 @@ snapshot, result, and thread limits. Arbitrary SQL is never accepted.
 Dashboards persist a validated visualization spec plus the dataset query, not
 rendered HTML or executable code.
 
+A dashboard can also be produced from a **template**: `required_columns` (names
+and types) plus a spec written against those declared names, bound later by a
+`{declared → actual}` mapping. Both ends are validated — a template whose spec
+reads an undeclared column is refused when the template is written, and a
+binding is refused through the same `CompileReport` shape the workflow compiler
+returns, so "satisfies the contract" actually implies "runs". Types widen only
+where widening cannot change an answer (`integer→number`, `date/datetime→string`;
+a number deliberately does not satisfy `string`).
+
+**Pins are the home-screen tiles.** `dashboard_pins` is per-user and unique on
+`(user_id, dashboard_id)`, carrying `grid_x/y/w/h` on a twelve-column grid, so a
+`Dashboard` stays one chart and needs no second layout concept beside it. The
+whole grid saves in one write, because dragging one tile moves its neighbours.
+The agent has tools to create dashboards and templates and to bind one, and
+deliberately **no pin tool**: the agent authors, the user curates.
+
 ## Generated apps
 
 A generated app is a name, globally unique slug, visibility policy, and immutable
@@ -115,6 +131,22 @@ React "never evaluates generated JavaScript, HTML, dependencies, or server code"
 that sentence outlived the design by several releases, which is the failure mode
 a security claim in a document is most prone to. What replaced it is in the next
 section.
+
+A generated app gets **no backend** (ADR 0009). It already has one in the only
+sense that matters — `window.jasmine.query()` over the validated `postMessage`
+channel, checked against the release's `data_bindings` — and that is a query API
+it did not write and cannot widen. The decision turns on a containment fact
+rather than a preference: the frame runs `sandbox="allow-scripts"` with
+`connect-src 'none'`, so it *cannot call a backend of its own*; admitting one
+means relaxing the renderer sandbox and either putting attacker-controlled bytes
+on our origin or standing up per-release origins with wildcard DNS and a router.
+Where Python is genuinely required, the answer is a precompute on the ADR 0005
+path whose *output* becomes a dataset version — a materialized view with a
+refresh schedule, not a service, with approval bound to the **code hash** rather
+than the run so an unattended refresh never executes unsigned code. A standing
+process is refused. The residual risk is recorded in 0005's register: a
+precomputed number is unverified output presented as data, and that difference
+must be visible in the UI, because it is not visible in the value.
 
 ## Code execution boundaries
 
@@ -198,6 +230,57 @@ and set this at `/api/admin/usage` and `/api/admin/budget`.
 Workflows (ADR 0007) compile an English description into a DAG and execute it on
 the same run loop, on a schedule, at `workflow` policy scope.
 
+A graph may declare **typed inputs** alongside its nodes, edges and trigger —
+name, JSON Schema type, label, description, required, default, choices — which is
+what the canvas renders its run form from. They ride on `graph["inputs"]`, so no
+column and no migration were needed; `workflow_runs.input_json` already existed.
+Binding happens at run start, after validation and before the run goes
+`running`, so a bad payload fails having called nothing, and the bound payload
+(defaults included) is written back so the run record answers "what did this
+actually run with". Values are rejected, never coerced. A graph declaring no
+inputs keeps the old free-form payload, because stored graphs are re-validated
+against the live registry at every run start and making an undeclared reference
+an error would fail runs on graphs nobody edited.
+
+Two declarations are compile errors rather than run-time surprises, both for the
+same reason — binding's post-condition is that every declared input has a value
+afterwards: an *optional* input with no default, and a *required* input with no
+default on a *schedule* trigger (that one does not fail once, it fails every
+Monday).
+
+## The shell
+
+One table, `apps/web/components/views/navigation.ts`, describes the whole of
+navigation, because a view missing from it is a view with no way to reach it
+while the shell still renders. `navigation.test.ts` pins the `View` union and
+that table together.
+
+Groups carry a **surface**. `rail` is the left sidebar — the places you work:
+Chat, Files (Files, Projects, Boards, Dashboards), Knowledge (Sources, Memory,
+Graph), and Workflows. `settings` is the top-right menu — the places you
+configure and audit: Connections (Databases, MCP, Integrations), Activity, and
+Admin. A group's siblings are reachable from a tab strip once you are inside it,
+so the rail answers "what am I trying to do" rather than "which subsystem owns
+this".
+
+Two things left the rail, for two different reasons, and the second is the
+sharper one:
+
+- **Create stopped being a place.** Creating is an action, so it became a menu
+  in the top right that actually makes the thing. There is no "Folder" entry
+  there, because the one question worth asking when you make a folder — which
+  folder it goes in — is one a corner menu cannot ask; folders are made in the
+  tree, where the answer is whatever you were pointing at. "LaTeX document" in
+  that menu is a *Project*, not a Document, because users looking for LaTeX kept
+  finding the document format of the same name and reporting the TeX compiler
+  as broken.
+- **Sandbox is a capability, not a destination.** You do not visit it any more
+  than you visit the database — you ask for a chart and get one, and the figure
+  appears on the tool card in the conversation that asked. A rail entry invited
+  users to operate a machine that is the agent's job, and invited them, whenever
+  `SANDBOX_ENABLED=0`, to start one that 502s. The service, its tools and its
+  API are untouched.
+
 ## Other subsystems
 
 Memory (durable per-workspace items with supersession), MCP client with per-user
@@ -206,12 +289,34 @@ management, documents and kanban boards as agent-editable artifacts, third-party
 connectors (Gmail, Strava, Garmin) and external database connections. Each has
 routes under `/api` and a view in the web app.
 
+**Documents** are `text` or `markdown` — and each kind means what it says. A
+`text` document renders verbatim in a monospace pane; running it through the
+Markdown renderer "just in case" would repeat the lie the old `latex` kind told,
+where the format's name and the format's behaviour were two different things.
+That kind is gone (migration `0026`); TeX in, PDF out is a Project.
+
+Documents are filed in **folders**, a workspace-scoped tree. Deleting a folder
+that still holds documents is **refused** (409 — the request is well-formed and
+would succeed once the folder is empty), never cascaded: a cascade needs a dialog
+asking about fourteen documents that are not on screen, which is a question the
+user cannot answer when it is asked. The folder is a label recreatable in a
+second; the documents are the work and carry version history. Empty descendants
+do go, since nothing can be lost. Consequently folder delete is *not*
+confirm-gated while document delete is — the only folder delete that can succeed
+destroys nothing, and a dialog guarding nothing trains users to dismiss the ones
+that guard something.
+
+Agent writes to a document arrive as **proposals** reviewed inline beside the
+text, and a document owns one chat thread, created on first open by
+`POST /api/documents/{id}/conversation` — a POST that needs no `Idempotency-Key`
+because the document id *is* the key.
+
 ## Repository
 
 - `apps/web` — Next.js workspace
 - `apps/api` — FastAPI HTTP and domain services; `app/services/` holds the agent
-  loop, retrieval, sandbox, workflows, MCP, projects, artifacts, connectors,
-  auth, memory, usage and budget
+  loop, retrieval, sandbox, workflows, MCP, projects, artifacts (documents,
+  folders, proposals), dashboards, connectors, auth, memory, usage and budget
 - `apps/worker` — production queue adapter contract
 - `packages/api-client` — typed browser contract and checked-in OpenAPI
 - `infra` — optional production-like local services

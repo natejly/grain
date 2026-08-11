@@ -18,6 +18,7 @@ from ..schemas import (
     DocumentSummaryOut,
     DocumentVersionOut,
 )
+from ..services import conversations
 from ..services.artifacts import boards, documents
 
 router = APIRouter(prefix="/api", tags=["artifacts"])
@@ -29,6 +30,7 @@ def _document_out(document: Document) -> DocumentOut:
         title=document.title,
         kind=document.kind,
         content=document.content,
+        folder_id=document.folder_id,
         updated_at=document.updated_at,
     )
 
@@ -39,6 +41,7 @@ def _summary_out(document: Document) -> DocumentSummaryOut:
         title=document.title,
         kind=document.kind,
         characters=len(document.content),
+        folder_id=document.folder_id,
         updated_at=document.updated_at,
     )
 
@@ -67,6 +70,7 @@ def create_document(
             title=payload.title,
             content=payload.content,
             kind=payload.kind,
+            folder_id=payload.folder_id,
             created_by=actor.user_id,
         )
     except documents.DocumentError as exc:
@@ -112,6 +116,7 @@ def update_document(
             workspace_id=actor.workspace_id,
             document_id=document_id,
             content=payload.content,
+            created_by=actor.user_id,
         )
     except documents.DocumentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -159,6 +164,7 @@ def restore_version(
             workspace_id=actor.workspace_id,
             document_id=document_id,
             version_id=version_id,
+            created_by=actor.user_id,
         )
     except documents.DocumentError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -171,11 +177,22 @@ def delete_document(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> None:
+    # The side-panel thread goes with it. It was only ever about this document —
+    # every turn was handed the document's text — so leaving it behind would
+    # leave a conversation whose subject no longer exists, invisible in the Chat
+    # rail (which filters scoped threads out) and reachable by nothing.
+    for conversation_id in conversations.for_document_ids(
+        db, workspace_id=actor.workspace_id, document_id=document_id
+    ):
+        conversations.purge(
+            db, workspace_id=actor.workspace_id, conversation_id=conversation_id
+        )
     try:
         documents.delete_document(
             db, workspace_id=actor.workspace_id, document_id=document_id
         )
     except documents.DocumentError as exc:
+        db.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 

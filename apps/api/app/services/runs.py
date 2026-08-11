@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import timedelta
+from typing import Any, Optional
 
 import httpx
 from sqlalchemy import select
@@ -269,8 +270,20 @@ def _fail_run(db, run_id: str, exc: Exception) -> None:
     db.commit()
 
 
-def resume_run(run_id: str, tool_call_id: str, decision: str) -> None:
-    """Continue a run parked on a tool approval, after the user decided."""
+def resume_run(
+    run_id: str,
+    tool_call_id: str,
+    decision: str,
+    amendment: Optional[dict[str, Any]] = None,
+    inputs: Optional[dict[str, Any]] = None,
+) -> None:
+    """Continue a run parked on a tool approval, after the user decided.
+
+    `amendment` carries a partial approval — the subset of a document edit's
+    hunks the reviewer accepted — through to the executor. `inputs` carries the
+    values a person typed at a workflow `manual` node; both are ignored by the
+    path they do not belong to.
+    """
     db = SessionLocal()
     try:
         run = db.get(Run, run_id)
@@ -288,7 +301,12 @@ def resume_run(run_id: str, tool_call_id: str, decision: str) -> None:
         )
         db.commit()
         result = resume_agent_turn(
-            db, run, tool_call_id=tool_call_id, decision=decision
+            db,
+            run,
+            tool_call_id=tool_call_id,
+            decision=decision,
+            amendment=amendment,
+            inputs=inputs,
         )
         if result is None:
             return

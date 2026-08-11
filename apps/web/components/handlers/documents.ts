@@ -44,10 +44,10 @@ export function createDocumentHandlers({
     }
   }
 
-  async function createDocument(title: string, kind: DocumentKind) {
+  async function createDocument(title: string, kind: DocumentKind, folderId = "") {
     setError("");
     try {
-      const created = await api.createDocument(title, "", kind);
+      const created = await api.createDocument(title, "", kind, folderId);
       setActiveDocument(created);
       setDocumentVersions([]);
       setDocuments(await api.listDocuments());

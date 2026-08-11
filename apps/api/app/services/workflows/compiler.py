@@ -33,7 +33,7 @@ from ...config import Settings, get_settings
 from ..llm_tools import ToolContext, ToolSpec, build_registry
 from ..model import _openai_client, call_responses, privacy_safe_identifier
 from ..usage import WORKFLOW_COMPILE, usage_scope
-from .dag import MAX_NODES, WorkflowGraph
+from .dag import MAX_INPUTS, MAX_NODES, WorkflowGraph
 from .validate import (
     CompileError,
     CompileReport,
@@ -59,10 +59,18 @@ Reply with one JSON object and nothing else. No prose, no code fence.
   "name": "short human name",
   "description": "one sentence",
   "trigger": {{"kind": "manual" | "schedule", "cron": "5-field cron", "timezone": "IANA zone"}},
+  "inputs": [
+    {{"name": "slug", "type": "string" | "number" | "integer" | "boolean" | "object" | "array",
+      "label": "What a person is asked", "description": "help text",
+      "required": true, "default": null, "choices": []}}
+  ],
   "nodes": [
     {{"id": "slug", "kind": "tool", "tool": "exact_tool_name",
       "arguments": {{...}}, "description": "why this step exists"}},
-    {{"id": "slug", "kind": "agent", "prompt": "what to do", "description": "..."}}
+    {{"id": "slug", "kind": "agent", "prompt": "what to do", "description": "..."}},
+    {{"id": "slug", "kind": "manual", "prompt": "question shown to a person",
+      "fields": [{{"name": "slug", "type": "string", "label": "...", "required": true}}],
+      "description": "..."}}
   ],
   "edges": [{{"from": "slug", "to": "slug"}}]
 }}
@@ -79,13 +87,28 @@ Rules, all enforced by a validator that will reject your answer:
    depending on itself. No duplicate edges.
 5. To use an earlier node's result, write {{{{ node_id.output }}}} inside a
    string. The referenced node MUST be upstream — connected by edges that reach
-   this node. To use the trigger payload, write {{{{ input.field }}}}.
-6. "kind": "schedule" REQUIRES a 5-field cron (minute hour day-of-month month
+   this node. To read one of the workflow's own inputs, write
+   {{{{ input.input_name }}}}.
+6. Declare an input for anything the automation should be able to vary between
+   runs — a repository, a channel, a date range. Anything you write
+   {{{{ input.x }}}} for MUST appear in `inputs` with that exact name. Give every
+   input a `label` a person will understand; a UI renders this list as a form.
+   Omit `inputs` entirely if the automation takes no parameters.
+7. An input with `"required": false` MUST have a `default` — a graph never reads
+   a value that is not there. A SCHEDULED workflow runs with nobody present, so
+   every input it declares must have a `default` as well.
+8. "kind": "schedule" REQUIRES a 5-field cron (minute hour day-of-month month
    day-of-week). No @daily / @weekly nicknames. "kind": "manual" must omit cron.
-7. A tool node has `tool` and `arguments` and no `prompt`. An agent node has
-   `prompt` and neither `tool` nor `arguments`.
-8. No fields other than those shown. Unknown fields are rejected.
-9. At most {MAX_NODES} nodes. Prefer the smallest graph that does the job.
+9. A tool node has `tool` and `arguments` and no `prompt`. An agent node has
+   `prompt` and neither `tool` nor `arguments`. A "manual" node pauses the run
+   for a person: it has a `prompt` (the question they see), optional `fields`
+   (typed values to collect, same shape as `inputs`), and neither `tool` nor
+   `arguments`. The person's values become the node's output, readable
+   downstream as {{{{ node_id.output.field_name }}}}. Use one when a step needs a
+   human's judgement or input before the workflow can continue.
+10. No fields other than those shown. Unknown fields are rejected.
+11. At most {MAX_NODES} nodes and {MAX_INPUTS} inputs. Prefer the smallest graph
+    that does the job.
 
 Tools marked (writes) will pause the workflow for human approval before they
 run. That is expected — do not avoid them, and do not pretend a read-only tool
@@ -111,12 +134,17 @@ class CompiledWorkflow:
 
     @property
     def requires_approval(self) -> bool:
-        """True when at least one node names a write-capable tool.
+        """True when a node names a write-capable tool or pauses for a person.
 
         The question a scheduler needs answered before it runs anything
-        unattended: will this park, or will it complete on its own?
+        unattended: will this park, or will it complete on its own? A manual node
+        parks by construction — it exists to wait for a human — so it answers the
+        question the same way a write-capable tool does.
         """
-        return any(item.code == "tool_write_capable" for item in self.warnings)
+        return any(
+            item.code in ("tool_write_capable", "manual_requires_person")
+            for item in self.warnings
+        )
 
 
 def render_tool_catalogue(
@@ -286,6 +314,10 @@ def summarize(compiled: CompiledWorkflow) -> Dict[str, Any]:
         "name": compiled.graph.name,
         "description": compiled.graph.description,
         "trigger": compiled.graph.trigger.model_dump(),
+        # The whole declaration, not a count: this is what a caller renders as a
+        # run form, and a summary that said "3 inputs" would send it back to the
+        # graph document for the only part it actually needs.
+        "inputs": [item.model_dump() for item in compiled.graph.inputs],
         "node_count": len(compiled.graph.nodes),
         "edge_count": len(compiled.graph.edges),
         "requires_approval": compiled.requires_approval,

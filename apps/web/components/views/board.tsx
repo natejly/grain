@@ -1,6 +1,6 @@
 "use client";
 
-import { KanbanSquare, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import type { Board } from "@workspace/api-client";
 import { useState } from "react";
 import {
@@ -326,8 +326,7 @@ export function BoardView({
 
       {boards.length === 0 ? (
         <div className="empty-state">
-          <KanbanSquare size={22} />
-          <p>No boards yet. Create one, or ask the assistant to plan your work.</p>
+          <p>No boards yet.</p>
         </div>
       ) : (
         boards.map((board) => (

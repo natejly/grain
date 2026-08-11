@@ -505,6 +505,57 @@ def test_an_unknown_node_kind_is_refused_by_the_schema():
 
 
 # ---------------------------------------------------------------------------
+# Manual nodes: the human-in-the-loop pause
+# ---------------------------------------------------------------------------
+
+
+def _manual(**node: Any) -> Dict[str, Any]:
+    """A one-node manual graph. Manual triggers avoid the cron requirement."""
+    base = {"id": "review", "kind": "manual", "prompt": "Ship it?"}
+    base.update(node)
+    return _graph(trigger={"kind": "manual"}, nodes=[base], edges=[])
+
+
+def test_a_manual_node_compiles_and_forces_approval():
+    """A pause is unattended risk by definition — a person must be there — so a
+    graph containing one can never be scheduled to run alone."""
+    document = _manual(fields=[{"name": "version", "type": "string"}])
+    assert _codes(document) == []
+    compiled = compile_document(document, REGISTRY)
+    assert compiled.requires_approval is True
+    assert "manual_requires_person" in [item.code for item in compiled.warnings]
+
+
+def test_a_manual_node_needs_a_question_to_ask():
+    assert "manual_missing_prompt" in _codes(_manual(prompt=""))
+
+
+def test_a_manual_node_may_not_name_a_tool_or_carry_arguments():
+    """It resolves no tool and runs no call — the pause is the whole node."""
+    codes = _codes(_manual(tool="list_datasets", arguments={"x": 1}))
+    assert {"manual_unexpected_tool", "manual_unexpected_arguments"} <= set(codes)
+
+
+def test_a_manual_field_that_is_not_a_reference_slug_is_refused():
+    """A field becomes `{{ review.output.<name> }}`, so its name has to be a slug
+    the reference grammar can address."""
+    assert "manual_field_invalid" in _codes(
+        _manual(fields=[{"name": "Bad Name", "type": "string"}])
+    )
+
+
+def test_a_manual_node_with_two_fields_of_one_name_is_refused():
+    assert "manual_duplicate_field" in _codes(
+        _manual(
+            fields=[
+                {"name": "version", "type": "string"},
+                {"name": "version", "type": "string"},
+            ]
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # Triggers
 # ---------------------------------------------------------------------------
 

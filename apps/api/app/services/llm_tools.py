@@ -23,6 +23,11 @@ class ToolContext:
     workspace_id: str
     user_id: str
     conversation_id: str
+    #: The document this turn is happening beside, when the user asked from the
+    #: chat panel in the document editor. It is what "this paragraph" refers to:
+    #: the document tools fall back to it, so the model does not have to list
+    #: documents and guess which one is on the user's screen.
+    document_id: str = ""
 
 
 @dataclass
@@ -273,6 +278,7 @@ def build_registry(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
     registry.update(graph_walk_tools(db, context))
     registry.update(artifact_tools(db, context))
     registry.update(project_tools(db, context))
+    registry.update(dashboard_tools(db, context))
     registry.update(integration_tools(db, context))
     registry.update(database_tools(db, context))
     registry.update(mcp_tools(db, context))
@@ -305,6 +311,15 @@ def artifact_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
 def project_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
     """The virtual filesystem behind multi-file code projects."""
     from .projects import registry_tools
+
+    return registry_tools(db, context)
+
+
+def dashboard_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """Saved charts over the datasets `query_dataset` above explores, and the
+    reusable definitions behind them. Authoring only — pinning one to a home
+    screen is the user's call, not the model's."""
+    from .dashboards.tools import registry_tools
 
     return registry_tools(db, context)
 

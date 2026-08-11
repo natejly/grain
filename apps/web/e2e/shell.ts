@@ -6,9 +6,9 @@ import type { Page } from "@playwright/test";
  * The shell has three surfaces and they are addressed by accessible name, not
  * by class: the left rail holds the places you work, the Settings menu in the
  * top right holds the places you configure, and a group's siblings sit in a tab
- * strip above the view. Names are used because labels like "Create" and
- * "Documents" also appear on form buttons *inside* the views — an unscoped
- * getByRole would match those too.
+ * strip above the view. Names are used because labels like "Create" and "Files"
+ * also appear on buttons *inside* the views — an unscoped getByRole would match
+ * those too.
  *
  * One copy of these helpers rather than one per spec: four near-identical
  * `openView` definitions is four places to update the next time navigation
@@ -20,9 +20,9 @@ export const rail = (page: Page) => page.getByRole("navigation", { name: "Worksp
 export const tabs = (page: Page, group: string) =>
   page.getByRole("navigation", { name: `${group} views` });
 
-/** Open a rail destination — Chat, Documents, Knowledge — and optionally a tab. */
+/** Open a rail destination — Chat, Files, Knowledge — and optionally a tab. */
 export async function openView(page: Page, group: string, tab?: RegExp | string) {
-  // A group's badge is part of its accessible name ("Documents 4"), so anchor
+  // A group's badge is part of its accessible name ("Files 4"), so anchor
   // on the label rather than asking for an exact match.
   await rail(page)
     .getByRole("button", { name: new RegExp(`^${group}`) })
@@ -45,7 +45,7 @@ export async function openSettings(page: Page, group: string, tab?: RegExp | str
 /**
  * Make something from the Create menu. `name` is required for the things that
  * cannot be renamed afterwards (document, project, board) and omitted for the
- * two that ask for nothing first (sandbox, dashboard).
+ * two that ask for nothing first (dashboard, workflow).
  */
 export async function createFromMenu(page: Page, thing: string, name?: string) {
   await page.getByRole("button", { name: "Create new" }).click();

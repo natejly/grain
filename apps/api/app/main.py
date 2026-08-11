@@ -16,8 +16,10 @@ from .api import (
     bibliography,
     board_ops,
     chat,
+    dashboards,
     dbconnect,
     doc_pending,
+    folders,
     generated_apps,
     graph,
     integrations,
@@ -102,10 +104,12 @@ app.include_router(dbconnect.router)
 app.include_router(artifacts.router)
 app.include_router(board_ops.router)
 app.include_router(doc_pending.router)
+app.include_router(folders.router)
 app.include_router(projects.router)
 app.include_router(bibliography.router)
 app.include_router(sandbox.router)
 app.include_router(analytics.router)
+app.include_router(dashboards.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)
 app.include_router(admin.router)

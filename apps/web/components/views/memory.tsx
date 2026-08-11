@@ -1,6 +1,6 @@
 "use client";
 
-import { Brain, Search, Trash2 } from "lucide-react";
+import { Search, Trash2 } from "lucide-react";
 import type { MemoryItem } from "@workspace/api-client";
 import { useState } from "react";
 import { formatRelative } from "./shared";
@@ -33,7 +33,6 @@ export function MemoryView({ memories, forgetMemory }: MemoryViewProps) {
       <div className="page-heading">
         <div>
           <h1>Memory</h1>
-          <p>What the assistant remembers about you. Recalled automatically in chat.</p>
         </div>
         {memories.length > 0 && (
           <label className="memory-search">
@@ -51,18 +50,13 @@ export function MemoryView({ memories, forgetMemory }: MemoryViewProps) {
 
       {memories.length === 0 ? (
         <div className="empty-state">
-          <Brain size={22} />
-          <p>
-            Nothing remembered yet. Chat with the assistant and durable facts
-            accumulate here.
-          </p>
+          <p>Nothing remembered yet.</p>
         </div>
       ) : (
         <div className="memory-panel">
           <div className="panel-title">
             <div>
               <strong>Remembered facts</strong>
-              <p>Forget anything you would rather it did not recall.</p>
             </div>
             <span className="panel-count">{matches.length}</span>
           </div>

@@ -148,6 +148,15 @@ def tool_node(
     }
 
 
+def manual_node(
+    node_id: str, prompt: str, fields: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    node: Dict[str, Any] = {"id": node_id, "kind": "manual", "prompt": prompt}
+    if fields is not None:
+        node["fields"] = fields
+    return node
+
+
 def store(
     db: Any, identity: Identity, document: Mapping[str, Any], *, status: str = "draft"
 ) -> Workflow:
@@ -592,6 +601,188 @@ def test_a_denied_approval_ends_the_run_and_skips_the_rest(
     rows = nodes_of(db, resumed)
     assert rows["send"].status == "failed"
     assert rows["log"].status == "skipped"
+
+
+# --------------------------------------------------------------------------
+# Manual nodes: the human-in-the-loop pause
+# --------------------------------------------------------------------------
+
+
+def test_a_manual_node_parks_the_run_for_a_person(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole node is the pause: it parks before anything downstream runs.
+
+    A manual node has no tool to resolve, so the park is proved by the same three
+    facts a write approval is — a proposed `AgentToolCall`, a backing run in
+    `waiting_for_approval`, and the downstream tool untouched — plus the one that
+    distinguishes it: the parked call carries the `__manual__` sentinel, which is
+    how the resume path knows to finish it from typed values rather than by
+    executing a call.
+    """
+    ship = Probe("probe_ship")
+    install(monkeypatch, ship)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                manual_node("approve", "Ship it?", [{"name": "version"}]),
+                tool_node("ship", "probe_ship", {"text": "{{ approve.output.version }}"}),
+            ],
+            [{"from": "approve", "to": "ship"}],
+        ),
+        trigger="schedule",
+    )
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "waiting_for_approval"
+    assert ship.calls == [], "a step downstream of an unanswered pause ran"
+
+    rows = nodes_of(db, workflow_run)
+    assert rows["approve"].status == "waiting_for_approval"
+    # The downstream node has not been reached, so it has no row at all yet.
+    assert "ship" not in rows
+
+    call = db.get(AgentToolCall, rows["approve"].agent_tool_call_id)
+    assert call is not None and call.status == "proposed"
+    assert call.name == executor.MANUAL_TOOL_NAME
+    backing = db.get(Run, workflow_run.run_id)
+    assert backing is not None and backing.status == "waiting_for_approval"
+    # No model turn was in flight: a manual park, like a tool park, saves no state.
+    assert not backing.agent_state_json
+
+
+def test_proceeding_a_manual_node_feeds_its_values_downstream(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proceed turns the submitted values into the node's output object, which a
+    downstream node reads as `{{ node.output.field }}` — through the decision
+    endpoint chat approvals use, with the values riding in `inputs`."""
+    ship = Probe("probe_ship")
+    install(monkeypatch, ship)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                manual_node("approve", "Which version ships?", [{"name": "version"}]),
+                tool_node("ship", "probe_ship", {"text": "{{ approve.output.version }}"}),
+            ],
+            [{"from": "approve", "to": "ship"}],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+    call_id = nodes_of(db, workflow_run)["approve"].agent_tool_call_id
+    assert call_id
+
+    with TestClient(app, base_url=TEST_BASE_URL) as client:
+        authorize(client, identity)
+        response = client.post(
+            f"/api/agent-tool-calls/{call_id}/decision",
+            json={
+                "decision": "approved",
+                "remember": False,
+                "inputs": {"version": "1.4.0"},
+            },
+            headers={"Idempotency-Key": "manual-approve-1"},
+        )
+    assert response.status_code == 200, response.text
+
+    db.expire_all()
+    resumed = db.get(WorkflowRun, workflow_run.id)
+    assert resumed.status == "succeeded", resumed.error
+    rows = nodes_of(db, resumed)
+    # The collected values are the node's output object, verbatim.
+    assert output_of(rows["approve"]) == {"version": "1.4.0"}
+    # And a downstream node resolved a field out of that object.
+    assert ship.calls == [{"text": "1.4.0"}]
+
+
+def test_rejecting_a_manual_node_cancels_the_run(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A person declining to continue is the gate working, not the automation
+    breaking, so the run lands in `cancelled` with `manual_rejected`."""
+    ship = Probe("probe_ship")
+    install(monkeypatch, ship)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                manual_node("approve", "Ship it?", [{"name": "version"}]),
+                tool_node("ship", "probe_ship", {"text": "{{ approve.output.version }}"}),
+            ],
+            [{"from": "approve", "to": "ship"}],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+    call_id = nodes_of(db, workflow_run)["approve"].agent_tool_call_id
+
+    with TestClient(app, base_url=TEST_BASE_URL) as client:
+        authorize(client, identity)
+        response = client.post(
+            f"/api/agent-tool-calls/{call_id}/decision",
+            json={"decision": "denied", "remember": False},
+            headers={"Idempotency-Key": "manual-deny-1"},
+        )
+    assert response.status_code == 200, response.text
+
+    db.expire_all()
+    resumed = db.get(WorkflowRun, workflow_run.id)
+    assert resumed.status == "cancelled"
+    assert "manual_rejected" in resumed.error
+    assert ship.calls == []
+    rows = nodes_of(db, resumed)
+    assert rows["approve"].status == "failed"
+    assert rows["ship"].status == "skipped"
+
+
+def test_invalid_manual_values_are_refused_and_the_run_keeps_waiting(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The values a person types are judged by the node's declared `fields`. A
+    submission that omits a required field 422s in front of them, and the run is
+    left exactly as it was — still parked, still answerable."""
+    ship = Probe("probe_ship")
+    install(monkeypatch, ship)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                manual_node(
+                    "approve",
+                    "Which version ships?",
+                    [{"name": "version", "type": "string", "required": True}],
+                ),
+                tool_node("ship", "probe_ship", {"text": "{{ approve.output.version }}"}),
+            ],
+            [{"from": "approve", "to": "ship"}],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+    call_id = nodes_of(db, workflow_run)["approve"].agent_tool_call_id
+
+    with TestClient(app, base_url=TEST_BASE_URL) as client:
+        authorize(client, identity)
+        response = client.post(
+            f"/api/agent-tool-calls/{call_id}/decision",
+            json={"decision": "approved", "remember": False, "inputs": {}},
+            headers={"Idempotency-Key": "manual-invalid-1"},
+        )
+    assert response.status_code == 422, response.text
+
+    db.expire_all()
+    still_parked = db.get(WorkflowRun, workflow_run.id)
+    assert still_parked.status == "waiting_for_approval"
+    assert nodes_of(db, still_parked)["approve"].status == "waiting_for_approval"
+    assert ship.calls == []
 
 
 def authorize(client: TestClient, identity: Identity) -> None:

@@ -18,14 +18,18 @@ test("the rail is the places you work, and only those", async ({ page }) => {
   // Workflows earned a rail slot rather than a place behind Settings: half of
   // what it does is operating a running thing, and an approval waiting since
   // 3am is not something you go looking for in a configuration menu.
-  for (const label of ["Chat", "Documents", "Knowledge", "Workflows"]) {
+  for (const label of ["Chat", "Files", "Knowledge", "Workflows"]) {
     await expect(rail(page).getByRole("button", { name: new RegExp(`^${label}`) }))
       .toBeVisible();
   }
   // Creating is an action, so it is no longer a place you can visit; the
-  // subsystems live inside a destination or behind Settings.
+  // subsystems live inside a destination or behind Settings. "Sandbox" is on
+  // this list for the sharper reason: running code is a capability, not a
+  // destination — you ask for a chart and it appears on the tool card that drew
+  // it, the same way you never visit "the database".
   for (const gone of [
     "Create",
+    "Sandbox",
     "Projects",
     "Databases",
     "MCP",
@@ -55,17 +59,21 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
   await page.goto("/");
   await shot(page, "chat");
 
-  await openView(page, "Documents");
+  await openView(page, "Files");
   await expect(page.locator(".documents-layout")).toBeVisible();
-  // Documents moved up to the rail; the four that shared its group came too.
-  for (const tab of ["Documents", "Projects", "Sandbox", "Boards", "Dashboards"]) {
+  // The group is Files, and the three siblings that shared it came along. It is
+  // *not* five entries any more: Sandbox left the product's navigation
+  // entirely, and nothing here should offer a way back to it.
+  for (const tab of ["Files", "Projects", "Boards", "Dashboards"]) {
     // Anchored: "Boards" is a substring of "Dashboards", and the count badge is
     // part of the accessible name, so neither end can be matched loosely.
-    await expect(tabs(page, "Documents").getByRole("button", { name: new RegExp(`^${tab}`) }))
+    await expect(tabs(page, "Files").getByRole("button", { name: new RegExp(`^${tab}`) }))
       .toBeVisible();
   }
+  await expect(tabs(page, "Files").getByRole("button")).toHaveCount(4);
+  await expect(tabs(page, "Files").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
 
-  await shot(page, "documents");
+  await shot(page, "files");
 
   await openView(page, "Knowledge");
   await expect(page.getByRole("heading", { name: "Sources" })).toBeVisible();
@@ -102,7 +110,7 @@ test("Create makes the thing and opens it, rather than going to a list", async (
   page,
 }) => {
   await page.goto("/");
-  // Deliberately starting from Chat: the old "Create" took you to the Documents
+  // Deliberately starting from Chat: the old "Create" took you to the Files
   // *list* and left the making to whatever button you found once you arrived.
   await expect(page.locator(".chat-layout")).toBeVisible();
 
@@ -111,8 +119,8 @@ test("Create makes the thing and opens it, rather than going to a list", async (
   // The document exists and is open for editing — not a list, not a form.
   await expect(page.getByRole("heading", { name: "Create Menu Note" })).toBeVisible();
   await expect(page.locator(".document-source")).toBeVisible();
-  // And it landed on the destination that holds documents, with its tab strip.
-  await expect(tabs(page, "Documents").getByRole("button", { name: /^Documents/ }))
+  // And it landed on the destination that holds files, with its tab strip.
+  await expect(tabs(page, "Files").getByRole("button", { name: /^Files/ }))
     .toHaveAttribute("aria-current", "page");
 
   // Put the shared workspace back: a stray document makes the next spec's
@@ -129,33 +137,13 @@ test("Create reaches a sibling of the destination it opens", async ({ page }) =>
   await createFromMenu(page, "Board", "Create Menu Board");
 
   await expect(page.getByRole("heading", { name: "Create Menu Board" })).toBeVisible();
-  await expect(tabs(page, "Documents").getByRole("button", { name: /^Boards/ }))
+  await expect(tabs(page, "Files").getByRole("button", { name: /^Boards/ }))
     .toHaveAttribute("aria-current", "page");
 
   // No arm: deleting a board is not confirm()-gated, and a handler with nothing
   // to catch stays live for whatever dialog comes next in this test.
   await page.getByRole("button", { name: "Delete Create Menu Board" }).click();
   await expect(page.getByRole("heading", { name: "Create Menu Board" })).toHaveCount(0);
-});
-
-test("Create starts a sandbox rather than showing you the sandbox page", async ({
-  page,
-}) => {
-  await page.goto("/");
-  // The one create action that takes no name: it asks for a machine on the
-  // first click, which is the difference between creating and navigating.
-  await createFromMenu(page, "Sandbox");
-
-  await expect(page.locator(".sandbox-layout")).toBeVisible();
-  // Either a machine started, or the deployment says code execution is off.
-  // Both prove the start was actually attempted; which one depends on the
-  // environment, and asserting only "the page rendered" would prove neither.
-  await expect(
-    page
-      .locator(".sandbox-items li")
-      .first()
-      .or(page.locator(".error-toast", { hasText: /Code execution is turned off/ })),
-  ).toBeVisible({ timeout: 20_000 });
 });
 
 test("the Create menu offers every kind of thing", async ({ page }) => {
@@ -166,12 +154,19 @@ test("the Create menu offers every kind of thing", async ({ page }) => {
     "Document",
     "Project",
     "LaTeX document",
-    "Sandbox",
     "Board",
     "Dashboard",
     "Workflow",
   ]) {
     await expect(menu.getByRole("button", { name: thing, exact: true })).toBeVisible();
+  }
+  // Two absences, for two different reasons. "Sandbox" was never a thing you
+  // make — it was a machine you were being asked to operate. "Folder" is a
+  // thing you make, but the only question worth asking about a new one is which
+  // folder it goes in, and a menu in the corner of the screen cannot ask that;
+  // it is made in the tree, where the answer is whatever you were pointing at.
+  for (const absent of ["Sandbox", "Folder"]) {
+    await expect(menu.getByRole("button", { name: absent, exact: true })).toHaveCount(0);
   }
   await shot(page, "create-menu");
 
@@ -179,11 +174,13 @@ test("the Create menu offers every kind of thing", async ({ page }) => {
   // in later, since none of these can be renamed.
   await menu.getByRole("button", { name: "Document", exact: true }).click();
   await expect(menu.getByRole("textbox", { name: "Document title" })).toBeVisible();
-  // The document formats must not claim the word "LaTeX": neither of them
-  // compiles anything, and the one that used to say it sent a user looking for
-  // a PDF down a path that could never produce one.
+  // The document formats must not offer the word "LaTeX" at all: neither of
+  // them compiles anything, and the option that used to say it sent a user
+  // looking for a PDF down a path that could never produce one. LaTeX is a
+  // *project* kind, one entry up in this same menu.
   const format = menu.getByRole("combobox", { name: "Document format" });
-  await expect(format.getByRole("option")).toHaveText(["Markdown", "Markdown + math"]);
+  await expect(format.getByRole("option")).toHaveText(["Markdown", "Plain text"]);
+  await expect(format.getByRole("option", { name: /latex/i })).toHaveCount(0);
   await shot(page, "create-menu-document");
 
   // The open panel's scrim covers the viewport, so Create has to be dismissed

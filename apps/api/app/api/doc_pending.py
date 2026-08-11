@@ -3,13 +3,13 @@
 The agent's approval card lives in chat, so a user reading a document has no
 signal that a diff is waiting on them. This exposes the same parked
 AgentToolCall rows the chat card renders, resolved to a document id so the
-Documents view can show the diff beside the text it would change.
+Documents view can show the diff beside the text it would change — and, for an
+edit, broken into the hunks a reviewer can take or leave one at a time.
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -17,14 +17,33 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import AgentToolCall, Document, Run
+from ..models import AgentToolCall, Run
 from ..schemas import ApiModel
-from ..services.artifacts import documents
+from ..services.agent_loop import open_document
+from ..services.artifacts import proposals
 
 router = APIRouter(prefix="/api/documents-pending", tags=["documents"])
 
 DOCUMENT_TOOLS = ("create_document", "edit_document")
 MAX_PENDING = 50
+
+#: Above this the review is sent as the all-or-nothing card instead of as
+#: segments. A response carrying fifty documents' full text, line by line, is a
+#: slower way to say the same thing than the unified diff already on the row.
+MAX_REVIEW_LINES = 4_000
+
+
+class ReviewSegment(ApiModel):
+    """One stretch of the document, as it is now and as the proposal wants it.
+
+    `index` is -1 for a stretch the edit does not touch, and otherwise the hunk
+    number a reviewer accepts by — the same number
+    `POST /api/agent-tool-calls/{id}/decision` takes in `accepted_hunks`.
+    """
+
+    index: int
+    before: List[str]
+    after: List[str]
 
 
 class PendingDocumentEditOut(ApiModel):
@@ -38,39 +57,12 @@ class PendingDocumentEditOut(ApiModel):
     document_id: str
     title: str
     proposal_preview: str
+    # The whole document with the proposal laid over it, or empty when there is
+    # nothing to review hunk by hunk (a create, an unresolvable target, a `find`
+    # that no longer matches, a document too long to ship line by line). An
+    # empty list is the signal to fall back to the whole-proposal card.
+    segments: List[ReviewSegment]
     created_at: datetime
-
-
-def _arguments(raw: str) -> Dict[str, Any]:
-    """Model-generated JSON. Truncation and hallucinated shapes are routine, so
-    anything that is not an object decodes to no arguments at all."""
-    try:
-        parsed = json.loads(raw or "{}")
-    except (ValueError, TypeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _text(args: Dict[str, Any], key: str) -> str:
-    value = args.get(key)
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _target(
-    db: Session, *, workspace_id: str, name: str, args: Dict[str, Any]
-) -> Optional[Document]:
-    """The document this call would change, if it exists in this workspace."""
-    if name == "create_document":
-        return None
-    try:
-        return documents.resolve(
-            db,
-            workspace_id=workspace_id,
-            document_id=_text(args, "document_id"),
-            title=_text(args, "title"),
-        )
-    except documents.DocumentError:
-        return None
 
 
 @router.get("", response_model=List[PendingDocumentEditOut])
@@ -98,18 +90,41 @@ def list_pending_document_edits(
     )
     pending: List[PendingDocumentEditOut] = []
     for call in calls:
-        args = _arguments(call.arguments_json)
-        document = _target(
-            db, workspace_id=actor.workspace_id, name=call.name, args=args
+        args = proposals.arguments_of(call.arguments_json)
+        run = db.get(Run, call.run_id)
+        if run is not None and run.workspace_id != actor.workspace_id:
+            run = None
+        open_doc = open_document(db, run) if run is not None else None
+        document = proposals.target_document(
+            db,
+            workspace_id=actor.workspace_id,
+            name=call.name,
+            args=args,
+            open_document_id=open_doc.id if open_doc else "",
         )
+        segments = proposals.review_segments(document, args)
+        # No hunks means the proposal changes nothing after all, which the diff
+        # already says better than a document with no decisions in it.
+        if not any(segment.changed for segment in segments):
+            segments = []
+        elif sum(len(segment.before) for segment in segments) > MAX_REVIEW_LINES:
+            segments = []
         pending.append(
             PendingDocumentEditOut(
                 id=call.id,
                 run_id=call.run_id,
                 name=call.name,
                 document_id=document.id if document else "",
-                title=document.title if document else _text(args, "title"),
+                title=document.title if document else proposals.text_of(args, "title"),
                 proposal_preview=call.proposal_preview,
+                segments=[
+                    ReviewSegment(
+                        index=segment.index,
+                        before=segment.before,
+                        after=segment.after,
+                    )
+                    for segment in segments
+                ],
                 created_at=call.created_at,
             )
         )

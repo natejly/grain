@@ -148,13 +148,7 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
     <div className="auth-card">
       <header className="auth-head">
         <h1>{heading}</h1>
-        <p>
-          {mode === "forgot"
-            ? "We will email a link to set a new password."
-            : showDevOverride
-              ? "Local development sign-in is enabled."
-              : "Jasmine keeps every workspace to itself."}
-        </p>
+        {mode === "forgot" && <p>We will email a link to set a new password.</p>}
       </header>
 
       {notice && (

@@ -1,10 +1,9 @@
 "use client";
 
-import { Network, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import type { KnowledgeGraph } from "@workspace/api-client";
 import { useState } from "react";
 import { Graph3D } from "../graph-3d";
-import { formatRelative } from "./shared";
 
 export type GraphViewProps = {
   graph: KnowledgeGraph | null;
@@ -46,28 +45,10 @@ export function GraphView({ graph, rebuild, openChunk }: GraphViewProps) {
         </button>
       </div>
 
-      <div className="graph-summary">
-        <div>
-          <strong>{graph?.entities.length || 0}</strong>
-          <span>entities shown</span>
-        </div>
-        <div>
-          <strong>{graph?.edges.length || 0}</strong>
-          <span>links shown</span>
-        </div>
-        {graph?.built_at && (
-          <div>
-            <strong>{graph.status}</strong>
-            <span>built {formatRelative(graph.built_at)}</span>
-          </div>
-        )}
-      </div>
-
       {nodes.length === 0 ? (
         <div className="feature-empty">
-          <Network size={25} />
-          <strong>No graph projection yet</strong>
-          <span>Index a source or rebuild the projection.</span>
+          <strong>No graph yet</strong>
+          <span>Index a source or rebuild.</span>
         </div>
       ) : (
         <div className="graph-layout">

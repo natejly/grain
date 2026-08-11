@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, List, Literal, Type, TypeVar, cast
+from typing import Any, List, Literal, Optional, Type, TypeVar, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select, update
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..database import get_db
-from ..models import AgentToolCall, Run, Tool, ToolCall, ToolPolicy
+from ..models import AgentToolCall, Run, Tool, ToolCall, ToolPolicy, WorkflowRun
 from ..schemas import (
     AgentApprovalRequest,
     AgentToolCallOut,
@@ -21,10 +21,13 @@ from ..schemas import (
     ToolPolicyOut,
     ToolPolicyRequest,
 )
-from ..services.agent_loop import policy_scope_for_run
+from ..services.agent_loop import open_document, policy_scope_for_run
+from ..services.artifacts import documents, proposals
 from ..services.audit import record_audit
 from ..services.events import append_event
 from ..services.runs import deny_tool_call, execute_tool_call, resume_run
+from ..services.workflows import executor as workflow_executor
+from ..services.workflows.inputs import InputBindingError
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key
 
@@ -359,6 +362,86 @@ def revoke_tool_policy(
     db.commit()
 
 
+def _hunk_amendment(
+    db: Session,
+    *,
+    call: AgentToolCall,
+    run: Run,
+    payload: AgentApprovalRequest,
+    actor: Actor,
+) -> Optional[dict[str, Any]]:
+    """Validate a partial approval, and turn it into the executor's amendment.
+
+    Checked here rather than at execution time because this is the request the
+    user is waiting on: a selection made against a diff the document has since
+    outgrown must fail in front of them, not three seconds later inside a
+    background task where the only trace is a tool error the model paraphrases.
+    """
+    if payload.accepted_hunks is None:
+        return None
+    if payload.decision != "approved":
+        raise HTTPException(
+            status_code=422,
+            detail="accepted_hunks only applies to an approval",
+        )
+    if call.name != "edit_document":
+        raise HTTPException(
+            status_code=422,
+            detail=f"“{call.name}” cannot be approved one hunk at a time",
+        )
+    open_doc = open_document(db, run)
+    args = proposals.arguments_of(call.arguments_json)
+    document = proposals.target_document(
+        db,
+        workspace_id=actor.workspace_id,
+        name=call.name,
+        args=args,
+        open_document_id=open_doc.id if open_doc else "",
+    )
+    segments = proposals.review_segments(document, args)
+    try:
+        documents.select_hunks(payload.accepted_hunks, documents.hunk_count(segments))
+    except documents.DocumentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"accepted_hunks": sorted(set(payload.accepted_hunks))}
+
+
+def _validate_manual_submission(
+    db: Session,
+    *,
+    call: AgentToolCall,
+    run: Run,
+    payload: AgentApprovalRequest,
+    actor: Actor,
+) -> None:
+    """Validate the values a person typed at a manual node, 422ing an invalid one.
+
+    The manual twin of `_hunk_amendment`: the person is waiting on this request,
+    so values that violate the node's declared `fields` must fail in front of
+    them, not in the background task that resumes the run. Only a manual node's
+    parked call reads `inputs` — an ordinary tool approval ignores the field — and
+    only an approval carries them; a rejection cancels the run regardless.
+    """
+    if call.name != workflow_executor.MANUAL_TOOL_NAME:
+        return
+    if payload.decision != "approved":
+        return
+    workflow_run = db.scalar(
+        select(WorkflowRun).where(
+            WorkflowRun.run_id == run.id,
+            WorkflowRun.workspace_id == actor.workspace_id,
+        )
+    )
+    if workflow_run is None:
+        return
+    try:
+        workflow_executor.check_manual_inputs(
+            db, workflow_run, tool_call_id=call.id, submitted=payload.inputs
+        )
+    except InputBindingError as exc:
+        raise HTTPException(status_code=422, detail="; ".join(exc.problems)) from exc
+
+
 @router.post(
     "/agent-tool-calls/{tool_call_id}/decision", response_model=AgentToolCallOut
 )
@@ -396,6 +479,8 @@ def decide_agent_tool_call(
         return _agent_tool_call_out(call, run.conversation_id)
     if run.status != "waiting_for_approval":
         raise HTTPException(status_code=409, detail="Run is not awaiting this approval")
+    amendment = _hunk_amendment(db, call=call, run=run, payload=payload, actor=actor)
+    _validate_manual_submission(db, call=call, run=run, payload=payload, actor=actor)
 
     if not _claim_decision(
         db,
@@ -409,12 +494,16 @@ def decide_agent_tool_call(
         # also schedule `resume_run`, or the tool the other reviewer denied is
         # executed by the loser's background task.
         raise HTTPException(status_code=409, detail="Tool call already decided")
-    if payload.remember:
+    if payload.remember and call.name != workflow_executor.MANUAL_TOOL_NAME:
         # "Always allow" answers the question the card asked, and no other. A
         # card raised by a workflow node is asking about unattended execution, so
         # remembering it grants at workflow scope; a chat card grants at chat
         # scope. Recording both against one workspace-wide row is the standing
         # grant ADR 0007 named as its sharpest residual risk.
+        #
+        # A manual node never consults resolve_policy — it always pauses — so a
+        # standing grant on the `__manual__` sentinel would gate nothing and only
+        # litter the workspace policy list with a tool that does not exist.
         _upsert_policy(
             db,
             workspace_id=actor.workspace_id,
@@ -444,11 +533,20 @@ def decide_agent_tool_call(
         action="agent_tool." + payload.decision,
         resource_type="agent_tool_call",
         resource_id=call.id,
-        detail={"tool": call.name, "remember": payload.remember},
+        detail={
+            "tool": call.name,
+            "remember": payload.remember,
+            # The audit row, not `arguments_json`, is where a partial approval
+            # is recorded. The arguments column stays the model's request; this
+            # is the human's answer to it, and the two must not be confused.
+            **({"accepted_hunks": payload.accepted_hunks} if amendment else {}),
+        },
     )
     db.commit()
     # Denied calls resume too: the loop feeds the denial back as the tool's
     # output so the model can answer around it instead of the run dying.
-    background_tasks.add_task(resume_run, run.id, call.id, payload.decision)
+    background_tasks.add_task(
+        resume_run, run.id, call.id, payload.decision, amendment, payload.inputs
+    )
     return _agent_tool_call_out(call, run.conversation_id)
 

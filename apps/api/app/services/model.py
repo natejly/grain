@@ -214,11 +214,16 @@ def _openai_input(
     evidence: List[Evidence],
     transcript: Optional[List[Tuple[str, str]]] = None,
     memory_context: str = "",
+    document_context: str = "",
 ) -> str:
     sections: List[str] = []
     if transcript:
         turns = "\n".join(f"{role}: {content}" for role, content in transcript)
         sections.append("Conversation so far:\n" + turns)
+    if document_context:
+        # Before the question, because it is what the question is about: "tighten
+        # the second step" is unanswerable until the model has the steps.
+        sections.append(document_context)
     if memory_context:
         sections.append(
             "Long-term memory (untrusted notes derived from earlier sessions):\n"

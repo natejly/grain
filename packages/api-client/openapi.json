@@ -935,6 +935,21 @@
       },
       "AgentApprovalRequest": {
         "properties": {
+          "accepted_hunks": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Hunks"
+          },
           "decision": {
             "enum": [
               "approved",
@@ -942,6 +957,18 @@
             ],
             "title": "Decision",
             "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputs"
           },
           "remember": {
             "default": false,
@@ -1754,6 +1781,11 @@
             "title": "Created At",
             "type": "string"
           },
+          "document_id": {
+            "default": "",
+            "title": "Document Id",
+            "type": "string"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -1775,6 +1807,41 @@
           "updated_at"
         ],
         "title": "ConversationOut",
+        "type": "object"
+      },
+      "DashboardColumnRequirement": {
+        "description": "One column a template requires of whatever dataset it is bound to.",
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 240,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "boolean",
+              "integer",
+              "number",
+              "string",
+              "date",
+              "datetime"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "DashboardColumnRequirement",
         "type": "object"
       },
       "DashboardCreate": {
@@ -1807,8 +1874,74 @@
         "title": "DashboardCreate",
         "type": "object"
       },
+      "DashboardLayoutTile": {
+        "properties": {
+          "dashboard_id": {
+            "title": "Dashboard Id",
+            "type": "string"
+          },
+          "grid_h": {
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Grid H",
+            "type": "integer"
+          },
+          "grid_w": {
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Grid W",
+            "type": "integer"
+          },
+          "grid_x": {
+            "maximum": 11.0,
+            "minimum": 0.0,
+            "title": "Grid X",
+            "type": "integer"
+          },
+          "grid_y": {
+            "maximum": 200.0,
+            "minimum": 0.0,
+            "title": "Grid Y",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dashboard_id",
+          "grid_x",
+          "grid_y",
+          "grid_w",
+          "grid_h"
+        ],
+        "title": "DashboardLayoutTile",
+        "type": "object"
+      },
+      "DashboardLayoutUpdate": {
+        "description": "A whole home screen in one write.\n\nDragging a tile moves its neighbours, so a layout save that took one tile at\na time would leave the grid inconsistent between requests \u2014 and a save that\nfailed halfway would leave two tiles claiming one cell.",
+        "properties": {
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/DashboardLayoutTile"
+            },
+            "maxItems": 60,
+            "title": "Tiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tiles"
+        ],
+        "title": "DashboardLayoutUpdate",
+        "type": "object"
+      },
       "DashboardOut": {
         "properties": {
+          "bindings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Bindings",
+            "type": "object"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1833,6 +1966,11 @@
           "spec": {
             "$ref": "#/components/schemas/DashboardSpec"
           },
+          "template_id": {
+            "default": "",
+            "title": "Template Id",
+            "type": "string"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -1849,6 +1987,103 @@
           "updated_at"
         ],
         "title": "DashboardOut",
+        "type": "object"
+      },
+      "DashboardPinOut": {
+        "properties": {
+          "dashboard": {
+            "$ref": "#/components/schemas/DashboardOut"
+          },
+          "grid_h": {
+            "title": "Grid H",
+            "type": "integer"
+          },
+          "grid_w": {
+            "title": "Grid W",
+            "type": "integer"
+          },
+          "grid_x": {
+            "title": "Grid X",
+            "type": "integer"
+          },
+          "grid_y": {
+            "title": "Grid Y",
+            "type": "integer"
+          },
+          "pinned_at": {
+            "format": "date-time",
+            "title": "Pinned At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dashboard",
+          "grid_x",
+          "grid_y",
+          "grid_w",
+          "grid_h",
+          "pinned_at"
+        ],
+        "title": "DashboardPinOut",
+        "type": "object"
+      },
+      "DashboardPinUpdate": {
+        "description": "Where a tile sits. Every field optional: pinning without a position puts\nthe tile at the bottom of the grid, which is what \"pin this\" means before\nanyone has dragged anything.",
+        "properties": {
+          "grid_h": {
+            "anyOf": [
+              {
+                "maximum": 12.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grid H"
+          },
+          "grid_w": {
+            "anyOf": [
+              {
+                "maximum": 12.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grid W"
+          },
+          "grid_x": {
+            "anyOf": [
+              {
+                "maximum": 11.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grid X"
+          },
+          "grid_y": {
+            "anyOf": [
+              {
+                "maximum": 200.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grid Y"
+          }
+        },
+        "title": "DashboardPinUpdate",
         "type": "object"
       },
       "DashboardRunOut": {
@@ -1905,6 +2140,122 @@
           }
         },
         "title": "DashboardSpec",
+        "type": "object"
+      },
+      "DashboardTemplateBind": {
+        "description": "Point a template at real data.\n\n`column_bindings` maps a name the template *declared* to a column the dataset\nactually has. A declared name absent from the map binds to the identical name\nin the dataset, so the common case \u2014 a dataset that already speaks the\ntemplate's vocabulary \u2014 needs no map at all.",
+        "properties": {
+          "column_bindings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Column Bindings",
+            "type": "object"
+          },
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "dataset_id"
+        ],
+        "title": "DashboardTemplateBind",
+        "type": "object"
+      },
+      "DashboardTemplateCreate": {
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "required_columns": {
+            "items": {
+              "$ref": "#/components/schemas/DashboardColumnRequirement"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Required Columns",
+            "type": "array"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/DashboardSpec"
+          }
+        },
+        "required": [
+          "name",
+          "required_columns",
+          "spec"
+        ],
+        "title": "DashboardTemplateCreate",
+        "type": "object"
+      },
+      "DashboardTemplateOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "required_columns": {
+            "items": {
+              "$ref": "#/components/schemas/DashboardColumnRequirement"
+            },
+            "title": "Required Columns",
+            "type": "array"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/DashboardSpec"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "required_columns",
+          "spec",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DashboardTemplateOut",
         "type": "object"
       },
       "DatasetColumn": {
@@ -2501,10 +2852,25 @@
         "title": "DocumentContentRequest",
         "type": "object"
       },
+      "DocumentFolderRequest": {
+        "properties": {
+          "folder_id": {
+            "default": "",
+            "title": "Folder Id",
+            "type": "string"
+          }
+        },
+        "title": "DocumentFolderRequest",
+        "type": "object"
+      },
       "DocumentOut": {
         "properties": {
           "content": {
             "title": "Content",
+            "type": "string"
+          },
+          "folder_id": {
+            "title": "Folder Id",
             "type": "string"
           },
           "id": {
@@ -2530,6 +2896,7 @@
           "title",
           "kind",
           "content",
+          "folder_id",
           "updated_at"
         ],
         "title": "DocumentOut",
@@ -2542,11 +2909,16 @@
             "title": "Content",
             "type": "string"
           },
+          "folder_id": {
+            "default": "",
+            "title": "Folder Id",
+            "type": "string"
+          },
           "kind": {
             "default": "markdown",
             "enum": [
-              "markdown",
-              "latex"
+              "text",
+              "markdown"
             ],
             "title": "Kind",
             "type": "string"
@@ -2569,6 +2941,10 @@
           "characters": {
             "title": "Characters",
             "type": "integer"
+          },
+          "folder_id": {
+            "title": "Folder Id",
+            "type": "string"
           },
           "id": {
             "title": "Id",
@@ -2593,6 +2969,7 @@
           "title",
           "kind",
           "characters",
+          "folder_id",
           "updated_at"
         ],
         "title": "DocumentSummaryOut",
@@ -2646,6 +3023,85 @@
           "count"
         ],
         "title": "DuplicateOut",
+        "type": "object"
+      },
+      "FolderOut": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_id": {
+            "title": "Parent Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "parent_id",
+          "updated_at"
+        ],
+        "title": "FolderOut",
+        "type": "object"
+      },
+      "FolderRequest": {
+        "properties": {
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_id": {
+            "default": "",
+            "title": "Parent Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "FolderRequest",
+        "type": "object"
+      },
+      "FolderUpdateRequest": {
+        "description": "Rename, move, or both. Omitted means \"leave it\"; `parent_id: \"\"` is a move\nto the top level, which is why neither field can default to a usable value.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          }
+        },
+        "title": "FolderUpdateRequest",
         "type": "object"
       },
       "GarminCredentialsIn": {
@@ -3601,6 +4057,13 @@
             "title": "Run Id",
             "type": "string"
           },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewSegment"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -3613,6 +4076,7 @@
           "document_id",
           "title",
           "proposal_preview",
+          "segments",
           "created_at"
         ],
         "title": "PendingDocumentEditOut",
@@ -3830,6 +4294,36 @@
           "manifest"
         ],
         "title": "PublishedAppOut",
+        "type": "object"
+      },
+      "ReviewSegment": {
+        "description": "One stretch of the document, as it is now and as the proposal wants it.\n\n`index` is -1 for a stretch the edit does not touch, and otherwise the hunk\nnumber a reviewer accepts by \u2014 the same number\n`POST /api/agent-tool-calls/{id}/decision` takes in `accepted_hunks`.",
+        "properties": {
+          "after": {
+            "items": {
+              "type": "string"
+            },
+            "title": "After",
+            "type": "array"
+          },
+          "before": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Before",
+            "type": "array"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "before",
+          "after"
+        ],
+        "title": "ReviewSegment",
         "type": "object"
       },
       "RunOut": {
@@ -4777,8 +5271,7 @@
             "type": "string"
           },
           "output": {
-            "title": "Output",
-            "type": "string"
+            "title": "Output"
           },
           "policy": {
             "title": "Policy",
@@ -8342,6 +8835,353 @@
         ]
       }
     },
+    "/api/dashboard-pins": {
+      "get": {
+        "operationId": "list_dashboard_pins_api_dashboard_pins_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DashboardPinOut"
+                  },
+                  "title": "Response List Dashboard Pins Api Dashboard Pins Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Dashboard Pins",
+        "tags": [
+          "dashboards"
+        ]
+      }
+    },
+    "/api/dashboard-pins/layout": {
+      "put": {
+        "description": "Save the whole grid in one write. See `DashboardLayoutUpdate`.",
+        "operationId": "save_dashboard_layout_api_dashboard_pins_layout_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardLayoutUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DashboardPinOut"
+                  },
+                  "title": "Response Save Dashboard Layout Api Dashboard Pins Layout Put",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Dashboard Layout",
+        "tags": [
+          "dashboards"
+        ]
+      }
+    },
+    "/api/dashboard-templates": {
+      "get": {
+        "operationId": "list_dashboard_templates_api_dashboard_templates_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DashboardTemplateOut"
+                  },
+                  "title": "Response List Dashboard Templates Api Dashboard Templates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Dashboard Templates",
+        "tags": [
+          "dashboards"
+        ]
+      },
+      "post": {
+        "operationId": "create_dashboard_template_api_dashboard_templates_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardTemplateCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardTemplateOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Dashboard Template",
+        "tags": [
+          "dashboards"
+        ]
+      }
+    },
+    "/api/dashboard-templates/{template_id}": {
+      "delete": {
+        "operationId": "delete_dashboard_template_api_dashboard_templates__template_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Dashboard Template",
+        "tags": [
+          "dashboards"
+        ]
+      }
+    },
+    "/api/dashboard-templates/{template_id}/bind": {
+      "post": {
+        "description": "Turn a definition and a dataset into a dashboard, or say why not.\n\nThe 422 here is the whole feature. A binding that does not satisfy the\ntemplate's declared shape is refused now, in front of whoever asked for it,\nrather than on the morning somebody opens the chart and reads an empty one.",
+        "operationId": "bind_dashboard_template_api_dashboard_templates__template_id__bind_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardTemplateBind"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bind Dashboard Template",
+        "tags": [
+          "dashboards"
+        ]
+      }
+    },
     "/api/dashboards": {
       "get": {
         "operationId": "list_dashboards_api_dashboards_get",
@@ -8391,7 +9231,7 @@
         },
         "summary": "List Dashboards",
         "tags": [
-          "analytics"
+          "dashboards"
         ]
       },
       "post": {
@@ -8459,7 +9299,175 @@
         },
         "summary": "Create Dashboard",
         "tags": [
-          "analytics"
+          "dashboards"
+        ]
+      }
+    },
+    "/api/dashboards/{dashboard_id}": {
+      "delete": {
+        "operationId": "delete_dashboard_api_dashboards__dashboard_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "title": "Dashboard Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Dashboard",
+        "tags": [
+          "dashboards"
+        ]
+      }
+    },
+    "/api/dashboards/{dashboard_id}/pin": {
+      "delete": {
+        "operationId": "unpin_dashboard_api_dashboards__dashboard_id__pin_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "title": "Dashboard Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unpin Dashboard",
+        "tags": [
+          "dashboards"
+        ]
+      },
+      "put": {
+        "operationId": "pin_dashboard_api_dashboards__dashboard_id__pin_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "title": "Dashboard Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardPinUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardPinOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin Dashboard",
+        "tags": [
+          "dashboards"
         ]
       }
     },
@@ -8517,7 +9525,7 @@
         },
         "summary": "Run Dashboard",
         "tags": [
-          "analytics"
+          "dashboards"
         ]
       }
     },
@@ -9416,6 +10424,133 @@
         ]
       }
     },
+    "/api/documents/{document_id}/conversation": {
+      "post": {
+        "description": "The thread for the chat panel beside a document, made on first open.\n\nA POST because the first call creates, but idempotent by construction rather\nthan by an `Idempotency-Key`: the document id *is* the key. There is one\nthread per document, so a retry, a second tab and a remount all land on the\nsame conversation, and nothing here needs a client to remember a nonce.",
+        "operationId": "document_conversation_api_documents__document_id__conversation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Document Conversation",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/documents/{document_id}/folder": {
+      "put": {
+        "operationId": "move_document_api_documents__document_id__folder_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentFolderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Move Document",
+        "tags": [
+          "folders"
+        ]
+      }
+    },
     "/api/documents/{document_id}/versions": {
       "get": {
         "operationId": "list_versions_api_documents__document_id__versions_get",
@@ -9542,6 +10677,233 @@
         "summary": "Restore Version",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/api/folders": {
+      "get": {
+        "operationId": "list_folders_api_folders_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FolderOut"
+                  },
+                  "title": "Response List Folders Api Folders Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Folders",
+        "tags": [
+          "folders"
+        ]
+      },
+      "post": {
+        "operationId": "create_folder_api_folders_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Folder",
+        "tags": [
+          "folders"
+        ]
+      }
+    },
+    "/api/folders/{folder_id}": {
+      "delete": {
+        "operationId": "delete_folder_api_folders__folder_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "folder_id",
+            "required": true,
+            "schema": {
+              "title": "Folder Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Folder",
+        "tags": [
+          "folders"
+        ]
+      },
+      "patch": {
+        "operationId": "update_folder_api_folders__folder_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "folder_id",
+            "required": true,
+            "schema": {
+              "title": "Folder Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Folder",
+        "tags": [
+          "folders"
         ]
       }
     },

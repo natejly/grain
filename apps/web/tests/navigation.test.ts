@@ -27,13 +27,32 @@ describe("navigation model", () => {
 
   it("puts the places you work on the rail", () => {
     // Create left the rail because creating is an action, not a destination.
-    // Documents took its place — and its siblings' tab strip with it.
+    // Files took its place — and its siblings' tab strip with it.
     expect(RAIL_GROUPS.map((group) => group.label)).toEqual([
       "Chat",
-      "Documents",
+      "Files",
       "Knowledge",
       "Workflows",
     ]);
+  });
+
+  it("has no sandbox destination, because a sandbox is not a place", () => {
+    // The product decision this encodes: capabilities are not destinations. You
+    // ask for a chart and get one on the tool card that drew it; you do not go
+    // and operate the machine, any more than you visit "the database". The rail
+    // entry also invited a user with SANDBOX_ENABLED=false to start a machine
+    // that 502s. None of this turns the service off — only the destination.
+    // Read as strings: "sandbox" is no longer in the View or CreateActionId
+    // unions, which is itself half the point — the compiler now refuses a
+    // reference to the destination as well.
+    const placements: string[] = NAV_GROUPS.flatMap((group) =>
+      group.items.map((item) => item.view as string),
+    );
+    expect(placements).not.toContain("sandbox");
+    expect(Object.keys(PAGE_TITLES)).not.toContain("sandbox");
+    const actions: string[] = CREATE_ACTIONS.map((action) => action.id as string);
+    expect(actions).not.toContain("sandbox");
+    expect(actions).not.toContain("folder");
   });
 
   it("keeps Workflows on the rail rather than behind Settings", () => {
@@ -61,16 +80,21 @@ describe("navigation model", () => {
     expect(SETTINGS_GROUPS.some((group) => rail.has(group.id))).toBe(false);
   });
 
-  it("keeps Documents' siblings reachable from its tab strip", () => {
-    // Moving Documents up must not strand the four views that shared its group.
-    const documents = NAV_GROUPS.find((group) => group.id === "documents");
-    expect(documents?.items.map((item) => item.view)).toEqual([
+  it("keeps Files' siblings reachable from its tab strip", () => {
+    // The group is called Files because that is what it holds — its old name,
+    // Documents, described one of its tabs and mislabelled the rest.
+    const files = NAV_GROUPS.find((group) => group.id === "files");
+    expect(files?.label).toBe("Files");
+    expect(files?.items.map((item) => item.view)).toEqual([
       "documents",
       "projects",
-      "sandbox",
       "boards",
       "dashboards",
     ]);
+    // And the tab a user clicks says Files too, so the rail and the strip do
+    // not name the same destination two different things.
+    expect(files?.items[0].label).toBe("Files");
+    expect(PAGE_TITLES.documents).toBe("Files");
   });
 
   it("resolves each view to the group that lists it", () => {
@@ -96,12 +120,11 @@ describe("navigation model", () => {
 });
 
 describe("create actions", () => {
-  it("offers the seven things a user can make", () => {
+  it("offers the six things a user can make", () => {
     expect(CREATE_ACTIONS.map((action) => action.label)).toEqual([
       "Document",
       "Project",
       "LaTeX document",
-      "Sandbox",
       "Board",
       "Dashboard",
       "Workflow",
@@ -157,8 +180,7 @@ describe("create actions", () => {
     expect(prompts.document).toBeTruthy();
     expect(prompts.project).toBeTruthy();
     expect(prompts.board).toBeTruthy();
-    // A sandbox is a machine, and a dashboard is named inside its own editor.
-    expect(prompts.sandbox).toBe("");
+    // A dashboard is named inside its own editor.
     expect(prompts.dashboard).toBe("");
     // A workflow is named by the compiler from the sentence it was asked for,
     // so a name typed beforehand would be thrown away.

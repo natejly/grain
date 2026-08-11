@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
@@ -19,7 +19,6 @@ from ..models import (
     Message,
     Run,
     RunEvent,
-    ToolCall,
     new_id,
 )
 from ..schemas import (
@@ -31,6 +30,8 @@ from ..schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
+from ..services import conversations
+from ..services.artifacts import documents
 from ..services.audit import record_audit
 from ..services.events import append_event
 from ..services.runs import TERMINAL_RUN_STATES, process_run
@@ -73,10 +74,17 @@ def list_conversations(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[Conversation]:
+    # Document-scoped threads are deliberately absent. They belong to the
+    # document editor's side panel, are created and deleted with the document,
+    # and one entry per document opened would turn the Chat rail into a list of
+    # things the user never started.
     return list(
         db.scalars(
             select(Conversation)
-            .where(Conversation.workspace_id == actor.workspace_id)
+            .where(
+                Conversation.workspace_id == actor.workspace_id,
+                Conversation.document_id == "",
+            )
             .order_by(Conversation.updated_at.desc())
         )
     )
@@ -128,6 +136,52 @@ def create_conversation(
     return conversation
 
 
+@router.post(
+    "/documents/{document_id}/conversation", response_model=ConversationOut
+)
+def document_conversation(
+    document_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> Conversation:
+    """The thread for the chat panel beside a document, made on first open.
+
+    A POST because the first call creates, but idempotent by construction rather
+    than by an `Idempotency-Key`: the document id *is* the key. There is one
+    thread per document, so a retry, a second tab and a remount all land on the
+    same conversation, and nothing here needs a client to remember a nonce.
+    """
+    try:
+        document = documents.get_document(
+            db, workspace_id=actor.workspace_id, document_id=document_id
+        )
+    except documents.DocumentError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    existing = conversations.for_document_ids(
+        db, workspace_id=actor.workspace_id, document_id=document.id
+    )
+    conversation = conversations.for_document(
+        db,
+        workspace_id=actor.workspace_id,
+        document_id=document.id,
+        user_id=actor.user_id,
+        title=document.title,
+    )
+    if not existing:
+        record_audit(
+            db,
+            workspace_id=actor.workspace_id,
+            actor_id=actor.user_id,
+            action="conversation.created",
+            resource_type="conversation",
+            resource_id=conversation.id,
+            detail={"title": conversation.title, "document_id": document.id},
+        )
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
 @router.delete("/conversations/{conversation_id}", status_code=204)
 def delete_conversation(
     conversation_id: str,
@@ -145,39 +199,11 @@ def delete_conversation(
         # so a replay is answered with the same 204 whether or not the row is
         # still there to look at.
         return
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.workspace_id == actor.workspace_id,
-        )
+    title = conversations.purge(
+        db, workspace_id=actor.workspace_id, conversation_id=conversation_id
     )
-    if conversation is None:
+    if title is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    title = conversation.title
-    run_ids = list(
-        db.scalars(
-            select(Run.id).where(
-                Run.conversation_id == conversation.id,
-                Run.workspace_id == actor.workspace_id,
-            )
-        )
-    )
-    if run_ids:
-        db.execute(delete(ToolCall).where(ToolCall.run_id.in_(run_ids)))
-        db.execute(delete(RunEvent).where(RunEvent.run_id.in_(run_ids)))
-    db.execute(
-        delete(Message).where(
-            Message.conversation_id == conversation.id,
-            Message.workspace_id == actor.workspace_id,
-        )
-    )
-    db.execute(
-        delete(Run).where(
-            Run.conversation_id == conversation.id,
-            Run.workspace_id == actor.workspace_id,
-        )
-    )
-    db.delete(conversation)
     record_key(
         db,
         workspace_id=actor.workspace_id,

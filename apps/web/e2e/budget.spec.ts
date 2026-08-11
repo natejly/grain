@@ -94,7 +94,7 @@ function watchForErrors(page: Page, ignore?: RegExp): string[] {
  * in the middle skips the inline cleanup at the end of that test. None of that
  * residue is inert: a parked `create_document` is workspace-wide, so it comes
  * back from `GET /api/documents-pending` and lands a second card in the
- * Documents view of a spec three files later. That is exactly how one failure
+ * Files view of a spec three files later. That is exactly how one failure
  * here became three, and the reason this sweeps rather than only clears.
  *
  * Driven through the API, and every step tolerates a workspace that is already

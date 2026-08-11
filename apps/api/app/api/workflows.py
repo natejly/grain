@@ -47,6 +47,8 @@ from ..services.workflows import (
     compile_document,
     compile_workflow,
     executor,
+    inputs,
+    parse_graph,
     schedule,
     summarize,
 )
@@ -86,7 +88,10 @@ class WorkflowNodeRunOut(ApiModel):
     status: str
     attempt: int
     arguments: Dict[str, Any]
-    output: str
+    # A scalar tool result is a string; a `manual` node's output is the JSON
+    # object of collected fields. Both are stored in `output_json` and returned
+    # as parsed JSON, so this carries whichever shape the node produced.
+    output: Any
     #: What authorised this node — `allow` for a standing grant or a read-only
     #: tool, `ask` for a human decision on this specific call. ADR 0007: without
     #: it the trail cannot tell an unattended 3am write from an approved one.
@@ -163,7 +168,10 @@ class WorkflowUpdateRequest(BaseModel):
 
 
 class WorkflowRunRequest(BaseModel):
-    #: The `{{ input.field }}` namespace for this execution.
+    #: The `{{ input.field }}` namespace for this execution: one value per input
+    #: the workflow declares, in the JSON type it declared. The declaration
+    #: itself is `graph["inputs"]`, which is what a client renders as the form
+    #: that produces this.
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -252,7 +260,7 @@ def _node_out(row: WorkflowNodeRun) -> WorkflowNodeRunOut:
         status=row.status,
         attempt=row.attempt,
         arguments=arguments if isinstance(arguments, dict) else {},
-        output=output if isinstance(output, str) else json.dumps(output, default=str),
+        output=output,
         policy=row.policy,
         agent_tool_call_id=row.agent_tool_call_id,
         error=row.error,
@@ -286,6 +294,26 @@ def _compile_failure(exc: WorkflowCompileError) -> HTTPException:
     to a model as a repair prompt, and both are worse one error at a time.
     """
     return HTTPException(status_code=422, detail=exc.report.as_dict())
+
+
+def _reject_bad_inputs(workflow: Workflow, supplied: Dict[str, Any]) -> None:
+    """422 a run whose inputs do not satisfy the declaration, before creating it.
+
+    The executor binds again and is the authority — it has to be, because the
+    scheduler and the recovery sweep never come through here. This is the same
+    check moved forward to where a person is still holding the form: a 422
+    listing every bad field beats a 202 followed by a run row that failed.
+
+    A graph too broken to parse is left to the executor, which fails the run with
+    `graph_unreadable` and says so where the run detail can show it.
+    """
+    graph, _ = parse_graph(_graph_document(workflow))
+    if graph is None:
+        return
+    try:
+        inputs.bind(graph, supplied)
+    except inputs.InputBindingError as exc:
+        raise HTTPException(status_code=422, detail={"inputs": exc.problems}) from exc
 
 
 def _apply(workflow: Workflow, compiled: CompiledWorkflow, *, source_prompt: str) -> None:
@@ -549,6 +577,7 @@ def run_workflow(
     workflow = _load(db, actor, workflow_id)
     if workflow.status == "disabled":
         raise HTTPException(status_code=409, detail="This workflow is disabled")
+    _reject_bad_inputs(workflow, payload.payload)
     workflow_run = executor.start_run(
         db, workflow, user_id=actor.user_id, trigger="manual", payload=payload.payload
     )

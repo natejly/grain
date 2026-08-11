@@ -1,7 +1,7 @@
 "use client";
 
 import type { DocumentKind } from "@workspace/api-client";
-import { CircleDot, LogOut, Menu, Plus, Trash2, X } from "lucide-react";
+import { BarChart3, CircleDot, LogOut, Menu, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
@@ -30,7 +30,6 @@ import {
   type GroupId,
 } from "./views/navigation";
 import { ProjectsView } from "./views/projects";
-import { SandboxView } from "./views/sandbox";
 import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
 import { SourcesView } from "./views/sources";
 import { ThemeToggle } from "./theme-toggle";
@@ -53,6 +52,7 @@ export function Workspace() {
     integrations,
     mcpServers,
     documents,
+    folders,
     activeDocument,
     documentVersions,
     boards,
@@ -82,7 +82,14 @@ export function Workspace() {
     endRef,
     fileInputRef,
     pendingApprovals,
+    dashboardApps,
     dashboards,
+    dashboardTemplates,
+    dashboardPins,
+    dashboardResults,
+    pinnedIds,
+    focusedDashboard,
+    setFocusedDashboard,
     loadWorkspace,
     refreshOffScreenWork,
     openDocument,
@@ -91,6 +98,11 @@ export function Workspace() {
     restoreDocumentVersion,
     removeDocument,
     decidePendingEdit,
+    createFolder,
+    renameFolder,
+    moveFolder,
+    removeFolder,
+    moveDocument,
     createBoard,
     addBoardCard,
     moveBoardCard,
@@ -126,6 +138,12 @@ export function Workspace() {
     forgetMemory,
     createDashboard,
     generateDashboard,
+    runDashboard,
+    pinDashboard,
+    unpinDashboard,
+    saveDashboardLayout,
+    bindDashboardTemplate,
+    removeDashboard,
     publishGeneratedApp,
     rollbackGeneratedApp,
     connectIntegration,
@@ -148,7 +166,9 @@ export function Workspace() {
     documents: documents.length,
     projects: projects.length,
     boards: boards.length,
-    dashboards: dashboards.length,
+    // Both kinds live on that page, so the badge counts both; a number that
+    // only counted half of what the page shows is worse than no number.
+    dashboards: dashboardApps.length + dashboards.length,
     data: dbConnections.length,
     mcp: mcpServers.length,
     integrations: integrations.filter((item) => item.account).length,
@@ -184,15 +204,10 @@ export function Workspace() {
     ]),
   );
 
-  // A sandbox is a machine on a meter, so the Create menu cannot start one on
-  // the way past: it asks the panel that owns them to, once, on its next
-  // render. The flag is lowered by the panel, so remounting it by navigating
-  // back to Sandbox does not silently boot a second machine.
-  const [sandboxRequested, setSandboxRequested] = useState(false);
-
-  // Same shape, same reason: "Workflow" in the Create menu opens the composer
-  // inside the panel that owns workflows, and the panel lowers the flag so
-  // navigating back later does not reopen a composer the user dismissed.
+  // "Workflow" in the Create menu opens the composer inside the panel that owns
+  // workflows, rather than compiling anything on the way past. The panel lowers
+  // the flag once it has acted, so navigating back later does not reopen a
+  // composer the user dismissed.
   const [workflowRequested, setWorkflowRequested] = useState(false);
 
   /**
@@ -210,7 +225,6 @@ export function Workspace() {
     // picking "LaTeX" is after.
     if (action.id === "latex") return createProject(name, "", "latex");
     if (action.id === "board") return createBoard(name);
-    if (action.id === "sandbox") return setSandboxRequested(true);
     // A workflow is a sentence, compiled and reviewed before it exists at all,
     // so the composer *is* the creation step — same as a dashboard's editor.
     if (action.id === "workflow") return setWorkflowRequested(true);
@@ -260,6 +274,34 @@ export function Workspace() {
             );
           })}
         </nav>
+
+        {/* Beneath the destinations, and deliberately not among them: a pin is
+            not a place the product has, it is a chart *this user* wanted where
+            they could see it. Its own nav so a screen reader is told which is
+            which, and so the rail's own list cannot grow by six on a Tuesday. */}
+        {dashboardPins.length > 0 && (
+          <nav className="pinned-nav" aria-label="Pinned dashboards">
+            <span className="pinned-heading">Pinned</span>
+            {dashboardPins.map((pin) => (
+              <button
+                key={pin.dashboard.id}
+                className={
+                  view === "dashboards" && focusedDashboard === pin.dashboard.id
+                    ? "pinned-item active"
+                    : "pinned-item"
+                }
+                onClick={() => {
+                  setView("dashboards");
+                  setSidebarOpen(false);
+                  setFocusedDashboard(pin.dashboard.id);
+                }}
+              >
+                <BarChart3 size={15} aria-hidden="true" />
+                <span>{pin.dashboard.name}</span>
+              </button>
+            ))}
+          </nav>
+        )}
 
         <div className="thread-heading">
           <span>Recent threads</span>
@@ -407,6 +449,7 @@ export function Workspace() {
             messages={messages}
             sources={sources}
             agentCalls={agentCalls}
+            apps={dashboardApps}
             draft={draft}
             setDraft={setDraft}
             activeRun={activeRun}
@@ -445,10 +488,24 @@ export function Workspace() {
 
         {view === "dashboards" && (
           <DashboardsView
-            apps={dashboards}
+            apps={dashboardApps}
             openEditor={setEditing}
             publish={publishGeneratedApp}
             rollback={rollbackGeneratedApp}
+            dashboards={dashboards}
+            templates={dashboardTemplates}
+            datasets={datasets}
+            pins={dashboardPins}
+            pinnedIds={pinnedIds}
+            results={dashboardResults}
+            runDashboard={runDashboard}
+            pinDashboard={pinDashboard}
+            unpinDashboard={unpinDashboard}
+            saveDashboardLayout={saveDashboardLayout}
+            bindDashboardTemplate={bindDashboardTemplate}
+            removeDashboard={removeDashboard}
+            focused={focusedDashboard}
+            setFocused={setFocusedDashboard}
           />
         )}
 
@@ -466,6 +523,14 @@ export function Workspace() {
         {view === "documents" && (
           <DocumentsView
             documents={documents}
+            folders={folders}
+            folderOps={{
+              createFolder,
+              renameFolder,
+              moveFolder,
+              removeFolder,
+              moveDocument,
+            }}
             active={activeDocument}
             versions={documentVersions}
             openDocument={openDocument}
@@ -512,18 +577,8 @@ export function Workspace() {
           />
         )}
 
-        {/* Self-contained: sandboxes are metered by the minute, so they are
-            fetched when this view opens rather than with the workspace. */}
-        {view === "sandbox" && (
-          <SandboxView
-            setError={setError}
-            startRequested={sandboxRequested}
-            onStartHandled={() => setSandboxRequested(false)}
-          />
-        )}
-
-        {/* Self-contained like the sandbox panel: a workflow's run history is
-            nobody's business until they open this. */}
+        {/* Self-contained: a workflow's run history is nobody's business until
+            they open this, so it is fetched here rather than at page load. */}
         {view === "workflows" && (
           <WorkflowsView
             setError={setError}
@@ -553,8 +608,8 @@ export function Workspace() {
           />
         )}
 
-        {/* Owner-only and workspace-wide, so it is fetched on open like the
-            sandbox panel rather than riding along with every page load. */}
+        {/* Owner-only and workspace-wide, so it is fetched on open rather than
+            riding along with every page load. */}
         {view === "admin" && <AdminView setError={setError} />}
       </main>
 

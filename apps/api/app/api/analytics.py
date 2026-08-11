@@ -11,17 +11,12 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..database import get_db
 from ..models import (
-    Dashboard,
     Dataset,
     DatasetVersion,
     Source,
     new_id,
 )
 from ..schemas import (
-    DashboardCreate,
-    DashboardOut,
-    DashboardRunOut,
-    DashboardSpec,
     DatasetCreate,
     DatasetOut,
     DatasetQuery,
@@ -55,18 +50,6 @@ def _dataset_out(dataset: Dataset, version: DatasetVersion) -> DatasetOut:
         content_hash=version.content_hash,
         created_at=dataset.created_at,
         updated_at=dataset.updated_at,
-    )
-
-
-def _dashboard_out(dashboard: Dashboard) -> DashboardOut:
-    return DashboardOut(
-        id=dashboard.id,
-        name=dashboard.name,
-        description=dashboard.description,
-        dataset_id=dashboard.dataset_id,
-        spec=DashboardSpec.model_validate(json.loads(dashboard.spec_json)),
-        created_at=dashboard.created_at,
-        updated_at=dashboard.updated_at,
     )
 
 
@@ -278,126 +261,3 @@ def query_dataset(
     except AnalyticsValidationError as exc:
         status = 404 if str(exc) == "Dataset not found" else 422
         raise HTTPException(status_code=status, detail=str(exc)) from exc
-
-
-@router.get("/dashboards", response_model=List[DashboardOut])
-def list_dashboards(
-    actor: Actor = Depends(get_actor),
-    db: Session = Depends(get_db),
-) -> List[DashboardOut]:
-    dashboards = db.scalars(
-        select(Dashboard)
-        .where(Dashboard.workspace_id == actor.workspace_id)
-        .order_by(Dashboard.updated_at.desc())
-    )
-    return [_dashboard_out(item) for item in dashboards]
-
-
-@router.post("/dashboards", response_model=DashboardOut, status_code=201)
-def create_dashboard(
-    payload: DashboardCreate,
-    key: str = Depends(idempotency_key),
-    actor: Actor = Depends(get_actor),
-    db: Session = Depends(get_db),
-) -> DashboardOut:
-    replay = find_replay(
-        db,
-        workspace_id=actor.workspace_id,
-        operation="dashboard.create",
-        key=key,
-    )
-    if replay:
-        dashboard = db.scalar(
-            select(Dashboard).where(
-                Dashboard.id == replay.resource_id,
-                Dashboard.workspace_id == actor.workspace_id,
-            )
-        )
-        if dashboard is None:
-            raise replayed_resource_gone()
-        return _dashboard_out(dashboard)
-    name = payload.name.strip()
-    existing = db.scalar(
-        select(Dashboard).where(
-            Dashboard.workspace_id == actor.workspace_id,
-            Dashboard.name == name,
-        )
-    )
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="Dashboard name already exists")
-    try:
-        result = execute_dataset_query(
-            db,
-            workspace_id=actor.workspace_id,
-            dataset_id=payload.dataset_id,
-            query=payload.spec.query,
-        )
-    except AnalyticsValidationError as exc:
-        status = 404 if str(exc) == "Dataset not found" else 422
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
-    result_fields = set(result.columns)
-    selected_fields = set(payload.spec.y_fields)
-    if payload.spec.x_field:
-        selected_fields.add(payload.spec.x_field)
-    unknown = selected_fields - result_fields
-    if unknown:
-        raise HTTPException(
-            status_code=422,
-            detail="Unknown visualization fields: " + ", ".join(sorted(unknown)),
-        )
-    dashboard = Dashboard(
-        id=new_id(),
-        workspace_id=actor.workspace_id,
-        created_by=actor.user_id,
-        dataset_id=payload.dataset_id,
-        name=name,
-        description=payload.description.strip(),
-        spec_json=payload.spec.model_dump_json(),
-    )
-    db.add(dashboard)
-    record_key(
-        db,
-        workspace_id=actor.workspace_id,
-        operation="dashboard.create",
-        key=key,
-        resource_id=dashboard.id,
-    )
-    record_audit(
-        db,
-        workspace_id=actor.workspace_id,
-        actor_id=actor.user_id,
-        action="dashboard.created",
-        resource_type="dashboard",
-        resource_id=dashboard.id,
-        detail={"name": dashboard.name, "dataset_id": dashboard.dataset_id},
-    )
-    db.commit()
-    db.refresh(dashboard)
-    return _dashboard_out(dashboard)
-
-
-@router.post("/dashboards/{dashboard_id}/run", response_model=DashboardRunOut)
-def run_dashboard(
-    dashboard_id: str,
-    actor: Actor = Depends(get_actor),
-    db: Session = Depends(get_db),
-) -> DashboardRunOut:
-    dashboard = db.scalar(
-        select(Dashboard).where(
-            Dashboard.id == dashboard_id,
-            Dashboard.workspace_id == actor.workspace_id,
-        )
-    )
-    if dashboard is None:
-        raise HTTPException(status_code=404, detail="Dashboard not found")
-    spec = DashboardSpec.model_validate(json.loads(dashboard.spec_json))
-    try:
-        result = execute_dataset_query(
-            db,
-            workspace_id=actor.workspace_id,
-            dataset_id=dashboard.dataset_id,
-            query=spec.query,
-        )
-    except AnalyticsValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return DashboardRunOut(dashboard=_dashboard_out(dashboard), result=result)

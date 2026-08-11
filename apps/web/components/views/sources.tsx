@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, File, Library, Plus, Trash2, UploadCloud } from "lucide-react";
+import { ExternalLink, File, Plus, Trash2, UploadCloud } from "lucide-react";
 import type { Source } from "@workspace/api-client";
 import { useState } from "react";
 import { api } from "../api";
@@ -115,21 +115,6 @@ export function SourcesView({
         <button type="button">{uploading ? "Working…" : "Browse"}</button>
       </div>
 
-      <div className="library-summary">
-        <div>
-          <strong>{sources.length}</strong>
-          <span>sources</span>
-        </div>
-        <div>
-          <strong>{sources.reduce((sum, source) => sum + source.chunk_count, 0)}</strong>
-          <span>indexed passages</span>
-        </div>
-        <div>
-          <strong>{formatBytes(sources.reduce((sum, source) => sum + source.byte_size, 0))}</strong>
-          <span>stored originals</span>
-        </div>
-      </div>
-
       <div className="source-table">
         <div className="source-table-head">
           <span>Source</span>
@@ -140,9 +125,7 @@ export function SourcesView({
         </div>
         {sources.length === 0 ? (
           <div className="table-empty">
-            <Library size={24} />
             <strong>No sources yet</strong>
-            <span>Add a document to make it searchable.</span>
           </div>
         ) : (
           sources.map((source) => (

@@ -7,7 +7,7 @@ instead of a blob of JSON arguments.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -54,12 +54,25 @@ def _list_documents(db: Session, context: ToolContext, args: Dict[str, Any]) -> 
     )
 
 
+def _document_id(context: ToolContext, args: Dict[str, Any]) -> str:
+    """The id the model named, or the document the user is looking at.
+
+    A turn started from the chat panel beside a document carries that document
+    on the context. Falling back to it is what lets "tighten this paragraph"
+    work: without it the model has to call `list_documents` and pick, which it
+    gets wrong exactly when two documents have similar titles.
+    """
+    return _text(args, "document_id") or (
+        context.document_id if not _text(args, "title") else ""
+    )
+
+
 def _read_document(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
     try:
         document = documents.resolve(
             db,
             workspace_id=context.workspace_id,
-            document_id=_text(args, "document_id"),
+            document_id=_document_id(context, args),
             title=_text(args, "title"),
         )
     except documents.DocumentError as exc:
@@ -106,24 +119,49 @@ def _preview_create_document(
     return documents.render_diff("", _text(args, "content"), title=f"{title} ({kind})")
 
 
+def _accepted_hunks(args: Dict[str, Any]) -> Optional[List[int]]:
+    """The reviewer's amendment, if they took only part of the proposal.
+
+    Never supplied by the model — it is not in the tool's schema. The decision
+    endpoint writes it onto the parked call when a user accepts some hunks and
+    rejects the others, and `_drain_pending` merges it in on the way to the
+    executor.
+    """
+    raw = args.get("accepted_hunks")
+    if not isinstance(raw, list):
+        return None
+    return [int(item) for item in raw if isinstance(item, (int, float))]
+
+
 def _edit_document(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
     try:
-        document, diff, count = documents.edit_document(
+        outcome = documents.edit_document(
             db,
             workspace_id=context.workspace_id,
-            document_id=_text(args, "document_id"),
+            document_id=_document_id(context, args),
             title=_text(args, "title"),
             find=_text(args, "find"),
             replace=_text(args, "replace"),
             replace_all=bool(args.get("replace_all")),
             summary=_text(args, "summary"),
+            accepted_hunks=_accepted_hunks(args),
+            created_by=context.user_id,
         )
     except documents.DocumentError as exc:
         return ToolResult(content=f"Error: {exc}")
-    plural = "occurrence" if count == 1 else "occurrences"
-    return ToolResult(
-        content=f"Edited “{document.title}” ({count} {plural} replaced).\n\n{diff}"
-    )
+    title = outcome.document.title
+    if outcome.partial:
+        # The model must be told it was overruled, or the next turn re-proposes
+        # the changes the user just rejected and the review is a treadmill.
+        head = (
+            f"Edited “{title}”. The user reviewed the change hunk by hunk and "
+            f"accepted {outcome.applied_hunks} of {outcome.total_hunks}, "
+            "rejecting the rest. Do not re-propose the rejected parts."
+        )
+    else:
+        plural = "occurrence" if outcome.replacements == 1 else "occurrences"
+        head = f"Edited “{title}” ({outcome.replacements} {plural} replaced)."
+    return ToolResult(content=f"{head}\n\n{outcome.diff}")
 
 
 def _preview_edit_document(
@@ -133,7 +171,7 @@ def _preview_edit_document(
         return documents.preview_edit(
             db,
             workspace_id=context.workspace_id,
-            document_id=_text(args, "document_id"),
+            document_id=_document_id(context, args),
             title=_text(args, "title"),
             find=_text(args, "find"),
             replace=_text(args, "replace"),
@@ -543,17 +581,17 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
         "create_document": ToolSpec(
             name="create_document",
             description=(
-                "Create a document. kind is 'markdown' or 'latex'; both are "
-                "markdown that renders math in $…$ and $$…$$, and neither is "
-                "compiled. For a document that must become a PDF, create a "
-                "project with kind 'latex' instead."
+                "Create a document. kind is 'markdown' (rendered, with maths in "
+                "$…$ and $$…$$) or 'text' (shown verbatim, never formatted). "
+                "Neither is compiled. For a document that must become a PDF, "
+                "create a project with kind 'latex' instead."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
                     "content": {"type": "string"},
-                    "kind": {"type": "string", "enum": ["markdown", "latex"]},
+                    "kind": {"type": "string", "enum": ["text", "markdown"]},
                 },
                 "required": ["title", "content"],
             },

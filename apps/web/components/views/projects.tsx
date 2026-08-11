@@ -148,7 +148,7 @@ export function ProjectsView({
 
         {projects.length === 0 ? (
           <p className="projects-empty">
-            No projects yet. Create one, or ask the assistant to build it.
+            No projects yet.
           </p>
         ) : (
           <ul className="projects-items">
@@ -306,7 +306,7 @@ export function ProjectsView({
         <section className="project-editor empty">
           <div className="empty-state">
             <Code2 size={22} />
-            <p>Select a project, or ask the assistant to build one.</p>
+            <p>Select a project.</p>
           </div>
         </section>
       )}

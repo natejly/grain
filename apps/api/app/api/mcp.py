@@ -98,11 +98,22 @@ def _load(db: Session, actor: Actor, server_id: str) -> McpServer:
     return server
 
 
-def _validate(payload: McpServerRequest) -> None:
+def _validate(payload: McpServerRequest, settings: Settings) -> None:
     if not NAME_RE.match(payload.name):
         raise HTTPException(
             status_code=422,
             detail="Name must be lowercase letters, digits, and dashes",
+        )
+    if payload.transport == "stdio" and not settings.mcp_stdio_allowed:
+        # A stdio server is an arbitrary command run as this API's own user;
+        # registering one outside development is remote code execution on the
+        # host. Refuse it here, and server_config refuses to spawn one too.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "stdio MCP servers run commands on the API host and are only "
+                "allowed in development. Register an http server instead."
+            ),
         )
     if payload.transport == "stdio" and not payload.command.strip():
         raise HTTPException(status_code=422, detail="A stdio server needs a command")
@@ -138,8 +149,9 @@ def create_server(
     payload: McpServerRequest,
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> McpServerOut:
-    _validate(payload)
+    _validate(payload, settings)
     duplicate = db.scalar(
         select(McpServer).where(
             McpServer.workspace_id == actor.workspace_id,
