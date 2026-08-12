@@ -1099,6 +1099,81 @@ export type AdminUsage = {
 };
 
 /**
+ * One metric's latency distribution, in milliseconds. Percentiles are computed
+ * server-side over the runs in the window (capped), and every one is null when
+ * no run contributed a sample — null means "nothing measured", never zero,
+ * because a zero here would read as an instantaneous response.
+ */
+export type AdminLatencyStats = {
+  samples: number;
+  p50_ms: number | null;
+  p90_ms: number | null;
+  p99_ms: number | null;
+  max_ms: number | null;
+};
+
+/** Run count in one equal-width time bucket of the window. */
+export type AdminThroughputBucket = {
+  start: string;
+  count: number;
+};
+
+/** A run that has not reached a terminal state — queued, running, cancelling. */
+export type AdminLiveRun = {
+  run_id: string;
+  conversation_id: string;
+  agent_id: string;
+  status: string;
+  created_at: string;
+  age_seconds: number;
+};
+
+/** A recently failed run and the reason it gives, clipped server-side. */
+export type AdminFailedRun = {
+  run_id: string;
+  conversation_id: string;
+  error: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * Active distinct members over the three standard windows. Counts only — the
+ * endpoint never returns user ids, which keeps it a workspace aggregate rather
+ * than a roster.
+ */
+export type AdminRetention = {
+  dau: number;
+  wau: number;
+  mau: number;
+};
+
+/**
+ * Admin observability: how fast runs answer, how many there are, how often they
+ * fail, what is live right now, and whether people keep coming back — all
+ * derived from timing the app already records, scoped to the workspace.
+ */
+export type AdminObservability = {
+  window_hours: number;
+  since: string;
+  /** Time-to-first-token, over completed runs that produced a delta. */
+  ttft: AdminLatencyStats;
+  /** Total wall latency, over terminal runs. */
+  total: AdminLatencyStats;
+  /** True count in the window, before the percentile-sampling cap. */
+  runs_in_window: number;
+  throughput: AdminThroughputBucket[];
+  completed: number;
+  failed: number;
+  cancelled: number;
+  /** failed / (completed + failed + cancelled); 0 when the window is empty. */
+  error_rate: number;
+  recent_failures: AdminFailedRun[];
+  live_runs: AdminLiveRun[];
+  retention: AdminRetention;
+};
+
+/**
  * The spend ceiling (ADR 0008): what a workspace *may* spend, next to what it
  * already has.
  *
@@ -2341,6 +2416,18 @@ export class WorkspaceApi {
    */
   getAdminUsage(days = 30): Promise<AdminUsage> {
     return this.request(`/api/admin/usage?days=${days}`);
+  }
+
+  /**
+   * Latency, throughput, error rate, live runs, and retention over a window.
+   *
+   * Owner-only like the rest of `/api/admin`; a non-owner gets the same 403 the
+   * usage and budget reads give. The API caps `hours` at 720 (30 days), because
+   * time-to-first-token is derived from the run-events table and the window is
+   * what bounds that scan.
+   */
+  getAdminObservability(hours = 24): Promise<AdminObservability> {
+    return this.request(`/api/admin/observability?hours=${hours}`);
   }
 
   /**

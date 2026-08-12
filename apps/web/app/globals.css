@@ -5420,6 +5420,107 @@ select:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Observability ----
+   A sibling of the spend panel: same full-width card, same window <select>, and
+   it reuses the spend panel's bar and row conventions rather than inventing its
+   own. Every colour is a token already redefined under both dark blocks, so
+   light and dark are automatic; the only new accent is the error red, borrowed
+   from .admin-error, for a failure count or rate that is worth the eye. */
+.observability-panel {
+  grid-column: 1 / -1;
+}
+
+.observability-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.observability-metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.observability-metric-head h3 {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.observability-metric-head span {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The percentile rows never scroll — there are exactly four — so it drops the
+   max-height the shared .usage-rows carries for the 25-row breakdowns. */
+.observability-percentiles {
+  max-height: none;
+}
+
+.observability-value {
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Runs per bucket, height encoding count. A row of columns filled from the
+   bottom, drawn in the same soft accent as the spend bars over the same track
+   colour, so the two panels read as one chart vocabulary. */
+.observability-throughput {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 56px;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+}
+
+.observability-col {
+  display: flex;
+  align-items: flex-end;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.observability-col span {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px;
+  background: var(--accent-soft);
+}
+
+.observability-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.observability-health strong.observability-error {
+  color: var(--red);
+}
+
+.observability-error {
+  color: var(--red);
+}
+
+.observability-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
 /* ---- Workflows ----
    Two panes: the automations you have on the left, one automation on the
    right. The right-hand pane draws the graph as rows rather than as a canvas —

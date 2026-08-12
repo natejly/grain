@@ -1678,6 +1678,11 @@ ROUTE_CASES: List[RouteCase] = [
     # aggregating rows it should not see, which is exactly what the leak scan
     # over every id and marker string catches.
     RouteCase("GET", "/api/admin/usage", SCOPED),
+    # Latency/throughput/error/liveness/retention rollups. Like /usage it takes
+    # no id, only a window, so the only cross-tenant risk is aggregating rows it
+    # should not see — the leak scan over the victim's run/conversation ids and
+    # marker strings is what proves it does not.
+    RouteCase("GET", "/api/admin/observability", SCOPED),
     # The spend ceiling. Both take no id: the ceiling they read and write is the
     # caller's own workspace's, named by `actor.workspace_id` and by nothing in
     # the request. The PUT is the one that matters here — it lists and *releases*
