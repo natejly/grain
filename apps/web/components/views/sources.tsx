@@ -109,8 +109,7 @@ export function SourcesView({
           <UploadCloud size={21} />
         </div>
         <div>
-          <strong>{uploading ? "Indexing your source…" : "Drop a source here"}</strong>
-          <span>Markdown, text, PDF, CSV, or JSON · up to 10 MB</span>
+          <strong>{uploading ? "Indexing…" : "Drop a file"}</strong>
         </div>
         <button type="button">{uploading ? "Working…" : "Browse"}</button>
       </div>

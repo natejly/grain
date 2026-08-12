@@ -103,6 +103,63 @@
     ]
   },
   {
+    "match": "track the launch checklist",
+    "steps": [
+      {
+        "call": {
+          "name": "add_todo",
+          "arguments": {
+            "list": "Launch checklist",
+            "title": "Freeze the release branch"
+          }
+        }
+      },
+      {
+        "call": {
+          "name": "add_todo",
+          "arguments": {
+            "list": "Launch checklist",
+            "title": "Run the migrations"
+          }
+        }
+      },
+      {
+        "text": "Tracking two things on the Launch checklist.",
+        "denied_text": "Understood — I added nothing."
+      }
+    ]
+  },
+  {
+    "match": "tick off the migrations",
+    "steps": [
+      {
+        "call": {
+          "name": "todo_check",
+          "arguments": { "list": "Launch checklist", "item": "Run the migrations" }
+        }
+      },
+      {
+        "text": "Ticked off Run the migrations.",
+        "denied_text": "Understood — I left the checklist alone."
+      }
+    ]
+  },
+  {
+    "match": "add the smoke test to the checklist",
+    "steps": [
+      {
+        "call": {
+          "name": "add_todo",
+          "arguments": { "list": "Launch checklist", "title": "Smoke-test checkout" }
+        }
+      },
+      {
+        "text": "Added the smoke test.",
+        "denied_text": "I could not add that — the tool is not allowed here."
+      }
+    ]
+  },
+  {
     "match": "check the rollout date",
     "steps": [
       {
@@ -124,6 +181,26 @@
       {
         "text": "Plotted it. The figure is saved to this workspace.",
         "denied_text": "Understood \u2014 I drew nothing."
+      }
+    ]
+  },
+  {
+    "match": "sweep the review notes",
+    "steps": [
+      {
+        "call": {
+          "name": "edit_document",
+          "arguments": {
+            "find": "needs review",
+            "replace": "was reviewed",
+            "replace_all": true,
+            "summary": "Sweep the review notes"
+          }
+        }
+      },
+      {
+        "text": "Swept the review notes.",
+        "denied_text": "Understood \u2014 I left the notes alone."
       }
     ]
   }

@@ -403,3 +403,39 @@
   read it from the previous one. Verify against the commit, not against the
   neighbouring summary — a shared tree makes attribution *harder* to inherit,
   not easier.
+- The lint-warning lesson above has a second half: the fix is to restore what was
+  deleted, not to delete the rest. Following that rule caught the regression this
+  session — `sources` was unused in `chat.tsx` because a trim pass had replaced the
+  composer's `placeholder={…}` with `placeholder=""` — but the first thing I did
+  with the finding was remove the now-unused prop from three files, which would
+  have made the deletion permanent and tidy. `git show HEAD:<file> | grep <symbol>`
+  is the check; it only works if you run it *before* you clean up, not after.
+- An `aria-label` and a `placeholder` are not substitutes for each other. A pass
+  that added accessible names to four composers blanked all four placeholders on
+  the way past, because the e2e locators had been switched from `getByPlaceholder`
+  to `getByRole("textbox", {name})` and the placeholder looked redundant. It is
+  not: the accessible name is for a screen reader, the placeholder is the empty
+  state's only instruction, and one of the four was the sole example anywhere in
+  the product of how to phrase a workflow. Every gate stayed green through the
+  deletion — the tests had just stopped looking at the thing that broke.
+- A migration guarded on the way up must be guarded on the way down. `0001_initial`
+  calls `Base.metadata.create_all()`, so a database migrated from empty arrives at
+  revision 0001 holding every column in today's `models.py`, and every later
+  `if not exists` guard correctly does nothing. Any downgrade that unconditionally
+  drops what its upgrade conditionally added then fails on exactly the databases
+  that were built cleanly from scratch. It also means `upgrade head` from empty
+  proves far less than it appears to: it exercises `models.py`, not the DDL.
+- "Verified the migration round trip" needs a stated range. A prior report claimed
+  upgrade → downgrade → upgrade at head; the chain was in fact broken four
+  revisions down, because only the top step had been run. `downgrade base` is the
+  claim worth making, and it is one command.
+- When a shared e2e suite fails, ask which spec *created* the condition before
+  fixing the spec that tripped over it. The failure named `workspace.spec.ts`; the
+  bug was `dashboards.spec.ts` never deleting its upload, because that DELETE needs
+  an `Idempotency-Key` its sibling deletes do not and the helper discarded the
+  status. Fix both ends — the leak at its source, and the over-broad locator that
+  made an unrelated leak fatal — then re-inject the leak to confirm the failure now
+  lands on the spec that caused it.
+- A cleanup block that deletes without asserting is a cleanup block that has
+  probably stopped working. This one had been silently failing for its whole
+  existence and was only visible as a strict-mode violation two files later.

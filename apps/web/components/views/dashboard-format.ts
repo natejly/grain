@@ -83,9 +83,18 @@ export function compactTiles(tiles: Tile[], priority?: string): Tile[] {
   for (const tile of ordered) {
     const clamped = clampTile(tile);
     let grid_y = 0;
-    while (placed.some((other) => overlaps(other, { ...clamped, grid_y }))) {
+    while (
+      grid_y < MAX_GRID_ROW &&
+      placed.some((other) => overlaps(other, { ...clamped, grid_y }))
+    ) {
       grid_y += 1;
     }
+    // The search stops at the last row the layout PUT will accept. Floating
+    // past it is reachable — twelve-high tiles stack one per twelve rows, so a
+    // screen of them runs off the bottom — and the whole save then fails
+    // validation, losing the drag that caused it along with every other tile's
+    // position. A tile parked on the last row overlaps its neighbour, which is
+    // visible and recoverable; a 422 is neither.
     placed.push({ ...clamped, grid_y });
   }
   return placed;

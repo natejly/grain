@@ -155,6 +155,17 @@ class Conversation(Base):
     #: the Chat rail: it belongs to the document, is created and deleted with
     #: it, and its turns are handed the document's text.
     document_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    #: How much this thread asks before acting: ask_writes | ask_all |
+    #: auto_writes. See `agent_loop.ApprovalMode`.
+    #:
+    #: Per conversation and not per workspace, because the mode is an answer to
+    #: what is being done *right now*. A bypass switched on to get through one
+    #: refactor would otherwise still be on next week, governing chats nobody
+    #: turned it on for — and the whole value of the ask is that it is still
+    #: there when the work changes.
+    approval_mode: Mapped[str] = mapped_column(
+        String(24), default="ask_writes", server_default="ask_writes"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -364,6 +375,14 @@ class ToolCall(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+#: What `AgentToolCall.decided_by` carries instead of a user id when a
+#: conversation's approval *mode* is what let a call through. Defined here
+#: rather than in `services/agent_loop`, which holds the rule that writes it,
+#: because the column and the property that reads it both live in this module
+#: and a constant cannot be imported upwards out of services.
+MODE_DECIDER_PREFIX = "mode:"
+
+
 class AgentToolCall(Base):
     """A function call issued by the LLM agent loop.
 
@@ -398,6 +417,21 @@ class AgentToolCall(Base):
     decided_by: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    @property
+    def approved_by_mode(self) -> str:
+        """The approval *mode* that let this call run, or "" when one did not.
+
+        The readable half of `decided_by`, and the only half that leaves the
+        API. The column holds either a user id or `mode:<mode>`, and a user id
+        is not something a conversation needs to be told — `AuditEventOut`
+        exposes no actor for the same reason. What a reader of a bypassed thread
+        does need is which calls nobody looked at, which is exactly this.
+        """
+        value = self.decided_by or ""
+        if not value.startswith(MODE_DECIDER_PREFIX):
+            return ""
+        return value[len(MODE_DECIDER_PREFIX) :]
 
 
 class Folder(Base):
@@ -495,6 +529,15 @@ class BoardCard(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     labels_json: Mapped[str] = mapped_column(Text, default="[]")
     position: Mapped[int] = mapped_column(Integer, default=0)
+    #: When this card was ticked off, or NULL for an open one. A timestamp
+    #: rather than a boolean because "done" on its own cannot answer the
+    #: question a checked list is actually asked — when did that happen, and was
+    #: it before or after the thing that went wrong.
+    #:
+    #: It lives on every card, not only on the ones drawn as checkboxes, which
+    #: is what lets a ticked item graduate into a kanban card without a
+    #: migration: a todo list *is* a one-column board (services/artifacts/todos).
+    done_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

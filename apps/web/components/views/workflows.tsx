@@ -218,17 +218,15 @@ function AuthorPanel({
       <div className="page-heading">
         <div>
           <h1>New workflow</h1>
-          <p>
-            Describe the automation in a sentence. It is compiled against this
-            workspace&rsquo;s tools and shown to you before anything is saved.
-          </p>
         </div>
       </div>
 
       <div className="workflow-compose">
         <textarea
           className="workflow-prompt"
-          aria-label="Describe the automation"
+          aria-label="Workflow prompt"
+          // An example, not a label: it is the only thing on the page that
+          // shows what a workflow description is allowed to look like.
           placeholder="Every Monday, pull the open pull requests, summarise them, and post the summary to Slack."
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
@@ -240,9 +238,6 @@ function AuthorPanel({
           }}
         />
         <div className="workflow-compose-actions">
-          <span className="field-hint">
-            Compiling saves nothing and grants nothing — it is a proposal.
-          </span>
           <button
             className="primary-button"
             onClick={() => void compile()}
@@ -907,7 +902,7 @@ export function WorkflowsView({
     inputs?: Record<string, unknown>,
   ) {
     try {
-      await api.decideAgentToolCall(callId, decision, remember, inputs);
+      await api.decideAgentToolCall(callId, decision, remember, { inputs });
       if (runDetail) await openRun(runDetail.id);
       if (watchedWorkflow) await refreshRuns(watchedWorkflow);
       onWorkspaceChanged?.();
@@ -1007,7 +1002,7 @@ export function WorkflowsView({
         {workflows.length === 0 ? (
           <p className="workflow-empty">
             {loaded
-              ? "No workflows yet. Describe one in a sentence and the compiler will build it."
+              ? "No workflows yet."
               : "Loading…"}
           </p>
         ) : (

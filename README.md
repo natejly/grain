@@ -40,11 +40,17 @@ never exposed through `NEXT_PUBLIC_*`, the bootstrap response, or browser storag
   typed run inputs validated before the first node executes
 - Documents in a folder tree, with agent edits proposed for inline review and a
   chat thread per document
+- Todo lists as a view over boards — a list is a board with exactly one column,
+  so ticking an item and later growing a second column keeps the same card
+- Per-conversation approval modes (ask before writes, auto-approve writes,
+  read-only), which apply to chat only and never to an unattended workflow
+- Author your own agents: name, instructions, and the subset of tools each may
+  call, with the workspace's last enabled agent protected from deletion
 - An agent loop with tool approval behind every chat turn, backed by OpenAI
 - Responsive Next.js workspace on a cream-and-mint light theme, with a dark theme
   that follows the OS or an explicit toggle. The rail holds the places you work
-  — chat, files (files, projects, boards, dashboards), knowledge (sources,
-  memory, graph) and workflows — and a top-right menu holds the places you
+  — chat, files (files, projects, boards, lists, dashboards), knowledge
+  (sources, memory, graph) and workflows — and a top-right menu holds the places you
   configure and audit: connections (databases, MCP, integrations), activity and
   admin. Creating is an action in the corner rather than a destination, and the
   sandbox is a capability the agent uses, not a page you visit

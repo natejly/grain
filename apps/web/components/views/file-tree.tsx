@@ -332,7 +332,6 @@ export function FileTree({
           <input
             value={name}
             aria-label="Folder name"
-            placeholder="Folder name"
             autoFocus
             onChange={(event) => setName(event.target.value)}
           />

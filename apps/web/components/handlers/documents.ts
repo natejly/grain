@@ -124,10 +124,17 @@ export function createDocumentHandlers({
     }
   }
 
-  /** Approve or deny an agent's document write from the Documents view. */
+  /**
+   * Approve or deny an agent's document write from the Documents view.
+   *
+   * `acceptedHunks` is the inline reviewer's staged selection, sent as one
+   * amendment on one decision. Absent means the proposal was taken whole, which
+   * is what the all-or-nothing card still sends and what a create can only mean.
+   */
   async function decidePendingEdit(
     edit: PendingDocumentEdit,
     decision: "approved" | "denied",
+    acceptedHunks?: number[],
   ) {
     setError("");
     // Same endpoint the chat card uses, so the parked run resumes identically.
@@ -136,7 +143,9 @@ export function createDocumentHandlers({
     // so swallowing the rejection left it stuck on "Applying…" with the edit
     // still outstanding. The card renders the message beside the button that
     // failed, which is where the user is looking.
-    await api.decideAgentToolCall(edit.id, decision, false);
+    await api.decideAgentToolCall(edit.id, decision, false, {
+      ...(acceptedHunks ? { accepted_hunks: acceptedHunks } : {}),
+    });
     setPendingEdits((items) => items.filter((item) => item.id !== edit.id));
     await awaitToolCompletion(edit);
     await refreshArtifacts().catch(() => undefined);

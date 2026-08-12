@@ -118,7 +118,7 @@ export function IntegrationsView({
                       type="email"
                       value={garminEmail}
                       onChange={(event) => setGarminEmail(event.target.value)}
-                      placeholder="Garmin account email"
+                      aria-label="Garmin email"
                       autoComplete="off"
                       disabled={!item.configured}
                     />
@@ -126,7 +126,7 @@ export function IntegrationsView({
                       type="password"
                       value={garminPassword}
                       onChange={(event) => setGarminPassword(event.target.value)}
-                      placeholder="Password"
+                      aria-label="Garmin password"
                       autoComplete="off"
                       disabled={!item.configured}
                     />

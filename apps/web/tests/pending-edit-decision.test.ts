@@ -89,7 +89,29 @@ describe("decidePendingEdit", () => {
     decideAgentToolCall.mockResolvedValue({ id: "call-1", status: "approved" });
     const { made, state } = handlers();
     await made.decidePendingEdit(EDIT as never, "approved");
-    expect(decideAgentToolCall).toHaveBeenCalledWith("call-1", "approved", false);
+    // No amendment: an approval with no hunk selection has to reach the server
+    // as the whole proposal, not as an empty `accepted_hunks` — which the
+    // server refuses outright, and rightly.
+    expect(decideAgentToolCall).toHaveBeenCalledWith("call-1", "approved", false, {});
+    expect(state.pending).toEqual([]);
+  });
+
+  /**
+   * The inline reviewer stages every hunk choice and sends them together. One
+   * decision is the whole point: the server turns a single `accepted_hunks`
+   * approval into one version row whose summary counts what was applied, so a
+   * per-click decision would write a version per click and leave a history of
+   * partial states nobody ever read — and only the first click could succeed
+   * anyway, since deciding a call twice is a 409.
+   */
+  it("sends a partial approval as one decision carrying the accepted hunks", async () => {
+    decideAgentToolCall.mockResolvedValue({ id: "call-1", status: "approved" });
+    const { made, state } = handlers();
+    await made.decidePendingEdit(EDIT as never, "approved", [0, 2]);
+    expect(decideAgentToolCall).toHaveBeenCalledTimes(1);
+    expect(decideAgentToolCall).toHaveBeenCalledWith("call-1", "approved", false, {
+      accepted_hunks: [0, 2],
+    });
     expect(state.pending).toEqual([]);
   });
 

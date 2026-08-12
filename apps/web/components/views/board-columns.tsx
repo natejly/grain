@@ -139,7 +139,7 @@ export function AddColumn({ onAdd }: { onAdd: (name: string) => Promise<void> })
         onKeyDown={(event) => {
           if (event.key === "Escape") setOpen(false);
         }}
-        placeholder="Column name"
+        aria-label="Column name"
         autoFocus
       />
       <div className="kanban-add-actions">

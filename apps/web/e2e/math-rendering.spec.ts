@@ -20,7 +20,7 @@ test("chat renders LaTeX maths, not TeX source", async ({ page }) => {
   await expect(page.getByText("Indexed").last()).toBeVisible({ timeout: 30_000 });
 
   await page.getByRole("button", { name: "Chat", exact: true }).click();
-  const composer = page.getByPlaceholder("Ask your workspace…");
+  const composer = page.getByRole("textbox", { name: "Message" });
   await composer.fill("show me the quadratic formula");
   await composer.press("Enter");
 

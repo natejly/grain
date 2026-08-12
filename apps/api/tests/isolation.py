@@ -344,6 +344,32 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["board_card"] = card.id
 
+        # A todo list is a *one-column* board (services/artifacts/todos.py), so
+        # the board above cannot stand in for one: /api/todos refuses a
+        # three-column board on shape alone, and a case aimed at it would pass
+        # even with the workspace filter removed.
+        todo_list = Board(
+            workspace_id=workspace_id, name=f"{label} list", created_by=user_id
+        )
+        db.add(todo_list)
+        db.flush()
+        ids["todo_list"] = todo_list.id
+        todo_column = BoardColumn(
+            workspace_id=workspace_id, board_id=todo_list.id, name="To do", position=0
+        )
+        db.add(todo_column)
+        db.flush()
+        todo_item = BoardCard(
+            workspace_id=workspace_id,
+            board_id=todo_list.id,
+            column_id=todo_column.id,
+            title=f"{label} secret errand",
+            position=0,
+        )
+        db.add(todo_item)
+        db.flush()
+        ids["todo_item"] = todo_item.id
+
         connection = DbConnection(
             workspace_id=workspace_id,
             name=f"{label} warehouse",
@@ -910,6 +936,14 @@ ROUTE_CASES: List[RouteCase] = [
         body_ids={"agent_id": "agent"},
     ),
     RouteCase(
+        "PUT",
+        "/api/conversations/{conversation_id}/approval-mode",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"mode": "auto_writes"},
+        note="Turning off another tenant's approval park is the worst of these.",
+    ),
+    RouteCase(
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
     ),
     RouteCase(
@@ -929,6 +963,33 @@ ROUTE_CASES: List[RouteCase] = [
         note="the original bytes, so a leak here is the file itself and not an id",
     ),
     RouteCase("GET", "/api/chunks/{chunk_id}", DENY, path_ids={"chunk_id": "chunk"}),
+    # -- agents ------------------------------------------------------------
+    # An agent carries its workspace's instructions verbatim, so a cross-tenant
+    # read is a prompt leak and a cross-tenant PATCH rewrites who the other
+    # workspace's chat is. Both id routes 404 from the same `_load` filter; the
+    # 409 "last enabled agent" guard sits behind it and so cannot be reached
+    # across tenants — the refusal must be 404, never 409, or the status alone
+    # would confirm the agent exists.
+    RouteCase("GET", "/api/agents", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/agents",
+        SCOPED,
+        body={"name": "probe", "instructions": "probe"},
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/agents/{agent_id}",
+        DENY,
+        path_ids={"agent_id": "agent"},
+        body={"name": "leaked"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/agents/{agent_id}",
+        DENY,
+        path_ids={"agent_id": "agent"},
+    ),
     # -- tools -------------------------------------------------------------
     RouteCase("GET", "/api/tool-calls", SCOPED),
     RouteCase("GET", "/api/agent-tool-calls", SCOPED),
@@ -1100,6 +1161,32 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"board_id": "board", "card_id": "board_card"},
         body={"index": 0, "column_id": ""},
         body_ids={"column_id": "board_column_other"},
+    ),
+    # -- todo lists ---------------------------------------------------------
+    # The item routes take no board id — checking something off should not
+    # require knowing which list it came from — so the workspace filter on the
+    # item lookup is the only thing between an id and another tenant's list.
+    RouteCase("GET", "/api/todos", SCOPED),
+    RouteCase("POST", "/api/todos", SCOPED, body={"name": "mine"}),
+    RouteCase(
+        "POST",
+        "/api/todos/{list_id}/items",
+        DENY,
+        path_ids={"list_id": "todo_list"},
+        body={"title": "planted by A", "body": ""},
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/todos/items/{item_id}",
+        DENY,
+        path_ids={"item_id": "todo_item"},
+        body={"done": True},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/todos/items/{item_id}",
+        DENY,
+        path_ids={"item_id": "todo_item"},
     ),
     # -- projects ----------------------------------------------------------
     RouteCase("GET", "/api/projects", SCOPED),

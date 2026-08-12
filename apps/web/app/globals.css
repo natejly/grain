@@ -3578,6 +3578,13 @@ select:focus-visible {
   color: var(--text-muted);
 }
 
+/* A proposed addition the reviewer turned down. Struck rather than removed:
+   the line you are deciding *against* has to stay legible while you decide. */
+.diff-line.dropped {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
 /* ---- Documents ---- */
 
 .documents-layout {
@@ -3782,10 +3789,15 @@ select:focus-visible {
   padding: 30px;
 }
 
+/* Wraps, because this row lost a third of its width the day the chat panel
+   opened beside it. Without wrapping the actions simply overflowed the grid
+   column and slid under the panel — Delete was not merely hard to see, it was
+   unclickable, with the panel's own header swallowing the press. */
 .document-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
 }
@@ -3798,12 +3810,16 @@ select:focus-visible {
 .document-head > div:first-child {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 9px;
 }
 
 .document-actions {
   display: flex;
   align-items: center;
+  flex: none;
   gap: 8px;
   margin-left: auto;
 }
@@ -3907,6 +3923,179 @@ select:focus-visible {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text);
+}
+
+/* ---- Reviewing a proposal inside the document ---- */
+
+/* Takes the place of .document-panes, so it inherits the same job: be the one
+   thing between the header and the bottom of the panel that scrolls. The bar
+   stays out of the scrollport — an Apply button that leaves the screen as you
+   read down a long proposal is the same defect the pending-edit panel had. */
+.document-review {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.document-review-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.document-review-bar .field-hint {
+  margin-top: 0;
+}
+
+.document-review-bar .primary-button {
+  margin-left: auto;
+}
+
+.document-review-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 20px 26px;
+}
+
+/* Inside the review the diff *is* the document, not a card quoted beside it,
+   so it drops the border, the inset and the ceiling it wears in a tool card. */
+.document-review-body .diff {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+.review-hunk {
+  margin: 10px 0;
+  border: 1px solid var(--accent-border);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.review-hunk.left {
+  border-color: var(--border);
+}
+
+/* Wraps as whole items rather than breaking them: a control reading "Accept
+   change" over "2" on two lines is a control whose name you have to reassemble
+   before you can trust which hunk you are about to take. */
+.review-hunk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  font-size: 11px;
+}
+
+.review-hunk-bar > span,
+.review-hunk-bar .ghost-button {
+  white-space: nowrap;
+}
+
+.review-hunk-bar > span:first-child {
+  font-weight: 600;
+}
+
+.review-hunk-bar .field-hint {
+  margin-top: 0;
+  margin-right: auto;
+}
+
+.review-hunk-bar .ghost-button {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+/* The chosen half of each pair, said in the control as well as in the lines —
+   a struck-through line is not something a colour-blind or low-vision reader
+   should have to detect to know which way this hunk is going. */
+.review-hunk-bar .ghost-button[aria-pressed="true"] {
+  border-color: var(--accent-border-strong);
+  background: var(--accent-muted);
+  color: var(--accent-text);
+}
+
+/* ---- The chat panel beside a document ---- */
+
+.documents-layout.with-chat {
+  grid-template-columns: 240px minmax(0, 1fr) 340px;
+}
+
+.document-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.document-chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 12px 10px 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.document-chat > .tool-error {
+  flex: none;
+  padding: 8px 14px;
+}
+
+/* Compact density, by overriding the shared view rather than by forking it.
+   ChatView is sized for a 760px column in the middle of the screen; the same
+   markup in a 340px rail needs the column to be the panel, not a centred
+   measure with 200px of nothing on either side of it. */
+.document-chat .message-scroll {
+  padding: 0 12px;
+}
+
+.document-chat .message-column {
+  width: 100%;
+  padding: 14px 0 10px;
+  font-size: 12px;
+}
+
+.document-chat .message {
+  margin-bottom: 18px;
+}
+
+.document-chat .composer-zone {
+  padding: 8px 12px 12px;
+  background: var(--surface);
+}
+
+.document-chat .composer {
+  width: 100%;
+  min-height: 60px;
+}
+
+.document-chat .composer textarea {
+  min-height: 34px;
+  max-height: 110px;
+  padding: 10px 10px 4px;
+}
+
+/* No room for a second column of source text at this width. */
+.document-chat .diff {
+  font-size: 10px;
 }
 
 /* ---- Kanban boards ---- */
@@ -7172,4 +7361,324 @@ select:focus-visible {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+/* ---- Todo lists ---- */
+
+.todo-new {
+  display: flex;
+  gap: 8px;
+}
+
+.todo-list {
+  margin-bottom: 26px;
+  padding: 14px 16px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.todo-list-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.todo-list-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.todo-list-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.todo-progress {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.todo-caption {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.todo-items {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.todo-item:last-child {
+  border-bottom: 0;
+}
+
+.todo-item label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.todo-item input[type="checkbox"] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Struck *and* dimmed: a tick that only changes the colour of the text is a
+   tick a low-vision reader has to compare two rows to find. */
+.todo-item.done .todo-item-title {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.todo-item-delete {
+  flex: none;
+  padding: 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.todo-item:hover .todo-item-delete,
+.todo-item-delete:focus-visible {
+  opacity: 1;
+}
+
+.todo-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.todo-add:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.todo-add-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.todo-add-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The chat mount. Denser, and inside a tool card rather than on a page of its
+   own, so it drops the card chrome the page version wears. */
+.todo-list.compact {
+  margin: 0;
+  padding: 10px 12px 6px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+}
+
+.todo-list.compact h2 {
+  font-size: 12px;
+}
+
+/* ---- Approval modes ---- */
+
+.disclosure.approval-mode {
+  margin-left: 2px;
+}
+
+.approval-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 29px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.approval-trigger:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* The control itself never reads as neutral while the bypass is on: this is
+   the state a user is most likely to have forgotten, so the thing they would
+   click to check has to answer before they click it. */
+.approval-trigger.bypass {
+  border-color: var(--clay);
+  background: var(--clay-muted);
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.approval-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.approval-option:hover {
+  background: var(--surface-hover);
+}
+
+.approval-option.active {
+  background: var(--accent-muted);
+}
+
+.approval-option-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.approval-option-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.approval-note {
+  margin: 6px 4px 2px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* The indicator. In the composer zone, so it cannot be scrolled away from. */
+.bypass-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: min(760px, 100%);
+  margin: 0 auto 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--clay);
+  border-radius: 7px;
+  background: var(--clay-muted);
+  color: var(--amber);
+}
+
+.bypass-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: auto;
+  min-width: 0;
+}
+
+.bypass-copy strong {
+  font-size: 12px;
+}
+
+.bypass-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.bypass-banner .ghost-button,
+.bypass-banner .primary-button {
+  font-size: 11px;
+}
+
+.bypass-trail {
+  width: 100%;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--clay);
+  list-style: none;
+}
+
+.bypass-trail li {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.bypass-trail .tool-name {
+  flex: none;
+  min-width: 120px;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+/* The composer edge carries the state too, so the warning is visible even
+   with the banner's own text scrolled behind a soft keyboard. */
+.composer-zone.bypassed .composer {
+  border-color: var(--clay);
+}
+
+/* A call the mode let through, badged on the card it happened on — the trail
+   where the writes are, not only in an audit table. */
+.tool-status .auto-approved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 7px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--clay-muted);
+  color: var(--amber);
+}
+
+/* A refusal must not read as one more grey word in a thread where everything
+   else sails through — which is exactly what a bypassed thread is. */
+.tool-status.denied {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--red);
+  font-weight: 600;
+}
+
+.tool-card.denied {
+  border-color: var(--red-border);
 }

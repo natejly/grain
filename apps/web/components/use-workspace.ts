@@ -39,9 +39,11 @@ import { createInfraHandlers } from "./handlers/infra";
 import { createIntegrationHandlers } from "./handlers/integrations";
 import { createMcpHandlers } from "./handlers/mcp";
 import { createSourceHandlers } from "./handlers/sources";
+import { createTodoHandlers } from "./handlers/todos";
 import type { BudgetPark } from "./views/budget-format";
 import type { DashboardResultState } from "./views/dashboard-grid";
 import { baseName, describeError, isTabular, type View } from "./views/shared";
+import { isTodoList, todoListsFrom } from "./views/todo-format";
 
 /**
  * Every piece of workspace state and the actions over it. The shell renders the
@@ -140,6 +142,30 @@ export function useWorkspace() {
   const pinnedIds = useMemo(
     () => new Set(dashboardPins.map((pin) => pin.dashboard.id)),
     [dashboardPins],
+  );
+
+  /**
+   * The boards that are todo lists — one column, drawn as checkboxes.
+   *
+   * Derived rather than fetched, because that is what a list *is* on the server
+   * too. It also means a list has no state of its own to fall behind: every
+   * place that already refreshes boards (a finished chat turn, a workflow run,
+   * the initial load) refreshes lists, and a list the agent just created shows
+   * up inline in the conversation that asked for it with nothing else wired.
+   */
+  const todoLists = useMemo(() => todoListsFrom(boards), [boards]);
+
+  /**
+   * The rest — the boards with something to drag between.
+   *
+   * The two views partition `boards` rather than overlapping, so a thing is in
+   * exactly one place and the badge on each tab counts what that tab shows.
+   * It also makes the graduation visible: add a second column to a list and it
+   * leaves Lists for Boards, same id, same cards, ticks intact.
+   */
+  const kanbanBoards = useMemo(
+    () => boards.filter((board) => !isTodoList(board)),
+    [boards],
   );
 
   const refreshSecondary = useCallback(async () => {
@@ -417,6 +443,8 @@ export function useWorkspace() {
 
   const boardHandlers = createBoardHandlers({ setError, setBoards });
 
+  const todoHandlers = createTodoHandlers({ setError, setBoards });
+
   const infraHandlers = createInfraHandlers({
     setError,
     setDbConnections,
@@ -543,13 +571,22 @@ export function useWorkspace() {
     dashboardPins,
     dashboardResults,
     pinnedIds,
+    todoLists,
+    kanbanBoards,
     focusedDashboard,
     setFocusedDashboard,
     loadWorkspace,
     refreshOffScreenWork,
+    // Both exposed for the chat panel beside a document, which has to refetch
+    // the pending edits its inline review renders and the list the document's
+    // title appears in — and nothing else, which is why it does not get
+    // `refreshOffScreenWork`.
+    refreshArtifacts,
+    refreshPendingEdits,
     ...documentHandlers,
     ...folderHandlers,
     ...boardHandlers,
+    ...todoHandlers,
     ...infraHandlers,
     ...mcpHandlers,
     ...chatHandlers,

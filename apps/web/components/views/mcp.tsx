@@ -121,12 +121,8 @@ function AddServerForm({
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="filesystem"
             required
           />
-          <span className="field-hint">
-            Tools appear to the model as mcp__{name || "name"}__&lt;tool&gt;
-          </span>
         </label>
         <label>
           Transport
@@ -147,7 +143,6 @@ function AddServerForm({
             <input
               value={command}
               onChange={(event) => setCommand(event.target.value)}
-              placeholder="npx"
               required
             />
           </label>
@@ -157,7 +152,6 @@ function AddServerForm({
               value={args}
               onChange={(event) => setArgs(event.target.value)}
               rows={3}
-              placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/path/to/dir"}
             />
           </label>
         </div>
@@ -167,7 +161,6 @@ function AddServerForm({
           <input
             value={url}
             onChange={(event) => setUrl(event.target.value)}
-            placeholder="https://example.com/mcp"
             required
           />
         </label>
@@ -179,11 +172,7 @@ function AddServerForm({
           value={secrets}
           onChange={(event) => setSecrets(event.target.value)}
           rows={2}
-          placeholder={
-            transport === "stdio" ? "API_KEY=sk-…" : "Authorization=Bearer …"
-          }
         />
-        <span className="field-hint">Encrypted at rest and never read back.</span>
       </label>
 
       <div className="mcp-form-actions">
@@ -263,10 +252,6 @@ function AuthControls({
       <button className="primary-button" onClick={() => void connect()} disabled={busy}>
         <KeyRound size={14} /> {busy ? "Starting…" : "Connect"}
       </button>
-      <span className="field-hint">
-        This server signs each person in separately, so connecting your account
-        does not give the rest of the workspace access to it.
-      </span>
     </div>
   );
 }

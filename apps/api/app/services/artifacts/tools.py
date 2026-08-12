@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
-from . import board_columns, boards, documents
+from . import board_columns, boards, documents, todos
 
 MAX_DOCUMENT_TOOL_CHARS = 12_000
 
@@ -554,9 +554,92 @@ def _preview_reorder_card(
     )
 
 
+# --------------------------------------------------------------------------
+# Todo lists
+#
+# Three tools, not a second suite. A todo list is a one-column board, so the
+# board tools above already read, rename, reorder and delete its items; what is
+# missing is only what a kanban has no concept of — ticking something off — plus
+# the two shortcuts that let the model work with a list without first learning
+# that it is secretly a board. See services/artifacts/todos.py.
+
+
+def _list_todos(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    lists = todos.list_todo_lists(db, workspace_id=context.workspace_id)
+    if not lists:
+        return ToolResult(content="There are no todo lists yet.")
+    open_only = bool(args.get("open_only", True))
+    payload = []
+    for board in lists:
+        snapshot = todos.snapshot(db, board)
+        items = snapshot["items"]
+        if open_only:
+            items = [item for item in items if not item["done"]]
+        payload.append({**snapshot, "items": items})
+    return ToolResult(content=json.dumps(payload, default=str))
+
+
+def _add_todo(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    try:
+        board = todos.resolve_list(
+            db,
+            workspace_id=context.workspace_id,
+            list_id=_text(args, "list_id"),
+            name=_text(args, "list"),
+        )
+        item = todos.add_item(
+            db,
+            workspace_id=context.workspace_id,
+            board=board,
+            title=_text(args, "title"),
+            body=_text(args, "body"),
+        )
+    except boards.BoardError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    return ToolResult(content=f"Added “{item.title}” to “{board.name}” (id {item.id}).")
+
+
+def _preview_add_todo(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
+    return f"Add “{_text(args, 'title')}” to the todo list"
+
+
+def _todo_check(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    done = bool(args.get("done", True))
+    try:
+        card = todos.find_item(
+            db,
+            workspace_id=context.workspace_id,
+            item=_text(args, "item"),
+            list_name=_text(args, "list"),
+        )
+        todos.set_done(db, card=card, done=done)
+    except boards.BoardError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    verb = "Checked off" if done else "Reopened"
+    return ToolResult(content=f"{verb} “{card.title}”.")
+
+
+def _preview_todo_check(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
+    verb = "Check off" if bool(args.get("done", True)) else "Reopen"
+    try:
+        card = todos.find_item(
+            db,
+            workspace_id=context.workspace_id,
+            item=_text(args, "item"),
+            list_name=_text(args, "list"),
+        )
+    except boards.BoardError as exc:
+        return f"This will fail: {exc}"
+    return f"{verb} “{card.title}”"
+
+
 _DOC_TARGET = {
     "document_id": {"type": "string", "description": "Document id (or use title)."},
     "title": {"type": "string", "description": "Document title, if no id."},
+}
+_LIST_TARGET = {
+    "list_id": {"type": "string", "description": "Todo list id (or use list)."},
+    "list": {"type": "string", "description": "Todo list name, if no id."},
 }
 _BOARD_TARGET = {
     "board_id": {"type": "string", "description": "Board id (or use board)."},
@@ -818,5 +901,65 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             executor=_reorder_card,
             read_only=False,
             preview=_preview_reorder_card,
+        ),
+        "list_todos": ToolSpec(
+            name="list_todos",
+            description=(
+                "Read the workspace's todo lists and their items. Open items "
+                "only unless open_only is false. A todo list is a board with a "
+                "single column, so the board tools work on one too."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "open_only": {
+                        "type": "boolean",
+                        "description": "Hide items already ticked off. Default true.",
+                    }
+                },
+            },
+            executor=_list_todos,
+        ),
+        "add_todo": ToolSpec(
+            name="add_todo",
+            description=(
+                "Add an item to a todo list. Omit the list when there is only "
+                "one. To start a new list, call create_board with a single "
+                "column — a todo list is exactly that."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    **_LIST_TARGET,
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+                "required": ["title"],
+            },
+            executor=_add_todo,
+            read_only=False,
+            preview=_preview_add_todo,
+        ),
+        "todo_check": ToolSpec(
+            name="todo_check",
+            description=(
+                "Tick a todo item off as you finish it, by id or title. Set "
+                "done to false to reopen one."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "item": {"type": "string", "description": "Item id or title."},
+                    "list": {
+                        "type": "string",
+                        "description": "List name, to disambiguate a title.",
+                    },
+                    "done": {"type": "boolean", "description": "Default true."},
+                },
+                "required": ["item"],
+            },
+            executor=_todo_check,
+            read_only=False,
+            preview=_preview_todo_check,
         ),
     }

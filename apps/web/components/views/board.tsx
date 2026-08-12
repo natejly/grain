@@ -63,7 +63,7 @@ function AddCard({
           if (event.key === "Escape") setOpen(false);
         }}
         rows={2}
-        placeholder="Card title"
+        aria-label="Card title"
         autoFocus
       />
       <div className="kanban-add-actions">
@@ -316,7 +316,7 @@ export function BoardView({
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="New board name"
+            aria-label="Board name"
           />
           <button type="submit" className="primary-button" disabled={!name.trim()}>
             <Plus size={15} /> Create

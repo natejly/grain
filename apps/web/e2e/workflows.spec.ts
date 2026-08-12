@@ -149,7 +149,7 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   );
 
   await page
-    .getByRole("textbox", { name: "Describe the automation" })
+    .getByRole("textbox", { name: "Workflow prompt" })
     .fill("Every Monday, pull the open pull requests, summarise them, and post to Slack.");
   await page.getByRole("button", { name: "Compile" }).click();
 

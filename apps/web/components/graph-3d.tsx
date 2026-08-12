@@ -103,7 +103,6 @@ function radiusFor(entity: GraphEntity): number {
 export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const [failure, setFailure] = useState("");
-  const [hovered, setHovered] = useState<string | null>(null);
   // The callback is read from a ref so a caller passing an inline arrow does not
   // tear down and rebuild the whole scene on every render.
   const selectRef = useRef(onSelect);
@@ -390,7 +389,6 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
         const id = instance === null ? null : entities[instance].id;
         if (id !== hoveredId) {
           hoveredId = id;
-          setHovered(id);
           applyHighlight();
           renderer.domElement.style.cursor = id ? "pointer" : "grab";
         }
@@ -400,7 +398,6 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
         pointerInside = false;
         if (hoveredId !== null) {
           hoveredId = null;
-          setHovered(null);
           applyHighlight();
         }
       }
@@ -526,7 +523,7 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
   if (entities.length === 0) {
     return (
       <div className={`graph-3d empty ${className ?? ""}`}>
-        <p>No entities yet. Upload a source and rebuild the graph.</p>
+        <p>No entities yet.</p>
       </div>
     );
   }
@@ -536,12 +533,7 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
       <div ref={mountRef} className="graph-3d-canvas" />
       {failure ? (
         <div className="graph-3d-failure">{failure}</div>
-      ) : (
-        <div className="graph-3d-hint">
-          drag to orbit · scroll to zoom · hover to isolate
-          {hovered ? " · click to inspect" : ""}
-        </div>
-      )}
+      ) : null}
       <div className="graph-3d-legend">
         <span>
           <i className="swatch typed" /> typed relation

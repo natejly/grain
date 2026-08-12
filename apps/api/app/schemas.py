@@ -167,6 +167,13 @@ class ConversationCreate(BaseModel):
     title: str = Field(default="New conversation", max_length=200)
 
 
+#: How much a conversation asks before acting. Spelled out here rather than
+#: imported from `services.agent_loop`, matching `ToolPolicyRequest.scope`: the
+#: wire contract and the policy engine are allowed to be described twice, and
+#: schemas do not reach into services.
+ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes"]
+
+
 class ConversationOut(ApiModel):
     id: str
     title: str
@@ -174,8 +181,20 @@ class ConversationOut(ApiModel):
     #: `GET /api/conversations` only ever returns the empty case; the field is
     #: here because `POST /api/documents/{id}/conversation` returns the other.
     document_id: str = ""
+    #: ask_writes | ask_all | auto_writes, governing this thread and no other.
+    approval_mode: ApprovalMode = "ask_writes"
     created_at: datetime
     updated_at: datetime
+
+
+class ApprovalModeRequest(BaseModel):
+    """The body of `PUT /api/conversations/{id}/approval-mode`.
+
+    No `remember` and no scope: a mode is already as narrow as it gets, and the
+    only thing it can be remembered against is the conversation it is set on.
+    """
+
+    mode: ApprovalMode
 
 
 class Citation(BaseModel):
@@ -374,6 +393,14 @@ class AgentToolCallOut(ApiModel):
     latency_ms: int
     #: What the call left behind that is a file rather than a sentence.
     artifacts: List[ToolArtifact] = []
+    #: The approval mode that let this call run unattended — "auto_writes" — or
+    #: "" when a person, a policy row or the tool's own default decided it.
+    #:
+    #: Here so a bypassed thread carries its own trail: the conversation is
+    #: where the writes happened, so it is where "nobody saw this one" has to be
+    #: legible, rather than only in an audit table a chat user never opens. The
+    #: *mode* and not `decided_by`, which would put a user id on the wire.
+    approved_by_mode: str = ""
     created_at: datetime
 
 
@@ -466,6 +493,11 @@ class BoardCardOut(ApiModel):
     title: str
     body: str
     labels: List[str]
+    #: Ticked off. Every card carries it, not only the ones a todo list draws as
+    #: checkboxes, which is what lets a checked item graduate into a kanban card
+    #: without changing anything about it. Defaulted, so a caller that predates
+    #: the column keeps parsing.
+    done: bool = False
 
 
 class BoardColumnOut(ApiModel):
@@ -490,6 +522,53 @@ class BoardCardRequest(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     body: str = ""
     labels: List[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------
+# Todo lists — the checkbox reading of a one-column board. See
+# services/artifacts/todos.py for why these are a view and not an entity.
+
+
+class TodoItemOut(ApiModel):
+    id: str
+    #: The board this item belongs to. Carried on the item because the endpoint
+    #: that ticks one does not take it: checking something off should not
+    #: require knowing which list it was on.
+    list_id: str
+    title: str
+    body: str
+    done: bool
+    #: When it was ticked, or null while it is open.
+    done_at: Optional[datetime] = None
+
+
+class TodoListOut(ApiModel):
+    id: str
+    name: str
+    items: List[TodoItemOut]
+
+
+class TodoListCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class TodoItemCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    body: str = ""
+
+
+class TodoItemUpdate(BaseModel):
+    """A partial update. Every field omitted is a field left alone.
+
+    `done` is the reason this route exists, and it is optional rather than
+    required so that renaming an item does not make a caller restate whether it
+    was finished — a PATCH that silently unticks something is exactly the bug a
+    checklist cannot afford.
+    """
+
+    done: Optional[bool] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    body: Optional[str] = None
 
 
 class McpToolOut(ApiModel):

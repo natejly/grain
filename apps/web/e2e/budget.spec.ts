@@ -306,7 +306,7 @@ test("a workflow held by the ceiling does not claim to be waiting for a decision
 
   await createFromMenu(page, "Workflow");
   await page
-    .getByRole("textbox", { name: "Describe the automation" })
+    .getByRole("textbox", { name: "Workflow prompt" })
     .fill("Every Monday, pull the open pull requests, summarise them, and post to Slack.");
   await page.getByRole("button", { name: "Compile" }).click();
   const preview = page.locator(".workflow-preview");

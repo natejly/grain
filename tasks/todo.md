@@ -1,84 +1,152 @@
-# Session review — five tracks landed, reconciled and verified
+# Agent Creator — custom agents (system prompt + provisioned tools) in chat and workflows
 
-Five tracks were built in parallel against baseline `0fe566c`, then reconciled.
-Everything below was re-run serially in the shared tree by the reconciling agent;
-the per-track numbers reported mid-session are superseded by these.
+Plan: ~/.claude/plans/steady-shimmying-walrus.md (approved 2026-08-11)
 
-## Gates (real output, all personally run)
+## Todo
 
-```
-.venv/bin/ruff check apps/api                        → All checks passed!
-.venv/bin/mypy apps/api/app                          → Success: no issues found in 118 source files
-PYTHONPATH=apps/api pytest apps/api/tests            → 1510 passed, 1 skipped, 3 xfailed in 29.64s
-PYTHONPATH=apps/api python scripts/export_openapi.py → packages/api-client/openapi.json
-apps/web  pnpm tsc --noEmit                          → clean
-apps/web  pnpm lint                                  → clean, 0 problems
-apps/web  pnpm test                                  → 290 passed (13 files)
-apps/web  pnpm build                                 → Compiled successfully, 8/8 static pages
-npx playwright test                                  → 44 passed (1.7m)   run 1
-npx playwright test                                  → 44 passed          run 2
-```
+- [ ] Baseline: record pytest + vitest state (guards work is in-flight, uncommitted)
+- [ ] Phase 1: migration 0031_agent_profiles + Agent model columns + schemas (AgentOut/Create/Update, ToolInfoOut)
+- [ ] Phase 2: llm_tools registry_families + build_registry(allowed=); agent_loop AgentDirectives/resolve_directives wired at run_agent_turn/_continue/_advance
+- [ ] Phase 3: app/api/agents.py CRUD (409 guards: last-enabled, delete-with-runs) + GET /api/tools + main.py registration
+- [ ] Phase 4: NodeSpec.agent, validate_graph(agents=) + _check_agents, compiler/workflows-router threading, executor per-node agent resolution + _default_agent
+- [ ] Backend tests: test_agents_api.py, test_agent_directives.py, tools endpoint, workflow compiler/executor cases
+- [ ] Phase 5: api-client types + methods (+ WorkflowGraphNode.agent and missing .when)
+- [ ] Phase 6: shared.ts View, navigation.ts entry, agents.tsx view, workspace.tsx block
+- [ ] Phase 7: chat composer agent selector (use-workspace + handlers/chat + chat.tsx); workflow node agent picker (workflow-graph.tsx + workflows.tsx + workflow-format.ts)
+- [ ] Gates: make lint, pytest, pnpm test, pnpm build, alembic upgrade x2 on scratch DB
+- [ ] Boot make dev and verify at the seam (create agent → chat → workflow node → run)
 
-Baseline was 1398 pytest / 253 vitest / 42 playwright. Deltas: +112 pytest,
-+37 vitest, +2 playwright (+3 folders, −1 sandbox-create, deleted with its
-destination).
+## Review
 
-## What landed
+(to be filled at completion)
 
-- [x] **Dashboards are reachable** — `services/dashboards/` (store, binding,
-      agent tools), `api/dashboards.py` (12 routes), parameterised templates
-      validated at *both* authoring and binding time, per-user pins as
-      twelve-column grid tiles, and the catalog/grid/tile UI. No pin tool for
-      the agent, on purpose: the agent authors, the user curates.
-- [x] **Typed workflow inputs** — `services/workflows/inputs.py`, declared on
-      `graph["inputs"]` with no migration, bound at run start before the run
-      goes `running`, rejected rather than coerced, rendered as a form by the
-      canvas and refused with the field named.
-- [x] **The human-in-the-loop `manual` node** — parks a run for a person on the
-      existing `AgentToolCall` park/resume seam. No new park mechanism, no new
-      grammar, no migration. 13 tests.
-- [x] **Files and folders** — a document folder tree, delete refused (409) never
-      cascaded, plus the document editor's `text`/`markdown` kinds, inline
-      proposal review, and one chat thread per document.
-- [x] **The workflow canvas** — React Flow graph with hover-expand chips, a
-      decision that leads the panel instead of trailing it, and measured framing.
-- [x] **ADR 0009: generated apps get no backend** — the frame cannot call one
-      without relaxing the renderer sandbox. Python, where genuinely required, is
-      a precompute whose output becomes a dataset version, approved by code hash.
+---
 
-## Reconciliation performed this pass
+# Chat approval modes + Todo lists (API only)
 
-- [x] **Migrations** — one head (`0030_document_folders`), chain `0001 → 0030`
-      linear across three agents' additions. Applied from an *empty* database:
-      57 tables, and a metadata diff against `models.py` shows zero missing
-      tables, zero extra tables, zero column drift.
-- [x] **Document editor ↔ folders fit** — `documents.tsx` composes `FileTree`
-      (folders) with `PendingEditList` (inline review); `workspace.tsx` wires
-      `folderOps`, `pendingEdits` and `decidePendingEdit` together. Both e2e
-      suites pass in the same run.
-- [x] **Regression found and fixed** — a stray trim pass had deleted the "Live"
-      pill and three pieces of empty-state copy from `activity.tsx`, and the
-      model-provider `agent-pill` from the `workspace.tsx` header, leaving their
-      CSS and their destructured props behind. Three separate track reports
-      dismissed the resulting lint warnings as "pre-existing in another agent's
-      file"; they were neither. Restored, and `pnpm lint` is now fully clean.
-- [x] **Docs** — `docs/ARCHITECTURE.md` gains a "The shell" section describing
-      the rail/settings split that NAV_GROUPS now encodes, plus dashboard
-      templates and pins, typed workflow inputs, document kinds/folders/threads,
-      and ADR 0009. `README.md`'s feature list no longer advertises the removed
-      Apps and Sandbox destinations.
+Migration landed as **0032_approval_modes_and_todo_items** (rebased onto the
+Agent Creator's 0031 while this was in flight; single head confirmed).
 
-## Open — not done, not attempted
+## Todo
 
-- [ ] **The document side chat has no UI.** `POST /api/documents/{id}/conversation`
-      exists, is tested, and is in `openapi.json`, but `packages/api-client` has
-      no method for it and nothing in `apps/web` calls it. The server half of
-      that feature is complete and the browser half is absent.
-- [ ] **Dashboard templates are agent-only.** The template routes and tools work;
-      there is no template UI. Acceptable under "the agent authors", but it means
-      a template cannot be inspected or corrected by hand.
-- [ ] `services/dashboards/binding.py` imports `CompileError`/`CompileReport`
-      from `..workflows.validate`. That is the one line to re-point if the
-      workflow validation module is ever reorganised.
-- [ ] Nothing here is committed. The tree carries all five tracks as working
-      changes.
+- [x] models: `Conversation.approval_mode`, `BoardCard.done_at`
+- [x] alembic 0032_approval_modes_and_todo_items (down_revision 0031_agent_profiles)
+- [x] agent_loop: `ApprovalMode`, `Verdict`, `evaluate_policy` (the decision) + `resolve_policy` (str face),
+      `approval_mode_for_run` (returns ask_writes for anything but chat scope), `mode_decider`,
+      `execute_agent_tool_call(decided_by=)`
+- [x] chat.py: `PUT /api/conversations/{id}/approval-mode`, audited
+- [x] schemas: ConversationOut.approval_mode, ApprovalModeRequest, BoardCardOut.done, Todo* models
+- [x] services/artifacts/todos.py: the checkbox view over a one-column board
+- [x] api/todos.py + main.py registration
+- [x] artifacts/tools.py: `list_todos`, `add_todo`, `todo_check`
+- [x] tests/test_approval_mode.py (20), tests/test_todos.py (16), 5 isolation route cases
+- [x] Gates: ruff, mypy 122 files, pytest 1568 passed, export_openapi, alembic round trip
+
+## Review
+
+**Approval modes.** One decision point still: `evaluate_policy` holds the whole
+rule and `resolve_policy` is its string-returning face, so `services/workflows/
+executor.py` was not touched. The mode is applied last, on top of the scope
+resolution, under two locks — it is ignored unless the scope is `chat`, and a
+`deny` survives every mode. `AgentToolCall.decided_by` is stamped `mode:auto_writes`
+only where the mode *changed* the answer, so a tool a policy row already allowed
+is not falsely attributed to the bypass either.
+
+**Todo lists.** A view over boards, as argued for: a list is a board with exactly
+one column, derived rather than stored. Only three routes do anything the board
+routes could not — `GET /api/todos`, `POST /api/todos`, and
+`PATCH /api/todos/items/{id}`, which ticks an item off with no board id at all.
+Three agent tools (`list_todos`, `add_todo`, `todo_check`) for the same reason.
+
+**Verification.** Ten deliberate mutations, each caught by exactly the intended
+test: the workflow-scope lock (twice, separately, plus the composed case that
+needs both broken), the deny survival, the over-attribution of a standing allow,
+the `done_at` rewrite, and three dropped workspace filters. Migration upgraded,
+downgraded, re-upgraded and re-run on a scratch DB.
+
+**Known, not mine:** `test_route_table_matches_the_app` fails on the four
+`/api/agents` routes the Agent Creator work added and has not yet given isolation
+cases. Every route in this change has one.
+
+## Document chat panel + inline per-hunk review (frontend)
+
+- [ ] `createThreadHandlers` extracted from `handlers/chat.ts`; ~8 deps collapse into `onRunSettled`
+- [ ] `useDocumentThread` hook: get-or-create the document's thread, own run/message state
+- [ ] Compact `ChatView` panel beside the document (reused, not reimplemented)
+- [ ] Inline per-hunk Accept/Reject over the document body, staged into ONE `accepted_hunks` decision
+- [ ] api-client: `segments` on `PendingDocumentEdit`, `documentConversation`, decision amendment
+- [ ] Playwright: kinds render per their promise, side-chat edit arrives, 1-of-2 hunks applied
+
+## Todo lists and approval modes — UI phase (plan)
+
+Built on the API phase (routes, tools, `Conversation.approval_mode`, `board_cards.done_at`).
+
+### Todo lists
+- [ ] `views/todo-format.ts` — a list is a board with one column (the server's own rule,
+      stated once client-side); `listForTodoCall` resolves a call's list the way
+      `todos.resolve_list` does. Unit tested.
+- [ ] `views/todos.tsx` — `TodoChecklist` (one list as checkboxes) + `TodosView` (the page).
+      One component, two mounts: the Lists tab and the chat embed.
+- [ ] `handlers/todos.ts` — create/add/tick/delete over the existing `boards` state, since a
+      list *is* a board and `GET /api/boards` already carries `done`.
+- [ ] Nav: `todos` view, "Lists" tab in the Files group (not "Boards" — anchored names).
+- [ ] Chat: a checklist under any `add_todo`/`todo_check` card, checkable in place.
+
+### Approval modes
+- [ ] API: `AgentToolCallOut.approved_by_mode` — the *mode* that decided a call, never the
+      user id (AuditEventOut deliberately exposes no actor). Derived from `decided_by`.
+- [ ] `views/approval-format.ts` — the three modes' labels/descriptions; unit tested.
+- [ ] `views/approval-mode.tsx` — picker (disclosure-menu) + the bypass indicator: persistent,
+      in the composer zone so scroll cannot hide it, naming the thread, listing what it has
+      auto-approved, with a one-click way off.
+- [ ] Tool cards: an "Auto-approved" badge where the mode decided; `denied` reads as denied.
+- [ ] Playwright: a write parks under ask_writes and does not under auto_writes; the indicator
+      is up the whole time; a denied tool stays denied under bypass; a tick survives reload.
+
+## Reconciliation and verification pass (integration)
+
+Appended, not overwritten — the plans above belong to the tracks that wrote them.
+
+This pass built no features. It reconciled three tracks that landed in one tree,
+verified every gate personally, and fixed what verification found.
+
+### Fixed
+
+- [x] **`alembic downgrade base` aborted at 0020.** `0001_initial` builds the schema
+      with `Base.metadata.create_all()`, so a from-empty database already holds every
+      current column by revision 0001 and 0020's guarded upgrade adds neither
+      `workflows.last_dispatched_at` nor `ix_workflows_schedule` — while its downgrade
+      dropped both unconditionally. The downgrade now mirrors the upgrade's guard.
+      Round trip `empty → head → base → head` passes; single head `0032`.
+- [x] **Four `/api/agents` routes had no tenant-isolation case**, failing
+      `test_route_table_matches_the_app`. Added `GET`/`POST /api/agents` (scoped) and
+      `PATCH`/`DELETE /api/agents/{agent_id}` (deny, 404 not 409). Verified by removing
+      the workspace filter from `_load`: exactly the two deny cases fail.
+- [x] **`dashboards.spec.ts` leaked its CSV into every later spec.**
+      `DELETE /api/sources/{id}` is behind an idempotency key its neighbours do not
+      need; the cleanup sent none, the helper reported the rejection to nobody, and
+      `workspace.spec.ts`'s `getByTitle("Delete source")` then matched two buttons.
+      Key added, cleanup now asserts the source is gone, and the loose locator is
+      anchored to its own filename. Verified by re-injecting the leak: dashboards'
+      own cleanup fails, and no innocent spec does.
+- [x] **`workspace.spec.ts` asserted the pre-redesign approval markup.** The Files
+      view now renders `DocumentReview` (per-hunk accept/reject) instead of
+      `.document-pending .tool-card`. Test updated to the new UI and screenshotted.
+- [x] **Three composer placeholders were blanked** when `aria-label`s were added
+      (chat, dashboard editor, workflow composer). The accessible names were the
+      right change; deleting the visible hint was not. All three restored, both
+      properties kept. The workflow one was the only example of a workflow
+      description anywhere in the product.
+- [x] Docs: `docs/ARCHITECTURE.md` (rail now lists Lists; new sections for approval
+      modes, authored agents, todo lists, and what the migration chain does *not*
+      prove), `README.md` (rail + three new capabilities).
+
+### Not done, deliberately
+
+- The `0001_initial` `create_all()` shortcut is left in place. Rewriting it into
+  real DDL would make the chain genuinely testable from empty, but it rewrites
+  committed migration history for every existing deployment. Documented instead.
+- `DashboardGrid.release()`/`nudge()` still call `commit()` from inside a
+  `setTiles` updater — an impure updater, double-invoked under StrictMode.
+  Harmless today because `commit` is debounced. Flagged by the dashboards track,
+  still unfixed, still not mine to change blind.

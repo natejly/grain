@@ -71,7 +71,7 @@ test("a folder is created, holds a file, and says how many", async ({ page }) =>
     .click();
   // The form says where the file will land before it is made, not after.
   await expect(tree(page).getByText(`In ${FOLDER}`)).toBeVisible();
-  await tree(page).getByPlaceholder("Title").fill(FILE);
+  await tree(page).getByRole("textbox", { name: "Title" }).fill(FILE);
   await tree(page).getByRole("button", { name: "Create", exact: true }).click();
 
   // The editor opened on the new file, and the header says which folder it is
@@ -118,7 +118,7 @@ test("a folder holding a file refuses to be deleted, and says what is in it", as
 
   // A file made at the top level, then filed — the other half of the move.
   await tree(page).getByRole("button", { name: "New document" }).click();
-  await tree(page).getByPlaceholder("Title").fill(FILE);
+  await tree(page).getByRole("textbox", { name: "Title" }).fill(FILE);
   await tree(page).getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("heading", { name: FILE })).toBeVisible();
 

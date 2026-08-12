@@ -76,6 +76,7 @@ def _agent_tool_call_out(call: AgentToolCall, conversation_id: str) -> AgentTool
         error=call.error,
         latency_ms=call.latency_ms,
         artifacts=_artifacts(call.artifacts_json),
+        approved_by_mode=call.approved_by_mode,
         created_at=call.created_at,
     )
 

@@ -201,7 +201,6 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
               value={name}
               onChange={(event) => setName(event.target.value)}
               autoComplete="name"
-              placeholder="Ada Lovelace"
             />
           </label>
         )}
@@ -213,7 +212,6 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             autoComplete="email"
-            placeholder="you@example.com"
             required
           />
         </label>
@@ -226,12 +224,10 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoComplete={mode === "signup" ? "new-password" : "current-password"}
-              required
-            />
-            {mode === "signup" && (
-              <span className="field-hint">At least 12 characters.</span>
-            )}
-          </label>
+            required
+          />
+          {mode === "signup" && null}
+        </label>
         )}
 
         {error && (

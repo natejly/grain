@@ -80,13 +80,6 @@ const ENGINE_LABELS: Record<DbEngine, string> = {
   duckdb: "DuckDB file",
 };
 
-const DSN_PLACEHOLDERS: Record<DbEngine, string> = {
-  postgres: "postgresql://user:password@host:5432/dbname",
-  mysql: "mysql://user:password@host:3306/dbname",
-  sqlite: "/absolute/path/to/database.db",
-  duckdb: "/absolute/path/to/warehouse.duckdb",
-};
-
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -132,12 +125,8 @@ function AddConnectionForm({
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="analytics"
             required
           />
-          <span className="field-hint">
-            The agent refers to this database by name in its tools.
-          </span>
         </label>
         <label>
           Engine
@@ -159,12 +148,8 @@ function AddConnectionForm({
         <input
           value={dsn}
           onChange={(event) => setDsn(event.target.value)}
-          placeholder={DSN_PLACEHOLDERS[engine]}
           required
         />
-        <span className="field-hint">
-          Encrypted at rest and never read back — only a redacted summary is shown.
-        </span>
       </label>
 
       <label className="db-toggle">
@@ -173,11 +158,7 @@ function AddConnectionForm({
           checked={readOnly}
           onChange={(event) => setReadOnly(event.target.checked)}
         />
-        Read-only — the agent may query but never write
-        <span className="field-hint">
-          Unchecking lets the agent propose writes, which you approve one statement
-          at a time. Point the connection at a least-privilege database user either way.
-        </span>
+        Read-only
       </label>
 
       <div className="mcp-form-actions">

@@ -27,7 +27,7 @@ test("documents: create, edit, live preview, and version history", async ({ page
   await openView(page, "Files", /^Files/);
 
   await page.getByRole("button", { name: "New document" }).click();
-  await page.getByPlaceholder("Title").fill("Feature Sweep Notes");
+  await page.getByRole("textbox", { name: "Title" }).fill("Feature Sweep Notes");
   await page.locator(".documents-new").getByRole("button", { name: "Create" }).click();
 
   const editor = page.locator(".document-source");
@@ -60,7 +60,7 @@ test("boards: create a board, add cards, and manage columns", async ({ page }) =
   await page.goto("/");
   await openView(page, "Files", /^Boards/);
 
-  await page.getByPlaceholder("New board name").fill("Sweep Board");
+  await page.getByRole("textbox", { name: "Board name" }).fill("Sweep Board");
   await page.locator(".board-new").getByRole("button", { name: /Create/ }).click();
 
   await expect(page.getByRole("heading", { name: "Sweep Board" })).toBeVisible();
@@ -69,7 +69,7 @@ test("boards: create a board, add cards, and manage columns", async ({ page }) =
   await expect(page.getByText("Done", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: /Add card/ }).first().click();
-  await page.getByPlaceholder("Card title").fill("Ship the sweep");
+  await page.getByRole("textbox", { name: "Card title" }).fill("Ship the sweep");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByText("Ship the sweep")).toBeVisible();
 
@@ -92,7 +92,7 @@ test("projects: a web project seeds files and bundles a live preview", async ({ 
   await openView(page, "Files", /^Projects/);
 
   await page.getByRole("button", { name: "New project" }).click();
-  await page.getByPlaceholder("Project name").fill("Sweep App");
+  await page.getByRole("textbox", { name: "Project name" }).fill("Sweep App");
   await page.locator(".projects-new").getByRole("button", { name: "Create" }).click();
 
   // The starter must arrive with files, or there is nothing to bundle.
@@ -141,9 +141,9 @@ test("mcp: the server form renders and validates", async ({ page }) => {
   await expect(page.getByRole("textbox", { name: /^Name/ })).toBeVisible();
   // The transport switch changes which fields are required — the stdio branch
   // asks for a command, the http branch for a URL.
-  await expect(page.getByPlaceholder("npx")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /^Command/ })).toBeVisible();
   await page.getByLabel("Transport").selectOption("http");
-  await expect(page.getByPlaceholder("https://example.com/mcp")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /^URL/ })).toBeVisible();
 
   await page.locator(".content-page").screenshot({
     path: "test-results/feature-mcp.png",

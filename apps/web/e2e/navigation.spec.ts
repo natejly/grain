@@ -61,16 +61,18 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
 
   await openView(page, "Files");
   await expect(page.locator(".documents-layout")).toBeVisible();
-  // The group is Files, and the three siblings that shared it came along. It is
-  // *not* five entries any more: Sandbox left the product's navigation
-  // entirely, and nothing here should offer a way back to it.
-  for (const tab of ["Files", "Projects", "Boards", "Dashboards"]) {
+  // The group is Files, and the siblings that shared it came along. Sandbox is
+  // still not among them: it left the product's navigation entirely, and
+  // nothing here should offer a way back to it. Lists joined, beside Boards
+  // rather than inside them — a todo list is a one-column board, and that is a
+  // detail nobody should have to know to find their checklist.
+  for (const tab of ["Files", "Projects", "Boards", "Lists", "Dashboards"]) {
     // Anchored: "Boards" is a substring of "Dashboards", and the count badge is
     // part of the accessible name, so neither end can be matched loosely.
     await expect(tabs(page, "Files").getByRole("button", { name: new RegExp(`^${tab}`) }))
       .toBeVisible();
   }
-  await expect(tabs(page, "Files").getByRole("button")).toHaveCount(4);
+  await expect(tabs(page, "Files").getByRole("button")).toHaveCount(5);
   await expect(tabs(page, "Files").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
 
   await shot(page, "files");

@@ -135,13 +135,6 @@ export function DashboardEditor({
         <div className="editor-body">
           <div className="editor-chat">
             <div className="editor-log" ref={logRef}>
-              {history.length === 0 && !pending && (
-                <p className="editor-hint">
-                  {datasets.length === 0
-                    ? "Describe the dashboard you want. Upload a CSV or JSON source to give it data."
-                    : "Describe the dashboard you want."}
-                </p>
-              )}
               {history.map((release) => (
                 <Fragment key={release.id}>
                   {release.manifest.prompt && (
@@ -205,6 +198,7 @@ export function DashboardEditor({
                   rows={2}
                   maxLength={4000}
                   disabled={working}
+                  aria-label="Dashboard prompt"
                 />
                 <button
                   className="send-button"

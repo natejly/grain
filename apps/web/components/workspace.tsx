@@ -32,6 +32,7 @@ import {
 import { ProjectsView } from "./views/projects";
 import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
 import { SourcesView } from "./views/sources";
+import { TodosView } from "./views/todos";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
 import { WorkspaceSwitcher } from "./workspace-selection";
@@ -55,7 +56,6 @@ export function Workspace() {
     folders,
     activeDocument,
     documentVersions,
-    boards,
     pendingEdits,
     dbConnections,
     projects,
@@ -92,6 +92,8 @@ export function Workspace() {
     setFocusedDashboard,
     loadWorkspace,
     refreshOffScreenWork,
+    refreshArtifacts,
+    refreshPendingEdits,
     openDocument,
     createDocument,
     saveDocument,
@@ -109,6 +111,9 @@ export function Workspace() {
     removeBoardCard,
     removeBoard,
     boardColumnOps,
+    kanbanBoards,
+    todoLists,
+    todoOps,
     addDbConnection,
     testDbConnection,
     removeDbConnection,
@@ -127,6 +132,7 @@ export function Workspace() {
     newConversation,
     removeConversation,
     decideAgentCall,
+    setApprovalMode,
     cancelActiveRun,
     regenerate,
     submitPrompt,
@@ -154,8 +160,11 @@ export function Workspace() {
   // Always present: this component only renders inside the authenticated gate.
   const { session, signOut } = useSession();
 
-  const activeTitle =
-    conversations.find((item) => item.id === activeConversation)?.title || "New conversation";
+  // The open thread's own row, which is where its approval mode lives. Read
+  // from the rail's list rather than held separately, so the picker and the
+  // bypass indicator cannot disagree about which mode is in force.
+  const activeThread = conversations.find((item) => item.id === activeConversation);
+  const activeTitle = activeThread?.title || "New conversation";
 
   // Per-view badge numbers. A view with no count (Chat, Graph, Activity) is
   // absent: Graph's size is a projection of Sources, so counting it in the
@@ -165,7 +174,10 @@ export function Workspace() {
     memory: memories.length,
     documents: documents.length,
     projects: projects.length,
-    boards: boards.length,
+    // Each tab counts what that tab shows: a one-column board is on Lists,
+    // not here, so counting it twice would make both numbers wrong.
+    boards: kanbanBoards.length,
+    todos: todoLists.length,
     // Both kinds live on that page, so the badge counts both; a number that
     // only counted half of what the page shows is worse than no number.
     dashboards: dashboardApps.length + dashboards.length,
@@ -461,6 +473,13 @@ export function Workspace() {
             decideAgentCall={decideAgentCall}
             openCitation={openCitation}
             onAttach={() => setView("sources")}
+            approval={{
+              mode: activeThread?.approval_mode ?? "ask_writes",
+              setMode: setApprovalMode,
+              conversationId: activeConversation,
+              conversationTitle: activeTitle,
+            }}
+            todos={{ lists: todoLists, ops: todoOps }}
             endRef={endRef}
           />
         )}
@@ -540,12 +559,27 @@ export function Workspace() {
             removeDocument={removeDocument}
             pendingEdits={pendingEdits}
             decidePendingEdit={decidePendingEdit}
+            chat={{
+              agentId: bootstrap?.default_agent_id,
+              sources,
+              apps: dashboardApps,
+              openCitation,
+              // The panel's own run finished: re-read the document it was about
+              // and the list its title appears in. The shell's other lists are
+              // deliberately not refreshed from here — a thread scoped to one
+              // document is not a reason to refetch six collections.
+              reloadDocument: async () => {
+                if (activeDocument) await openDocument(activeDocument.id);
+                await refreshArtifacts();
+              },
+              refreshPendingEdits,
+            }}
           />
         )}
 
         {view === "boards" && (
           <BoardView
-            boards={boards}
+            boards={kanbanBoards}
             createBoard={createBoard}
             addCard={addBoardCard}
             moveCard={moveBoardCard}
@@ -554,6 +588,8 @@ export function Workspace() {
             columnOps={boardColumnOps}
           />
         )}
+
+        {view === "todos" && <TodosView lists={todoLists} ops={todoOps} />}
 
         {view === "data" && (
           <DataView

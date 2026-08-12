@@ -129,20 +129,12 @@ export function ProjectsView({
             <input
               value={newName}
               onChange={(event) => setNewName(event.target.value)}
-              placeholder="Project name"
+              aria-label="Project name"
               autoFocus
             />
             <button type="submit" className="primary-button">
               Create
             </button>
-            <span className="field-hint">
-              {newKind === "latex"
-                ? "Starts from a document that already compiles. TeX Live runs in " +
-                  "your browser with a core package set — tikz and beamer are not " +
-                  "included."
-                : "Starts from a React file that already renders. Only react and " +
-                  "react-dom are available — there is no package install."}
-            </span>
           </form>
         )}
 
@@ -197,7 +189,7 @@ export function ProjectsView({
                 <input
                   value={newPath}
                   onChange={(event) => setNewPath(event.target.value)}
-                  placeholder="components/Chart.tsx"
+                  aria-label="File path"
                   autoFocus
                 />
               </form>

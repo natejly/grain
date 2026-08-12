@@ -157,7 +157,7 @@ export function CeilingEditor({ idPrefix, budget, onSaved }: CeilingEditorProps)
               budget.ceiling.window_hours,
             )}. This window: ${formatCount(budget.spend.total_tokens)} tokens, ` +
             `${spend.kind === "unknown" ? "nothing priced" : `${spend.label} spent`}.`
-          : "No limit is set, so nothing stops a runaway loop. Leave a field empty for no limit of that kind."}
+          : "No limit set."}
       </p>
 
       <div className="budget-fields">
@@ -169,7 +169,6 @@ export function CeilingEditor({ idPrefix, budget, onSaved }: CeilingEditorProps)
             min={0}
             step="0.01"
             inputMode="decimal"
-            placeholder="No limit"
             value={draft.usd}
             onChange={(event) => setDraft({ ...draft, usd: event.target.value })}
           />
@@ -182,7 +181,6 @@ export function CeilingEditor({ idPrefix, budget, onSaved }: CeilingEditorProps)
             min={0}
             step={1000}
             inputMode="numeric"
-            placeholder="No limit"
             value={draft.tokens}
             onChange={(event) => setDraft({ ...draft, tokens: event.target.value })}
           />

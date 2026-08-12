@@ -1,19 +1,18 @@
 "use client";
 
+import type { PendingDocumentEdit } from "@workspace/api-client";
 import { Check, GitPullRequestArrow, X } from "lucide-react";
 import { useState } from "react";
 
-/** One agent write parked on approval, from GET /api/documents-pending. */
-export type PendingDocumentEdit = {
-  id: string;
-  run_id: string;
-  name: string;
-  /** Empty for a create, or when the model named a document that doesn't exist. */
-  document_id: string;
-  title: string;
-  proposal_preview: string;
-  created_at: string;
-};
+/**
+ * One agent write parked on approval, from GET /api/documents-pending.
+ *
+ * Re-exported rather than redeclared. It was a second, structurally identical
+ * copy of the client's type until the server started sending `segments` — at
+ * which point the copy was simply wrong, and every consumer that imported it
+ * from here could not see the field the inline review is built from.
+ */
+export type { PendingDocumentEdit };
 
 export type PendingDecision = (
   edit: PendingDocumentEdit,

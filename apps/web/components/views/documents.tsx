@@ -1,22 +1,37 @@
 "use client";
 
-import { FileText, History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import {
+  FileText,
+  History,
+  MessageSquare,
+  Plus,
+  RotateCcw,
+  Save,
+  Trash2,
+  X,
+} from "lucide-react";
 import type {
+  Citation,
   DocumentKind,
   DocumentSummary,
   DocumentVersion,
   Folder,
+  GeneratedApp,
+  Source,
   WorkspaceDocument,
 } from "@workspace/api-client";
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { useDocumentThread } from "../use-document-thread";
+import { ChatView } from "./chat";
 import {
   PendingEditList,
   type PendingDecision,
   type PendingDocumentEdit,
 } from "./document-pending";
+import { DocumentReview, type HunkDecision } from "./document-review";
 import { FileTree, type FolderOps } from "./file-tree";
 import { folderPath } from "./folder-tree";
 import { DOCUMENT_KIND_LABELS } from "./shared";
@@ -34,7 +49,25 @@ export type DocumentsViewProps = {
   removeDocument: (document: DocumentSummary) => Promise<void>;
   /** Agent writes awaiting approval; optional until the workspace wires them. */
   pendingEdits?: PendingDocumentEdit[];
-  decidePendingEdit?: PendingDecision;
+  decidePendingEdit?: HunkDecision & PendingDecision;
+  /** What the side chat needs to be the same chat as the rail's. */
+  chat?: DocumentChatDeps;
+};
+
+/**
+ * Everything the panel beside the document needs from the shell. Optional as a
+ * bundle rather than field by field, so a caller either wires the panel or does
+ * not have one — there is no half-wired state where the composer sends into
+ * nothing.
+ */
+export type DocumentChatDeps = {
+  agentId?: string;
+  sources: Source[];
+  apps: GeneratedApp[];
+  /** The shell's provenance drawer, which renders above this panel. */
+  openCitation: (citation: Citation) => Promise<void>;
+  reloadDocument: () => Promise<void>;
+  refreshPendingEdits: () => Promise<void>;
 };
 
 /**
@@ -86,16 +119,34 @@ export function DocumentsView({
   removeDocument,
   pendingEdits,
   decidePendingEdit,
+  chat,
 }: DocumentsViewProps) {
   const [draft, setDraft] = useState("");
   const [dirty, setDirty] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newKind, setNewKind] = useState<DocumentKind>("markdown");
   // Which folder a new file lands in. Set by "New file here" in the tree, so
   // the answer is whatever the user was pointing at rather than always the top.
   const [newFolder, setNewFolder] = useState("");
+
+  /**
+   * The thread lives here rather than inside the panel so that closing the
+   * panel does not abandon a run. Unmounting the panel would take its event
+   * stream with it: the turn would keep going on the server, the write would
+   * still park, and the user would have no card to answer it with.
+   *
+   * Empty document id when the panel is not wired, which is what keeps this
+   * from creating a thread for a caller that has no panel to show it in.
+   */
+  const thread = useDocumentThread({
+    documentId: chat && active ? active.id : "",
+    agentId: chat?.agentId,
+    reloadDocument: chat?.reloadDocument ?? (async () => undefined),
+    refreshPendingEdits: chat?.refreshPendingEdits ?? (async () => undefined),
+  });
 
   // The agent edits documents underneath us, so re-sync whenever the loaded
   // document changes identity or content — unless the user has unsaved work.
@@ -116,13 +167,29 @@ export function DocumentsView({
     ...(active ? pending.filter((edit) => edit.document_id === active.id) : []),
     ...pending.filter((edit) => edit.name === "create_document"),
   ];
+  /**
+   * The one proposal the inline reviewer owns: an edit to the open document
+   * that the server broke into hunks. Everything else — a create, a target that
+   * no longer resolves, a `find` that has gone stale, a document too long to
+   * ship line by line — arrives with no segments and keeps the all-or-nothing
+   * card, which is the honest offer when there is nothing to review piecewise.
+   */
+  const reviewable = decidePendingEdit
+    ? proposals.find(
+        (edit) =>
+          edit.name === "edit_document" &&
+          edit.document_id === active?.id &&
+          edit.segments.length > 0,
+      )
+    : undefined;
+  const carded = proposals.filter((edit) => edit.id !== reviewable?.id);
   const approvals =
-    decidePendingEdit && proposals.length > 0 ? (
-      <PendingEditList edits={proposals} decide={decidePendingEdit} />
+    decidePendingEdit && carded.length > 0 ? (
+      <PendingEditList edits={carded} decide={decidePendingEdit} />
     ) : null;
 
   return (
-    <div className="documents-layout">
+    <div className={showChat && chat ? "documents-layout with-chat" : "documents-layout"}>
       <aside className="documents-list">
         <div className="documents-list-head">
           <span>Files</span>
@@ -159,11 +226,12 @@ export function DocumentsView({
             <input
               value={newTitle}
               onChange={(event) => setNewTitle(event.target.value)}
-              placeholder="Title"
+              aria-label="Title"
               autoFocus
             />
             <select
               value={newKind}
+              aria-label="Format"
               onChange={(event) => setNewKind(event.target.value as DocumentKind)}
             >
               {Object.entries(DOCUMENT_KIND_LABELS).map(([value, label]) => (
@@ -204,6 +272,15 @@ export function DocumentsView({
               </span>
             </div>
             <div className="document-actions">
+              {chat && (
+                <button
+                  className="ghost-button"
+                  aria-pressed={showChat}
+                  onClick={() => setShowChat((value) => !value)}
+                >
+                  <MessageSquare size={14} /> Chat
+                </button>
+              )}
               <button
                 className="ghost-button"
                 onClick={() => setShowHistory((value) => !value)}
@@ -263,20 +340,29 @@ export function DocumentsView({
 
           {approvals}
 
-          <div className="document-panes">
-            <textarea
-              className="document-source"
-              value={draft}
-              spellCheck
-              onChange={(event) => {
-                setDraft(event.target.value);
-                setDirty(true);
-              }}
-            />
-            <div className="document-preview">
-              <DocumentBody kind={active.kind} content={draft} />
+          {/* The reviewer replaces the editor rather than sitting above it. The
+              document is mid-proposal: an editable textarea beside it would let
+              a user type into text the agent is asking to change, and whichever
+              of the two writes last would silently win. */}
+          {reviewable && decidePendingEdit ? (
+            <DocumentReview edit={reviewable} decide={decidePendingEdit} />
+          ) : (
+            <div className="document-panes">
+              <textarea
+                className="document-source"
+                value={draft}
+                spellCheck
+                aria-label="Document source"
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                  setDirty(true);
+                }}
+              />
+              <div className="document-preview">
+                <DocumentBody kind={active.kind} content={draft} />
+              </div>
             </div>
-          </div>
+          )}
         </section>
       ) : (
         <section className={approvals ? "document-editor" : "document-editor empty"}>
@@ -287,6 +373,54 @@ export function DocumentsView({
             </div>
           )}
         </section>
+      )}
+
+      {showChat && chat && active && (
+        <aside className="document-chat" aria-label={`Chat about ${active.title}`}>
+          <div className="document-chat-head">
+            <strong>Chat about this document</strong>
+            <button
+              className="icon-button"
+              onClick={() => setShowChat(false)}
+              aria-label="Close document chat"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          {thread.error && (
+            <div className="tool-error" role="alert">
+              {thread.error}
+            </div>
+          )}
+          {/* The same view the rail renders, at compact density. Reused rather
+              than rebuilt: streaming, tool cards, approvals, the budget hold
+              and the citation verdict are one implementation, so the panel
+              cannot fall behind Chat by a bug fix. */}
+          <ChatView
+            messages={thread.messages}
+            sources={chat.sources}
+            // Only what the inline reviewer is not already holding. Offering
+            // Approve twice for one call, in two places on the same screen,
+            // means one of them is stale the moment the other is pressed.
+            agentCalls={thread.agentCalls.filter((call) => call.id !== reviewable?.id)}
+            apps={chat.apps}
+            draft={thread.draft}
+            setDraft={thread.setDraft}
+            activeRun={thread.activeRun}
+            runStatus={thread.runStatus}
+            budgetPark={thread.budgetPark}
+            submitPrompt={thread.submitPrompt}
+            cancelActiveRun={thread.cancelActiveRun}
+            regenerate={thread.regenerate}
+            decideAgentCall={thread.decideAgentCall}
+            openCitation={chat.openCitation}
+            // No paperclip. Attaching a source navigates to the Knowledge view,
+            // which would close the document this panel is about — a button
+            // that throws away the thing you were doing is worse than no
+            // button, so ChatView omits it when no handler is given.
+            endRef={thread.endRef}
+          />
+        </aside>
       )}
     </div>
   );

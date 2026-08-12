@@ -66,9 +66,29 @@ export type Bootstrap = {
 export type Conversation = {
   id: string;
   title: string;
+  /**
+   * The document this thread belongs to, or "" for an ordinary chat.
+   *
+   * `listConversations` only ever returns the empty case — a document's thread
+   * is reached through its document, not through the rail — so this is the one
+   * field on a Conversation that says which of the two surfaces it came from.
+   */
+  document_id: string;
+  approval_mode: ApprovalMode;
   created_at: string;
   updated_at: string;
 };
+
+/**
+ * How much one thread asks before acting. Per conversation, never per
+ * workspace: a bypass switched on to get through one refactor must not still
+ * be on next week, governing chats nobody turned it on for.
+ *
+ * - `ask_writes` — read-only tools run, writes park. The default.
+ * - `ask_all` — everything parks, searches included.
+ * - `auto_writes` — writes execute unattended. The bypass.
+ */
+export type ApprovalMode = "ask_writes" | "ask_all" | "auto_writes";
 
 export type Citation = {
   chunk_id: string;
@@ -200,6 +220,16 @@ export type AgentToolCall = {
   latency_ms: number;
   /** Files the call left behind — the chart a `run_python` call drew. */
   artifacts: ToolArtifact[];
+  /**
+   * The approval mode that let this call run with nobody looking — the string
+   * `"auto_writes"` — or "" when a person, a standing policy or the tool's own
+   * read-only default decided it.
+   *
+   * The mode and never the decider's id: this is what makes a bypassed thread
+   * readable in the conversation, so a user can see which writes went through
+   * unreviewed without opening an audit table.
+   */
+  approved_by_mode: string;
   created_at: string;
 };
 
@@ -260,6 +290,12 @@ export type BoardCard = {
   title: string;
   body: string;
   labels: string[];
+  /**
+   * Ticked off. Every card carries it, not only the ones a one-column board
+   * draws as checkboxes — which is what lets a checked item graduate into a
+   * kanban card by growing a second column, same id, tick intact.
+   */
+  done: boolean;
 };
 
 export type BoardColumn = {
@@ -272,6 +308,33 @@ export type Board = {
   id: string;
   name: string;
   columns: BoardColumn[];
+};
+
+/**
+ * A todo list, as the API returns one.
+ *
+ * A list is a board with exactly one column — derived, not stored — so nearly
+ * everything you can do to one is done through the board routes above. Only
+ * two operations have no board equivalent, and they are the only two this
+ * client carries: making a list (`createTodoList`, which knows the shape a list
+ * has to be born in) and ticking an item off without naming its board
+ * (`setTodoItemDone`).
+ */
+export type TodoList = {
+  id: string;
+  name: string;
+  items: TodoItem[];
+};
+
+export type TodoItem = {
+  id: string;
+  /** Carried on the item because the route that ticks one does not take it. */
+  list_id: string;
+  title: string;
+  body: string;
+  done: boolean;
+  /** When it was ticked, or null while it is open. */
+  done_at: string | null;
 };
 
 export type DbEngine = "postgres" | "mysql" | "sqlite" | "duckdb";
@@ -354,6 +417,20 @@ export type WorkspaceProject = {
   updated_at: string;
 };
 
+/**
+ * One stretch of a document, as it is now and as a proposal wants it.
+ *
+ * `index` is -1 for a stretch the edit does not touch, and otherwise the hunk
+ * number `decideAgentToolCall` accepts by. The segments cover the whole
+ * document in order, which is what lets a client render the text and the
+ * proposal as one thing rather than as a document and a diff card beside it.
+ */
+export type ReviewSegment = {
+  index: number;
+  before: string[];
+  after: string[];
+};
+
 /** A document write the agent proposed and the user has not decided yet. */
 export type PendingDocumentEdit = {
   id: string;
@@ -362,6 +439,13 @@ export type PendingDocumentEdit = {
   document_id: string;
   title: string;
   proposal_preview: string;
+  /**
+   * Empty when there is nothing to review hunk by hunk — a create, a target
+   * that no longer resolves, a `find` that no longer matches, or a document too
+   * long to ship line by line. Empty is the signal to fall back to the
+   * all-or-nothing card rather than to render a document with no decisions.
+   */
+  segments: ReviewSegment[];
   created_at: string;
 };
 
@@ -1310,6 +1394,38 @@ export class WorkspaceApi {
     );
   }
 
+  /**
+   * The thread for the chat panel beside a document, created on first open.
+   *
+   * A POST that carries no `Idempotency-Key` on purpose — the document id *is*
+   * the key. There is one thread per document, so a retry, a second tab and a
+   * React remount all land on the same conversation, and nothing here needs the
+   * caller to remember a nonce. Passing `false` for `mutation` is what keeps a
+   * fresh key from being minted per call for an operation that cannot double.
+   */
+  documentConversation(documentId: string): Promise<Conversation> {
+    return this.request(
+      `/api/documents/${documentId}/conversation`,
+      { method: "POST" },
+      false,
+    );
+  }
+
+  /**
+   * Change how much this thread asks before acting.
+   *
+   * A PUT of a value rather than the creation of one, so a retry lands on the
+   * same state by construction and no `Idempotency-Key` rides along — the
+   * server audits every call, including the no-op, which is the correct record
+   * of a request that really was made twice.
+   */
+  setApprovalMode(conversationId: string, mode: ApprovalMode): Promise<Conversation> {
+    return this.request(`/api/conversations/${conversationId}/approval-mode`, {
+      method: "PUT",
+      body: JSON.stringify({ mode }),
+    });
+  }
+
   deleteConversation(conversationId: string): Promise<void> {
     return this.request(
       `/api/conversations/${conversationId}`,
@@ -1416,26 +1532,32 @@ export class WorkspaceApi {
   }
 
   /**
-   * Approve or deny a parked agent tool call; `remember` stores it as a policy.
+   * What a reviewer changed about the call before allowing it.
    *
-   * `inputs` carries the values a person typed into a paused manual node, which
-   * the server validates against that node's declared fields and turns into its
-   * output. It rides only when supplied and is ignored for a real tool
-   * approval, so the two decisions travel one endpoint without a second shape.
+   * Both fields say the same kind of thing — the human's answer is not simply
+   * yes to what the model asked — which is why they travel together rather than
+   * as two more positional arguments. `inputs` carries the values typed into a
+   * paused manual node, which the server validates against that node's declared
+   * fields and turns into its output. `accepted_hunks` names the changes of a
+   * document edit the reviewer took, by the `index` on `ReviewSegment`; omitting
+   * it means the proposal was taken whole. The server records the amendment
+   * without rewriting `arguments_json`, so the audit row keeps saying what the
+   * model asked for and the amendment says what the human allowed.
    */
   decideAgentToolCall(
     toolCallId: string,
     decision: "approved" | "denied",
     remember = false,
-    inputs?: Record<string, unknown>,
+    amendment: {
+      inputs?: Record<string, unknown>;
+      accepted_hunks?: number[];
+    } = {},
   ): Promise<AgentToolCall> {
     return this.request(
       `/api/agent-tool-calls/${toolCallId}/decision`,
       {
         method: "POST",
-        body: JSON.stringify(
-          inputs === undefined ? { decision, remember } : { decision, remember, inputs },
-        ),
+        body: JSON.stringify({ decision, remember, ...amendment }),
       },
       true,
     );
@@ -1580,6 +1702,37 @@ export class WorkspaceApi {
 
   deleteBoard(boardId: string): Promise<void> {
     return this.request(`/api/boards/${boardId}`, { method: "DELETE" }, true);
+  }
+
+  /**
+   * Start a todo list — a board born with the single column that shape needs.
+   *
+   * Through `/api/todos` rather than `createBoard(name, ["To do"])` so the
+   * column a list is made with is named on the server and nowhere else; a
+   * client that spelled it would be a second definition of what a list is.
+   */
+  createTodoList(name: string): Promise<TodoList> {
+    return this.request(
+      "/api/todos",
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
+  }
+
+  /**
+   * Tick an item off, or reopen it. Takes no board id, which is the entire
+   * point: checking something off should not require knowing which list it
+   * came from, and that is the one interaction a kanban cannot offer.
+   *
+   * Returns the item rather than its list, so a long list does not get slower
+   * to tick the longer it gets.
+   */
+  setTodoItemDone(itemId: string, done: boolean): Promise<TodoItem> {
+    return this.request(
+      `/api/todos/items/${itemId}`,
+      { method: "PATCH", body: JSON.stringify({ done }) },
+      true,
+    );
   }
 
   listDbConnections(): Promise<DbConnection[]> {

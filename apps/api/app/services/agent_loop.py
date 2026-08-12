@@ -10,7 +10,15 @@ from sqlalchemy.orm import Session
 
 from ..clock import utcnow
 from ..config import Settings, get_settings
-from ..models import AgentToolCall, Conversation, Document, Run, ToolPolicy, WorkflowRun
+from ..models import (
+    MODE_DECIDER_PREFIX,
+    AgentToolCall,
+    Conversation,
+    Document,
+    Run,
+    ToolPolicy,
+    WorkflowRun,
+)
 from . import budget, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
@@ -255,10 +263,65 @@ PolicyScope = Literal["chat", "workflow"]
 CHAT_SCOPE: PolicyScope = "chat"
 WORKFLOW_SCOPE: PolicyScope = "workflow"
 
+#: How much one *conversation* wants to be asked. Held on `Conversation`, read
+#: by `evaluate_policy`, and only ever consulted at `chat` scope.
+#:
+#: - ``ask_writes``   read-only tools run, write-capable tools park. The default,
+#:                    and the only mode a thread has until somebody says otherwise.
+#: - ``ask_all``      everything parks, read-only searches included, for a thread
+#:                    working somewhere sensitive enough to want each look first.
+#: - ``auto_writes``  writes execute without parking. The bypass.
+ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes"]
 
-def resolve_policy(
-    db: Session, *, workspace_id: str, spec: Optional[ToolSpec], scope: PolicyScope
-) -> str:
+ASK_WRITES: ApprovalMode = "ask_writes"
+ASK_ALL: ApprovalMode = "ask_all"
+AUTO_WRITES: ApprovalMode = "auto_writes"
+
+APPROVAL_MODES: Tuple[ApprovalMode, ...] = (ASK_WRITES, ASK_ALL, AUTO_WRITES)
+
+#: `MODE_DECIDER_PREFIX` is the prefix `AgentToolCall.decided_by` carries when a
+#: *mode* let a call through. The column otherwise holds a user id, and ids here
+#: are uuid4 hex with no colon in them, so nothing a person could be called
+#: collides with it. It is defined beside the column, in `models`, because
+#: `AgentToolCall.approved_by_mode` reads it back out — one prefix, written in
+#: one place and parsed in one place. Re-exported here because this module is
+#: where the rule that writes it lives.
+
+
+def mode_decider(mode: str) -> str:
+    """`decided_by` for a call that a mode approved. "" when a mode did not.
+
+    Property 3 of the approval modes, in one function: a row that names a *user*
+    as the decider of a write nobody looked at is worse than a row that names
+    nobody, because a reader who audits it later has no way to tell it apart
+    from a write that really was reviewed. So the bypass writes down what
+    actually happened — the mode is the decider, and it is spelled as one.
+    """
+    return f"{MODE_DECIDER_PREFIX}{mode}" if mode else ""
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """What the policy said, and whether a conversation's mode is what said it."""
+
+    #: ask | allow | deny.
+    policy: str
+    #: The mode that produced this verdict, when a mode is what produced it, and
+    #: "" when a policy row or the tool's own default did. Set for exactly one
+    #: transition — a bypass turning an approval park into an execution — because
+    #: that is the only case in which a write happens and no person ever sees it.
+    #: `AgentToolCall.decided_by` is stamped from it.
+    by_mode: str = ""
+
+
+def evaluate_policy(
+    db: Session,
+    *,
+    workspace_id: str,
+    spec: Optional[ToolSpec],
+    scope: PolicyScope,
+    mode: ApprovalMode = ASK_WRITES,
+) -> Verdict:
     """ask | allow | deny for one tool in one situation. The only decision point.
 
     Without an override, read-only tools run unattended and write-capable tools
@@ -285,23 +348,119 @@ def resolve_policy(
     authorise a 3am scheduled run to send mail. Getting that authority requires
     granting it at `workflow` scope, where the question being answered is the
     question actually being asked.
+
+    `mode` is the conversation's own answer to "how much do you want to be
+    asked", and it is applied last, on top of everything above, under two rules
+    that are the whole safety argument for having a bypass at all:
+
+    - **It is ignored unless `scope` is chat.** A mode is stored on a
+      conversation, and a workflow's backing Run carries a conversation too (the
+      executor makes one to hold the transcript), so without this line a mode set
+      while typing could reach an unattended 3am run through the back door the
+      chat|workflow split was built to close. `mode` defaults to `ask_writes` for
+      the same reason `scope` has no default at all: the forgetful call site
+      gets the narrow answer.
+    - **A `deny` stays denied**, in every mode. A prohibition is not a grant, and
+      the bypass is permission to skip *asking*, not permission to overrule a
+      refusal. An `ask` row is different in kind — it is a request to be asked,
+      and the mode is the conversation answering that request in advance — so
+      `auto_writes` does clear one, while nothing clears a deny.
     """
     if spec is None:
-        return "allow"
-    rows = list(
-        db.scalars(
-            select(ToolPolicy).where(
-                ToolPolicy.workspace_id == workspace_id,
-                ToolPolicy.tool_name == spec.name,
+        base = "allow"
+    else:
+        rows = list(
+            db.scalars(
+                select(ToolPolicy).where(
+                    ToolPolicy.workspace_id == workspace_id,
+                    ToolPolicy.tool_name == spec.name,
+                )
             )
         )
-    )
-    valid = {row.scope: row.policy for row in rows if row.policy in {"ask", "allow", "deny"}}
-    if scope in valid:
-        return valid[scope]
-    if valid.get(CHAT_SCOPE) == "deny":
-        return "deny"
-    return "allow" if spec.read_only else "ask"
+        valid = {
+            row.scope: row.policy for row in rows if row.policy in {"ask", "allow", "deny"}
+        }
+        if scope in valid:
+            base = valid[scope]
+        elif valid.get(CHAT_SCOPE) == "deny":
+            base = "deny"
+        else:
+            base = "allow" if spec.read_only else "ask"
+
+    if scope != CHAT_SCOPE or mode == ASK_WRITES or base == "deny":
+        return Verdict(policy=base)
+    if mode == ASK_ALL:
+        return Verdict(policy="ask")
+    # auto_writes. `by_mode` is set only where the mode changed the answer: a
+    # tool a row already allowed was not let through by the bypass, and saying it
+    # was would put a claim on the audit row that the policy table contradicts.
+    return Verdict(policy="allow", by_mode=AUTO_WRITES if base == "ask" else "")
+
+
+def resolve_policy(
+    db: Session,
+    *,
+    workspace_id: str,
+    spec: Optional[ToolSpec],
+    scope: PolicyScope,
+    mode: ApprovalMode = ASK_WRITES,
+) -> str:
+    """`evaluate_policy`'s verdict, as the bare string most callers want.
+
+    Not a second decision point — there is still exactly one, immediately above.
+    This is its narrow face, kept because every caller but the agent loop only
+    ever compares the verdict to "ask" / "deny", and asking them to reach through
+    a dataclass to do that would buy nothing. The loop uses the wide one, because
+    it is the only caller that also has to record *who* decided.
+    """
+    return evaluate_policy(
+        db, workspace_id=workspace_id, spec=spec, scope=scope, mode=mode
+    ).policy
+
+
+def approval_mode_for_run(
+    db: Session, run: Run, *, scope: PolicyScope
+) -> ApprovalMode:
+    """The mode governing this run's next tool call.
+
+    Read at each decision rather than once per turn, so switching a thread out of
+    bypass is felt by the very next call the model makes instead of the next
+    turn the user sends.
+
+    Anything that is not a chat run resolves to `ask_writes` here, and that is
+    the first of the two locks on property 1 (the second is in `evaluate_policy`,
+    which ignores the mode at workflow scope regardless of what it is handed). A
+    workflow's backing Run has a Conversation of its own, so a single missing
+    guard would let a mode reach a run nobody is watching.
+    """
+    if scope != CHAT_SCOPE or not run.conversation_id:
+        return ASK_WRITES
+    conversation = db.get(Conversation, run.conversation_id)
+    if conversation is None or conversation.workspace_id != run.workspace_id:
+        return ASK_WRITES
+    # Refreshed rather than trusted, for the same reason `_drain_pending`
+    # refreshes the run a few lines earlier: turning the bypass back off is a
+    # safety switch, and one that waits for the current turn to finish is not
+    # one. Sessions here are opened with `expire_on_commit=False`, so a
+    # Conversation still resident in the identity map would keep answering with
+    # whatever it said when the turn began — for all six iterations of it.
+    #
+    # As written today that cannot happen, because the identity map's references
+    # are weak and this function drops the only strong one before it returns. So
+    # this line changes no behaviour; it is what stops the behaviour from being
+    # an accident of garbage collection that any future caller holding on to a
+    # Conversation would silently undo.
+    #
+    # No guard for a conversation deleted mid-turn: purging one deletes its runs
+    # too, and the `db.refresh(run)` above reaches that first.
+    db.refresh(conversation)
+    # Spelled out rather than cast: a column holding a value this enum has since
+    # dropped must land on the strict mode, not on whatever it says.
+    if conversation.approval_mode == ASK_ALL:
+        return ASK_ALL
+    if conversation.approval_mode == AUTO_WRITES:
+        return AUTO_WRITES
+    return ASK_WRITES
 
 
 def _billing_operation(scope: PolicyScope) -> str:
@@ -491,7 +650,16 @@ def execute_agent_tool_call(
     *,
     existing_id: Optional[str] = None,
     denied: bool = False,
+    decided_by: str = "",
 ) -> ToolResult:
+    """Run one tool call and record it.
+
+    `decided_by` names whoever authorised a call that skipped the approval park —
+    in practice `mode_decider(...)`, since a call a *person* decided was already
+    stamped by the decision endpoint. Left empty for the ordinary case of a tool
+    whose policy never asked, where an unset `decided_at` is the true statement:
+    there was no decision to make.
+    """
     started = time.monotonic()
     record = db.get(AgentToolCall, existing_id) if existing_id else None
     if record is None:
@@ -503,6 +671,9 @@ def execute_agent_tool_call(
         )
         db.add(record)
         db.flush()
+    if decided_by:
+        record.decided_by = decided_by
+        record.decided_at = utcnow()
     append_event(
         db,
         workspace_id=run.workspace_id,
@@ -568,7 +739,14 @@ def execute_agent_tool_call(
         action="agent_tool.executed",
         resource_type="agent_tool_call",
         resource_id=record.id,
-        detail={"tool": name, "status": record.status},
+        detail={
+            "tool": name,
+            "status": record.status,
+            # Only present when something other than a human authorised the
+            # call, which is the fact an audit of a bypassed thread is looking
+            # for. Absent means the ordinary path.
+            **({"decided_by": decided_by} if decided_by else {}),
+        },
     )
     db.commit()
     return result
@@ -611,13 +789,22 @@ def _drain_pending(
         name = str(call.get("name") or "")
         spec = registry.get(name)
         decision = call.get("decision")
+        # A call arriving with a decision already on it was decided by a person
+        # at `POST /api/agent-tool-calls/{id}/decision`, which stamped the row
+        # itself. Nothing left for this path to attribute.
+        decided_by = ""
         if decision is None:
-            policy = resolve_policy(
-                db, workspace_id=run.workspace_id, spec=spec, scope=scope
+            verdict = evaluate_policy(
+                db,
+                workspace_id=run.workspace_id,
+                spec=spec,
+                scope=scope,
+                mode=approval_mode_for_run(db, run, scope=scope),
             )
-            if policy == "ask" and spec is not None:
+            if verdict.policy == "ask" and spec is not None:
                 return _park_for_approval(db, run, state, call, spec, context)
-            decision = "denied" if policy == "deny" else "approved"
+            decision = "denied" if verdict.policy == "deny" else "approved"
+            decided_by = mode_decider(verdict.by_mode)
         result = execute_agent_tool_call(
             db,
             run,
@@ -627,6 +814,7 @@ def _drain_pending(
             _amended(str(call.get("arguments") or "{}"), call.get("amendment")),
             existing_id=call.get("tool_call_id"),
             denied=decision == "denied",
+            decided_by=decided_by,
         )
         state.input_items.append(
             {

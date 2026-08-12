@@ -83,7 +83,6 @@ export function ResetRoute() {
                     autoComplete="new-password"
                     required
                   />
-                  <span className="field-hint">At least 12 characters.</span>
                 </label>
                 <label>
                   Confirm password

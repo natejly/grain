@@ -18,7 +18,7 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
   await page.getByRole("button", { name: "Chat", exact: true }).click();
-  const composer = page.getByPlaceholder("Ask your workspace…");
+  const composer = page.getByRole("textbox", { name: "Message" });
   await composer.fill("Who owns Project Northstar?");
   await composer.press("Enter");
   const citation = page.getByRole("button", { name: /northstar-e2e\.md/ });
@@ -40,7 +40,10 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
 
   await openView(page, "Knowledge", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByTitle("Delete source").click();
+  // Named, not "the delete button": the title is identical on every row, so the
+  // bare locator only works while this spec's upload is the workspace's only
+  // source — which makes an unrelated file's leak fail *this* test.
+  await page.getByRole("button", { name: "Delete northstar-e2e.md" }).click();
   await expect(page.getByText("northstar-e2e.md")).toHaveCount(0);
 });
 
@@ -66,7 +69,7 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
   await expect(chip).toBeVisible();
   await expect(chip).toHaveAttribute("aria-pressed", "true");
 
-  const composer = page.getByPlaceholder("Describe this dashboard…");
+  const composer = page.getByRole("textbox", { name: "Dashboard prompt" });
   await composer.fill("Show revenue by team");
   await composer.press("Enter");
 
@@ -92,9 +95,7 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
 });
 
 function chatComposer(page: Page) {
-  // The placeholder tracks whether the workspace has an indexed source, which
-  // earlier tests change; either wording is the same box.
-  return page.getByPlaceholder(/Ask your workspace|Upload a source/);
+  return page.getByRole("textbox", { name: "Message" });
 }
 
 /**
@@ -201,14 +202,20 @@ test("a parked write is decidable from the Files view", async ({ page }) => {
   // user again beside the document it would change.
   await page.reload();
   await openPlaybook(page);
-  const panel = page.locator(".document-pending .tool-card");
-  await expect(panel).toContainText("The assistant wants to edit");
-  await expect(panel).toContainText("Rollback Playbook");
+  // The write is now decided hunk by hunk, in the document itself, rather than
+  // accepted whole from a card beside it — so the panel to find is the review
+  // section, and the diff lines carry no +/- prefix because the accept state is
+  // on the hunk rather than in the text.
+  const panel = page.getByRole("region", { name: "Proposed changes" });
+  await expect(panel).toContainText("1 proposed change");
+  // The title belongs to the editor the panel is docked in: the point of this
+  // test is that the diff found the user *beside the document it changes*.
+  await expect(page.getByRole("heading", { name: "Rollback Playbook" })).toBeVisible();
   await expect(panel.locator(".diff-line.del")).toHaveText(
-    "-Page the on-call engineer.",
+    "Page the on-call engineer.",
   );
   await expect(panel.locator(".diff-line.add")).toHaveText(
-    "+Page the on-call engineer in the payments rotation.",
+    "Page the on-call engineer in the payments rotation.",
   );
   // The panel is a diff, two buttons and the document underneath it, and every
   // assertion above passes just as well when they are stacked unreadably. It is
@@ -216,8 +223,8 @@ test("a parked write is decidable from the Files view", async ({ page }) => {
   // is where a second card would be seen rather than only counted.
   await page.screenshot({ path: "test-results/document-parked-write.png", fullPage: true });
 
-  await panel.getByRole("button", { name: "Approve" }).click();
-  await expect(page.locator(".document-pending")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Apply 1 of 1 change" }).click();
+  await expect(page.locator(".document-review")).toHaveCount(0);
 
   // No reload: the handler follows the run's event stream and refetches once the
   // tool reports completion, so the open editor picks the write up on its own.

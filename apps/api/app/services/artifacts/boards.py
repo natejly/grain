@@ -338,6 +338,11 @@ def snapshot(db: Session, board: Board) -> Dict[str, Any]:
                 "title": card.title,
                 "body": card.body,
                 "labels": _labels(card),
+                # Every card carries it, not only the ones a todo list draws as
+                # checkboxes — see services/artifacts/todos.py. Reported here so
+                # that an item ticked off as a todo is still visibly done after
+                # its board grows a second column and becomes a kanban.
+                "done": card.done_at is not None,
             }
         )
     return {

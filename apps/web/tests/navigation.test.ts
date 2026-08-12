@@ -89,6 +89,10 @@ describe("navigation model", () => {
       "documents",
       "projects",
       "boards",
+      // Beside Boards, not inside them: a list is a board with one column, and
+      // that is an implementation detail nobody should have to know to find
+      // their checklist.
+      "todos",
       "dashboards",
     ]);
     // And the tab a user clicks says Files too, so the rail and the strip do

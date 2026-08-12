@@ -22,6 +22,7 @@ from ..models import (
     new_id,
 )
 from ..schemas import (
+    ApprovalModeRequest,
     CitationCheck,
     ConversationCreate,
     ConversationOut,
@@ -177,6 +178,52 @@ def document_conversation(
             resource_id=conversation.id,
             detail={"title": conversation.title, "document_id": document.id},
         )
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
+@router.put(
+    "/conversations/{conversation_id}/approval-mode", response_model=ConversationOut
+)
+def set_approval_mode(
+    conversation_id: str,
+    payload: ApprovalModeRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> Conversation:
+    """Change how much this thread asks before acting.
+
+    Audited on every call, including the no-op where the mode is already what
+    was asked for. Turning the approval park off is the single most consequential
+    switch in the product — it is the containment that prompt injection has to
+    get past — so "when did this thread stop asking, and who stopped it" must
+    have an answer, and an audit that skips the unchanged case is an audit whose
+    silence means two different things.
+
+    No `Idempotency-Key`: this is a PUT of a value, not the creation of one, so a
+    retry lands on the same state by construction. It writes a second audit row,
+    which is the correct record of a request that was actually made twice.
+    """
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.workspace_id == actor.workspace_id,
+        )
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    previous = conversation.approval_mode
+    conversation.approval_mode = payload.mode
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="conversation.approval_mode_set",
+        resource_type="conversation",
+        resource_id=conversation.id,
+        detail={"from": previous, "to": payload.mode},
+    )
     db.commit()
     db.refresh(conversation)
     return conversation

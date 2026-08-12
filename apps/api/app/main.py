@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import (
     admin,
+    agents,
     analytics,
     artifacts,
     audit,
@@ -29,6 +30,7 @@ from .api import (
     sandbox,
     sources,
     system,
+    todos,
     tools,
     workflows,
 )
@@ -93,6 +95,7 @@ async def request_headers(request: Request, call_next):
 app.include_router(auth_router)
 app.include_router(system.router)
 app.include_router(chat.router)
+app.include_router(agents.router)
 app.include_router(sources.router)
 app.include_router(tools.router)
 app.include_router(audit.router)
@@ -103,6 +106,7 @@ app.include_router(mcp.router)
 app.include_router(dbconnect.router)
 app.include_router(artifacts.router)
 app.include_router(board_ops.router)
+app.include_router(todos.router)
 app.include_router(doc_pending.router)
 app.include_router(folders.router)
 app.include_router(projects.router)

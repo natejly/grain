@@ -100,8 +100,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_workflows_schedule", table_name="workflows")
-    op.drop_column("workflows", "last_dispatched_at")
+    # Mirrors the guard on the upgrade, which is not decoration: 0001 builds the
+    # schema with `Base.metadata.create_all`, so a database migrated from empty
+    # already carries `last_dispatched_at` by the time this revision runs and the
+    # upgrade adds neither the column nor the index. Dropping either
+    # unconditionally then aborts `downgrade base` on exactly the databases that
+    # were migrated cleanly from scratch.
+    inspector = sa.inspect(op.get_bind())
+    tables = set(inspector.get_table_names())
+    if "workflows" in tables:
+        indexes = {index["name"] for index in inspector.get_indexes("workflows")}
+        if "ix_workflows_schedule" in indexes:
+            op.drop_index("ix_workflows_schedule", table_name="workflows")
+        columns = {column["name"] for column in inspector.get_columns("workflows")}
+        if "last_dispatched_at" in columns:
+            op.drop_column("workflows", "last_dispatched_at")
 
     # Collapsing two scopes into one key means choosing which grant survives.
     # The chat row wins: it is the one that existed before this migration, and

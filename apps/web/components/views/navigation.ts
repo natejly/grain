@@ -8,6 +8,7 @@ import {
   FileText,
   KanbanSquare,
   Library,
+  ListChecks,
   MessageSquare,
   Network,
   Plug,
@@ -98,6 +99,15 @@ export const NAV_GROUPS: NavGroup[] = [
       { view: "documents", label: "Files", icon: FileText },
       { view: "projects", label: "Projects", icon: Braces },
       { view: "boards", label: "Boards", icon: KanbanSquare },
+      /**
+       * Beside Boards rather than inside them, because a list is a board with
+       * one column and that is an implementation detail nobody should have to
+       * know to find their checklist. A tab of its own is also what makes the
+       * graduation legible in the other direction: add a second column to a
+       * list and it stops appearing here and starts appearing there, same id,
+       * same items, ticks intact.
+       */
+      { view: "todos", label: "Lists", icon: ListChecks },
       { view: "dashboards", label: "Dashboards", icon: BarChart3 },
     ],
   },

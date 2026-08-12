@@ -24,6 +24,28 @@ resumes queued ingestion, and safely retries approved read-only calls. A
 production queue adds transport-level claiming and retry scheduling while using
 the same idempotent task entrypoints.
 
+### What the migration chain does and does not prove
+
+Schema lives in `apps/api/alembic/versions`, single head, one linear chain.
+`alembic upgrade head` against an empty database is verified — but it is worth
+being precise about what that verifies, because it is less than it looks.
+
+`0001_initial` builds the schema with `Base.metadata.create_all()`. An empty
+database therefore arrives at revision 0001 already holding **every table and
+column in the current `models.py`**, and each later revision's `if not exists`
+guard correctly does nothing. So a from-empty upgrade proves `models.py` is
+coherent; it does *not* exercise the incremental DDL, and a migrated-from-empty
+database is not structurally identical to one that upgraded from an older
+deployment.
+
+The visible consequence is that guarded upgrades need equally guarded
+downgrades. `0020` adds `workflows.last_dispatched_at` and `ix_workflows_schedule`
+only when absent — which on a from-empty database is never — while its downgrade
+dropped both unconditionally, so `alembic downgrade base` aborted at 0020 on
+exactly the databases that had been migrated cleanly from scratch. The downgrade
+now mirrors the upgrade's guard, and the full `empty → head → base → head` round
+trip passes.
+
 ## Retrieval
 
 Retrieval is hybrid and on by default: a BM25 arm and a dense (cosine) arm, fused
@@ -248,6 +270,55 @@ afterwards: an *optional* input with no default, and a *required* input with no
 default on a *schedule* trigger (that one does not fail once, it fails every
 Monday).
 
+### Approval modes
+
+`Conversation.approval_mode` lets a *chat* thread run `ask_writes` (the default),
+`auto_writes`, or `read_only`. The rule lives in one place: `evaluate_policy`
+holds it and returns a `Verdict`; `resolve_policy` is its string face and
+delegates, which is why `services/workflows/executor.py` needed no change.
+
+The mode is applied last, on top of scope resolution, and is fenced off from
+unattended execution by two independent locks:
+
+1. `evaluate_policy` ignores `mode` unless `scope == chat`.
+2. `approval_mode_for_run` returns `ask_writes` for anything that is not a chat
+   run.
+
+The second is not redundant. The executor gives every workflow run a
+`Conversation` of its own, so without it a mode set on that row would be the back
+door into workflow scope. Each lock has its own test and a third composed test
+fails only when both are removed.
+
+Two invariants sit above the mode. **`deny` survives every mode** — a
+`tool_policies` row saying no is not overridable by a thread setting. And the
+audit does not lie: `AgentToolCall.decided_by` is stamped `mode:auto_writes`
+rather than a user id, and only where the mode actually *changed* the answer, so
+a tool a standing grant already allowed is not credited to the bypass. The mode
+is re-read per tool call, so switching out of bypass mid-turn parks the very next
+write.
+
+### Agents as authored profiles
+
+An agent is something a person writes, not a row the signup emits (migration
+`0031`): name, description, instructions, and `allowed_tools_json` — the subset
+of the registry it may call, where null means "all tools". `/api/agents` is the
+CRUD surface, and a workflow step may name the agent it runs as.
+
+Deleting or disabling the workspace's **last enabled agent is refused** (409),
+because chat and workflows both need one; the guard sits behind the workspace
+filter, so a cross-tenant request still 404s and never reveals existence through
+a 409.
+
+### Todo lists
+
+A list is **a board with exactly one column** — derived, not stored. There is no
+todo table: `board_cards.done_at` (a nullable timestamp, not a boolean) carries
+the tick, so a ticked item graduates into a kanban card by growing a second
+column, with the same id and the tick intact. Only three routes do what the board
+routes could not: `GET /api/todos`, `POST /api/todos`, and
+`PATCH /api/todos/items/{item_id}`, which deliberately takes no board id.
+Everything else is board machinery reached through the board routes.
+
 ## The shell
 
 One table, `apps/web/components/views/navigation.ts`, describes the whole of
@@ -256,8 +327,8 @@ while the shell still renders. `navigation.test.ts` pins the `View` union and
 that table together.
 
 Groups carry a **surface**. `rail` is the left sidebar — the places you work:
-Chat, Files (Files, Projects, Boards, Dashboards), Knowledge (Sources, Memory,
-Graph), and Workflows. `settings` is the top-right menu — the places you
+Chat, Files (Files, Projects, Boards, Lists, Dashboards), Knowledge (Sources,
+Memory, Graph), and Workflows. `settings` is the top-right menu — the places you
 configure and audit: Connections (Databases, MCP, Integrations), Activity, and
 Admin. A group's siblings are reachable from a tab strip once you are inside it,
 so the rail answers "what am I trying to do" rather than "which subsystem owns

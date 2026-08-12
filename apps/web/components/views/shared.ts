@@ -9,6 +9,7 @@ export type View =
   | "integrations"
   | "documents"
   | "boards"
+  | "todos"
   | "data"
   | "projects"
   | "mcp"
@@ -73,6 +74,7 @@ export const PAGE_TITLES: Record<View, string> = {
   dashboards: "Dashboards",
   documents: "Files",
   boards: "Boards",
+  todos: "Lists",
   data: "Databases",
   projects: "Projects",
   integrations: "Integrations",

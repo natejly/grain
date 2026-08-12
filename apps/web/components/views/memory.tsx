@@ -41,7 +41,6 @@ export function MemoryView({ memories, forgetMemory }: MemoryViewProps) {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search memory"
               aria-label="Search memory"
             />
           </label>
@@ -63,8 +62,7 @@ export function MemoryView({ memories, forgetMemory }: MemoryViewProps) {
           {matches.length === 0 ? (
             <div className="feature-empty">
               <Search size={20} />
-              <strong>No memory matches “{query.trim()}”</strong>
-              <span>Try a name, a topic, or clear the search.</span>
+              <strong>No matches</strong>
             </div>
           ) : (
             <div className="memory-list">

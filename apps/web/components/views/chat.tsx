@@ -2,6 +2,7 @@
 
 import {
   ArrowUp,
+  Ban,
   Check,
   ChevronRight,
   Copy,
@@ -13,9 +14,12 @@ import {
   Square,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import type {
   AgentToolCall,
+  ApprovalMode,
+  Board,
   Citation,
   CitationCheck,
   GeneratedApp,
@@ -28,9 +32,13 @@ import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { ChatDashboardEmbeds } from "../chat-dashboard-embed";
 import { ArtifactImages } from "../source-image";
+import { autoApprovedCalls, isBypass } from "./approval-format";
+import { ApprovalModeControl, BypassIndicator } from "./approval-mode";
 import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
+import { TODO_TOOLS, listForTodoCall } from "./todo-format";
+import { TodoChecklist, type TodoOps } from "./todos";
 
 export type ToolDecision = (
   call: AgentToolCall,
@@ -64,7 +72,31 @@ export type ChatViewProps = {
   regenerate: () => Promise<void>;
   decideAgentCall: ToolDecision;
   openCitation: (citation: Citation) => Promise<void>;
-  onAttach: () => void;
+  /**
+   * Add a source. Omitted where there is nowhere to go: the panel beside a
+   * document would have to leave the document to reach the Knowledge view, so
+   * it shows no paperclip rather than one that discards what you were doing.
+   */
+  onAttach?: () => void;
+  /**
+   * This thread's approval mode, and the way to change it.
+   *
+   * Optional because the mode belongs to a *conversation*, and this component
+   * is also mounted where there is no thread of one's own to govern. Where it
+   * is absent no control renders — rather than a control that reads
+   * "Ask before writes" while governing nothing.
+   */
+  approval?: {
+    mode: ApprovalMode;
+    setMode: (mode: ApprovalMode) => Promise<void>;
+    conversationId: string | null;
+    conversationTitle: string;
+  };
+  /**
+   * The workspace's todo lists, so a turn that touched one can show it as
+   * checkboxes here instead of sending the reader to another page.
+   */
+  todos?: { lists: Board[]; ops: TodoOps };
   endRef: React.RefObject<HTMLDivElement | null>;
 };
 
@@ -197,12 +229,48 @@ function prettyArguments(raw: string): string {
   }
 }
 
+/**
+ * What a finished call's status line says.
+ *
+ * "denied" gets a word and an icon of its own because it has to survive the
+ * bypass: under `auto_writes` a tool a policy forbids is still refused, and a
+ * thread where everything else sails through is exactly where a refusal
+ * rendered as one more grey word would be read as success.
+ */
+function ToolStatus({ call }: { call: AgentToolCall }) {
+  const latency = call.latency_ms > 0 ? ` · ${call.latency_ms}ms` : "";
+  if (call.status === "proposed") return <span className="tool-status">Needs approval</span>;
+  if (call.status === "denied") {
+    return (
+      <span className="tool-status denied">
+        <Ban size={12} aria-hidden="true" /> Denied — not run{latency}
+      </span>
+    );
+  }
+  return (
+    <span className="tool-status">
+      {call.approved_by_mode ? (
+        // The trail, on the call itself. `approved_by_mode` is set by the
+        // server only where the mode changed the answer, so this badge never
+        // appears on a call a standing policy would have allowed anyway.
+        <span className="auto-approved">
+          <Zap size={12} aria-hidden="true" /> Auto-approved
+        </span>
+      ) : null}
+      {call.status}
+      {latency}
+    </span>
+  );
+}
+
 function ToolCallCard({
   call,
   decide,
+  todos,
 }: {
   call: AgentToolCall;
   decide: ToolDecision;
+  todos?: { lists: Board[]; ops: TodoOps };
 }) {
   const [expanded, setExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -211,6 +279,16 @@ function ToolCallCard({
   const args = prettyArguments(call.arguments_json);
   // A pending write shows what it will do; the raw arguments stay one click away.
   const preview = call.proposal_preview;
+  /**
+   * The list this call was about, once it has actually happened.
+   *
+   * Only for a call that ran: a *proposed* `todo_check` has not ticked
+   * anything, and drawing the list under the card that is still asking would
+   * show the item unticked beside a preview saying it is about to be ticked —
+   * two states of the same thing, side by side, one of them wrong.
+   */
+  const touchedList =
+    todos && call.status === "succeeded" ? listForTodoCall(call, todos.lists) : null;
 
   async function choose(decision: "approved" | "denied") {
     setBusy(true);
@@ -232,12 +310,21 @@ function ToolCallCard({
         <ChevronRight size={14} className={expanded ? "chev open" : "chev"} />
         <Wrench size={14} />
         <span className="tool-name">{call.name}</span>
-        <span className="tool-status">
-          {pending ? "Needs approval" : call.status}
-          {call.latency_ms > 0 ? ` · ${call.latency_ms}ms` : ""}
-        </span>
+        <ToolStatus call={call} />
       </button>
       {preview && <ProposalPreview preview={preview} />}
+      {touchedList && todos && (
+        <TodoChecklist
+          list={touchedList}
+          ops={todos.ops}
+          compact
+          caption={
+            call.name === "todo_check"
+              ? "The assistant ticked an item off this list."
+              : "The assistant added to this list."
+          }
+        />
+      )}
       {/* Outside the disclosure, deliberately. A chart behind a closed triangle
           is as invisible as a chart that was never rendered — which is the bug
           this is fixing, arriving one click later. */}
@@ -309,12 +396,26 @@ export function ChatView({
   decideAgentCall,
   openCitation,
   onAttach,
+  approval,
+  todos,
   endRef,
 }: ChatViewProps) {
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
   const callsForRun = (runId: string) =>
     agentCalls.filter((call) => call.run_id === runId);
+  const bypassed = Boolean(approval && isBypass(approval.mode));
+  /**
+   * Which card in a turn gets the checklist: the last one that touched a list.
+   *
+   * A turn that adds three items makes three calls, and every one of them would
+   * draw the same finished list — three identical checklists stacked, the first
+   * two of which claim to be the state after one item. One turn, one list, at
+   * the end of it, where it is true.
+   */
+  const checklistCallId = (calls: AgentToolCall[]): string =>
+    calls.filter((call) => call.status === "succeeded" && TODO_TOOLS.includes(call.name)).at(-1)
+      ?.id ?? "";
   const lastAssistant = [...messages].reverse().find((item) => item.role === "assistant");
   // A live card is only a duplicate once its run has an assistant message to
   // hang under. The user's own message carries the same run_id, so matching on
@@ -332,18 +433,23 @@ export function ChatView({
   return (
     <section className="chat-layout">
       <div className={`message-scroll ${messages.length === 0 ? "empty" : ""}`}>
-        {messages.length === 0 ? (
-          <div className="welcome">
-            <p>No messages yet.</p>
-          </div>
-        ) : (
+        {messages.length > 0 && (
           <div className="message-column">
             {messages.map((message) => (
               <article key={message.id} className={`message ${message.role}`}>
                 {message.role === "assistant" &&
-                  callsForRun(message.run_id).map((call) => (
-                    <ToolCallCard key={call.id} call={call} decide={decideAgentCall} />
-                  ))}
+                  (() => {
+                    const calls = callsForRun(message.run_id);
+                    const showChecklist = checklistCallId(calls);
+                    return calls.map((call) => (
+                      <ToolCallCard
+                        key={call.id}
+                        call={call}
+                        decide={decideAgentCall}
+                        todos={call.id === showChecklist ? todos : undefined}
+                      />
+                    ));
+                  })()}
                 <div className="message-author">
                   {message.role === "user" ? (
                     <div className="tiny-avatar">U</div>
@@ -386,7 +492,12 @@ export function ChatView({
               </article>
             ))}
             {liveCalls.map((call) => (
-              <ToolCallCard key={call.id} call={call} decide={decideAgentCall} />
+              <ToolCallCard
+                key={call.id}
+                call={call}
+                decide={decideAgentCall}
+                todos={call.id === checklistCallId(liveCalls) ? todos : undefined}
+              />
             ))}
             {/* Sits where a tool card would, and is deliberately not one: the
                 run parked before it asked the model anything, so there is no
@@ -416,7 +527,18 @@ export function ChatView({
         )}
       </div>
 
-      <div className="composer-zone">
+      <div className={bypassed ? "composer-zone bypassed" : "composer-zone"}>
+        {/* In the composer zone rather than in the transcript, and that is the
+            whole design: a transcript scrolls, so a warning placed in one is a
+            warning you can leave behind above the fold. This cannot be
+            scrolled away from while the bypass is on. */}
+        {approval && bypassed && (
+          <BypassIndicator
+            conversationTitle={approval.conversationTitle}
+            approved={autoApprovedCalls(agentCalls, approval.conversationId)}
+            stop={() => approval.setMode("ask_writes")}
+          />
+        )}
         <form className="composer" onSubmit={(event) => void submitPrompt(event)}>
           <textarea
             value={draft}
@@ -427,6 +549,9 @@ export function ChatView({
                 void submitPrompt();
               }
             }}
+            // The hint is the empty workspace's only instruction, so it stays
+            // visible; the accessible name is stable ("Message") so tests and
+            // screen readers do not depend on whether a source is indexed yet.
             placeholder={
               sources.some((source) => source.status === "ready")
                 ? "Ask your workspace…"
@@ -434,16 +559,22 @@ export function ChatView({
             }
             rows={1}
             disabled={Boolean(activeRun)}
+            aria-label="Message"
           />
           <div className="composer-tools">
-            <button
-              type="button"
-              onClick={onAttach}
-              title="Add a source"
-              aria-label="Add a source"
-            >
-              <Paperclip size={17} />
-            </button>
+            {onAttach && (
+              <button
+                type="button"
+                onClick={onAttach}
+                title="Add a source"
+                aria-label="Add a source"
+              >
+                <Paperclip size={17} />
+              </button>
+            )}
+            {approval && (
+              <ApprovalModeControl mode={approval.mode} setMode={approval.setMode} />
+            )}
             <span className="composer-spacer" />
             {activeRun ? (
               <button
