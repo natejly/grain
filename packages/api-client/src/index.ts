@@ -2714,6 +2714,52 @@ export class WorkspaceApi {
     return this.request(`/api/workflows/runs/${workflowRunId}`);
   }
 
+  // --- Personal crons (automation) ------------------------------------------
+  // Plain `this.request`, not `workflowWrite`: a cron does not compile, so
+  // there is no findings report to preserve — a bad schedule or IANA zone is a
+  // single-sentence 422 that `request` already surfaces next to the form. The
+  // ticker that dispatches these is the same one workflows use, so its armed
+  // state is read through `workflowSchedulingEnabled()` above, not a second
+  // probe.
+
+  listCrons(): Promise<Cron[]> {
+    return this.request("/api/crons");
+  }
+
+  createCron(payload: CronCreateInput): Promise<Cron> {
+    return this.request(
+      "/api/crons",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  getCron(cronId: string): Promise<Cron> {
+    return this.request(`/api/crons/${cronId}`);
+  }
+
+  /** Edit fields or flip `enabled`; a disabled cron never fires. */
+  updateCron(cronId: string, payload: CronUpdateInput): Promise<Cron> {
+    return this.request(
+      `/api/crons/${cronId}`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  deleteCron(cronId: string): Promise<void> {
+    return this.request(`/api/crons/${cronId}`, { method: "DELETE" }, true);
+  }
+
+  /**
+   * Fire this cron now, ignoring its schedule. 202: a task cron enqueues a
+   * fresh unattended run, a message cron posts synchronously. The claim column
+   * is untouched, so the next scheduled minute still fires on its own.
+   */
+  runCronNow(cronId: string): Promise<void> {
+    return this.request(`/api/crons/${cronId}/run-now`, { method: "POST" }, true);
+  }
+
   /**
    * Can a stored cron actually fire? Asked of the ticker, which is the only
    * thing that knows.
@@ -3107,3 +3153,56 @@ async function workflowFailure(response: Response): Promise<ApiError> {
     response.status,
   );
 }
+
+// --- Personal crons (automation) --------------------------------------------
+// A recurring job an external cron fires unattended, grounded on the same
+// schedule machinery as workflows (services/workflows/schedule.py) and armed by
+// the same POST /api/workflows/tick. A `kind="task"` fire re-runs `prompt` as a
+// fresh chat turn at WORKFLOW policy scope — so its first write-capable tool
+// parks for a human, exactly as a scheduled workflow does — and a `kind="message"`
+// fire posts `body` verbatim into a create-or-named conversation. Mirrors
+// services/crons.py and api/crons.py field for field.
+
+export type CronKind = "task" | "message";
+
+export type Cron = {
+  id: string;
+  name: string;
+  /** "task" re-runs `prompt` as a turn; "message" posts `body` to a conversation. */
+  kind: CronKind;
+  /** 5-field cron expression, shown verbatim — never reworded into prose. */
+  schedule_cron: string;
+  schedule_timezone: string;
+  enabled: boolean;
+  /** kind="task": re-run as a fresh unattended chat turn. "" for a message cron. */
+  prompt: string;
+  /** kind="message": posted verbatim into the target conversation. "" for a task. */
+  body: string;
+  /** The conversation a message cron posts into; "" until the first fire names one. */
+  target_conversation_id: string;
+  /** The atomic claim column: when the ticker last fired this cron, null if never. */
+  last_dispatched_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CronCreateInput = {
+  name: string;
+  kind: CronKind;
+  schedule_cron: string;
+  schedule_timezone: string;
+  /** Supply for kind="task"; ignored for a message cron. */
+  prompt?: string;
+  /** Supply for kind="message"; ignored for a task cron. */
+  body?: string;
+};
+
+export type CronUpdateInput = {
+  name?: string;
+  schedule_cron?: string;
+  schedule_timezone?: string;
+  /** The enable/disable toggle: a disabled cron never fires. */
+  enabled?: boolean;
+  prompt?: string;
+  body?: string;
+};

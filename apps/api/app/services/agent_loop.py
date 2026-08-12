@@ -466,7 +466,14 @@ def policy_scope_for_run(db: Session, run: Run) -> PolicyScope:
     injection scenario ends at an agent node honouring instructions it read out
     of a fetched document, and an agent node resolving at chat scope would
     inherit the very standing grant the scope split exists to withhold.
+
+    A cron task run has no WorkflowRun backing it — a fresh turn *is* its
+    execution — but it is no less unattended, so `cron_id` classifies it as
+    `workflow` by construction. The whole policy/approval/billing chain then
+    treats it like a scheduled workflow without a second code path.
     """
+    if run.cron_id:
+        return WORKFLOW_SCOPE
     backing = db.scalar(select(WorkflowRun.id).where(WorkflowRun.run_id == run.id))
     return WORKFLOW_SCOPE if backing is not None else CHAT_SCOPE
 
@@ -1026,10 +1033,18 @@ def run_agent_turn(
     unclean stop, and without this the recovery sweep would staple a chat turn
     onto an automation. Failing loudly is the correct outcome — the workflow run
     is the record that matters, and it can be re-run.
+
+    The guard keys on the *actual* danger — a WorkflowRun backing the run — not
+    on policy scope. A cron task run is at `workflow` scope (via `cron_id`) yet
+    has no DAG: a fresh turn is its correct execution and recovery, so it must be
+    allowed through here exactly as a chat run is.
     """
     settings = settings or get_settings()
     scope = policy_scope_for_run(db, run)
-    if not workflow_node and scope == WORKFLOW_SCOPE:
+    backs_workflow = (
+        db.scalar(select(WorkflowRun.id).where(WorkflowRun.run_id == run.id)) is not None
+    )
+    if not workflow_node and backs_workflow:
         raise RuntimeError("This run belongs to a workflow; start it through the executor")
     document = open_document(db, run)
     context = ToolContext(

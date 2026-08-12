@@ -5,6 +5,7 @@ import {
   Bot,
   Braces,
   Brain,
+  Clock,
   Database,
   FileText,
   KanbanSquare,
@@ -146,13 +147,23 @@ export const NAV_GROUPS: NavGroup[] = [
    * and on purpose; an approval that has been waiting since 3am is the opposite
    * of that. So: a place you work, appended rather than inserted, because the
    * three that were already here should not move for a fourth.
+   *
+   * Automations sit beside Workflows rather than in a group of their own: both
+   * are unattended recurring work armed by the same ticker, and a personal cron
+   * that fired a task run parks its writes for a person exactly as a scheduled
+   * workflow does — so the same reason Workflows earns a rail seat (you come
+   * here to *answer* what ran unwatched, not only to make one) is the reason a
+   * cron's approval belongs a tab away rather than buried in Settings.
    */
   {
     id: "workflows",
     label: "Workflows",
     icon: Workflow,
     surface: "rail",
-    items: [{ view: "workflows", label: "Workflows", icon: Workflow }],
+    items: [
+      { view: "workflows", label: "Workflows", icon: Workflow },
+      { view: "crons", label: "Automations", icon: Clock },
+    ],
   },
   {
     id: "connections",

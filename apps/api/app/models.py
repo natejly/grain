@@ -255,6 +255,12 @@ class Run(Base):
     # The skill VERSION invoked, pinned at send time so a run parked over an edit
     # resumes with the body its sender saw. 0 means none / pre-pinning.
     skill_version: Mapped[int] = mapped_column(Integer, default=0)
+    # Set when the workflow-less cron scheduler created this run, "" otherwise.
+    # It is the marker `policy_scope_for_run` reads to run the turn at WORKFLOW
+    # scope — a cron task fires with nobody watching, so a standing chat "always
+    # allow" must not reach it. Not a FK: a run is a historical record and must
+    # survive the cron's deletion, exactly as `skill_id` survives a skill's.
+    cron_id: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -1427,6 +1433,47 @@ class WorkflowNodeRun(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Cron(Base):
+    """A personal recurring job an external cron fires unattended.
+
+    Grounded on the workflow-schedule machinery (services/workflows/schedule.py):
+    the same conditional-UPDATE claim on `last_dispatched_at`, the same CATCHUP
+    window, armed by the same POST /api/workflows/tick. It carries no authority
+    of its own — a `kind="task"` fire runs at WORKFLOW policy scope, so the first
+    write-capable tool parks for a human exactly as a scheduled workflow does.
+    """
+
+    __tablename__ = "crons"
+    __table_args__ = (Index("ix_crons_workspace_enabled", "workspace_id", "enabled"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    # task | message
+    kind: Mapped[str] = mapped_column(String(16), default="task")
+    # 5-field cron + IANA zone, validated exactly as a workflow trigger is
+    # (services/workflows/validate.cron_error / cron_matches).
+    schedule_cron: Mapped[str] = mapped_column(String(120), default="")
+    schedule_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # kind="task": re-run as a fresh unattended chat turn.
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    # kind="message": posted verbatim into the target conversation.
+    body: Mapped[str] = mapped_column(Text, default="")
+    # The conversation kind="message" posts into, created-or-named on first fire.
+    # "" until the first dispatch names one; not a FK for the same reason
+    # Run.skill_id is not — the cron outlives a purged conversation.
+    target_conversation_id: Mapped[str] = mapped_column(String(36), default="")
+    # The atomic claim column, truncated to the minute. The ticker advances it
+    # with a conditional UPDATE, so two ticks in one minute produce one fire.
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class ModelUsage(Base):

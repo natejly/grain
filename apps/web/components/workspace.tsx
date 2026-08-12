@@ -37,6 +37,7 @@ import { SourcesView } from "./views/sources";
 import { TodosView } from "./views/todos";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
+import { CronsView } from "./views/crons";
 import { WorkspaceSwitcher } from "./workspace-selection";
 
 export function Workspace() {
@@ -662,6 +663,11 @@ export function Workspace() {
             onWorkspaceChanged={() => void refreshOffScreenWork().catch(() => undefined)}
           />
         )}
+
+        {/* Self-contained like WorkflowsView: a cron's schedule and last-fired
+            state are nobody's business until they open this, so the list is
+            fetched here rather than at page load. */}
+        {view === "crons" && <CronsView setError={setError} />}
 
         {view === "mcp" && (
           <McpView

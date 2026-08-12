@@ -52,6 +52,7 @@ from app.models import (
     BoardColumn,
     Chunk,
     Conversation,
+    Cron,
     Dashboard,
     DashboardPin,
     DashboardTemplate,
@@ -699,6 +700,23 @@ def build_tenant(label: str) -> Tenant:
         db.add(node_run)
         db.flush()
         ids["workflow_node_run"] = node_run.id
+
+        # A personal cron whose id another tenant can name: naming it would let
+        # you read its prompt, fire it unattended, or delete it. `run-now`'s DENY
+        # is the sharp one — it proves a foreign cron cannot be fired.
+        cron = Cron(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} secret cron",
+            kind="task",
+            schedule_cron="0 9 * * *",
+            schedule_timezone="UTC",
+            prompt=f"{label} secret cron prompt",
+            enabled=True,
+        )
+        db.add(cron)
+        db.flush()
+        ids["cron"] = cron.id
 
         # A standing chat grant, so the scope split has something to be wrong
         # about: `test_workflow_policy_scope.py` proves this row does not reach
@@ -1628,6 +1646,37 @@ ROUTE_CASES: List[RouteCase] = [
     # resource to point it at, and with WORKFLOW_CRON_SECRET unset (as it is
     # here) it refuses outright. See api/workflows.py:tick.
     RouteCase("POST", "/api/workflows/tick", PUBLIC),
+    # -- crons -------------------------------------------------------------
+    # A cron id is worth as much as a workflow id: naming another tenant's
+    # automation would let you read its prompt, fire it unattended, or delete it.
+    # Every id-taking route is a DENY; `run-now`'s DENY is what proves a foreign
+    # cron cannot be fired. Dispatch has no route of its own — the shared
+    # /api/workflows/tick claims and enqueues due crons.
+    RouteCase("GET", "/api/crons", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/crons",
+        SCOPED,
+        body={
+            "name": "mine",
+            "kind": "task",
+            "schedule_cron": "0 9 * * *",
+            "schedule_timezone": "UTC",
+            "prompt": "do it",
+        },
+    ),
+    RouteCase("GET", "/api/crons/{cron_id}", DENY, path_ids={"cron_id": "cron"}),
+    RouteCase(
+        "PATCH",
+        "/api/crons/{cron_id}",
+        DENY,
+        path_ids={"cron_id": "cron"},
+        body={"enabled": False},
+    ),
+    RouteCase("DELETE", "/api/crons/{cron_id}", DENY, path_ids={"cron_id": "cron"}),
+    RouteCase(
+        "POST", "/api/crons/{cron_id}/run-now", DENY, path_ids={"cron_id": "cron"}
+    ),
     # -- integrations ------------------------------------------------------
     RouteCase("GET", "/api/integrations", SCOPED),
     RouteCase(

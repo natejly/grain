@@ -8125,3 +8125,70 @@ select:focus-visible {
   color: var(--text);
   font-size: 11px;
 }
+
+/* ---- Automations (personal crons) ----
+   The list and detail reuse the Workflows view's layout classes wholesale; only
+   the create form is the crons view's own, because a workflow is authored from
+   one sentence and a cron from a handful of typed fields. These match the tone
+   of `.create-form` — the same borders, the same surfaces — so the two ways of
+   making unattended work do not look like two different applications. */
+.cron-form {
+  display: grid;
+  gap: 12px;
+  max-width: 640px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.cron-field {
+  display: grid;
+  gap: 5px;
+}
+
+.cron-field > span {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cron-field input,
+.cron-field select {
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.cron-field input:focus,
+.cron-field select:focus,
+.cron-field .workflow-prompt:focus {
+  border-color: var(--accent-border-strong);
+}
+
+/* Schedule and timezone sit side by side: a cron expression is meaningless
+   without the zone it is read in, so the two are one decision. */
+.cron-field-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.cron-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* The Run-now confirmation, in green — it reads like the schedule note that
+   sits above it, so a fired automation and a scheduled one speak the same way. */
+.workflow-approval-note.live {
+  background: var(--green-muted);
+  color: var(--green);
+}
