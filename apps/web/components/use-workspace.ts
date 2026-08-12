@@ -77,6 +77,13 @@ export function useWorkspace() {
   // Which authored agent answers the next message; "" is the workspace
   // default. Session state on purpose — a conversation does not remember it.
   const [selectedAgentId, setSelectedAgentId] = useState("");
+  // Per-turn model / reasoning-effort / fast overrides for the composer, session
+  // state like the agent selection above. The model stays "" (the deployment's
+  // own) until the user picks one; the effort seeds from the deployment default
+  // once bootstrap arrives; "fast" is the low-effort shortcut.
+  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedEffort, setSelectedEffort] = useState("");
+  const [fast, setFast] = useState(false);
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState("");
   /**
@@ -326,6 +333,14 @@ export function useWorkspace() {
     void loadWorkspace();
   }, [loadWorkspace]);
 
+  // Seed the composer's effort from the deployment default the first time
+  // bootstrap arrives, and never again — `current || preset` leaves a value the
+  // user has since picked alone.
+  useEffect(() => {
+    const preset = bootstrap?.model_provider.default_effort;
+    if (preset) setSelectedEffort((current) => current || preset);
+  }, [bootstrap]);
+
   useEffect(() => {
     void refreshArtifacts().catch(() => undefined);
   }, [refreshArtifacts]);
@@ -482,6 +497,9 @@ export function useWorkspace() {
     activeRun,
     selectedAgentId,
     setSelectedAgentId,
+    selectedModel,
+    selectedEffort,
+    fast,
     setError,
     setView,
     setSidebarOpen,
@@ -570,6 +588,12 @@ export function useWorkspace() {
     setDraft,
     selectedAgentId,
     setSelectedAgentId,
+    selectedModel,
+    setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
+    fast,
+    setFast,
     activeRun,
     runStatus,
     budgetPark,

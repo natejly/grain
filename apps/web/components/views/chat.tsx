@@ -105,6 +105,22 @@ export type ChatViewProps = {
   // the same way it mounts without `onAttach` or `approval`.
   selectedAgentId?: string;
   onSelectAgent?: (agentId: string) => void;
+  /**
+   * Per-turn model / reasoning-effort / fast overrides for the composer, with
+   * the deployment's allow-lists to draw from. Optional and grouped for the same
+   * reason as `approval`: the document panel mounts ChatView without them and so
+   * renders no such controls.
+   */
+  turnControls?: {
+    models: string[];
+    efforts: string[];
+    model: string;
+    setModel: (value: string) => void;
+    effort: string;
+    setEffort: (value: string) => void;
+    fast: boolean;
+    setFast: (value: boolean) => void;
+  };
 };
 
 /**
@@ -148,6 +164,73 @@ function AgentSelect({
         </option>
       ))}
     </select>
+  );
+}
+
+/**
+ * The per-turn model, reasoning effort and fast shortcut, drawn from the
+ * deployment's allow-lists. Each part renders only when the deployment offers
+ * choices for it — a scripted provider with no models or efforts shows nothing.
+ * "Fast" is the low-effort shortcut, so it disables the effort dropdown while on
+ * (the backend ignores the effort under fast) and pairs with that dropdown.
+ */
+function TurnControls({
+  models,
+  efforts,
+  model,
+  setModel,
+  effort,
+  setEffort,
+  fast,
+  setFast,
+  disabled,
+}: NonNullable<ChatViewProps["turnControls"]> & { disabled: boolean }) {
+  return (
+    <>
+      {models.length > 0 && (
+        <select
+          className="composer-select"
+          value={model}
+          onChange={(event) => setModel(event.target.value)}
+          disabled={disabled}
+          aria-label="Model"
+        >
+          <option value="">Default model</option>
+          {models.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      )}
+      {efforts.length > 0 && (
+        <>
+          <select
+            className="composer-select"
+            value={effort}
+            onChange={(event) => setEffort(event.target.value)}
+            disabled={disabled || fast}
+            aria-label="Reasoning effort"
+          >
+            {efforts.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className={fast ? "composer-toggle on" : "composer-toggle"}
+            onClick={() => setFast(!fast)}
+            disabled={disabled}
+            aria-pressed={fast}
+            title="Fast: skip extended reasoning"
+          >
+            <Zap size={13} aria-hidden="true" /> Fast
+          </button>
+        </>
+      )}
+    </>
   );
 }
 
@@ -452,6 +535,7 @@ export function ChatView({
   endRef,
   selectedAgentId,
   onSelectAgent,
+  turnControls,
 }: ChatViewProps) {
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
@@ -630,6 +714,9 @@ export function ChatView({
                 selectedAgentId={selectedAgentId ?? ""}
                 onSelectAgent={onSelectAgent}
               />
+            )}
+            {turnControls && (
+              <TurnControls {...turnControls} disabled={Boolean(activeRun)} />
             )}
             {approval && (
               <ApprovalModeControl mode={approval.mode} setMode={approval.setMode} />

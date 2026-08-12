@@ -5,6 +5,7 @@ import type {
   Citation,
   CitationCheck,
   Message,
+  MessageControls,
   ToolArtifact,
 } from "@workspace/api-client";
 import type { Dispatch, FormEvent, RefObject, SetStateAction } from "react";
@@ -32,6 +33,11 @@ import { describeError } from "../views/shared";
 export type ThreadHandlerDeps = {
   /** The agent to run as, from bootstrap; the server picks one when absent. */
   agentId?: string;
+  /**
+   * Per-turn model / effort / fast overrides for this turn. Optional: the panel
+   * beside a document has no such composer, so it sends the deployment defaults.
+   */
+  controls?: MessageControls;
   messages: Message[];
   draft: string;
   activeConversation: string | null;
@@ -92,6 +98,7 @@ export function toolFailure(tool: string, error: string): string {
 
 export function createThreadHandlers({
   agentId,
+  controls,
   messages,
   draft,
   activeConversation,
@@ -208,6 +215,7 @@ export function createThreadHandlers({
         activeConversation,
         lastUser.content,
         agentId,
+        controls,
       );
       setMessages((items) =>
         items.some((item) => item.id === response.message.id)
@@ -394,7 +402,7 @@ export function createThreadHandlers({
     setError("");
     try {
       const conversationId = await ensureConversation();
-      const response = await api.sendMessage(conversationId, content, agentId);
+      const response = await api.sendMessage(conversationId, content, agentId, controls);
       setMessages((items) => {
         const existing = items.some((item) => item.id === response.message.id);
         return existing ? items : [...items, response.message];

@@ -67,6 +67,12 @@ export function Workspace() {
     setDraft,
     selectedAgentId,
     setSelectedAgentId,
+    selectedModel,
+    setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
+    fast,
+    setFast,
     activeRun,
     runStatus,
     budgetPark,
@@ -486,6 +492,16 @@ export function Workspace() {
             endRef={endRef}
             selectedAgentId={selectedAgentId}
             onSelectAgent={setSelectedAgentId}
+            turnControls={{
+              models: bootstrap?.model_provider.selectable_models ?? [],
+              efforts: bootstrap?.model_provider.reasoning_efforts ?? [],
+              model: selectedModel,
+              setModel: setSelectedModel,
+              effort: selectedEffort,
+              setEffort: setSelectedEffort,
+              fast,
+              setFast,
+            }}
           />
         )}
 

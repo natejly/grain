@@ -28,6 +28,11 @@ export type ChatHandlerDeps = {
   bootstrap: Bootstrap | null;
   selectedAgentId: string;
   setSelectedAgentId: Dispatch<SetStateAction<string>>;
+  /** Per-turn composer overrides; `fast` omits the effort so the backend's
+   * fast→low mapping applies, and an empty model/effort is the deployment default. */
+  selectedModel: string;
+  selectedEffort: string;
+  fast: boolean;
   conversations: Conversation[];
   messages: Message[];
   draft: string;
@@ -60,6 +65,9 @@ export function createChatHandlers({
   bootstrap,
   selectedAgentId,
   setSelectedAgentId,
+  selectedModel,
+  selectedEffort,
+  fast,
   conversations,
   messages,
   draft,
@@ -116,6 +124,9 @@ export function createChatHandlers({
 
   const thread = createThreadHandlers({
     agentId: selectedAgentId || bootstrap?.default_agent_id,
+    // Fast omits the effort so the backend's fast→low mapping wins; the
+    // api-client drops an empty-string model or effort off the wire.
+    controls: { model: selectedModel, effort: fast ? "" : selectedEffort, fast },
     messages,
     draft,
     activeConversation,
