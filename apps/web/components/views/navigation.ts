@@ -16,6 +16,7 @@ import {
   Plug,
   ShieldCheck,
   Sparkles,
+  Terminal,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -173,6 +174,10 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { view: "data", label: "Databases", icon: Database },
       { view: "mcp", label: "MCP", icon: Blocks },
+      // Beside MCP because it is the same kind of surface: registering tools the
+      // agent may call. Not on the rail — you configure it rarely and on
+      // purpose, and it is not a machine you operate.
+      { view: "sandbox-tools", label: "Sandbox tools", icon: Terminal },
       { view: "integrations", label: "Integrations", icon: Plug },
     ],
   },

@@ -382,13 +382,24 @@ def evaluate_policy(
             base = "allow" if spec.read_only else "ask"
 
     if scope != CHAT_SCOPE or mode == ASK_WRITES or base == "deny":
-        return Verdict(policy=base)
-    if mode == ASK_ALL:
+        result = Verdict(policy=base)
+    elif mode == ASK_ALL:
+        result = Verdict(policy="ask")
+    else:
+        # auto_writes. `by_mode` is set only where the mode changed the answer: a
+        # tool a row already allowed was not let through by the bypass, and
+        # saying it was would put a claim on the audit row that the policy table
+        # contradicts.
+        result = Verdict(policy="allow", by_mode=AUTO_WRITES if base == "ask" else "")
+
+    # A custom sandbox tool with approval="always" carries `force_ask`, which may
+    # only tighten: any `allow` this arrives at — from a policy row, the tool's
+    # own default, or an `auto_writes` bypass, in chat scope or workflow scope —
+    # becomes an `ask`. A `deny` is never reached here (it returned above), so a
+    # prohibition still prohibits, mirroring how a deny survives every mode.
+    if spec is not None and spec.force_ask and result.policy == "allow":
         return Verdict(policy="ask")
-    # auto_writes. `by_mode` is set only where the mode changed the answer: a
-    # tool a row already allowed was not let through by the bypass, and saying it
-    # was would put a claim on the audit row that the policy table contradicts.
-    return Verdict(policy="allow", by_mode=AUTO_WRITES if base == "ask" else "")
+    return result
 
 
 def resolve_policy(

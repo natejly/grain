@@ -780,6 +780,45 @@ class SandboxExecution(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class SandboxTool(Base):
+    """A workspace-defined tool the agent can call, executed in the session
+    sandbox under this tool's own egress allowlist and approval policy.
+
+    The slug ``name`` is unique per workspace and is the name the model calls, so
+    it must not collide with a builtin (run_python, …) — enforced at the create
+    route, which is the only writer. ``egress_hosts_json`` is the ONLY hosts an
+    execution of this tool may reach: it tightens the workspace sandbox default
+    and can never widen policy.py's metadata/RFC1918/loopback denials, which are
+    reapplied unconditionally by egress_rules. ``approval`` may only tighten.
+    """
+
+    __tablename__ = "sandbox_tools"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(60))
+    description: Mapped[str] = mapped_column(Text, default="")
+    #: JSON Schema (object) shown to the model as the tool's parameters.
+    input_schema_json: Mapped[str] = mapped_column(
+        Text, default='{"type":"object","properties":{}}'
+    )
+    #: JSON list of argv tokens; a token may contain {{param}} placeholders.
+    #: Executed as argv, never as a shell line — see services/sandbox/custom.py.
+    argv_json: Mapped[str] = mapped_column(Text, default="[]")
+    #: JSON list of hostnames. Empty = no egress (strictest). Non-empty = the
+    #: only hosts this tool's execution may reach.
+    egress_hosts_json: Mapped[str] = mapped_column(Text, default="[]")
+    #: "inherit" | "always". "always" forces a human approval; tighten-only.
+    approval: Mapped[str] = mapped_column(String(16), default="inherit")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+
 class McpServer(Base):
     """A configured MCP server: a stdio subprocess or a streamable HTTP endpoint."""
 

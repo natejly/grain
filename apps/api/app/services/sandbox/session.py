@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -29,7 +29,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from ...clock import utcnow
 from ...config import Settings
-from ...models import SandboxExecution, SandboxSession, new_id
+from ...models import SandboxExecution, SandboxSession, SandboxTool, new_id
 from . import policy
 from .provider import get_provider
 from .types import (
@@ -262,6 +262,8 @@ def ensure_session(
     settings: Settings,
     project_id: str = "",
     label: str = "",
+    network: Optional[NetworkPolicy] = None,
+    allow_hosts: Optional[Sequence[str]] = None,
 ) -> SandboxSession:
     """Return this workspace's sandbox for `project_id`, creating one if needed.
 
@@ -269,7 +271,23 @@ def ensure_session(
     the second turn of "now plot the column you just cleaned" only works if it
     lands in the same machine. Creating a fresh one per tool call would also
     multiply the bill by the length of the conversation.
+
+    `network`/`allow_hosts` override the settings-derived egress for this
+    machine — the seam a custom sandbox tool uses to run under its own, tighter
+    allowlist (see `ensure_tool_session`). When they are given, reuse is gated
+    on the live row's *frozen* policy matching the override: a machine created
+    under an earlier egress must never be handed back for a call that has since
+    tightened, which is the same frozen-policy rule the create path enforces
+    below. When they are omitted, reuse and creation behave exactly as before.
     """
+    eff_network: NetworkPolicy = (
+        network if network is not None else settings.sandbox_network_policy
+    )
+    eff_hosts: List[str] = (
+        list(allow_hosts)
+        if allow_hosts is not None
+        else list(settings.sandbox_allowed_hosts)
+    )
     existing = db.scalars(
         select(SandboxSession)
         .where(SandboxSession.workspace_id == workspace_id)
@@ -277,7 +295,13 @@ def ensure_session(
         .where(SandboxSession.status.in_(LIVE_STATUSES))
         .order_by(SandboxSession.created_at.desc())
     ).first()
-    if existing is not None:
+    if existing is not None and (
+        network is None
+        or (
+            network_policy_of(existing) == eff_network
+            and allow_hosts_for(existing) == eff_hosts
+        )
+    ):
         touch(db, existing)
         return existing
 
@@ -298,8 +322,8 @@ def ensure_session(
         workspace_id=workspace_id,
         template=settings.sandbox_template,
         timeout_seconds=settings.sandbox_session_timeout_seconds,
-        network=settings.sandbox_network_policy,
-        allow_hosts=tuple(settings.sandbox_allowed_hosts),
+        network=eff_network,
+        allow_hosts=tuple(eff_hosts),
         env=policy.sandbox_env(settings),
         metadata=policy.session_metadata(workspace_id=workspace_id, user_id=user_id),
     )
@@ -361,6 +385,90 @@ def ensure_session(
     db.commit()
     db.refresh(row)
     return row
+
+
+def tool_egress(
+    settings: Settings, egress_hosts: Sequence[str]
+) -> Tuple[NetworkPolicy, List[str]]:
+    """The effective (policy, allow_hosts) for a custom-tool execution.
+
+    Tighten-only, by construction: the result is never wider than the workspace
+    default, and never wider than policy.py's hard denials (those are reapplied
+    by `egress_rules` regardless of what is returned here).
+
+      - default 'none'      -> 'none' (a tool cannot re-open a closed sandbox)
+      - default 'allowlist' -> 'allowlist' over egress_hosts ∩ operator allowlist
+      - default 'open'      -> 'allowlist' restricted to egress_hosts
+      - egress_hosts empty  -> 'none' (the tool declares no reachable host)
+
+    A driver that cannot express 'allowlist' (container/subprocess) degrades to
+    'none' — the strictly tighter policy — never to 'open'. There is no branch
+    that returns 'open', so a custom tool can never reach more than its declared
+    hosts, and cannot reach the metadata endpoint at all.
+    """
+    default = settings.sandbox_network_policy
+    hosts = [h for h in egress_hosts if h]
+    if default == "none" or not hosts:
+        return "none", []
+    if settings.sandbox_provider in ("container", "subprocess"):
+        # allowlist is unsupported on these drivers (container_provider rejects
+        # it); fail closed to the strictly tighter policy rather than 'open'.
+        return "none", []
+    if default == "allowlist":
+        # Tighten against the OPERATOR's allowlist too: a tool may narrow the
+        # deployment's permitted hosts, never reach one it never allowed. Reaching
+        # past the operator default would make a per-tool egress a widening, which
+        # is the opposite of what it is for.
+        permitted = set(settings.sandbox_allowed_hosts)
+        hosts = [h for h in hosts if h in permitted]
+        if not hosts:
+            return "none", []
+    return "allowlist", hosts
+
+
+def _tool_egress_hosts(tool: SandboxTool) -> List[str]:
+    try:
+        parsed = json.loads(tool.egress_hosts_json or "[]")
+    except ValueError:
+        # A corrupt column fails closed: no reachable host, never a wide one.
+        return []
+    return [str(host) for host in parsed] if isinstance(parsed, list) else []
+
+
+def ensure_tool_session(
+    db: Session,
+    *,
+    workspace_id: str,
+    user_id: str,
+    settings: Settings,
+    tool: SandboxTool,
+) -> SandboxSession:
+    """A sandbox frozen to THIS tool's egress, reused across calls for cost.
+
+    Distinct from the workspace-default machine so a custom tool's execution
+    runs under its own allowlist, not whatever the default sandbox was created
+    with. Reuse is keyed by `project_id="sandboxtool:<id>"` AND — via
+    `ensure_session`'s override guard — the live row's frozen policy must equal
+    this tool's current egress, so an edited egress is never honoured by a
+    machine created under the old one.
+
+    The whole point of routing through `ensure_session` is that there is exactly
+    one quota/create/freeze path: the spec still goes through `SandboxSpec` ->
+    `provider.create` -> `egress_rules`, so `ALWAYS_DENIED_CIDRS` and the
+    everything-deny are reapplied for this session exactly as for any other. The
+    tool can only ever narrow to its hosts, never widen a hard denial.
+    """
+    policy_value, hosts = tool_egress(settings, _tool_egress_hosts(tool))
+    return ensure_session(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        settings=settings,
+        project_id=f"sandboxtool:{tool.id}",
+        label=f"tool:{tool.name}",
+        network=policy_value,
+        allow_hosts=hosts,
+    )
 
 
 def record_execution(

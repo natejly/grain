@@ -718,6 +718,43 @@ class McpServerRequest(BaseModel):
     secrets: Dict[str, str] = Field(default_factory=dict)
 
 
+class SandboxToolOut(ApiModel):
+    id: str
+    name: str
+    description: str
+    input_schema: Dict[str, Any]
+    argv: List[str]
+    egress_hosts: List[str]
+    approval: Literal["inherit", "always"]
+    enabled: bool
+    created_at: datetime
+
+
+class SandboxToolRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    description: str = ""
+    input_schema: Dict[str, Any] = Field(
+        default_factory=lambda: {"type": "object", "properties": {}}
+    )
+    argv: List[str] = Field(default_factory=list)
+    egress_hosts: List[str] = Field(default_factory=list)
+    approval: Literal["inherit", "always"] = "inherit"
+    enabled: bool = True
+
+
+class SandboxToolUpdate(BaseModel):
+    """A partial edit: every field optional so a PATCH can flip `enabled` alone
+    without resending the schema and argv it does not mean to change."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    description: Optional[str] = None
+    input_schema: Optional[Dict[str, Any]] = None
+    argv: Optional[List[str]] = None
+    egress_hosts: Optional[List[str]] = None
+    approval: Optional[Literal["inherit", "always"]] = None
+    enabled: Optional[bool] = None
+
+
 class AuditEventOut(ApiModel):
     id: str
     action: str

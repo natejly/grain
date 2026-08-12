@@ -660,6 +660,40 @@ export type McpServerInput = {
   secrets?: Record<string, string>;
 };
 
+/**
+ * A workspace-defined tool the agent can call, executed in the session sandbox
+ * under this tool's own egress allowlist and approval policy.
+ *
+ * `name` is the slug the model calls; `argv` is the command template whose
+ * `{{param}}` placeholders are filled from a validated call and run as argv
+ * (never a shell line). `egress_hosts` is the ONLY hosts an execution may
+ * reach — it tightens the workspace sandbox default and can never widen the
+ * sandbox's metadata/RFC1918/loopback denials. `approval="always"` forces a
+ * human approval even where the workspace policy would allow; it may only
+ * tighten, never loosen a deny.
+ */
+export type SandboxTool = {
+  id: string;
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  argv: string[];
+  egress_hosts: string[];
+  approval: "inherit" | "always";
+  enabled: boolean;
+  created_at: string;
+};
+
+export type SandboxToolInput = {
+  name: string;
+  description?: string;
+  input_schema?: Record<string, unknown>;
+  argv?: string[];
+  egress_hosts?: string[];
+  approval?: "inherit" | "always";
+  enabled?: boolean;
+};
+
 export type AuditEvent = {
   id: string;
   action: string;
@@ -2236,6 +2270,29 @@ export class WorkspaceApi {
   /** Forget this user's token. Other members of the workspace keep theirs. */
   disconnectMcpServer(serverId: string): Promise<McpAuthStatus> {
     return this.request(`/api/mcp/servers/${serverId}/disconnect`, { method: "POST" });
+  }
+
+  listSandboxTools(): Promise<SandboxTool[]> {
+    return this.request("/api/sandbox-tools");
+  }
+
+  createSandboxTool(input: SandboxToolInput): Promise<SandboxTool> {
+    return this.request("/api/sandbox-tools", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** Partial update — the toggle sends only `{ enabled }`, the editor the rest. */
+  updateSandboxTool(id: string, input: Partial<SandboxToolInput>): Promise<SandboxTool> {
+    return this.request(`/api/sandbox-tools/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+
+  deleteSandboxTool(id: string): Promise<void> {
+    return this.request(`/api/sandbox-tools/${id}`, { method: "DELETE" }, true);
   }
 
   listAuditEvents(): Promise<AuditEvent[]> {

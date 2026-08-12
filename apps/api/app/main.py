@@ -29,6 +29,7 @@ from .api import (
     memory,
     projects,
     sandbox,
+    sandbox_tools,
     skills,
     sources,
     system,
@@ -115,6 +116,7 @@ app.include_router(folders.router)
 app.include_router(projects.router)
 app.include_router(bibliography.router)
 app.include_router(sandbox.router)
+app.include_router(sandbox_tools.router)
 app.include_router(analytics.router)
 app.include_router(dashboards.router)
 app.include_router(generated_apps.router)

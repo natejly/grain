@@ -31,6 +31,7 @@ import {
   type GroupId,
 } from "./views/navigation";
 import { ProjectsView } from "./views/projects";
+import { SandboxToolsView } from "./views/sandbox-tools";
 import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
 import { SkillsView } from "./views/skills";
 import { SourcesView } from "./views/sources";
@@ -55,6 +56,7 @@ export function Workspace() {
     apps,
     integrations,
     mcpServers,
+    sandboxTools,
     documents,
     folders,
     activeDocument,
@@ -145,6 +147,9 @@ export function Workspace() {
     setMcpServerEnabled,
     setMcpToolEnabled,
     removeMcpServer,
+    addSandboxTool,
+    setSandboxToolEnabled,
+    removeSandboxTool,
     selectConversation,
     newConversation,
     removeConversation,
@@ -200,6 +205,7 @@ export function Workspace() {
     dashboards: dashboardApps.length + dashboards.length,
     data: dbConnections.length,
     mcp: mcpServers.length,
+    "sandbox-tools": sandboxTools.length,
     integrations: integrations.filter((item) => item.account).length,
   };
 
@@ -692,6 +698,15 @@ export function Workspace() {
             setServerEnabled={setMcpServerEnabled}
             setToolEnabled={setMcpToolEnabled}
             removeServer={removeMcpServer}
+          />
+        )}
+
+        {view === "sandbox-tools" && (
+          <SandboxToolsView
+            tools={sandboxTools}
+            addTool={addSandboxTool}
+            setToolEnabled={setSandboxToolEnabled}
+            removeTool={removeSandboxTool}
           />
         )}
 

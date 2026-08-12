@@ -15,6 +15,7 @@ export type View =
   | "data"
   | "projects"
   | "mcp"
+  | "sandbox-tools"
   | "activity"
   | "admin"
   | "workflows"
@@ -84,6 +85,12 @@ export const PAGE_TITLES: Record<View, string> = {
   projects: "Projects",
   integrations: "Integrations",
   mcp: "MCP servers",
+  // A tools-*management* destination, not the sandbox itself: you come here to
+  // author the custom tools the agent may run and to set each one's egress and
+  // approval, exactly as MCP is where you register servers. This is not the
+  // "sandbox" destination the docstring above refuses — nobody operates a
+  // machine here, they configure a capability.
+  "sandbox-tools": "Sandbox tools",
   activity: "Activity",
   admin: "Admin",
   workflows: "Workflows",

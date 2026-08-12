@@ -23,6 +23,7 @@ import type {
   PendingDocumentEdit,
   ProjectSummary,
   ProvenanceChunk,
+  SandboxTool,
   Skill,
   Source,
   WorkspaceDocument,
@@ -39,6 +40,7 @@ import { createGraphHandlers } from "./handlers/graph";
 import { createInfraHandlers } from "./handlers/infra";
 import { createIntegrationHandlers } from "./handlers/integrations";
 import { createMcpHandlers } from "./handlers/mcp";
+import { createSandboxToolHandlers } from "./handlers/sandbox-tools";
 import { createSourceHandlers } from "./handlers/sources";
 import { createTodoHandlers } from "./handlers/todos";
 import type { BudgetPark } from "./views/budget-format";
@@ -64,6 +66,7 @@ export function useWorkspace() {
   const [apps, setApps] = useState<GeneratedApp[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationProvider[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [sandboxTools, setSandboxTools] = useState<SandboxTool[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [activeDocument, setActiveDocument] = useState<WorkspaceDocument | null>(null);
@@ -213,6 +216,7 @@ export function useWorkspace() {
       nextApps,
       nextIntegrations,
       nextMcp,
+      nextSandboxTools,
     ] = await Promise.all([
       api.getGraph(),
       api.listMemory(),
@@ -220,6 +224,7 @@ export function useWorkspace() {
       api.listApps(),
       api.listIntegrations(),
       api.listMcpServers(),
+      api.listSandboxTools(),
     ]);
     setGraph(nextGraph);
     setMemories(nextMemories);
@@ -227,6 +232,7 @@ export function useWorkspace() {
     setApps(nextApps);
     setIntegrations(nextIntegrations);
     setMcpServers(nextMcp);
+    setSandboxTools(nextSandboxTools);
   }, []);
 
   /** Everything the home screen reads: what exists, what is bindable, what is pinned. */
@@ -304,6 +310,7 @@ export function useWorkspace() {
         nextApps,
         nextIntegrations,
         nextMcp,
+        nextSandboxTools,
       ] = await Promise.all([
         api.bootstrap(),
         api.listConversations(),
@@ -316,6 +323,7 @@ export function useWorkspace() {
         api.listApps(),
         api.listIntegrations(),
         api.listMcpServers(),
+        api.listSandboxTools(),
       ]);
       setBootstrap(boot);
       setConversations((current) => {
@@ -334,6 +342,7 @@ export function useWorkspace() {
       setApps(nextApps);
       setIntegrations(nextIntegrations);
       setMcpServers(nextMcp);
+      setSandboxTools(nextSandboxTools);
       setError("");
       if (chats[0] && !activeConversationRef.current) {
         setActiveConversation(chats[0].id);
@@ -504,6 +513,8 @@ export function useWorkspace() {
 
   const mcpHandlers = createMcpHandlers({ setError, setMcpServers });
 
+  const sandboxToolHandlers = createSandboxToolHandlers({ setError, setSandboxTools });
+
   /**
    * The composer's slash-picker actions. Attaching seeds each declared arg with
    * its default so a skill with sensible defaults is sendable on sight; clearing
@@ -614,6 +625,7 @@ export function useWorkspace() {
     apps,
     integrations,
     mcpServers,
+    sandboxTools,
     documents,
     folders,
     activeDocument,
@@ -684,6 +696,7 @@ export function useWorkspace() {
     ...todoHandlers,
     ...infraHandlers,
     ...mcpHandlers,
+    ...sandboxToolHandlers,
     ...chatHandlers,
     ...sourceHandlers,
     ...graphHandlers,

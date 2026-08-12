@@ -78,6 +78,7 @@ from app.models import (
     RunEvent,
     SandboxExecution,
     SandboxSession,
+    SandboxTool,
     Skill,
     SkillVersion,
     Source,
@@ -638,6 +639,26 @@ def build_tenant(label: str) -> Tenant:
         db.add(execution)
         db.flush()
         ids["sandbox_execution"] = execution.id
+
+        # A workspace-defined sandbox tool. Written directly for the same reason
+        # the sessions are: the point is to own a row whose id another tenant can
+        # name, not to exercise the create route. The description carries the
+        # marker string so the id-less leak scan catches it if a list route ever
+        # answered with a foreign workspace's tools.
+        sandbox_tool = SandboxTool(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label.lower()}-probe",
+            description=f"{label} secret sandbox tool",
+            input_schema_json='{"type":"object","properties":{}}',
+            argv_json=json.dumps(["echo", "hi"]),
+            egress_hosts_json="[]",
+            approval="inherit",
+            enabled=True,
+        )
+        db.add(sandbox_tool)
+        db.flush()
+        ids["sandbox_tool"] = sandbox_tool.id
 
         # A stored automation, one execution of it, and one node inside that
         # execution. Written directly for the same reason the sandbox rows are:
@@ -1586,6 +1607,30 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/sandbox/{session_id}",
         DENY,
         path_ids={"session_id": "sandbox_session"},
+    ),
+    # A custom sandbox tool is workspace data: listing another tenant's tools
+    # would leak their names, descriptions, and egress, and naming one by id to
+    # edit or delete it is a cross-tenant write. List/create are SCOPED; every
+    # id-taking route is a DENY.
+    RouteCase("GET", "/api/sandbox-tools", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/sandbox-tools",
+        SCOPED,
+        body={"name": "mine-probe", "argv": ["echo", "hi"]},
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/sandbox-tools/{tool_id}",
+        DENY,
+        path_ids={"tool_id": "sandbox_tool"},
+        body={"enabled": False},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/sandbox-tools/{tool_id}",
+        DENY,
+        path_ids={"tool_id": "sandbox_tool"},
     ),
     # -- workflows ---------------------------------------------------------
     # A workflow id is worth more than most: naming another tenant's automation
