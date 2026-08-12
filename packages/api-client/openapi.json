@@ -5290,6 +5290,35 @@
         "title": "ToolCallOut",
         "type": "object"
       },
+      "ToolInfoOut": {
+        "description": "One registry tool, for the provisioning checklist.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "family": {
+            "title": "Family",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "read_only": {
+            "title": "Read Only",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "read_only",
+          "family"
+        ],
+        "title": "ToolInfoOut",
+        "type": "object"
+      },
       "ToolPolicyOut": {
         "properties": {
           "created_at": {
@@ -14571,6 +14600,60 @@
           }
         },
         "summary": "Revoke Tool Policy",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
+    "/api/tools": {
+      "get": {
+        "description": "The live tool registry, grouped by family \u2014 the provisioning checklist.\n\nBuilt from the same `registry_families` the loop's `build_registry`\nflattens, so what an agent editor offers and what a turn can call cannot\ndisagree. Like every registry build, this consults the workspace's MCP\nservers, so it reflects what is connected *now*.",
+        "operationId": "list_registry_tools_api_tools_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ToolInfoOut"
+                  },
+                  "title": "Response List Registry Tools Api Tools Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Registry Tools",
         "tags": [
           "tools"
         ]

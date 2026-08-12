@@ -247,7 +247,12 @@ test("a destination reopens where you left it", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Memory" })).toBeVisible();
 
   await openView(page, "Chat");
-  await expect(page.locator(".view-tabs")).toHaveCount(0);
+  // Chat was a single-item group and had no tab strip; Agents joined it, so the
+  // strip now exists. Asserting its contents rather than its absence keeps what
+  // this line was actually for — that switching destinations rebuilds the strip
+  // — instead of deleting the check because the shape moved.
+  await expect(tabs(page, "Chat").getByRole("button", { name: /^Chat/ })).toBeVisible();
+  await expect(tabs(page, "Chat").getByRole("button", { name: /^Agents/ })).toBeVisible();
 
   await openView(page, "Knowledge");
   await expect(page.getByRole("heading", { name: "Memory" })).toBeVisible();

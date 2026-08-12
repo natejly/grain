@@ -866,3 +866,43 @@ def test_a_guard_referencing_an_unknown_input_is_refused() -> None:
         if node["id"] == "post":
             node["when"] = {"left": "{{ input.nonexistent }}", "op": "present"}
     assert "reference_unknown_input" in _codes(document)
+
+
+# --------------------------------------------------------------------------
+# Authored agents on agent nodes
+# --------------------------------------------------------------------------
+
+
+def test_an_agent_on_a_non_agent_node_is_misplaced() -> None:
+    """`agent` names who runs a step; a tool node is run by nobody."""
+    document = _graph()
+    document["nodes"][0]["agent"] = "agent-1"
+    assert "agent_misplaced" in _codes(document)
+
+
+def test_agent_existence_is_checked_only_when_ids_are_supplied() -> None:
+    """The compiler's repair loop is db-free, so it can only check shape; the
+    save and run paths pass the workspace's enabled ids and get the real check."""
+    document = _graph()
+    for node in document["nodes"]:
+        if node["id"] == "summarise":
+            node["agent"] = "agent-1"
+    # No ids supplied: shape passes, existence not judged.
+    assert _codes(document) == []
+
+    graph, errors = parse_graph(document)
+    assert graph is not None, errors
+    assert not validate_graph(graph, REGISTRY, agents={"agent-1"}).errors
+    unknown = validate_graph(graph, REGISTRY, agents=set()).errors
+    assert [item.code for item in unknown] == ["agent_unknown"]
+
+
+def test_an_empty_agent_field_is_the_default_and_always_valid() -> None:
+    """"" is what every stored graph already means; it must never be judged."""
+    document = _graph()
+    for node in document["nodes"]:
+        if node["id"] == "summarise":
+            node["agent"] = ""
+    graph, errors = parse_graph(document)
+    assert graph is not None, errors
+    assert not validate_graph(graph, REGISTRY, agents=set()).errors

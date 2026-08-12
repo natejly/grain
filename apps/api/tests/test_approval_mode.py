@@ -103,7 +103,13 @@ def install(monkeypatch: pytest.MonkeyPatch, *probes: Probe) -> None:
     """Make `probes` the entire registry the agent loop builds."""
     registry = {probe.name: probe.spec() for probe in probes}
     monkeypatch.setattr(
-        agent_loop, "build_registry", lambda db, context: dict(registry)
+        agent_loop,
+        "build_registry",
+        lambda db, context, allowed=None: {
+            name: spec
+            for name, spec in registry.items()
+            if allowed is None or name in set(allowed)
+        },
     )
 
 

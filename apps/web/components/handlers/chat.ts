@@ -26,6 +26,8 @@ import { createThreadHandlers } from "./thread";
  */
 export type ChatHandlerDeps = {
   bootstrap: Bootstrap | null;
+  selectedAgentId: string;
+  setSelectedAgentId: Dispatch<SetStateAction<string>>;
   conversations: Conversation[];
   messages: Message[];
   draft: string;
@@ -56,6 +58,8 @@ export type ChatHandlerDeps = {
 
 export function createChatHandlers({
   bootstrap,
+  selectedAgentId,
+  setSelectedAgentId,
   conversations,
   messages,
   draft,
@@ -111,7 +115,7 @@ export function createChatHandlers({
   }
 
   const thread = createThreadHandlers({
-    agentId: bootstrap?.default_agent_id,
+    agentId: selectedAgentId || bootstrap?.default_agent_id,
     messages,
     draft,
     activeConversation,

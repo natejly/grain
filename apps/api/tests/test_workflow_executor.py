@@ -106,10 +106,20 @@ def install(monkeypatch: pytest.MonkeyPatch, *probes: Probe) -> Dict[str, ToolSp
     from app.api import workflows as workflows_api
 
     registry = {probe.name: probe.spec() for probe in probes}
+
+    def fake_build_registry(
+        db: Any, context: ToolContext, allowed: Optional[Any] = None
+    ) -> Dict[str, ToolSpec]:
+        # Honour the agent-subset filter the real build_registry applies, so a
+        # test giving an agent a provisioned subset exercises the same
+        # intersection the product does.
+        if allowed is None:
+            return dict(registry)
+        names = set(allowed)
+        return {name: spec for name, spec in registry.items() if name in names}
+
     for module in (executor, agent_loop, workflows_api):
-        monkeypatch.setattr(
-            module, "build_registry", lambda db, context: dict(registry)
-        )
+        monkeypatch.setattr(module, "build_registry", fake_build_registry)
     return registry
 
 
@@ -1655,3 +1665,170 @@ def test_a_node_with_one_live_dependency_runs_despite_a_skipped_one(
     assert rows["page"].status == "skipped"
     assert rows["summary"].status == "succeeded"
     assert summary.calls == [{"text": "sev low"}]
+
+
+# --------------------------------------------------------------------------
+# Authored agents on agent nodes
+# --------------------------------------------------------------------------
+
+
+def _add_agent(
+    db: Any,
+    identity: Identity,
+    name: str,
+    *,
+    instructions: str = "You are the specialist.",
+    enabled: bool = True,
+) -> str:
+    from app.models import Agent
+
+    agent = Agent(
+        workspace_id=identity.workspace_id,
+        name=name,
+        instructions=instructions,
+        enabled=enabled,
+    )
+    db.add(agent)
+    db.commit()
+    return agent.id
+
+
+def _default_agent_id(db: Any, identity: Identity) -> str:
+    from sqlalchemy import select
+
+    from app.models import Agent
+
+    return db.scalars(
+        select(Agent.id)
+        .where(Agent.workspace_id == identity.workspace_id, Agent.enabled.is_(True))
+        .order_by(Agent.created_at, Agent.id)
+    ).first()
+
+
+def test_an_agent_node_runs_as_its_named_agent_and_empty_means_default(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each agent node decides the backing run's agent, and "" decides it back
+    to the workspace default — an earlier node's choice must not leak forward."""
+    install(monkeypatch, Probe("probe_read"))
+    specialist = _add_agent(db, identity, "Specialist")
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                {
+                    "id": "expert_step",
+                    "kind": "agent",
+                    "prompt": "Assess the situation.",
+                    "agent": specialist,
+                },
+                {
+                    "id": "plain_step",
+                    "kind": "agent",
+                    "prompt": "Now summarise: {{ expert_step.output }}",
+                },
+            ],
+            [{"from": "expert_step", "to": "plain_step"}],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "succeeded", workflow_run.error
+    rows = nodes_of(db, workflow_run)
+    # The specialist's turn is recorded on its node...
+    assert json.loads(rows["expert_step"].arguments_json)["agent"] == "Specialist"
+    # ...and the second node put the backing run back on the default agent.
+    run = db.get(Run, workflow_run.run_id)
+    assert run.agent_id == _default_agent_id(db, identity)
+    assert run.agent_id != specialist
+
+
+def test_a_graph_naming_a_disabled_agent_fails_before_the_first_node(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = Probe("probe_read")
+    install(monkeypatch, probe)
+    retired = _add_agent(db, identity, "Retired", enabled=False)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("gather", "probe_read"),
+                {
+                    "id": "think",
+                    "kind": "agent",
+                    "prompt": "Ponder {{ gather.output }}",
+                    "agent": retired,
+                },
+            ],
+            [{"from": "gather", "to": "think"}],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "failed"
+    assert "graph_stale" in workflow_run.error
+    # Loudly and *before* node one: the tool never ran.
+    assert probe.calls == []
+
+
+def test_an_agent_vanishing_mid_run_halts_at_the_node_that_needed_it(
+    db: Any, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_prepare's check passes (the agent is enabled at run start); the node's
+    own resolution is the backstop when it is disabled while the run is live."""
+    from app.models import Agent
+
+    specialist = _add_agent(db, identity, "Doomed")
+
+    def sabotage(inner_db: Any, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+        row = inner_db.get(Agent, specialist)
+        row.enabled = False
+        inner_db.commit()
+        return ToolResult(content="sabotaged")
+
+    saboteur = ToolSpec(
+        name="probe_saboteur",
+        description="Disables the specialist as a side effect.",
+        parameters={"type": "object", "properties": {}},
+        executor=sabotage,
+    )
+    from app.api import workflows as workflows_api
+
+    registry = {"probe_saboteur": saboteur}
+
+    def fake_build_registry(
+        db_: Any, context: ToolContext, allowed: Optional[Any] = None
+    ) -> Dict[str, ToolSpec]:
+        return dict(registry)
+
+    for module in (executor, agent_loop, workflows_api):
+        monkeypatch.setattr(module, "build_registry", fake_build_registry)
+
+    workflow_run = begin(
+        db,
+        identity,
+        graph(
+            [
+                tool_node("trip", "probe_saboteur"),
+                {
+                    "id": "think",
+                    "kind": "agent",
+                    "prompt": "This turn never starts.",
+                    "agent": specialist,
+                },
+            ],
+            [{"from": "trip", "to": "think"}],
+        ),
+    )
+    executor.advance_run(db, workflow_run)
+
+    assert workflow_run.status == "failed"
+    assert "agent_unavailable" in workflow_run.error
+    rows = nodes_of(db, workflow_run)
+    assert rows["trip"].status == "succeeded"
+    assert rows["think"].status == "failed"

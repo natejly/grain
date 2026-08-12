@@ -12,6 +12,7 @@ from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..models import (
     MODE_DECIDER_PREFIX,
+    Agent,
     AgentToolCall,
     Conversation,
     Document,
@@ -881,6 +882,54 @@ def _apply_web_search(
     return anchor_citations(text, outcome.anchors)
 
 
+@dataclass(frozen=True)
+class AgentDirectives:
+    """What the run's agent contributes to a turn: its voice, and its tools.
+
+    Resolved once per entry into the loop — start and both resume doors — so a
+    turn that parks resumes with the same instructions and the same registry
+    subset it began with, whatever has happened to the Agent row in between.
+    """
+
+    instructions: str
+    #: None means the whole registry. A set — empty included — is the agent's
+    #: provisioned subset, applied as `build_registry(..., allowed=)`.
+    allowed: Optional[frozenset[str]]
+
+
+def resolve_directives(db: Session, run: Run) -> AgentDirectives:
+    """`run.agent_id` → the instructions and tool subset this turn runs under.
+
+    Fallbacks are deliberate and total: a missing agent row or blank
+    instructions yields the stock `CHAT_INSTRUCTIONS`, and an allowlist that
+    does not parse as a JSON list yields None (all tools, still policy-gated)
+    — a corrupt row must degrade to default behaviour, never to a failed turn.
+    `Agent.enabled` is ignored here on purpose: disabling gates the *selection*
+    of an agent for new runs (chat resolution, workflow validation), not the
+    resumption of a run already carrying its id.
+    """
+    agent = db.get(Agent, run.agent_id) if run.agent_id else None
+    if agent is not None and agent.workspace_id != run.workspace_id:
+        # Runs are only ever created with a workspace-checked agent id, so this
+        # is belt-and-braces — but a cross-tenant prompt is the one mistake this
+        # function must be structurally unable to make.
+        agent = None
+    instructions = CHAT_INSTRUCTIONS
+    allowed: Optional[frozenset[str]] = None
+    if agent is not None:
+        if agent.instructions.strip():
+            instructions = agent.instructions
+        raw = agent.allowed_tools_json
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, list):
+                allowed = frozenset(str(item) for item in parsed)
+    return AgentDirectives(instructions=instructions, allowed=allowed)
+
+
 def _advance(
     db: Session,
     run: Run,
@@ -891,6 +940,7 @@ def _advance(
     step: ModelStep,
     settings: Settings,
     scope: PolicyScope,
+    instructions: str = CHAT_INSTRUCTIONS,
 ) -> Outcome:
     tools = _tool_payload(registry, settings)
     while True:
@@ -922,7 +972,7 @@ def _advance(
         buffer = DeltaBuffer(db, workspace_id=run.workspace_id, run_id=run.id)
         response: Any = None
         for kind, value in step(
-            state.input_items, [] if final_round else tools, CHAT_INSTRUCTIONS
+            state.input_items, [] if final_round else tools, instructions
         ):
             if kind == "delta":
                 buffer.add(str(value))
@@ -996,7 +1046,8 @@ def run_agent_turn(
         conversation_id=run.conversation_id,
         document_id=document.id if document else "",
     )
-    registry = build_registry(db, context)
+    directives = resolve_directives(db, run)
+    registry = build_registry(db, context, allowed=directives.allowed)
     state = LoopState(
         input_items=[
             {
@@ -1031,6 +1082,7 @@ def run_agent_turn(
             step=model_step or _default_model_step(settings, run, list(evidence)),
             settings=settings,
             scope=scope,
+            instructions=directives.instructions,
         )
     return _finish(db, run, outcome)
 
@@ -1173,7 +1225,8 @@ def _continue(
         conversation_id=run.conversation_id,
         document_id=document.id if document else "",
     )
-    registry = build_registry(db, context)
+    directives = resolve_directives(db, run)
+    registry = build_registry(db, context, allowed=directives.allowed)
     scope = policy_scope_for_run(db, run)
     with usage_scope(
         workspace_id=run.workspace_id,
@@ -1191,6 +1244,7 @@ def _continue(
             step=model_step or _default_model_step(settings, run, state.evidence),
             settings=settings,
             scope=scope,
+            instructions=directives.instructions,
         )
     if workflow_run is not None:
         # The agent node's turn is over; the graph is not. Returning None keeps

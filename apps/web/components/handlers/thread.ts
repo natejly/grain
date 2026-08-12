@@ -85,7 +85,7 @@ export type ThreadHandlerDeps = {
  * unnamed tool failure tells a user nothing they can act on: the whole question
  * is *which* of the things they approved went wrong.
  */
-function toolFailure(tool: string, error: string): string {
+export function toolFailure(tool: string, error: string): string {
   const detail = error || "the call failed";
   return tool ? `${tool} failed: ${detail}` : detail;
 }

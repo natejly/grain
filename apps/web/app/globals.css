@@ -7638,6 +7638,48 @@ select:focus-visible {
   display: flex;
   gap: 10px;
   padding: 3px 0;
+}
+
+/* --- Agents (authored system prompts + provisioned tools) --- */
+
+.agent-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 94vw);
+  height: 100%;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* The drawer reuses .mcp-form's field styling; only the frame differs. */
+.agent-form {
+  margin-bottom: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.agent-instructions {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.agent-provisioning {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.agent-provisioning legend {
+  padding: 0 4px;
   color: var(--text-muted);
   font-size: 11px;
 }
@@ -7681,4 +7723,52 @@ select:focus-visible {
 
 .tool-card.denied {
   border-color: var(--red-border);
+}
+
+.agent-tool-groups {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.agent-tool-family > h4 {
+  margin: 0 0 4px;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-tool-unavailable code {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.agent-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-bottom: 18px;
+}
+
+.composer-tools .agent-select {
+  max-width: 160px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.workflow-agent-select {
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
 }
