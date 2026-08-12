@@ -67,6 +67,13 @@ export function useDocumentThread({
     setAgentCalls([]);
     setDraft("");
     setError("");
+    // The run belongs to the file we just left. Leaving it set disables the new
+    // file's composer, turns Send into a Stop wired to somebody else's run, and
+    // leaves a budget hold on screen for a document that has none — the panel
+    // would be reporting the previous file's turn as this one's.
+    setActiveRun(null);
+    setRunStatus("");
+    setBudgetPark(null);
     if (!documentId) return;
     void (async () => {
       try {

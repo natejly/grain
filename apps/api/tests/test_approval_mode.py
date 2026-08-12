@@ -42,6 +42,7 @@ from app.models import (
     AuditEvent,
     Conversation,
     Run,
+    RunEvent,
     ToolPolicy,
     Workflow,
     WorkflowRun,
@@ -785,3 +786,49 @@ def test_the_conversation_can_read_back_what_the_bypass_approved(
     body = owner.get("/api/agent-tool-calls").text
     assert identity.user_id not in body
     assert "decided_by" not in body
+
+
+def test_the_stream_says_a_call_was_bypassed_while_it_is_happening(
+    owner: TestClient, db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Property 3 again, but at the moment it is worth knowing.
+
+    `GET /api/agent-tool-calls` is a refetch, and the client only makes it once
+    the run settles. So a trail that lives only there is blank for the whole of
+    the turn in which the writes are actually going through — the only window in
+    which turning the bypass off could still stop anything — and a run that
+    parks on a later approval or on the budget ceiling never leaves that window
+    at all. The events are what the chat has during the turn, so they carry it.
+    """
+    write = Probe(WRITE, read_only=False)
+    read = Probe(READ, read_only=True)
+    install(monkeypatch, write, read)
+    conversation = new_conversation(owner)
+    set_mode(owner, conversation["id"], AUTO_WRITES)
+
+    identity = identity_of(owner)
+    bypassed = make_run(db, identity, conversation["id"])
+    run_agent_turn(db, bypassed, evidence=[], model_step=calls_then_answers(WRITE))
+    unattended = make_run(db, identity, conversation["id"])
+    run_agent_turn(db, unattended, evidence=[], model_step=calls_then_answers(READ))
+
+    stamped: Dict[Tuple[str, str], str] = {}
+    for event in db.scalars(
+        select(RunEvent)
+        .where(RunEvent.run_id.in_([bypassed.id, unattended.id]))
+        .order_by(RunEvent.sequence)
+    ):
+        if event.event_type not in ("tool.started", "tool.completed"):
+            continue
+        payload = json.loads(event.payload_json)
+        stamped[(payload["tool_name"], event.event_type)] = payload["approved_by_mode"]
+
+    # Both events, because a client that reloaded mid-run has only the ones it
+    # received and the completed row is the one it keeps.
+    assert stamped[(WRITE, "tool.started")] == AUTO_WRITES
+    assert stamped[(WRITE, "tool.completed")] == AUTO_WRITES
+    # And a read the mode never had to decide is blank, so "unreviewed" counts
+    # the calls the bypass actually let through rather than every call in a
+    # bypassed thread.
+    assert stamped[(READ, "tool.started")] == ""
+    assert stamped[(READ, "tool.completed")] == ""

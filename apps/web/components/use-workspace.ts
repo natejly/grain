@@ -439,6 +439,22 @@ export function useWorkspace() {
     activeDocumentRef,
   });
 
+  /**
+   * Re-read whichever document is open *at the moment this runs*.
+   *
+   * The caller is the document panel's `onRunSettled`, which fires after a whole
+   * turn has streamed. By then the user may well have clicked a different file,
+   * and a handler built around the `activeDocument` of the render that started
+   * the turn would reopen the one they left — silently replacing what they are
+   * looking at with what they were looking at. The rail's twin reads
+   * `activeDocumentRef` for exactly this reason; so does this.
+   */
+  const reloadOpenDocument = async () => {
+    const open = activeDocumentRef.current;
+    if (open) await documentHandlers.openDocument(open);
+    await refreshArtifacts();
+  };
+
   const folderHandlers = createFolderHandlers({ setError, setFolders, setDocuments });
 
   const boardHandlers = createBoardHandlers({ setError, setBoards });
@@ -583,6 +599,7 @@ export function useWorkspace() {
     // `refreshOffScreenWork`.
     refreshArtifacts,
     refreshPendingEdits,
+    reloadOpenDocument,
     ...documentHandlers,
     ...folderHandlers,
     ...boardHandlers,

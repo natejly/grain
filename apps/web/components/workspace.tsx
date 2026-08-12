@@ -92,8 +92,8 @@ export function Workspace() {
     setFocusedDashboard,
     loadWorkspace,
     refreshOffScreenWork,
-    refreshArtifacts,
     refreshPendingEdits,
+    reloadOpenDocument,
     openDocument,
     createDocument,
     saveDocument,
@@ -568,10 +568,7 @@ export function Workspace() {
               // and the list its title appears in. The shell's other lists are
               // deliberately not refreshed from here — a thread scoped to one
               // document is not a reason to refetch six collections.
-              reloadDocument: async () => {
-                if (activeDocument) await openDocument(activeDocument.id);
-                await refreshArtifacts();
-              },
+              reloadDocument: reloadOpenDocument,
               refreshPendingEdits,
             }}
           />

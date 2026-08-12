@@ -3,7 +3,7 @@
 The SSRF defense has two halves and this file is the second one. `validate_public_https_url`
 checks the addresses a host *resolves to*; but httpx resolves again to connect, so a name
 that answered a public address for the check can answer a private one for the socket (DNS
-rebinding). `_peer_is_blocked` reads the address the connection genuinely used and refuses
+rebinding). `peer_is_blocked` reads the address the connection genuinely used and refuses
 it before a byte of the body is read.
 
 These are pure network helpers — no database, no app fixtures — so the file drives them
@@ -48,7 +48,7 @@ def _public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _FakeStream:
-    """The one method `_peer_is_blocked` calls on httpx's network-stream extension."""
+    """The one method `peer_is_blocked` calls on httpx's network-stream extension."""
 
     def __init__(self, peer: Optional[Tuple[str, int]]) -> None:
         self._peer = peer

@@ -44,10 +44,27 @@ RESOURCE_METADATA = (
     "https://mcp.example.test/.well-known/oauth-protected-resource/mcp"
 )
 PUBLIC_IP = "93.184.216.34"
+PRIVATE_IP = "10.0.0.5"
+METADATA_IP = "169.254.169.254"
 
 
 # --------------------------------------------------------------------------
 # The fake internet
+
+
+class _FakePeer:
+    """httpx's network-stream extension, reduced to the one call the guard makes.
+
+    This is what makes DNS rebinding expressible offline: the monkeypatched
+    resolver decides what the pre-connect check sees, and this decides what the
+    socket actually reached, which is the whole point of the two being separate.
+    """
+
+    def __init__(self, address: str) -> None:
+        self._address = address
+
+    def get_extra_info(self, name: str) -> Optional[tuple]:
+        return (self._address, 443) if name == "server_addr" else None
 
 
 class FakeAuthServer:
@@ -59,6 +76,9 @@ class FakeAuthServer:
 
     def __init__(self) -> None:
         self.requests: List[httpx.Request] = []
+        # URL -> the address the socket "really" reached. Anything unlisted is
+        # public, so a rebinding test names exactly the one hop that goes bad.
+        self.peers: Dict[str, str] = {}
         self.publish_resource_metadata = True
         self.publish_auth_metadata = True
         self.challenge_resource_metadata: Optional[str] = RESOURCE_METADATA
@@ -73,6 +93,16 @@ class FakeAuthServer:
         self.token_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
+        response = self._route(request)
+        # Every real connection has a peer, so every fake one does too; without
+        # it `peer_is_blocked` reads "unknown" and no test could distinguish a
+        # guard that works from a guard that is not called.
+        response.extensions["network_stream"] = _FakePeer(
+            self.peers.get(str(request.url), PUBLIC_IP)
+        )
+        return response
+
+    def _route(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         url = str(request.url)
         if url == SERVER_URL and request.method == "POST":
@@ -327,6 +357,103 @@ def test_a_later_hop_is_validated_too(server_double, monkeypatch, encryption):
 def test_plain_http_destinations_are_refused(server_double, public_dns, encryption):
     with pytest.raises(oauth.McpOAuthError, match="Refused to contact"):
         oauth.probe_authentication("http://mcp.example.test/mcp", encryption)
+
+
+# --------------------------------------------------------------------------
+# SSRF, second half: the address checked is not the address connected to
+#
+# `_validate_destination` resolves a name; httpx resolves it again to open the
+# socket. A host that answers a public address for the first lookup and a
+# private one for the second walks straight past a check that only ever saw the
+# first answer — so every hop below keeps `public_dns` (the pre-connect check
+# passes, exactly as it would for the attacker) and moves only the peer.
+
+
+def test_a_rebound_mcp_endpoint_is_refused(server_double, public_dns, encryption):
+    """The front door. The probe POST is where the chain starts, and the reply
+    it reads is what nominates every later URL."""
+    server_double.peers[SERVER_URL] = METADATA_IP
+    with pytest.raises(oauth.McpOAuthError, match="blocked network"):
+        oauth.discover(SERVER_URL, encryption)
+
+
+def test_a_rebound_metadata_fetch_is_refused_rather_than_skipped(
+    server_double, public_dns, encryption
+):
+    """Not merely "not used": aborted.
+
+    `_get_metadata` answers None for a 404 and discovery tries the next
+    candidate spelling. Treating a connection that landed inside the same way
+    would let the flow shrug and continue, and the fallback at the end of
+    `fetch_protected_resource` would happily invent an issuer — the response
+    would have been read from a private host either way.
+    """
+    server_double.peers[RESOURCE_METADATA] = PRIVATE_IP
+    with pytest.raises(oauth.McpOAuthError, match="blocked network"):
+        oauth.discover(SERVER_URL, encryption)
+    # It reached the metadata document and stopped there, never nominating an
+    # issuer off the back of it.
+    fetched = [str(request.url) for request in server_double.requests]
+    assert fetched[-1] == RESOURCE_METADATA
+    assert not any(url.startswith(ISSUER) for url in fetched)
+
+
+def test_a_rebound_authorization_server_document_is_refused(
+    server_double, public_dns, encryption
+):
+    """The issuer is a URL the MCP server chose, so its metadata hop is the one
+    an attacker actually wants — it names the endpoints the browser is sent to."""
+    server_double.peers[f"{ISSUER}/.well-known/oauth-authorization-server"] = PRIVATE_IP
+    with pytest.raises(oauth.McpOAuthError, match="blocked network"):
+        oauth.discover(SERVER_URL, encryption)
+
+
+def test_a_rebound_registration_endpoint_is_refused(
+    server_double, public_dns, workspace, encryption
+):
+    """Registration POSTs this deployment's callback URL and takes a client id
+    back; a rebound issuer would be handed the former and choose the latter."""
+    server_double.peers[REGISTER] = PRIVATE_IP
+    db, server = _session_and_server(workspace)
+    try:
+        with pytest.raises(oauth.McpOAuthError, match="blocked network"):
+            oauth.begin_authorization(db, server, workspace["owner"].user_id, encryption)
+        # Nothing was believed: no registration row, and so no authorize URL.
+        assert db.query(McpOAuthClient).count() == 0
+    finally:
+        db.close()
+
+
+def test_a_rebound_token_endpoint_never_yields_a_stored_token(
+    server_double, public_dns, workspace, encryption
+):
+    """The code has already left by the time the peer is knowable — that is what
+    a post-connect check cannot fix. What it does stop is the *answer* being
+    believed: an internal host does not get to mint us an access token that we
+    would then store and present to the real server."""
+    db, server = _session_and_server(workspace)
+    try:
+        oauth.begin_authorization(db, server, workspace["owner"].user_id, encryption)
+        record = db.query(OAuthState).one()
+        server_double.peers[TOKEN] = METADATA_IP
+        with pytest.raises(oauth.McpOAuthError, match="blocked network"):
+            oauth.complete_authorization(db, record.state, "auth-code-1", encryption)
+        assert db.query(McpOAuthToken).count() == 0
+    finally:
+        db.close()
+
+
+def test_a_public_peer_still_connects(server_double, public_dns, workspace, encryption):
+    """The control. Every test above leaves the pre-connect check passing, so
+    without this one they would all pass equally against a guard that refused
+    every connection."""
+    db, server = _session_and_server(workspace)
+    try:
+        _connect(db, server, workspace["owner"].user_id, encryption)
+        token = db.query(McpOAuthToken).one()
+        assert decrypt_secret(token.access_token_enc) == "access-1"
+    finally:
+        db.close()
 
 
 # --------------------------------------------------------------------------

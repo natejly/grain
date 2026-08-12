@@ -240,6 +240,16 @@ export function createThreadHandlers({
      * away the only useful half of the message.
      */
     let failedTool = "";
+    /**
+     * Whether the transcript on screen is still this run's.
+     *
+     * A stream outlives a switch — to another thread in the rail, to another
+     * file in the document panel — and the messages rendered after one belong to
+     * somebody else, so an unguarded append types this thread's answer into
+     * theirs. The refetch after the loop already reads the ref for exactly this
+     * reason; the deltas that arrive before it have to as well.
+     */
+    const stillOpen = () => activeConversationRef.current === conversationId;
     try {
       for await (const event of api.streamRun(runId)) {
         if (event.event === "run.started") {
@@ -276,7 +286,7 @@ export function createThreadHandlers({
             setRunStatus(`Recalling ${count} ${count === 1 ? "memory" : "memories"}`);
           }
         }
-        if (event.event === "message.delta") {
+        if (event.event === "message.delta" && stillOpen()) {
           const delta = String(event.data.delta || "");
           setMessages((items) => {
             const existing = items.findIndex((item) => item.id === temporaryId);
@@ -337,7 +347,7 @@ export function createThreadHandlers({
         if (event.event === "run.citations") {
           citationReport = readCitationCheck(event.data);
         }
-        if (event.event === "message.completed") {
+        if (event.event === "message.completed" && stillOpen()) {
           const completed: Message = {
             id: String(event.data.message_id),
             run_id: runId,

@@ -439,3 +439,38 @@
 - A cleanup block that deletes without asserting is a cleanup block that has
   probably stopped working. This one had been silently failing for its whole
   existence and was only visible as a strict-mode violation two files later.
+- A commit message is a claim about the tree, not the tree. f57547f's message
+  says "the document chat panel and the todo/approval-mode UI are NOT in this
+  commit"; `git show --stat f57547f` lists `use-document-thread.ts`,
+  `views/todos.tsx`, `views/approval-mode.tsx` and both their e2e specs among the
+  files it *adds*. A session briefed from that prose spent its first hour ready
+  to rebuild ~1,800 lines that were already there and already green. The check is
+  two commands and belongs before the plan, not after it:
+  `git show --stat <base> -- <area>` and `git log --oneline -- <the file the
+  feature would live in>`. If the file's only commit is the base, the feature
+  landed in the base — whatever the base says about itself.
+- A post-connect peer check is not a substitute for a pre-connect one, and where
+  it sits changes what it can promise. On `execute_read_only_get` the request
+  carries nothing, so refusing after the connect loses nothing. On the OAuth token
+  leg the authorization code and client secret are already on the wire by the time
+  the peer is knowable, so the same check can only stop the *reply* being believed
+  — it cannot un-send the credential. Write that limit into the comment; a guard
+  described as preventing something it cannot prevent is how the next reader
+  decides the door is shut.
+- `key` is a correctness feature, not a list-rendering chore. `DocumentReview`
+  holds the reviewer's staged per-hunk rejections in its own state; rendered
+  unkeyed, a second proposal arriving for the same document reuses the instance,
+  so the new diff opens with hunks crossed out that nobody crossed out and the
+  Apply count agrees with them. Any component whose state is only valid for one
+  identity of its props needs `key={that.id}` — and the test for it has to render
+  the *parent* and rerender with a new id, because the reset is React's job and
+  the child alone cannot show it.
+- A client that reads a field the server never sends fails silently and
+  confidently. `handlers/thread.ts` read `data.approved_by_mode` off the tool
+  stream events with a comment calling the event "the authority on it";
+  `agent_loop.py` put it in no payload. So the bypass banner said "Nothing has
+  gone through unreviewed yet" for the whole of every turn in which writes were
+  going through — correcting itself only at the settle-time refetch, which a run
+  that parks or fails never reaches. Grep both ends of any field a comment claims
+  arrives on an event: `grep -rn "<field>" apps/api apps/web` should hit a writer
+  as well as a reader.

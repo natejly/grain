@@ -48,7 +48,7 @@ def validate_public_https_url(url: str, settings: Settings) -> None:
             raise ToolSecurityError("Tool destination resolved to a blocked network")
 
 
-def _peer_is_blocked(response: httpx.Response) -> bool:
+def peer_is_blocked(response: httpx.Response) -> bool:
     """Whether the connection was actually served from a blocked network.
 
     `validate_public_https_url` checks the addresses a host *resolves to*, but
@@ -65,6 +65,10 @@ def _peer_is_blocked(response: httpx.Response) -> bool:
     the sole defense rather than failing every request outright. A peer that is
     reported but unparseable is blocked, since a value we cannot read is one we
     cannot vouch for.
+
+    Public rather than private because MCP OAuth discovery has the identical
+    door — every hop there is a URL the remote server chose — and two copies of
+    a rebinding check would drift into disagreeing about what "internal" means.
     """
     stream = response.extensions.get("network_stream")
     if stream is None:
@@ -103,7 +107,7 @@ def execute_read_only_get(
                 current,
                 headers={"Accept": "application/json, text/plain;q=0.9"},
             ) as response:
-                if _peer_is_blocked(response):
+                if peer_is_blocked(response):
                     raise ToolSecurityError(
                         "Tool destination connected to a blocked network"
                     )

@@ -18,7 +18,10 @@ token endpoint, registration endpoint. That is a server-side request forgery
 primitive aimed at the VPC and at 169.254.169.254, and it does not stop after
 the first hop, so `_validate_destination` runs on every hop rather than once at
 the front door. It delegates to `services.tools.validate_public_https_url`; see
-that function's call site below for exactly what is relaxed and why.
+that function's call site below for exactly what is relaxed and why. Resolving
+and then connecting are two lookups, though, so every response also passes
+`_guard_peer` before it is read — a name that answers a public address for the
+check and a private one for the socket is otherwise inside.
 
 **PKCE is the only thing standing between a leaked code and a session.** These
 are public clients — dynamic registration usually yields no client secret — so
@@ -53,7 +56,7 @@ from ...clock import utcnow
 from ...config import Settings
 from ...models import McpOAuthClient, McpOAuthToken, McpServer, OAuthState
 from ..crypto import EncryptionNotConfiguredError, decrypt_secret, encrypt_secret
-from ..tools import ToolSecurityError, validate_public_https_url
+from ..tools import ToolSecurityError, peer_is_blocked, validate_public_https_url
 
 # Tests set this to an httpx.MockTransport so the whole flow runs offline.
 HTTP_TRANSPORT: Optional[httpx.BaseTransport] = None
@@ -194,6 +197,21 @@ def _validate_destination(url: str, settings: Settings) -> None:
         raise McpOAuthError(f"Refused to contact that address: {exc}") from exc
 
 
+def _guard_peer(response: httpx.Response) -> None:
+    """Refuse a connection that landed inside, whatever the pre-check resolved.
+
+    `_validate_destination` checks the addresses a name resolves to; httpx then
+    resolves it again to open the socket, so a host that answered a public
+    address for the check can answer a private one for the connection. Every
+    URL on this path was chosen by the MCP server, which makes rebinding the
+    cheapest way to turn discovery into a read of 169.254.169.254 — so the same
+    check `execute_read_only_get` pins its fetch with runs here, on the streamed
+    response, before any status, header or body is trusted.
+    """
+    if peer_is_blocked(response):
+        raise McpOAuthError("Refused to contact that address: it connected to a blocked network")
+
+
 def _read_json(response: httpx.Response) -> Dict[str, Any]:
     """Parse a metadata document, giving up on one that will not stop.
 
@@ -228,6 +246,7 @@ def _get_metadata(
     _validate_destination(url, settings)
     try:
         with client.stream("GET", url, headers={"Accept": "application/json"}) as response:
+            _guard_peer(response)
             if response.status_code != 200:
                 return None
             return _read_json(response)
@@ -281,18 +300,23 @@ def probe_authentication(url: str, settings: Settings) -> Optional[AuthChallenge
     }
     try:
         with http_client() as client:
-            response = client.post(
+            # Streamed for the peer check, and because the body is never wanted:
+            # this endpoint answers `text/event-stream`, so a plain `post` would
+            # sit reading a channel that has no reason to end.
+            with client.stream(
+                "POST",
                 url,
                 json=payload,
                 headers={"Accept": "application/json, text/event-stream"},
-            )
+            ) as response:
+                _guard_peer(response)
+                status = response.status_code
+                header = response.headers.get("www-authenticate", "")
     except httpx.HTTPError as exc:
         raise McpOAuthError("Could not reach that MCP server") from exc
-    if response.status_code != 401:
+    if status != 401:
         return None
-    return AuthChallenge(
-        resource_metadata_url=parse_challenge(response.headers.get("www-authenticate", ""))
-    )
+    return AuthChallenge(resource_metadata_url=parse_challenge(header))
 
 
 def parse_challenge(header: str) -> str:
@@ -550,6 +574,7 @@ def register_client(
             with client.stream(
                 "POST", auth_server.registration_endpoint, json=payload
             ) as response:
+                _guard_peer(response)
                 if response.status_code not in (200, 201):
                     raise McpOAuthError(
                         f"Client registration was refused ({response.status_code})"
@@ -692,6 +717,12 @@ def _token_request(
                 data=body,
                 headers={"Accept": "application/json"},
             ) as response:
+                # This one cannot un-send the code and secret already written to
+                # the socket — the peer is only knowable after the connect. What
+                # it does stop is the reply being believed: a rebound host does
+                # not get to hand us an access token we would then store and
+                # present to the real server.
+                _guard_peer(response)
                 if response.status_code != 200:
                     # The provider's body may quote the code back at us; only
                     # the status crosses this boundary.

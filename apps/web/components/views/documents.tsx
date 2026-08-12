@@ -183,6 +183,11 @@ export function DocumentsView({
       )
     : undefined;
   const carded = proposals.filter((edit) => edit.id !== reviewable?.id);
+  /** Every proposal the editor column already offers a decision for. Empty when
+      it offers none, so the panel is never the *only* place to answer one. */
+  const decided = new Set(
+    decidePendingEdit ? proposals.map((edit) => edit.id) : [],
+  );
   const approvals =
     decidePendingEdit && carded.length > 0 ? (
       <PendingEditList edits={carded} decide={decidePendingEdit} />
@@ -345,7 +350,16 @@ export function DocumentsView({
               a user type into text the agent is asking to change, and whichever
               of the two writes last would silently win. */}
           {reviewable && decidePendingEdit ? (
-            <DocumentReview edit={reviewable} decide={decidePendingEdit} />
+            /* Keyed on the proposal, so a second one arriving while the first
+               is still on screen gets a fresh reviewer. Without it React reuses
+               the instance and its staged rejections, and the new diff opens
+               with hunks already crossed out that nobody crossed out — with the
+               Apply count agreeing. */
+            <DocumentReview
+              key={reviewable.id}
+              edit={reviewable}
+              decide={decidePendingEdit}
+            />
           ) : (
             <div className="document-panes">
               <textarea
@@ -399,10 +413,12 @@ export function DocumentsView({
           <ChatView
             messages={thread.messages}
             sources={chat.sources}
-            // Only what the inline reviewer is not already holding. Offering
+            // Only what the editor column is not already holding — the inline
+            // reviewer *and* every all-or-nothing card beside it. Offering
             // Approve twice for one call, in two places on the same screen,
-            // means one of them is stale the moment the other is pressed.
-            agentCalls={thread.agentCalls.filter((call) => call.id !== reviewable?.id)}
+            // means one of them is stale the moment the other is pressed, and
+            // the second press comes back "already decided".
+            agentCalls={thread.agentCalls.filter((call) => !decided.has(call.id))}
             apps={chat.apps}
             draft={thread.draft}
             setDraft={thread.setDraft}

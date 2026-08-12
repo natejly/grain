@@ -679,7 +679,17 @@ def execute_agent_tool_call(
         workspace_id=run.workspace_id,
         run_id=run.id,
         event_type="tool.started",
-        payload={"tool_call_id": record.id, "tool_name": name},
+        payload={
+            "tool_call_id": record.id,
+            "tool_name": name,
+            # The one window in which "turn it off" can still prevent something
+            # is the turn itself, so the bypass has to be legible *while* it is
+            # spending — a client that only learns which calls went through
+            # unreviewed from the settle-time refetch shows "nothing has gone
+            # through yet" for exactly as long as things are going through, and
+            # a run that parks or fails never corrects it.
+            "approved_by_mode": record.approved_by_mode,
+        },
     )
     db.commit()
 
@@ -730,6 +740,11 @@ def execute_agent_tool_call(
             "status": record.status,
             "preview": record.result_preview,
             "artifacts": result.artifacts,
+            # Repeated from `tool.started` rather than left to be remembered: a
+            # client that joined the stream late, or that reloaded mid-run, has
+            # only the events it received, and the completed row is the one it
+            # keeps.
+            "approved_by_mode": record.approved_by_mode,
         },
     )
     record_audit(
