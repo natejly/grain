@@ -79,6 +79,14 @@ export type MessageControls = {
   model?: string;
   effort?: string;
   fast?: boolean;
+  /**
+   * A skill to inject into this one turn, and the values for its declared args.
+   * Per-turn like the model/effort above: absent means today's behaviour, and
+   * the skill never becomes part of the conversation. `skillArgs` only rides the
+   * wire when `skillId` is set.
+   */
+  skillId?: string;
+  skillArgs?: Record<string, unknown>;
 };
 
 export type Conversation = {
@@ -295,6 +303,72 @@ export type AgentUpdateBody = {
   enabled?: boolean;
   allowed_tools?: string[] | null;
   clear_allowed_tools?: boolean;
+};
+
+/**
+ * One parameter a skill declares. The workflow InputSpec shape, minus the
+ * workflow-only bits — a name, a type the value is coerced to, and the usual
+ * label/required/default/choices affordances an editor needs to render a field.
+ */
+export type SkillArg = {
+  name: string;
+  type: "string" | "number" | "integer" | "boolean";
+  label: string;
+  description: string;
+  required: boolean;
+  default: unknown;
+  choices: unknown[];
+};
+
+/**
+ * A reusable, named instruction block a user authors once and invokes per turn.
+ *
+ * `can_share`/`can_edit` are the caller's rights on this row, resolved by the
+ * server rather than guessed by the client: a member sees a shared skill but may
+ * not edit it or flip its `shared` flag, so the editor disables those controls
+ * instead of surprising them with a 403.
+ */
+export type Skill = {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  body: string;
+  args: SkillArg[];
+  shared: boolean;
+  version: number;
+  can_share: boolean;
+  can_edit: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One retained snapshot of a skill, for the versions list and its restore. */
+export type SkillVersion = {
+  id: string;
+  version: number;
+  title: string;
+  created_at: string;
+};
+
+export type SkillCreateBody = {
+  name: string;
+  title: string;
+  description?: string;
+  body: string;
+  args?: SkillArg[];
+  /** Ignored server-side for a non-owner; the editor hides it unless permitted. */
+  shared?: boolean;
+};
+
+/** Every field optional; omitted means "leave alone". A member sending
+ * `shared` is refused — sharing is gated to an owner/admin. */
+export type SkillUpdateBody = {
+  title?: string;
+  description?: string;
+  body?: string;
+  args?: SkillArg[];
+  shared?: boolean;
 };
 
 /** One registry tool, as the provisioning checklist renders it. */
@@ -1602,6 +1676,12 @@ export class WorkspaceApi {
           ...(controls?.model ? { model: controls.model } : {}),
           ...(controls?.effort ? { effort: controls.effort } : {}),
           ...(controls?.fast ? { fast: true } : {}),
+          // A skill is injected for this turn only, so it rides the send like the
+          // other per-turn controls. `skill_args` only travels with a skill.
+          ...(controls?.skillId ? { skill_id: controls.skillId } : {}),
+          ...(controls?.skillId && controls?.skillArgs
+            ? { skill_args: controls.skillArgs }
+            : {}),
         }),
       },
       true,
@@ -1734,6 +1814,44 @@ export class WorkspaceApi {
 
   deleteAgent(agentId: string): Promise<undefined> {
     return this.request(`/api/agents/${agentId}`, { method: "DELETE" });
+  }
+
+  // --- Skills (authored instruction blocks, invoked per turn) ---
+
+  /** The skills visible to the caller: their own, plus the workspace's shared. */
+  listSkills(): Promise<Skill[]> {
+    return this.request("/api/skills");
+  }
+
+  getSkill(skillId: string): Promise<Skill> {
+    return this.request(`/api/skills/${skillId}`);
+  }
+
+  createSkill(body: SkillCreateBody): Promise<Skill> {
+    return this.request("/api/skills", { method: "POST", body: JSON.stringify(body) }, true);
+  }
+
+  updateSkill(skillId: string, body: SkillUpdateBody): Promise<Skill> {
+    return this.request(`/api/skills/${skillId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  deleteSkill(skillId: string): Promise<undefined> {
+    return this.request(`/api/skills/${skillId}`, { method: "DELETE" });
+  }
+
+  listSkillVersions(skillId: string): Promise<SkillVersion[]> {
+    return this.request(`/api/skills/${skillId}/versions`);
+  }
+
+  /** Apply a retained snapshot as a new version; returns the skill at that new head. */
+  restoreSkillVersion(skillId: string, versionId: string): Promise<Skill> {
+    return this.request(
+      `/api/skills/${skillId}/versions/${versionId}/restore`,
+      { method: "POST" },
+    );
   }
 
   /** The live tool registry, for the agent editor's provisioning checklist. */

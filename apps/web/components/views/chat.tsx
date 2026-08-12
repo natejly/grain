@@ -11,6 +11,7 @@ import {
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Square,
   Wrench,
   X,
@@ -25,6 +26,7 @@ import type {
   CitationCheck,
   GeneratedApp,
   Message,
+  Skill,
   Source,
 } from "@workspace/api-client";
 import { FormEvent, useEffect, useState } from "react";
@@ -120,6 +122,20 @@ export type ChatViewProps = {
     setEffort: (value: string) => void;
     fast: boolean;
     setFast: (value: boolean) => void;
+  };
+  /**
+   * The composer's slash-command picker: the skill attached to the next turn,
+   * the values for its declared args, and the ways to change them. Optional and
+   * grouped like `approval`/`turnControls` — the document panel mounts ChatView
+   * without it and so shows no picker. The attachment is per-turn state the
+   * caller clears once the send lands; here we only read and edit it.
+   */
+  skills?: {
+    attached: Skill | null;
+    argValues: Record<string, unknown>;
+    attach: (skill: Skill) => void;
+    detach: () => void;
+    setArg: (name: string, value: unknown) => void;
   };
 };
 
@@ -231,6 +247,178 @@ function TurnControls({
         </>
       )}
     </>
+  );
+}
+
+/**
+ * The skills the composer's slash picker offers, fetched once when a surface
+ * that has a picker mounts. Gated on `enabled` because ChatView is also mounted
+ * beside a document, where there is no picker and so no reason to ask for the
+ * list. Mirrors how AgentSelect fetches the agent list for itself.
+ */
+function useVisibleSkills(enabled: boolean): Skill[] {
+  const [skills, setSkills] = useState<Skill[]>([]);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    void api
+      .listSkills()
+      .then((rows) => {
+        if (!cancelled) setSkills(rows);
+      })
+      .catch(() => undefined); // the composer works without a picker
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+  return skills;
+}
+
+/** Skills whose name/title/description contain the text typed after the "/". */
+export function matchSkills(skills: Skill[], query: string): Skill[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return skills;
+  return skills.filter((skill) =>
+    `${skill.name} ${skill.title} ${skill.description}`.toLowerCase().includes(needle),
+  );
+}
+
+/**
+ * Whether an attached skill's required args are all filled, so the send button
+ * can refuse a turn the server would only 422 anyway. A boolean arg is always
+ * satisfied (its absence reads as false); everything else must be non-empty.
+ */
+export function argsSatisfied(skill: Skill | null, values: Record<string, unknown>): boolean {
+  if (!skill) return true;
+  return skill.args.every((arg) => {
+    if (!arg.required || arg.type === "boolean") return true;
+    const value = values[arg.name];
+    return value !== undefined && value !== null && String(value).trim() !== "";
+  });
+}
+
+/** The leading-"/" token stripped from a draft once a skill is attached. */
+export function stripSlashToken(draft: string): string {
+  return draft.replace(/^\/\S*\s?/, "");
+}
+
+/**
+ * The autocomplete that opens when a composer draft starts with "/". It floats
+ * above the composer rather than pushing it down, so the textarea does not jump
+ * under the cursor mid-type.
+ */
+function SkillPicker({
+  skills,
+  onPick,
+}: {
+  skills: Skill[];
+  onPick: (skill: Skill) => void;
+}) {
+  return (
+    <ul className="skill-picker" role="listbox" aria-label="Skills">
+      {skills.map((skill) => (
+        <li key={skill.id}>
+          <button type="button" onClick={() => onPick(skill)} role="option" aria-selected={false}>
+            <span className="skill-picker-name">
+              <Sparkles size={13} aria-hidden /> /{skill.name}
+            </span>
+            {skill.description && (
+              <span className="skill-picker-desc">{skill.description}</span>
+            )}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The attached skill, shown as a chip on its own row above the composer tools so
+ * it never crowds the agent/approval/model controls. Any args the skill declares
+ * are prompted inline here — the smallest thing that lets a parameterised skill
+ * be sent — and the whole row disappears the moment the skill is detached or the
+ * send clears it.
+ */
+function SkillBar({
+  skill,
+  values,
+  setArg,
+  detach,
+  disabled,
+}: {
+  skill: Skill;
+  values: Record<string, unknown>;
+  setArg: (name: string, value: unknown) => void;
+  detach: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="skill-bar">
+      <span className="skill-chip">
+        <Sparkles size={13} aria-hidden />
+        /{skill.name}
+        <button
+          type="button"
+          onClick={detach}
+          disabled={disabled}
+          aria-label={`Remove skill ${skill.name}`}
+        >
+          <X size={12} />
+        </button>
+      </span>
+      {skill.args.map((arg) => {
+        const value = values[arg.name];
+        const label = arg.label || arg.name;
+        if (arg.type === "boolean") {
+          return (
+            <label key={arg.name} className="skill-arg-inline skill-arg-bool">
+              <input
+                type="checkbox"
+                checked={Boolean(value)}
+                disabled={disabled}
+                onChange={(event) => setArg(arg.name, event.target.checked)}
+              />
+              {label}
+            </label>
+          );
+        }
+        if (arg.choices.length > 0) {
+          return (
+            <label key={arg.name} className="skill-arg-inline">
+              <span>{label}</span>
+              <select
+                className="composer-select"
+                value={value === undefined || value === null ? "" : String(value)}
+                disabled={disabled}
+                onChange={(event) => setArg(arg.name, event.target.value)}
+                aria-label={label}
+              >
+                <option value="">—</option>
+                {arg.choices.map((choice) => (
+                  <option key={String(choice)} value={String(choice)}>
+                    {String(choice)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        }
+        return (
+          <label key={arg.name} className="skill-arg-inline">
+            <span>{label}</span>
+            <input
+              className="skill-arg-input"
+              type={arg.type === "string" ? "text" : "number"}
+              value={value === undefined || value === null ? "" : String(value)}
+              placeholder={arg.required ? "required" : "optional"}
+              disabled={disabled}
+              onChange={(event) => setArg(arg.name, event.target.value)}
+              aria-label={label}
+            />
+          </label>
+        );
+      })}
+    </div>
   );
 }
 
@@ -536,11 +724,27 @@ export function ChatView({
   selectedAgentId,
   onSelectAgent,
   turnControls,
+  skills,
 }: ChatViewProps) {
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
   const callsForRun = (runId: string) =>
     agentCalls.filter((call) => call.run_id === runId);
+  // The slash picker: open only when a picker exists, nothing is attached yet,
+  // and the draft leads with "/". The matches drive both the dropdown and the
+  // Enter-to-attach shortcut, so they are computed once here.
+  const skillList = useVisibleSkills(Boolean(skills));
+  const slashQuery =
+    skills && !skills.attached && draft.startsWith("/") ? draft.slice(1) : null;
+  const skillMatches = slashQuery === null ? [] : matchSkills(skillList, slashQuery);
+  const pickerOpen = slashQuery !== null && skillMatches.length > 0;
+  const attachSkill = (skill: Skill) => {
+    skills?.attach(skill);
+    setDraft(stripSlashToken(draft));
+  };
+  // A turn cannot be sent with a required arg left blank; the button says so
+  // rather than letting the server 422 a click the composer could have refused.
+  const skillReady = argsSatisfied(skills?.attached ?? null, skills?.argValues ?? {});
   const bypassed = Boolean(approval && isBypass(approval.mode));
   /**
    * Which card in a turn gets the checklist: the last one that touched a list.
@@ -676,13 +880,23 @@ export function ChatView({
             stop={() => approval.setMode("ask_writes")}
           />
         )}
-        <form className="composer" onSubmit={(event) => void submitPrompt(event)}>
+        <div className="composer-shell">
+          {pickerOpen && (
+            <SkillPicker skills={skillMatches} onPick={attachSkill} />
+          )}
+          <form className="composer" onSubmit={(event) => void submitPrompt(event)}>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
+                // With the slash picker open, Enter attaches the top match
+                // rather than sending a message that is only a "/query".
+                if (pickerOpen) {
+                  attachSkill(skillMatches[0]);
+                  return;
+                }
                 void submitPrompt();
               }
             }}
@@ -698,6 +912,15 @@ export function ChatView({
             disabled={Boolean(activeRun)}
             aria-label="Message"
           />
+          {skills?.attached && (
+            <SkillBar
+              skill={skills.attached}
+              values={skills.argValues}
+              setArg={skills.setArg}
+              detach={skills.detach}
+              disabled={Boolean(activeRun)}
+            />
+          )}
           <div className="composer-tools">
             {onAttach && (
               <button
@@ -735,14 +958,15 @@ export function ChatView({
               <button
                 className="send-button"
                 type="submit"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || !skillReady}
                 aria-label="Send message"
               >
                 <ArrowUp size={18} />
               </button>
             )}
           </div>
-        </form>
+          </form>
+        </div>
       </div>
     </section>
   );

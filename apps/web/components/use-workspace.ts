@@ -23,6 +23,7 @@ import type {
   PendingDocumentEdit,
   ProjectSummary,
   ProvenanceChunk,
+  Skill,
   Source,
   WorkspaceDocument,
   WorkspaceProject,
@@ -84,6 +85,11 @@ export function useWorkspace() {
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedEffort, setSelectedEffort] = useState("");
   const [fast, setFast] = useState(false);
+  // The skill attached to the next turn and the values for its declared args.
+  // Per-turn session state like the controls above: the composer's slash picker
+  // sets it, the send consumes it, and it never becomes part of the conversation.
+  const [attachedSkill, setAttachedSkill] = useState<Skill | null>(null);
+  const [skillArgs, setSkillArgs] = useState<Record<string, unknown>>({});
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState("");
   /**
@@ -488,6 +494,27 @@ export function useWorkspace() {
 
   const mcpHandlers = createMcpHandlers({ setError, setMcpServers });
 
+  /**
+   * The composer's slash-picker actions. Attaching seeds each declared arg with
+   * its default so a skill with sensible defaults is sendable on sight; clearing
+   * drops both the skill and its args, which is what the send does per-turn.
+   */
+  const attachSkill = useCallback((skill: Skill) => {
+    setAttachedSkill(skill);
+    const seeded: Record<string, unknown> = {};
+    for (const arg of skill.args) {
+      if (arg.default !== null && arg.default !== undefined) seeded[arg.name] = arg.default;
+    }
+    setSkillArgs(seeded);
+  }, []);
+  const detachSkill = useCallback(() => {
+    setAttachedSkill(null);
+    setSkillArgs({});
+  }, []);
+  const setSkillArg = useCallback((name: string, value: unknown) => {
+    setSkillArgs((current) => ({ ...current, [name]: value }));
+  }, []);
+
   const chatHandlers = createChatHandlers({
     bootstrap,
     conversations,
@@ -500,6 +527,9 @@ export function useWorkspace() {
     selectedModel,
     selectedEffort,
     fast,
+    attachedSkill,
+    skillArgs,
+    clearAttachedSkill: detachSkill,
     setError,
     setView,
     setSidebarOpen,
@@ -594,6 +624,11 @@ export function useWorkspace() {
     setSelectedEffort,
     fast,
     setFast,
+    attachedSkill,
+    skillArgs,
+    attachSkill,
+    detachSkill,
+    setSkillArg,
     activeRun,
     runStatus,
     budgetPark,

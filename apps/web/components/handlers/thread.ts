@@ -80,6 +80,13 @@ export type ThreadHandlerDeps = {
    * started under a different one. State would be stale by then.
    */
   activeConversationRef: RefObject<string | null>;
+  /**
+   * Fired once a fresh prompt has been accepted by the server. The rail uses it
+   * to clear a per-turn skill attachment the way the draft is cleared — the
+   * skill governed this one turn and must not silently ride the next. Absent on
+   * the document panel, which has no such attachment.
+   */
+  onSent?: () => void;
 };
 
 /**
@@ -114,6 +121,7 @@ export function createThreadHandlers({
   onRunSettled,
   onToolProposed,
   activeConversationRef,
+  onSent,
 }: ThreadHandlerDeps) {
   /**
    * Merge a tool event into the card list. Events arrive in stages (proposed →
@@ -407,6 +415,9 @@ export function createThreadHandlers({
         const existing = items.some((item) => item.id === response.message.id);
         return existing ? items : [...items, response.message];
       });
+      // The turn was accepted, so a per-turn skill has done its job; clear it
+      // beside the draft so it does not attach itself to the next message.
+      onSent?.();
       void followRun(response.run.id, conversationId);
     } catch (caught) {
       setDraft(content);

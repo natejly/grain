@@ -243,6 +243,18 @@ class Run(Base):
     # budget park use the same model and effort the user originally chose.
     requested_model: Mapped[str] = mapped_column(String(80), default="")
     requested_effort: Mapped[str] = mapped_column(String(16), default="")
+    # The skill invoked for this one turn, or "" for none. Deliberately not a
+    # ForeignKey: a run is a historical record and must survive the skill's
+    # deletion, exactly as `requested_model` outlives a renamed deployment. The
+    # body is resolved and spliced into this turn's instructions in
+    # `agent_loop.resolve_directives`; it does not change the conversation.
+    skill_id: Mapped[str] = mapped_column(String(36), default="")
+    # The resolved args for that invocation, a JSON object keyed by arg name.
+    # "" means none, the same string-for-unset convention the columns above use.
+    skill_args_json: Mapped[str] = mapped_column(Text, default="")
+    # The skill VERSION invoked, pinned at send time so a run parked over an edit
+    # resumes with the body its sender saw. 0 means none / pre-pinning.
+    skill_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -1060,6 +1072,73 @@ class DatasetVersion(Base):
     row_count: Mapped[int] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String(64))
     object_key: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Skill(Base):
+    """A reusable, named instruction block a person authors once and invokes per turn.
+
+    Mirrors the `Dataset`/`DatasetVersion` split: this row holds the *current*
+    content plus a `version` pointer, and each edit appends an immutable
+    `SkillVersion` snapshot so prior versions stay restorable. An edit that
+    changes nothing (same `content_hash`) writes no new version.
+
+    `shared` is the sharing gate's one bit: a member may author a private skill,
+    but flipping this True is owner/admin-only, enforced in `api/skills.py`. The
+    slug `name` is unique per workspace and is what the composer's "/name" picker
+    types.
+    """
+
+    __tablename__ = "skills"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    #: The instructions injected into a turn, with literal `{{ name }}` placeholders.
+    body: Mapped[str] = mapped_column(Text)
+    #: JSON list of SkillArg-shaped param declarations. "[]" means no args.
+    args_json: Mapped[str] = mapped_column(Text, default="[]")
+    shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Current version number, bumped on every content edit; SkillVersion retains
+    #: each one.
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    #: sha256 of (title | description | body | args_json). An edit that leaves it
+    #: unchanged is a no-op — no version, no new snapshot.
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SkillVersion(Base):
+    """An immutable snapshot of a skill at one version, retained and restorable.
+
+    Append-only, like `DatasetVersion`: a restore reads a snapshot and applies it
+    as a *new* version rather than mutating history, so the trail of what a skill
+    has been stays intact.
+    """
+
+    __tablename__ = "skill_versions"
+    __table_args__ = (
+        UniqueConstraint("skill_id", "version"),
+        Index("ix_skill_versions_workspace_skill", "workspace_id", "skill_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text)
+    args_json: Mapped[str] = mapped_column(Text, default="[]")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    #: Who authored this version. Empty for rows predating the column, mirroring
+    #: `DocumentVersion.created_by`.
+    created_by: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

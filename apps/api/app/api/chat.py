@@ -33,6 +33,7 @@ from ..schemas import (
     SendMessageResponse,
 )
 from ..services import conversations
+from ..services import skills as skills_service
 from ..services.artifacts import documents
 from ..services.audit import record_audit
 from ..services.events import append_event
@@ -359,6 +360,26 @@ def send_message(
     # `fast` maps to "low", not "none" — the honest lowest-latency effort every
     # model accepts — and an explicit `effort` always wins over it.
     requested_effort = payload.effort or ("low" if payload.fast else "")
+    # A skill invoked for this turn must be visible to the caller (own or shared,
+    # same-workspace) and its args must validate now, so the refusal lands at send
+    # time rather than inside the turn. The resolved args are stored on the run and
+    # the body is spliced into the instructions in `resolve_directives`.
+    skill_id = ""
+    skill_args_json = ""
+    skill_version = 0
+    if payload.skill_id:
+        skill = skills_service.resolve_visible(
+            db,
+            workspace_id=actor.workspace_id,
+            user_id=actor.user_id,
+            skill_id=payload.skill_id,
+        )
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Skill not available")
+        skill_id = skill.id
+        skill_args_json = skills_service.validate_args(skill, payload.skill_args or {})
+        # Pin the version so a run parked over a later edit resumes with this body.
+        skill_version = skill.version
     run = Run(
         id=new_id(),
         workspace_id=actor.workspace_id,
@@ -369,6 +390,9 @@ def send_message(
         prompt=payload.content,
         requested_model=payload.model or "",
         requested_effort=requested_effort,
+        skill_id=skill_id,
+        skill_args_json=skill_args_json,
+        skill_version=skill_version,
     )
     message = Message(
         id=new_id(),

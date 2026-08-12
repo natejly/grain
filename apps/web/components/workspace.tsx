@@ -32,6 +32,7 @@ import {
 } from "./views/navigation";
 import { ProjectsView } from "./views/projects";
 import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
+import { SkillsView } from "./views/skills";
 import { SourcesView } from "./views/sources";
 import { TodosView } from "./views/todos";
 import { ThemeToggle } from "./theme-toggle";
@@ -73,6 +74,11 @@ export function Workspace() {
     setSelectedEffort,
     fast,
     setFast,
+    attachedSkill,
+    skillArgs,
+    attachSkill,
+    detachSkill,
+    setSkillArg,
     activeRun,
     runStatus,
     budgetPark,
@@ -502,6 +508,13 @@ export function Workspace() {
               fast,
               setFast,
             }}
+            skills={{
+              attached: attachedSkill,
+              argValues: skillArgs,
+              attach: attachSkill,
+              detach: detachSkill,
+              setArg: setSkillArg,
+            }}
           />
         )}
 
@@ -634,6 +647,10 @@ export function Workspace() {
         {/* Self-contained like WorkflowsView: the agent list is fetched when
             somebody opens the editor, not at page load. */}
         {view === "agents" && <AgentsView setError={setError} />}
+
+        {/* Self-contained like AgentsView: the skill list is nobody's business
+            until they open this or type "/" in the composer. */}
+        {view === "skills" && <SkillsView setError={setError} />}
 
         {/* Self-contained: a workflow's run history is nobody's business until
             they open this, so it is fetched here rather than at page load. */}

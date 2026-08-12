@@ -20,7 +20,7 @@ from ..models import (
     ToolPolicy,
     WorkflowRun,
 )
-from . import budget, usage
+from . import budget, skills, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .harness import ModelStep, resolve_harness
@@ -911,6 +911,14 @@ def resolve_directives(db: Session, run: Run) -> AgentDirectives:
                 parsed = None
             if isinstance(parsed, list):
                 allowed = frozenset(str(item) for item in parsed)
+    # A skill invoked for this turn is spliced onto the agent's voice, not in
+    # place of it: same instruction path, resolved once per loop entry, so a
+    # turn that parks and resumes re-injects the identical body. A deleted skill
+    # renders to "" and degrades to no injection, exactly like the missing agent.
+    if run.skill_id:
+        injected = skills.render_for_run(db, run)
+        if injected:
+            instructions = f"{instructions}\n\n{injected}"
     return AgentDirectives(instructions=instructions, allowed=allowed)
 
 

@@ -3,6 +3,7 @@ import { ApiError, type DocumentKind, type Source } from "@workspace/api-client"
 export type View =
   | "chat"
   | "agents"
+  | "skills"
   | "sources"
   | "memory"
   | "graph"
@@ -70,6 +71,7 @@ export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
 export const PAGE_TITLES: Record<View, string> = {
   chat: "Chat",
   agents: "Agents",
+  skills: "Skills",
   sources: "Sources",
   memory: "Memory",
   graph: "Graph",

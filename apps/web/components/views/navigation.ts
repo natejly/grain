@@ -14,6 +14,7 @@ import {
   Network,
   Plug,
   ShieldCheck,
+  Sparkles,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -85,11 +86,14 @@ export const NAV_GROUPS: NavGroup[] = [
     /**
      * Agents live beside Chat, not in settings: an agent is who you are
      * talking to, so the place you author one is a tab away from the place
-     * you use one.
+     * you use one. A skill is the same argument in the other dimension — not
+     * who answers but what you ask them to do — so it sits alongside, authored
+     * a tab from the composer that invokes it with "/".
      */
     items: [
       { view: "chat", label: "Chat", icon: MessageSquare },
       { view: "agents", label: "Agents", icon: Bot },
+      { view: "skills", label: "Skills", icon: Sparkles },
     ],
   },
   /**

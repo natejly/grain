@@ -333,6 +333,56 @@ describe("WorkspaceApi", () => {
     });
   });
 
+  /**
+   * A skill is a per-turn injection like the model/effort overrides, so it
+   * rides the same conditional spread: `skill_id` under the name the API
+   * validates, and `skill_args` *only* when a skill is actually attached — a
+   * stray args map with no skill would be an unbound payload the server never
+   * asked for.
+   */
+  it("sends the attached skill and its args under the agreed field names", async () => {
+    let sent: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+
+    await new WorkspaceApi("http://example.test").sendMessage("conv-1", "go", "agent-1", {
+      skillId: "skill-9",
+      skillArgs: { topic: "roadmap", verbose: true },
+    });
+
+    expect(sent).toEqual({
+      content: "go",
+      agent_id: "agent-1",
+      skill_id: "skill-9",
+      skill_args: { topic: "roadmap", verbose: true },
+    });
+  });
+
+  it("omits skill_args unless a skill is attached, and both when none is", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+    const api = new WorkspaceApi("http://example.test");
+
+    // Args present but no skill: the args are orphaned and must not be sent.
+    await api.sendMessage("conv-1", "hi", "agent-1", { skillArgs: { topic: "x" } });
+    // A skill with no declared args: skill_id rides, skill_args does not.
+    await api.sendMessage("conv-1", "hi", "agent-1", { skillId: "skill-9" });
+
+    expect(bodies[0]).toEqual({ content: "hi", agent_id: "agent-1" });
+    expect(bodies[0]).not.toHaveProperty("skill_args");
+    expect(bodies[1]).toEqual({ content: "hi", agent_id: "agent-1", skill_id: "skill-9" });
+    expect(bodies[1]).not.toHaveProperty("skill_args");
+  });
+
   it("parses ordered resumable SSE events", async () => {
     const body = [
       "id: 3",

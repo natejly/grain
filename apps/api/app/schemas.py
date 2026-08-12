@@ -162,6 +162,75 @@ class AgentUpdate(BaseModel):
     clear_allowed_tools: bool = False
 
 
+class SkillArg(BaseModel):
+    """One skill parameter: the workflow `InputSpec` shape, minus workflow-only bits.
+
+    A skill runs inside one chat turn, so it needs no `object`/`array` inputs and
+    no reference grammar — only the scalar kinds a person types into a composer
+    field. `required`/`default`/`choices` carry the same meaning they do for a
+    workflow input: whether a run may omit it, what pre-fills it, and the closed
+    set it must belong to.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=60)
+    type: Literal["string", "number", "integer", "boolean"] = "string"
+    label: str = Field(default="", max_length=120)
+    description: str = Field(default="", max_length=500)
+    required: bool = True
+    default: Any = None
+    choices: List[Any] = Field(default_factory=list)
+
+
+class SkillOut(ApiModel):
+    id: str
+    name: str
+    title: str
+    description: str = ""
+    body: str
+    #: Deserialized from `Skill.args_json`.
+    args: List[SkillArg] = []
+    shared: bool = False
+    version: int
+    #: True when the caller may toggle `shared` (owner/admin). Lets the editor
+    #: disable the control rather than surprise a member with a 403.
+    can_share: bool = False
+    #: True when the caller authored it; a member sees shared skills read-only.
+    can_edit: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=500)
+    body: str = Field(min_length=1, max_length=20000)
+    args: List[SkillArg] = Field(default_factory=list, max_length=20)
+    #: Owner/admin only. A non-owner sending shared=True is refused 403 by
+    #: create_skill — the sharing gate is enforced server-side, not silently.
+    shared: bool = False
+
+
+class SkillUpdate(BaseModel):
+    """A partial edit. None means "leave alone" on every field."""
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    description: Optional[str] = Field(default=None, max_length=500)
+    body: Optional[str] = Field(default=None, min_length=1, max_length=20000)
+    args: Optional[List[SkillArg]] = Field(default=None, max_length=20)
+    #: Owner-only; a member sending it is refused 403.
+    shared: Optional[bool] = None
+
+
+class SkillVersionOut(ApiModel):
+    id: str
+    version: int
+    title: str
+    created_at: datetime
+
+
 class ToolInfoOut(ApiModel):
     """One registry tool, for the provisioning checklist."""
 
@@ -277,6 +346,13 @@ class SendMessageRequest(BaseModel):
     #: "fast" must not promise a setting some models cannot honour. An explicit
     #: `effort` always wins over `fast`.
     fast: bool = False
+    #: Invoke this skill for this turn only. Must be visible to the caller (own or
+    #: shared). Absent = today's behaviour exactly; the skill's body is spliced
+    #: into the turn's instructions and does not change the conversation.
+    skill_id: Optional[str] = None
+    #: Values for the skill's declared args, keyed by name. Validated against the
+    #: skill's `args` at send time, then substituted into the body before injection.
+    skill_args: Optional[Dict[str, Any]] = None
 
 
 class RunOut(ApiModel):

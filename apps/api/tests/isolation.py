@@ -77,6 +77,8 @@ from app.models import (
     RunEvent,
     SandboxExecution,
     SandboxSession,
+    Skill,
+    SkillVersion,
     Source,
     SyncJob,
     Tool,
@@ -738,6 +740,39 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["model_usage"] = model_usage.id
 
+        # A *private* skill, so the DENY cases bite on the workspace filter: a
+        # foreign workspace's skill must 404 whether or not it is shared, and a
+        # private one also proves a same-workspace member cannot reach it. The
+        # marker body is what a leaked read would surface beyond the id.
+        skill = Skill(
+            workspace_id=workspace_id,
+            name=f"{label.lower()}-skill",
+            title=f"{label} skill",
+            description=f"{label} secret skill description",
+            body=f"{label} secret skill body",
+            args_json="[]",
+            shared=False,
+            version=1,
+            content_hash="",
+            created_by=user_id,
+        )
+        db.add(skill)
+        db.flush()
+        ids["skill"] = skill.id
+        skill_version = SkillVersion(
+            workspace_id=workspace_id,
+            skill_id=skill.id,
+            version=1,
+            title=skill.title,
+            description=skill.description,
+            body=skill.body,
+            args_json="[]",
+            created_by=user_id,
+        )
+        db.add(skill_version)
+        db.flush()
+        ids["skill_version"] = skill_version.id
+
         db.commit()
     finally:
         db.close()
@@ -1052,6 +1087,44 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/agents/{agent_id}",
         DENY,
         path_ids={"agent_id": "agent"},
+    ),
+    # -- skills ------------------------------------------------------------
+    # A skill carries a workspace's instructions verbatim, so a cross-tenant read
+    # is a prompt leak and a cross-tenant PATCH rewrites what another workspace's
+    # turn is told to do. Visibility is own-or-shared within one workspace; the
+    # fixture skill is private, so every id route 404s on the workspace filter
+    # regardless of the sharing gate behind it. Create/list take no foreign id.
+    RouteCase("GET", "/api/skills", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/skills",
+        SCOPED,
+        body={"name": "mine-skill", "title": "Mine", "body": "do the thing"},
+    ),
+    RouteCase(
+        "GET", "/api/skills/{skill_id}", DENY, path_ids={"skill_id": "skill"}
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/skills/{skill_id}",
+        DENY,
+        path_ids={"skill_id": "skill"},
+        body={"title": "leaked"},
+    ),
+    RouteCase(
+        "DELETE", "/api/skills/{skill_id}", DENY, path_ids={"skill_id": "skill"}
+    ),
+    RouteCase(
+        "GET",
+        "/api/skills/{skill_id}/versions",
+        DENY,
+        path_ids={"skill_id": "skill"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/skills/{skill_id}/versions/{version_id}/restore",
+        DENY,
+        path_ids={"skill_id": "skill", "version_id": "skill_version"},
     ),
     # -- audit / graph / memory -------------------------------------------
     RouteCase("GET", "/api/audit-events", SCOPED),

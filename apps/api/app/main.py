@@ -28,6 +28,7 @@ from .api import (
     memory,
     projects,
     sandbox,
+    skills,
     sources,
     system,
     todos,
@@ -96,6 +97,7 @@ app.include_router(auth_router)
 app.include_router(system.router)
 app.include_router(chat.router)
 app.include_router(agents.router)
+app.include_router(skills.router)
 app.include_router(sources.router)
 app.include_router(tools.router)
 app.include_router(audit.router)
