@@ -341,9 +341,12 @@ test("a chart the agent draws is visible in the conversation", async ({ page }) 
   await composer.press("Enter");
 
   const card = page.locator(".tool-card", { hasText: "run_python" });
-  await expect(card).toBeVisible({ timeout: 30_000 });
+  // run_python is the heaviest turn in the suite — it spawns a real subprocess
+  // to draw the figure — so its card and confirmation get the same budget the
+  // rest of the agent-write assertions use, not a tighter hardcoded one.
+  await expect(card).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   await card.getByRole("button", { name: "Approve" }).click();
-  await expect(page.getByText("Plotted it.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Plotted it.")).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
 
   // The whole point. `toBeVisible` passes on a broken image, so the browser is
   // asked whether it actually decoded pixels — the failure this is guarding
