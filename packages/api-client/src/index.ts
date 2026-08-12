@@ -1579,6 +1579,34 @@ export class WorkspaceApi {
     }
   }
 
+  /**
+   * True when the API has anonymous playground mode turned on. Public and
+   * unauthenticated like `devOverride`, so the sign-in screen can decide
+   * whether to show a "Try it" button before any session exists. A swallowed
+   * error is the disabled answer — a missing or 404 endpoint is not a button.
+   */
+  async playgroundAvailable(): Promise<boolean> {
+    try {
+      return (
+        await this.request<{ enabled: boolean }>("/api/auth/playground")
+      ).enabled;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Mints an ephemeral anonymous session over a throwaway, fully-isolated
+   * playground workspace. No credentials — the visitor is trying the app.
+   */
+  async playgroundLogin(): Promise<AuthSession> {
+    return this.adopt(
+      await this.request<AuthSession>("/api/auth/playground", {
+        method: "POST",
+      }),
+    );
+  }
+
   /** Does not sign the caller in — the account still has to confirm by email. */
   signup(
     email: string,
@@ -1607,6 +1635,32 @@ export class WorkspaceApi {
       method: "POST",
       body: JSON.stringify({ email }),
     });
+  }
+
+  /**
+   * Asks the API to email a one-time sign-in link. Returns the same
+   * deliberately uninformative acknowledgement as signup and reset — identical
+   * whether or not the address has an account — so callers must render its
+   * `detail` verbatim and never read an outcome out of it.
+   */
+  requestLoginLink(email: string): Promise<AuthAcknowledgement> {
+    return this.request("/api/auth/login-link/request", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  /**
+   * Redeems a magic-link token for a real session, exactly like `login`. The
+   * link is single-use and short-lived; a spent or expired token is a 400.
+   */
+  async consumeLoginLink(token: string): Promise<AuthSession> {
+    return this.adopt(
+      await this.request<AuthSession>("/api/auth/login-link/consume", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    );
   }
 
   confirmPasswordReset(

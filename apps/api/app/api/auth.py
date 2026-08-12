@@ -13,11 +13,12 @@ Two rules shape almost every response in this file:
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,6 +34,7 @@ from ..schemas import (
     LoginIn,
     PasswordResetConfirmIn,
     PasswordResetRequestIn,
+    PlaygroundOut,
     SignupIn,
     VerifyEmailIn,
     WorkspaceMembershipOut,
@@ -429,6 +431,82 @@ def dev_login(
     return session_out
 
 
+@router.get("/playground", response_model=PlaygroundOut)
+def playground_status(
+    settings: Settings = Depends(get_settings),
+) -> PlaygroundOut:
+    """Whether the anonymous "try it" mode is available.
+
+    Public and unauthenticated like ``dev_override_status``: the login screen
+    needs to know whether to render the button before any session exists. Kept
+    off /api/bootstrap, which is auth-gated and unreachable pre-login.
+    """
+    return PlaygroundOut(enabled=settings.playground_enabled)
+
+
+@router.post("/playground", response_model=AuthSessionOut)
+def playground_login(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthSessionOut:
+    """Mint an ephemeral, fully-isolated guest session — only when enabled.
+
+    Isolation is structural, not bespoke. ``_create_account`` seeds a throwaway
+    ``User`` + personal ``Workspace`` + owner ``Membership`` — the same primitive
+    signup uses — and ``_issue_login`` mints a normal session over it. Every
+    request therefore scopes the guest through the exact ``get_actor`` /
+    ``_resolve_workspace`` membership fence every real tenant passes: the guest
+    owns one fresh workspace and ``_resolve_workspace`` only ever returns a
+    workspace it holds a membership in, so a guest can no more read another
+    tenant's data than two real tenants can read each other's. ``password_hash``
+    is NULL — ``verify_password`` refuses a null hash, so nothing can ever
+    password-login to a guest account (the same stance as Google and dev-seed
+    accounts), and there is no promotion path to a credentialed user.
+    """
+    if not settings.playground_enabled:
+        raise HTTPException(status_code=404, detail="Playground is not enabled")
+    _rate_limit(request, "playground", settings)
+    # A hard ceiling on live guests. Each call seeds a throwaway workspace and
+    # nothing cascades on delete, so per-IP rate limiting alone (which collapses
+    # to one bucket behind a reverse proxy) is not a real bound on row creation.
+    # At capacity the guest is turned away rather than the database grown.
+    live_guests = (
+        db.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(User.email.like("%@playground.local"))
+        )
+        or 0
+    )
+    if live_guests >= settings.playground_max_sessions:
+        raise HTTPException(
+            status_code=429,
+            detail="The playground is at capacity right now — try again shortly.",
+        )
+    handle = secrets.token_hex(8)
+    user, workspace = _create_account(
+        db,
+        email=f"playground-{handle}@playground.local",
+        name="Playground guest",
+        password_hash=None,
+        email_verified=False,
+    )
+    record_audit(
+        db,
+        workspace_id=workspace.id,
+        actor_id=user.id,
+        action="auth.account.created",
+        resource_type="user",
+        resource_id=user.id,
+        detail={"method": "playground"},
+    )
+    session_out = _issue_login(db, request, response, user, settings)
+    db.commit()
+    return session_out
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     actor: Actor = Depends(get_actor),
@@ -574,6 +652,82 @@ def confirm_password_reset(
     revoke_all_sessions(db, user.id)
     db.commit()
     return AuthAcknowledgement(detail="Password updated. Sign in with your new password.")
+
+
+@router.post(
+    "/login-link/request",
+    response_model=AuthAcknowledgement,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def request_login_link(
+    payload: PasswordResetRequestIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthAcknowledgement:
+    """Email a passwordless sign-in link, without saying whether the account exists.
+
+    A byte-for-byte sibling of ``request_password_reset``: the same
+    deliberately-uninformative acknowledgement, the same 202, and exactly one
+    message on both branches so response *time* is not the enumeration oracle the
+    identical body hides. The only differences from reset are the token purpose
+    and TTL — the single-use/expiry/hash-at-rest mechanism is reused verbatim.
+    """
+    _rate_limit(request, "login-link", settings)
+    email = _normalize_email(payload.email)
+    user = db.scalar(select(User).where(User.email == email))
+    sender = email_service.get_email_sender(settings)
+    if user is not None and user.status == "active":
+        raw_token = email_service.issue_email_token(
+            db,
+            user_id=user.id,
+            purpose=email_service.PURPOSE_LOGIN,
+            ttl=email_service.LOGIN_TOKEN_TTL,
+        )
+        db.commit()
+        message = email_service.login_link_email(settings, to=email, raw_token=raw_token)
+    else:
+        # Same non-oracle discipline as the reset request: the unknown branch
+        # still sends one message, so "issued a link" and "did nothing" cost the
+        # same network round trip and read identically to a caller with a
+        # stopwatch. Reuses the reset flow's no-account copy.
+        message = email_service.no_account_email(settings, to=email)
+    _send_quietly(sender, message)
+    return AuthAcknowledgement(detail=GENERIC_EMAIL_ACK)
+
+
+@router.post("/login-link/consume", response_model=AuthSessionOut)
+def consume_login_link(
+    payload: VerifyEmailIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthSessionOut:
+    """Redeem a sign-in link and mint a session, exactly like login.
+
+    The consume half models ``confirm_password_reset`` — the same single-use
+    conditional UPDATE, committed on its own before anything is minted, so a
+    burnt link is a one-way door; a spent, expired, or unknown link 400s with the
+    same generic detail, never a distinct code that would leak which. The
+    session-mint half is ``_issue_login`` verbatim (fixation-safe rotation,
+    cookie, audit). Like ``_issue_login`` and unlike ``login`` it does not
+    require ``email_verified_at``: redeeming a link emailed to the address proves
+    mailbox control, which is exactly the proof login accepts. A non-active
+    account is rejected with the same generic 400 so status is not an oracle.
+    """
+    _rate_limit(request, "login-link-consume", settings)
+    token = email_service.consume_email_token(
+        db, raw_token=payload.token, purpose=email_service.PURPOSE_LOGIN
+    )
+    if token is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    user = db.get(User, token.user_id)
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    session_out = _issue_login(db, request, response, user, settings)
+    db.commit()
+    return session_out
 
 
 @router.post("/verify-email", response_model=AuthAcknowledgement)

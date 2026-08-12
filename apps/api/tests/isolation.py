@@ -986,6 +986,10 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase("GET", "/api/auth/google/callback", PUBLIC),
     RouteCase("GET", "/api/auth/dev-override", PUBLIC),
     RouteCase("POST", "/api/auth/dev-login", PUBLIC),
+    RouteCase("POST", "/api/auth/login-link/request", PUBLIC),
+    RouteCase("POST", "/api/auth/login-link/consume", PUBLIC),
+    RouteCase("GET", "/api/auth/playground", PUBLIC),
+    RouteCase("POST", "/api/auth/playground", PUBLIC),
     # -- chat --------------------------------------------------------------
     RouteCase("GET", "/api/conversations", SCOPED),
     RouteCase("POST", "/api/conversations", SCOPED, body={"title": "mine"}),

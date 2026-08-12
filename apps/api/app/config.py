@@ -392,6 +392,22 @@ class Settings(BaseSettings):
     # issues a real session without email/password. Refused outside
     # development/test the same way DEV_AUTO_LOGIN is.
     dev_user: str = ""
+    # Anonymous "try it" mode. OFF by default like sandbox_enabled: the safe
+    # state and the off state are the same. Unlike DEV_USER/DEV_AUTO_LOGIN this
+    # is *not* forbidden in production — it is a legitimate public demo, not an
+    # auth bypass: it mints a real session (opaque hashed token, CSRF secret,
+    # secure cross-site cookie) over a genuinely isolated throwaway workspace,
+    # reached through the same membership scoping every request enforces. But it
+    # mints a *credential-free* session, so _guard_playground fences the one
+    # posture that would make that unsafe. Document this as public-demo-only.
+    playground_enabled: bool = False
+    #: Hard ceiling on live playground guest accounts. Each anonymous POST
+    #: /api/auth/playground seeds a throwaway workspace, and nothing here cascades
+    #: on delete, so without a bound an unauthenticated caller could grow the
+    #: database without limit. At the ceiling the endpoint refuses (429) rather
+    #: than growing; a demo operator sizes this, and reclaiming old guests is an
+    #: operational task (they carry a @playground.local marker).
+    playground_max_sessions: int = Field(default=200, ge=1)
 
     # Anchored to the repo root for the same reason the sqlite and objects paths
     # are: a bare ".env" resolves against the working directory, and `make
@@ -611,6 +627,36 @@ class Settings(BaseSettings):
             )
         if self.email_sender == "smtp" and not self.smtp_host.strip():
             raise ValueError("EMAIL_SENDER=smtp requires SMTP_HOST")
+        return self
+
+    @model_validator(mode="after")
+    def _guard_playground(self) -> Settings:
+        """Fence the anonymous try-it door.
+
+        Playground mints a credential-free session — the class _guard_auth
+        restricts. Unlike DEV_AUTO_LOGIN/DEV_USER it is *allowed* in production,
+        because it is a public demo rather than an auth bypass: a fresh,
+        isolated, owner-only throwaway workspace reached through the same
+        membership scoping every request already enforces. So the gate is not
+        is_dev_env. But it is only safe when the session posture that protects a
+        real login also protects it, so the one combination that would make a
+        credential-free session unsafe — an insecure cookie any visitor can mint
+        at will and a network attacker can read — is refused. _guard_auth already
+        forces SESSION_COOKIE_SECURE in production; asserting it here as well
+        ties the guarantee to *this* feature, so a future relaxation of one
+        cannot silently weaken the other. Off is the fail-safe default; there is
+        nothing to check when off.
+        """
+        if not self.playground_enabled:
+            return self
+        if self.is_dev_env:
+            return self
+        if not self.session_cookie_secure:
+            raise ValueError(
+                "PLAYGROUND_ENABLED=1 outside development requires "
+                "SESSION_COOKIE_SECURE=true — an anonymous session anybody can "
+                "mint must not ride an insecure cross-site cookie."
+            )
         return self
 
     @property

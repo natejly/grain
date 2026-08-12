@@ -142,6 +142,19 @@ class DevOverrideOut(ApiModel):
     handle: str = ""
 
 
+class PlaygroundOut(ApiModel):
+    """Whether the anonymous "try it" mode is available.
+
+    Public and unauthenticated for the same reason as DevOverrideOut: the login
+    screen has to know whether to render the "Try the playground" button before
+    any session exists. Not folded into /api/bootstrap, which is auth-gated and
+    therefore unreachable pre-login. Off by default and outside an opted-in
+    deployment.
+    """
+
+    enabled: bool
+
+
 class AgentOut(ApiModel):
     id: str
     name: str
