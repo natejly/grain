@@ -1,7 +1,7 @@
 "use client";
 
 import type { DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, LogOut, Menu, Plus, ShieldAlert, Trash2, X } from "lucide-react";
+import { BarChart3, CircleDot, Columns2, LogOut, Menu, Plus, ShieldAlert, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
@@ -14,6 +14,7 @@ import { AdminView } from "./views/admin";
 import { AgentsView } from "./views/agents";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
+import { ChatSplit } from "./views/chat-split";
 import { DashboardEditor } from "./views/dashboard-editor";
 import { DashboardsView } from "./views/dashboards";
 import { DataView } from "./views/data";
@@ -67,6 +68,13 @@ export function Workspace() {
     activeProject,
     view,
     setView,
+    extraPanes,
+    focusedPane,
+    openInNewPane,
+    closePane,
+    focusPane,
+    refreshConversations,
+    patchConversation,
     draft,
     setDraft,
     selectedAgentId,
@@ -360,6 +368,17 @@ export function Workspace() {
                   <time>{formatRelative(conversation.updated_at)}</time>
                 </button>
                 <button
+                  className="thread-split"
+                  title="Open in a new pane"
+                  aria-label={`Open ${conversation.title} in a new pane`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openInNewPane(conversation.id);
+                  }}
+                >
+                  <Columns2 size={13} />
+                </button>
+                <button
                   className="thread-delete"
                   title="Delete chat"
                   aria-label={`Delete ${conversation.title}`}
@@ -493,50 +512,69 @@ export function Workspace() {
         )}
 
         {view === "chat" && (
-          <ChatView
-            messages={messages}
+          // The chat surface is a split: the shell's own ChatView (pane 0,
+          // passed through unchanged so the single-pane user sees zero change)
+          // plus any extra concurrent panes. With no extra panes ChatSplit
+          // renders the primary alone with no wrapper — the no-regression path.
+          <ChatSplit
+            panes={extraPanes}
+            conversations={conversations}
+            bootstrap={bootstrap}
             sources={sources}
-            agentCalls={agentCalls}
             apps={dashboardApps}
-            draft={draft}
-            setDraft={setDraft}
-            activeRun={activeRun}
-            runStatus={runStatus}
-            budgetPark={budgetPark}
-            flaggedRuns={flaggedRuns}
-            submitPrompt={submitPrompt}
-            cancelActiveRun={cancelActiveRun}
-            regenerate={regenerate}
-            decideAgentCall={decideAgentCall}
             openCitation={openCitation}
-            onAttach={() => setView("sources")}
-            approval={{
-              mode: activeThread?.approval_mode ?? "ask_writes",
-              setMode: setApprovalMode,
-              conversationId: activeConversation,
-              conversationTitle: activeTitle,
-            }}
-            todos={{ lists: todoLists, ops: todoOps }}
-            endRef={endRef}
-            selectedAgentId={selectedAgentId}
-            onSelectAgent={setSelectedAgentId}
-            turnControls={{
-              models: bootstrap?.model_provider.selectable_models ?? [],
-              efforts: bootstrap?.model_provider.reasoning_efforts ?? [],
-              model: selectedModel,
-              setModel: setSelectedModel,
-              effort: selectedEffort,
-              setEffort: setSelectedEffort,
-              fast,
-              setFast,
-            }}
-            skills={{
-              attached: attachedSkill,
-              argValues: skillArgs,
-              attach: attachSkill,
-              detach: detachSkill,
-              setArg: setSkillArg,
-            }}
+            closePane={closePane}
+            focusedPane={focusedPane}
+            focusPane={focusPane}
+            onSettled={refreshConversations}
+            onApprovalChanged={patchConversation}
+            primary={
+              <ChatView
+                messages={messages}
+                sources={sources}
+                agentCalls={agentCalls}
+                apps={dashboardApps}
+                draft={draft}
+                setDraft={setDraft}
+                activeRun={activeRun}
+                runStatus={runStatus}
+                budgetPark={budgetPark}
+                flaggedRuns={flaggedRuns}
+                submitPrompt={submitPrompt}
+                cancelActiveRun={cancelActiveRun}
+                regenerate={regenerate}
+                decideAgentCall={decideAgentCall}
+                openCitation={openCitation}
+                onAttach={() => setView("sources")}
+                approval={{
+                  mode: activeThread?.approval_mode ?? "ask_writes",
+                  setMode: setApprovalMode,
+                  conversationId: activeConversation,
+                  conversationTitle: activeTitle,
+                }}
+                todos={{ lists: todoLists, ops: todoOps }}
+                endRef={endRef}
+                selectedAgentId={selectedAgentId}
+                onSelectAgent={setSelectedAgentId}
+                turnControls={{
+                  models: bootstrap?.model_provider.selectable_models ?? [],
+                  efforts: bootstrap?.model_provider.reasoning_efforts ?? [],
+                  model: selectedModel,
+                  setModel: setSelectedModel,
+                  effort: selectedEffort,
+                  setEffort: setSelectedEffort,
+                  fast,
+                  setFast,
+                }}
+                skills={{
+                  attached: attachedSkill,
+                  argValues: skillArgs,
+                  attach: attachSkill,
+                  detach: detachSkill,
+                  setArg: setSkillArg,
+                }}
+              />
+            }
           />
         )}
 

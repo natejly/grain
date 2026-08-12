@@ -31,6 +31,19 @@ import type {
 } from "@workspace/api-client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import {
+  CHAT_PANES_KEY,
+  addPane,
+  newPaneId,
+  parseStoredPanes,
+  prunePanes,
+  refocusAfterClose,
+  removePane,
+  serializeStoredPanes,
+  type ChatPane,
+} from "./chat-panes";
+
+export type { ChatPane } from "./chat-panes";
 import { createBoardHandlers } from "./handlers/boards";
 import { createChatHandlers } from "./handlers/chat";
 import { createDashboardHandlers } from "./handlers/dashboards";
@@ -47,6 +60,21 @@ import type { BudgetPark } from "./views/budget-format";
 import type { DashboardResultState } from "./views/dashboard-grid";
 import { baseName, describeError, isTabular, type View } from "./views/shared";
 import { isTodoList, todoListsFrom } from "./views/todo-format";
+
+/**
+ * The persisted pane layout, or none. Guarded for private-mode / server render
+ * exactly like the workspace selection: a throwing or absent store is simply an
+ * empty split, never a crash. The decode itself lives in `chat-panes` so it can
+ * be tested without a DOM; this wrapper only adds the `window` guard.
+ */
+function readStoredPanes(): ChatPane[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return parseStoredPanes(window.localStorage.getItem(CHAT_PANES_KEY));
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Every piece of workspace state and the actions over it. The shell renders the
@@ -77,6 +105,14 @@ export function useWorkspace() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [activeProject, setActiveProject] = useState<WorkspaceProject | null>(null);
   const [view, setView] = useState<View>("chat");
+  // Extra chat panes open beside the primary shell chat, and which one holds the
+  // split's focus. An empty list is today's single-pane shell — a guaranteed
+  // no-regression path — so pane 0 (the shell's `activeConversation`) is
+  // implicit and only the EXTRA panes live here. Persisted like the workspace
+  // selection so a split survives a reload; hydrated lazily so the server render
+  // never touches localStorage. `focusedPane` is null when the primary is focused.
+  const [extraPanes, setExtraPanes] = useState<ChatPane[]>(() => readStoredPanes());
+  const [focusedPane, setFocusedPane] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // Which authored agent answers the next message; "" is the workspace
   // default. Session state on purpose — a conversation does not remember it.
@@ -275,6 +311,79 @@ export function useWorkspace() {
   const refreshPendingEdits = useCallback(async () => {
     setPendingEdits(await api.listPendingDocumentEdits());
   }, []);
+
+  /** Re-read the rail's conversations list — what an extra pane's finished run
+   *  needs the shell to catch up on, and nothing else. */
+  const refreshConversations = useCallback(async () => {
+    setConversations(await api.listConversations());
+  }, []);
+
+  /** Replace one conversation row in the rail's list. An extra pane changing its
+   *  approval mode hands the updated row here so the mode keeps one home. */
+  const patchConversation = useCallback((updated: Conversation) => {
+    setConversations((items) =>
+      items.map((item) => (item.id === updated.id ? updated : item)),
+    );
+  }, []);
+
+  /**
+   * Open a conversation in an extra pane beside the primary chat.
+   *
+   * Ignored when the cap is hit or the conversation is already the primary pane
+   * — that thread is on screen, and a second copy of what pane 0 already shows
+   * is not what "split" is for. Switches to Chat so the new pane is visible even
+   * when the action is fired from the rail on another view.
+   */
+  const openInNewPane = useCallback((conversationId: string) => {
+    // The early return gates the SIDE EFFECTS — a no-op open must not yank the
+    // view to Chat or shut the rail. `addPane` re-checks the same guard so it
+    // stays a total pure function, but the list decision and the view switch
+    // are two separate concerns.
+    if (conversationId === activeConversationRef.current) return;
+    setExtraPanes((panes) =>
+      addPane(panes, conversationId, activeConversationRef.current, newPaneId()),
+    );
+    setView("chat");
+    setSidebarOpen(false);
+  }, []);
+
+  const closePane = useCallback((paneId: string) => {
+    setExtraPanes((panes) => removePane(panes, paneId));
+    setFocusedPane((current) => refocusAfterClose(current, paneId));
+  }, []);
+
+  const focusPane = useCallback((paneId: string | null) => {
+    setFocusedPane(paneId);
+  }, []);
+
+  // Persist the split, and prune panes whose conversation no longer exists.
+  // The persist mirrors the workspace-selection guard; the prune fires whenever
+  // the conversations list changes — a delete included — but only once the list
+  // has actually loaded, so a persisted split is not wiped by the empty list the
+  // first render holds before `loadWorkspace` resolves.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(CHAT_PANES_KEY, serializeStoredPanes(extraPanes));
+    } catch {
+      // Private mode: the split just does not survive a reload.
+    }
+  }, [extraPanes]);
+
+  useEffect(() => {
+    if (conversations.length === 0) return;
+    const known = new Set(conversations.map((item) => item.id));
+    setExtraPanes((panes) => prunePanes(panes, known));
+    // A pruned pane may have held the split's focus; if the focused id no longer
+    // names a pane whose conversation survived, hand focus back to the primary
+    // rather than leave it pointing at a pane about to leave the screen.
+    setFocusedPane((current) =>
+      current &&
+      !extraPanes.some((pane) => pane.id === current && known.has(pane.conversationId))
+        ? null
+        : current,
+    );
+  }, [conversations, extraPanes]);
 
   /**
    * Catch up after something changed the workspace without going through chat.
@@ -637,6 +746,16 @@ export function useWorkspace() {
     activeProject,
     view,
     setView,
+    // Multi-pane split: the extra panes beside the primary chat, which one is
+    // focused, and the actions over them. An empty `extraPanes` is the shell as
+    // it has always been.
+    extraPanes,
+    focusedPane,
+    openInNewPane,
+    closePane,
+    focusPane,
+    refreshConversations,
+    patchConversation,
     draft,
     setDraft,
     selectedAgentId,

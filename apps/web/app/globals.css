@@ -612,7 +612,8 @@ select:focus-visible {
   width: 100%;
   height: 34px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* Two trailing action columns: open in a new pane, and delete. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;
@@ -658,7 +659,8 @@ select:focus-visible {
   font-size: 9px;
 }
 
-.thread-delete {
+.thread-delete,
+.thread-split {
   width: 26px;
   height: 26px;
   display: grid;
@@ -673,11 +675,15 @@ select:focus-visible {
 
 .thread:hover .thread-delete,
 .thread.active .thread-delete,
-.thread-delete:focus-visible {
+.thread-delete:focus-visible,
+.thread:hover .thread-split,
+.thread.active .thread-split,
+.thread-split:focus-visible {
   opacity: 1;
 }
 
-.thread-delete:hover {
+.thread-delete:hover,
+.thread-split:hover {
   background: var(--surface-hover);
   color: var(--text);
 }
@@ -4406,6 +4412,106 @@ select:focus-visible {
 /* No room for a second column of source text at this width. */
 .document-chat .diff {
   font-size: 10px;
+}
+
+/* ---- Multi-pane chat split ----
+   The shell's primary chat and any extra concurrent panes, side by side in a
+   resizable horizontal split. Only rendered once a second pane is open — the
+   single-pane user gets the primary ChatView with none of this around it.
+   Colours are tokens only, so the split reads correctly in both themes. */
+.chat-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* On a phone a horizontal split crushes every pane below a usable width, so
+   stack them vertically and turn the col-resize divider into a plain rule that
+   no longer advertises a drag it cannot usefully perform on this axis. */
+@media (max-width: 640px) {
+  .chat-split {
+    flex-direction: column;
+  }
+
+  .pane-divider {
+    cursor: default;
+  }
+}
+
+.chat-split-pane {
+  /* flex-grow (the resize ratio) is set inline per pane; min-width:0 is what
+     lets a pane shrink under its content rather than forcing the row wider. */
+  flex-shrink: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-divider {
+  flex: 0 0 6px;
+  align-self: stretch;
+  border: 0;
+  padding: 0;
+  background: var(--border);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.pane-divider:hover,
+.pane-divider:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.chat-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+/* The focused pane, so a keyboard user and a mouse user both know which pane a
+   close or resize is about. Inset so it does not shift the layout. */
+.chat-pane.focused {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: -2px;
+}
+
+.chat-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 10px 8px 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.chat-pane-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.chat-pane > .tool-error {
+  flex: none;
+  padding: 8px 14px;
+}
+
+/* Compact density: an extra pane is narrower than the centred primary column,
+   so it pads like the panel beside a document rather than reserving a measure. */
+.chat-pane .message-scroll {
+  padding: 0 14px;
+}
+
+.chat-pane .message-column {
+  width: 100%;
 }
 
 /* ---- Kanban boards ---- */
