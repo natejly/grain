@@ -46,15 +46,10 @@ def upgrade() -> None:
             sa.Column("created_by", sa.String(36), nullable=False, server_default=""),
         )
     if "updated_at" not in _columns("agents"):
-        op.add_column(
-            "agents",
-            sa.Column(
-                "updated_at",
-                sa.DateTime(),
-                nullable=False,
-                server_default=sa.text("CURRENT_TIMESTAMP"),
-            ),
-        )
+        # SQLite rejects ALTER TABLE … DEFAULT CURRENT_TIMESTAMP (non-constant).
+        # Add nullable, backfill from created_at; the ORM still writes on update.
+        op.add_column("agents", sa.Column("updated_at", sa.DateTime(), nullable=True))
+        op.execute(sa.text("UPDATE agents SET updated_at = created_at WHERE updated_at IS NULL"))
 
 
 def downgrade() -> None:

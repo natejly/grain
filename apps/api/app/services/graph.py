@@ -468,13 +468,17 @@ def rebuild_graph(workspace_id: str, actor_id: str) -> None:
                 )
                 llm_budget = max(0, llm_budget - 1)
 
+        # Imported here, not at module scope, because memory.py imports this
+        # module: the cycle only closes at call time, which is safe, and the
+        # alternative — graph.py spelling `status == "active"` for itself — is a
+        # second liveness rule that a change to supersession would not reach. A
+        # retired claim that kept its node would be the exact failure the
+        # supersession work fixed, resurfacing through the projection.
+        from .memory import _active
+
         memory_items = list(
             db.scalars(
-                select(MemoryItem)
-                .where(
-                    MemoryItem.workspace_id == workspace_id,
-                    MemoryItem.status == "active",
-                )
+                _active(select(MemoryItem), workspace_id)
                 # Unordered rows would make `version` a hash of physical row order
                 # and hand the LLM budget to a different subset on every rebuild.
                 .order_by(MemoryItem.id)

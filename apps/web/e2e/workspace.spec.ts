@@ -1,4 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
+
+/**
+ * How long an agent write may take to confirm on screen.
+ *
+ * 20s failed intermittently when another session ran its own suite on the same
+ * machine — the assertion was sound, the margin was not. This is machine speed,
+ * not a product deadline, so it is generous on purpose: a slow confirmation is
+ * not a defect, and a spec that fails under load teaches people to re-run
+ * rather than to read.
+ */
+const AGENT_WRITE_TIMEOUT = 45_000;
 import { openSettings, openView } from "./shell";
 
 test("upload, cited answer, provenance, graph, and deletion", async ({
@@ -116,7 +127,7 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
   await composer.press("Enter");
 
   const createCard = page.locator(".tool-card", { hasText: "create_document" });
-  await expect(createCard).toBeVisible({ timeout: 20_000 });
+  await expect(createCard).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   await expect(createCard.getByText("Needs approval")).toBeVisible();
   await expect(
     createCard.locator(".diff-line.add", { hasText: "Step two: run the migrations." }),
@@ -125,13 +136,13 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
   await createCard.getByRole("button", { name: "Approve" }).click();
   await expect(
     page.getByText("Drafted the Launch Runbook with three steps."),
-  ).toBeVisible({ timeout: 20_000 });
+  ).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
 
   await composer.fill("Tighten step two of the runbook.");
   await composer.press("Enter");
 
   const editCard = page.locator(".tool-card", { hasText: "edit_document" });
-  await expect(editCard).toBeVisible({ timeout: 20_000 });
+  await expect(editCard).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   const added = editCard.locator(".diff-line.add");
   const removed = editCard.locator(".diff-line.del");
   await expect(removed).toHaveText("-Step two: run the migrations.");
@@ -147,7 +158,7 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
 
   await editCard.getByRole("button", { name: "Deny" }).click();
   await expect(page.getByText("I left the Launch Runbook untouched.")).toBeVisible({
-    timeout: 20_000,
+    timeout: AGENT_WRITE_TIMEOUT,
   });
 
   await openView(page, "Files", /^Files/);
@@ -173,16 +184,16 @@ test("a parked write is decidable from the Files view", async ({ page }) => {
   await composer.fill("Draft the rollback playbook.");
   await composer.press("Enter");
   const createCard = page.locator(".tool-card", { hasText: "create_document" });
-  await expect(createCard).toBeVisible({ timeout: 20_000 });
+  await expect(createCard).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   await createCard.getByRole("button", { name: "Approve" }).click();
   await expect(page.getByText("Drafted the Rollback Playbook.")).toBeVisible({
-    timeout: 20_000,
+    timeout: AGENT_WRITE_TIMEOUT,
   });
 
   await composer.fill("Name the on-call rotation in the playbook.");
   await composer.press("Enter");
   await expect(page.locator(".tool-card", { hasText: "edit_document" })).toBeVisible({
-    timeout: 20_000,
+    timeout: AGENT_WRITE_TIMEOUT,
   });
 
   // The same parked call, seen from the approvals queue. This is the assertion
@@ -230,7 +241,7 @@ test("a parked write is decidable from the Files view", async ({ page }) => {
   // tool reports completion, so the open editor picks the write up on its own.
   // The value can only come from the server, so this also proves the write landed.
   await expect(page.locator(".document-source")).toHaveValue(/payments rotation/, {
-    timeout: 20_000,
+    timeout: AGENT_WRITE_TIMEOUT,
   });
 });
 
@@ -290,7 +301,7 @@ test("a fabricated citation is flagged under the answer that made it", async ({
   // The model cited [42] against a handful of passages. The validator has
   // always caught this; the product has never shown it.
   const flagged = page.locator(".citation-check.fabricated");
-  await expect(flagged).toBeVisible({ timeout: 20_000 });
+  await expect(flagged).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   await expect(flagged).toContainText("[42]");
   await expect(flagged).toContainText("does not match a supplied passage");
   // A correctness warning about the text above it, so it is announced.
@@ -304,7 +315,7 @@ test("a fabricated citation is flagged under the answer that made it", async ({
   await composer.fill("What does the rollout reduce?");
   await composer.press("Enter");
   const clean = page.locator(".citation-check.clean");
-  await expect(clean).toBeVisible({ timeout: 20_000 });
+  await expect(clean).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   await expect(clean).toContainText("Citations check out");
   expect(await clean.evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(
     fill,
@@ -338,7 +349,7 @@ test("a chart the agent draws is visible in the conversation", async ({ page }) 
   // asked whether it actually decoded pixels — the failure this is guarding
   // against rendered an <img> with an empty src and told nobody.
   const figure = card.locator("img.artifact-image");
-  await expect(figure).toBeVisible({ timeout: 20_000 });
+  await expect(figure).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   await expect
     .poll(() => decoded(figure), { timeout: 15_000 })
     .toBe(true);
@@ -354,7 +365,7 @@ test("a chart the agent draws is visible in the conversation", async ({ page }) 
   await page.reload();
   await openThread(page, "Plot the rollout for me.");
   const reloaded = page.locator(".tool-card", { hasText: "run_python" }).locator("img");
-  await expect(reloaded).toBeVisible({ timeout: 20_000 });
+  await expect(reloaded).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   await expect.poll(() => decoded(reloaded), { timeout: 15_000 }).toBe(true);
 
   // The figure is also a workspace source, and can be opened from there.

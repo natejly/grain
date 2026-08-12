@@ -4300,7 +4300,7 @@ select:focus-visible {
 .projects-layout {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr) minmax(0, 1fr);
-  height: 100%;
+  flex: 1;
   min-height: 0;
 }
 
@@ -4508,10 +4508,17 @@ select:focus-visible {
   tab-size: 2;
 }
 
-.project-preview-pane,
+.project-preview-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .project-preview {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-width: 0;
   min-height: 0;
 }

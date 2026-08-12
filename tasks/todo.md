@@ -197,3 +197,60 @@ Deliberate v1 exclusions: per-agent model override, per-conversation sticky sele
 Multi-session coordination: this session shared the tree with two others; the split was
 negotiated by message, contracts were committed early to make clobbers recoverable, and
 the tree moved to per-session worktrees mid-build (this one: Dashbored-agent-creator).
+
+## Knowledge graph empty for a memory-only workspace (2026-08-12)
+
+Reported as "rebuild_graph never reads MemoryItem". That is not the defect — the
+projection has read MemoryItem since 88f0588 (entity_memories / memory_ids_json /
+"from memory" in the entity row). Verified against a copy of data/workspace.db:
+rebuilding Lyn's workspace (14 memories, 0 sources) yields 25 entities / 48 edges.
+
+Real defect: nothing ever triggers a rebuild for a workspace with no sources.
+`mark_graph_stale` is called on every memory write, and *nothing consumes* the
+"stale" status. `rebuild_graph` runs only from source ingest, source delete, and
+POST /api/graph/rebuild. Lyn's projection: status=stale, built_at=NULL, never built.
+
+- [ ] Graph page acts on `stale`: rebuild once on open (not on GET, which
+      refreshSecondary calls after every chat turn — that would be a full LLM
+      rebuild per turn)
+- [ ] Empty-state copy stops saying sources are the only input
+- [ ] rebuild_graph's memory liveness goes through memory._active()
+- [ ] Tests: memory-only graph is non-empty; superseded contributes nothing
+      (mutation-checked); idempotent; cross-tenant isolation; chokepoint assertion
+
+### Review
+
+The reported diagnosis did not hold. `rebuild_graph` has projected memories since
+88f0588: it reads `MemoryItem`, keeps `entity_memories` / `relation_memories`,
+writes `memory_ids_json` on both nodes and edges, folds curated `entity_names`
+through the same article-alias pass as chunk names, and the entity row already
+renders "· from memory". Proved on a copy of data/workspace.db: Lyn's workspace
+(14 memories, 0 sources) rebuilds to 25 entities / 48 edges, every one of them
+memory-cited and none chunk-cited, and a second rebuild reproduces the version
+hash exactly.
+
+What was actually broken is the trigger. `mark_graph_stale` runs on every memory
+write and *nothing consumed the status it wrote* — `rebuild_graph` ran only from
+source ingest, source delete, and the page's own button. Lyn's projection was
+`status=stale, built_at=NULL`: never built, and nothing in the product would ever
+have built it.
+
+- Graph page rebuilds a `stale` projection on open. Not on GET /api/graph:
+  `refreshSecondary` re-reads the graph after every chat turn, so read-repair
+  there would spend a full rebuild (up to 60 extraction calls) per turn to serve
+  a page nobody opened. This view mounts only when its tab is open.
+- `stale` now reads as "about to build" in the empty state but *not* on the
+  button, so a failed auto-rebuild leaves the manual retry reachable.
+- `rebuild_graph` takes memory liveness from `memory._active()` (function-level
+  import; memory.py imports graph.py, so the cycle closes at call time only).
+- Six API tests + five web tests. Mutation-checked: replacing `_active(...)` with
+  a bare workspace filter fails `test_a_superseded_memory_contributes_nothing`
+  (both the retired *and* the forgotten name reappear as nodes) and
+  `test_graph_takes_memory_liveness_from_memorys_own_chokepoint`; restored, green.
+
+Deferred: `api/memory.py:45` still spells out `status == "active"` for the list
+endpoint, so `_active()` is the chokepoint for recall and the projection but not
+literally every reader. Out of scope here and separately tested.
+
+Not run: Playwright (ports coordinated with another session). The graph page's
+stale-open path is covered by vitest against the real component, not e2e.

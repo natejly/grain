@@ -5,6 +5,7 @@ tears it down: nothing in the graph is a system of record.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import uuid
 
@@ -819,7 +820,9 @@ def test_tool_bounds_survive_non_finite_arguments(workspace, db):
 # Rebuild robustness
 
 
-def _memory(workspace_id: str, key: str, content: str, names) -> str:
+def _memory(
+    workspace_id: str, key: str, content: str, names, *, status: str = "active"
+) -> str:
     db = SessionLocal()
     try:
         item = MemoryItem(
@@ -828,7 +831,7 @@ def _memory(workspace_id: str, key: str, content: str, names) -> str:
             kind="fact",
             content=content,
             entity_names_json=json.dumps(names),
-            status="active",
+            status=status,
         )
         db.add(item)
         db.commit()
@@ -984,3 +987,233 @@ def test_graph_digest_finds_a_calendar_named_entity(workspace, db):
     digest = _graph_digest(db, workspace_id, "Tell me about Friday")
     assert digest, "the Friday node exists; the question must reach it"
     assert any("Friday" in line for line in digest)
+
+
+# --------------------------------------------------------------------------
+# Memory as a projection input
+#
+# The graph has two authoritative inputs, not one, and a workspace that has
+# uploaded nothing is the case where that distinction is the whole feature: it
+# is entirely normal for someone to have taught the workspace fourteen things
+# about themselves and indexed zero documents. These tests hold the line that
+# such a workspace still gets a graph, that a corrected fact does not keep its
+# old node, and that a reader can tell the two kinds of support apart.
+
+
+def _snapshot(db, workspace_id: str):
+    """Everything the projection asserts, in a form two rebuilds can compare."""
+    entities = {
+        row.id: row
+        for row in db.query(GraphEntity).filter_by(workspace_id=workspace_id).all()
+    }
+    nodes = sorted(
+        (
+            row.normalized_name,
+            row.entity_type,
+            row.mention_count,
+            tuple(sorted(json.loads(row.memory_ids_json))),
+            tuple(sorted(json.loads(row.chunk_ids_json))),
+        )
+        for row in entities.values()
+    )
+    edges = sorted(
+        (
+            entities[row.from_entity_id].normalized_name,
+            entities[row.to_entity_id].normalized_name,
+            row.relation,
+            row.weight,
+        )
+        for row in db.query(GraphEdge).filter_by(workspace_id=workspace_id).all()
+    )
+    return nodes, edges
+
+
+def test_a_workspace_with_memories_and_no_sources_still_has_a_graph(workspace, db):
+    """The user's reported case: 14 memories, 0 sources, an empty graph.
+
+    Nothing here is a document, so every node the rebuild produces has to come
+    from a memory or there is no graph at all.
+    """
+    workspace_id, user_id = workspace
+    _memory(
+        workspace_id,
+        "who",
+        "Nathaniel Ly studies Computer Science at Yale.",
+        ["Nathaniel Ly", "Yale"],
+    )
+    _memory(
+        workspace_id,
+        "work",
+        "Nathaniel Ly interned at Capital One.",
+        ["Nathaniel Ly", "Capital One"],
+    )
+    graph.rebuild_graph(workspace_id, user_id)
+
+    projection = db.query(GraphProjection).filter_by(workspace_id=workspace_id).one()
+    assert projection.status == "ready", projection.error
+    entities = db.query(GraphEntity).filter_by(workspace_id=workspace_id).all()
+    assert entities, "memories alone must be able to fill the graph"
+    assert {"nathaniel ly", "yale", "capital one"} <= {
+        row.normalized_name for row in entities
+    }
+    assert db.query(GraphEdge).filter_by(workspace_id=workspace_id).all()
+
+
+def test_memory_support_is_distinguishable_from_document_support(workspace, db):
+    """ADR 0002 keeps provenance on every node; the *kind* of it is the claim.
+
+    "You told me this" and "this document says this" are different standings for
+    the same name, and a reader clicking through has nothing else to tell them
+    apart — so the two id lists are populated independently, and a node with only
+    one kind of support carries only that kind. This is also what the entity row
+    reads to say "from memory".
+    """
+    workspace_id, user_id = workspace
+    _ingest(workspace_id, user_id, "Helios Freight ships with Borealis Rail.")
+    _memory(workspace_id, "told", "Quintus Vale mentors me.", ["Quintus Vale"])
+    graph.rebuild_graph(workspace_id, user_id)
+
+    by_name = {
+        row.normalized_name: row
+        for row in db.query(GraphEntity).filter_by(workspace_id=workspace_id).all()
+    }
+    remembered = by_name["quintus vale"]
+    assert json.loads(remembered.memory_ids_json), "a remembered name cites its memory"
+    assert json.loads(remembered.chunk_ids_json) == []
+    assert json.loads(remembered.source_ids_json) == []
+
+    quoted = by_name["helios freight"]
+    assert json.loads(quoted.chunk_ids_json), "a quoted name cites its passage"
+    assert json.loads(quoted.source_ids_json)
+    assert json.loads(quoted.memory_ids_json) == []
+
+
+def test_a_superseded_memory_contributes_nothing(workspace, db):
+    """A corrected fact must not keep the node its old value put there.
+
+    This is the failure the memory-supersession work fixed, and the projection is
+    the back door into it: `Fly.io` retired hours ago, and a graph that still
+    shows it — with an edge to the API it no longer hosts — is a worse answer
+    than no graph, because it looks current.
+    """
+    workspace_id, user_id = workspace
+    _memory(workspace_id, "live", "Deploys go to Zephyr Rail.", ["Zephyr Rail"])
+    _memory(
+        workspace_id,
+        "old",
+        "Deploys go to Umbral Heights.",
+        ["Umbral Heights"],
+        status="superseded",
+    )
+    _memory(
+        workspace_id,
+        "gone",
+        "Deploys go to Quaggan Freight.",
+        ["Quaggan Freight"],
+        status="deleted",
+    )
+    graph.rebuild_graph(workspace_id, user_id)
+
+    names = {
+        row.normalized_name
+        for row in db.query(GraphEntity).filter_by(workspace_id=workspace_id).all()
+    }
+    assert "zephyr rail" in names, "the current value is projected"
+    assert "umbral heights" not in names, "a retired claim keeps no node"
+    assert "quaggan freight" not in names, "a forgotten claim keeps no node"
+
+    retired = {
+        row.id
+        for row in db.query(MemoryItem)
+        .filter(MemoryItem.workspace_id == workspace_id, MemoryItem.status != "active")
+        .all()
+    }
+    cited = set()
+    for row in db.query(GraphEntity).filter_by(workspace_id=workspace_id).all():
+        cited.update(json.loads(row.memory_ids_json))
+    for row in db.query(GraphEdge).filter_by(workspace_id=workspace_id).all():
+        cited.update(json.loads(row.memory_ids_json))
+    # Not just "no node of its own": a retired row must not turn up as
+    # provenance for a name some live memory also happens to mention.
+    assert cited.isdisjoint(retired)
+
+
+def test_graph_takes_memory_liveness_from_memorys_own_chokepoint(workspace, db):
+    """The rule above has to be the *same* rule recall uses, not a copy of it.
+
+    test_memory_depth.py pins `_active()` as the single place a query decides
+    what counts as a live memory, on the grounds that a second copy is a second
+    thing to forget. The projection is a reader of memory like any other, so it
+    goes through the same function rather than spelling the predicate out again.
+    """
+    source = inspect.getsource(graph.rebuild_graph)
+    assert "_active(" in source
+    assert "MemoryItem.status" not in source, (
+        "rebuild_graph decides memory liveness for itself instead of via _active()"
+    )
+
+
+def test_rebuilding_a_memory_only_graph_twice_changes_nothing(workspace, db):
+    """ADR 0002: the projection may be dropped and rebuilt at any time."""
+    workspace_id, user_id = workspace
+    _memory(
+        workspace_id,
+        "one",
+        "Maya Chen leads Atlas Labs.",
+        ["Maya Chen", "Atlas Labs"],
+    )
+    _memory(
+        workspace_id,
+        "two",
+        "Atlas Labs funds Project Northstar.",
+        ["Atlas Labs", "Project Northstar"],
+    )
+    graph.rebuild_graph(workspace_id, user_id)
+    projection = db.query(GraphProjection).filter_by(workspace_id=workspace_id).one()
+    first_version = projection.version
+    first = _snapshot(db, workspace_id)
+    assert first[0], "nothing is proven by two empty rebuilds agreeing"
+
+    # From scratch, not incrementally: the rows are dropped the way an operator
+    # clearing the projection would drop them.
+    db.query(GraphEdge).filter_by(workspace_id=workspace_id).delete()
+    db.query(GraphEntity).filter_by(workspace_id=workspace_id).delete()
+    db.commit()
+    graph.rebuild_graph(workspace_id, user_id)
+    db.expire_all()
+
+    projection = db.query(GraphProjection).filter_by(workspace_id=workspace_id).one()
+    assert projection.version == first_version
+    assert _snapshot(db, workspace_id) == first
+
+
+def test_memory_derived_entities_stay_inside_their_workspace(workspace, db):
+    """Two tenants, one table. A rebuild reads and writes only its own rows."""
+    workspace_id, user_id = workspace
+    other_id = str(uuid.uuid4())
+    session = SessionLocal()
+    try:
+        session.add(Workspace(id=other_id, name="Other tenant"))
+        session.commit()
+    finally:
+        session.close()
+    try:
+        _memory(workspace_id, "mine", "Sable Ridge is ours.", ["Sable Ridge"])
+        _memory(other_id, "theirs", "Cobalt Vale is theirs.", ["Cobalt Vale"])
+        graph.rebuild_graph(workspace_id, user_id)
+
+        mine = db.query(GraphEntity).filter_by(workspace_id=workspace_id).all()
+        assert {row.normalized_name for row in mine} >= {"sable ridge"}
+        assert "cobalt vale" not in {row.normalized_name for row in mine}
+        # The other tenant's rebuild never ran, so its memories projected nothing
+        # anywhere — not into its own graph, and not into ours.
+        assert db.query(GraphEntity).filter_by(workspace_id=other_id).all() == []
+    finally:
+        session = SessionLocal()
+        try:
+            for model in (GraphEdge, GraphEntity, GraphProjection, MemoryItem):
+                session.query(model).filter(model.workspace_id == other_id).delete()
+            session.query(Workspace).filter(Workspace.id == other_id).delete()
+            session.commit()
+        finally:
+            session.close()
