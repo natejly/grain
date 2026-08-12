@@ -13,6 +13,7 @@ import {
   Square,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import type {
   AgentToolCall,
@@ -51,6 +52,20 @@ export type ChatViewProps = {
   apps: GeneratedApp[];
   draft: string;
   setDraft: (value: string) => void;
+  /**
+   * Per-turn controls: the deployment's model allow-list and effort choices,
+   * and the current selection. When `selectableModels` has fewer than two
+   * entries the model dropdown is pointless (the scripted double, or a
+   * single-model deployment) and is left out, so the composer stays clean.
+   */
+  selectableModels: string[];
+  efforts: string[];
+  selectedModel: string;
+  setSelectedModel: (value: string) => void;
+  selectedEffort: string;
+  setSelectedEffort: (value: string) => void;
+  fast: boolean;
+  setFast: (value: boolean) => void;
   activeRun: string | null;
   runStatus: string;
   /**
@@ -188,6 +203,12 @@ function CitationVerdictNote({ report }: { report: CitationCheck }) {
   );
 }
 
+/** "xhigh" → "Extra high"; every other effort just gets its first letter cased. */
+function effortLabel(effort: string): string {
+  if (effort === "xhigh") return "Extra high";
+  return effort.charAt(0).toUpperCase() + effort.slice(1);
+}
+
 function prettyArguments(raw: string): string {
   if (!raw || raw === "{}") return "";
   try {
@@ -300,6 +321,14 @@ export function ChatView({
   apps,
   draft,
   setDraft,
+  selectableModels,
+  efforts,
+  selectedModel,
+  setSelectedModel,
+  selectedEffort,
+  setSelectedEffort,
+  fast,
+  setFast,
   activeRun,
   runStatus,
   budgetPark,
@@ -443,6 +472,55 @@ export function ChatView({
               aria-label="Add a source"
             >
               <Paperclip size={17} />
+            </button>
+            {/* A single-model deployment (or the scripted double) has nothing to
+                choose between, so the model dropdown only appears once there is
+                a real choice to make. */}
+            {selectableModels.length > 1 && (
+              <select
+                className="composer-select"
+                value={selectedModel}
+                onChange={(event) => setSelectedModel(event.target.value)}
+                disabled={Boolean(activeRun)}
+                title="Model for this message"
+                aria-label="Model for this message"
+              >
+                {selectableModels.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            )}
+            {efforts.length > 0 && (
+              <select
+                className="composer-select"
+                value={selectedEffort}
+                onChange={(event) => setSelectedEffort(event.target.value)}
+                disabled={Boolean(activeRun) || fast}
+                title="Reasoning effort for this message"
+                aria-label="Reasoning effort for this message"
+              >
+                {efforts.map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effortLabel(effort)}
+                  </option>
+                ))}
+              </select>
+            )}
+            {/* "Fast" is honest: the backend maps it to the lowest effort the
+                product model reliably accepts, so while it is on the explicit
+                effort selector is disabled to show it has taken over. */}
+            <button
+              type="button"
+              className={fast ? "composer-toggle on" : "composer-toggle"}
+              onClick={() => setFast(!fast)}
+              disabled={Boolean(activeRun)}
+              aria-pressed={fast}
+              title="Fast: lowest-latency effort"
+            >
+              <Zap size={14} />
+              Fast
             </button>
             <span className="composer-spacer" />
             {activeRun ? (

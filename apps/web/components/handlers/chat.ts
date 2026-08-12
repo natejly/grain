@@ -43,6 +43,10 @@ export type ChatHandlerDeps = {
   conversations: Conversation[];
   messages: Message[];
   draft: string;
+  /** Per-turn overrides read at send time; "" means "use the deployment default". */
+  selectedModel: string;
+  selectedEffort: string;
+  fast: boolean;
   activeConversation: string | null;
   activeRun: string | null;
   setError: Dispatch<SetStateAction<string>>;
@@ -73,6 +77,9 @@ export function createChatHandlers({
   conversations,
   messages,
   draft,
+  selectedModel,
+  selectedEffort,
+  fast,
   activeConversation,
   activeRun,
   setError,
@@ -255,6 +262,7 @@ export function createChatHandlers({
         activeConversation,
         lastUser.content,
         bootstrap?.default_agent_id,
+        { model: selectedModel, effort: fast ? "" : selectedEffort, fast },
       );
       setMessages((items) =>
         items.some((item) => item.id === response.message.id)
@@ -455,6 +463,7 @@ export function createChatHandlers({
         conversationId,
         content,
         bootstrap?.default_agent_id,
+        { model: selectedModel, effort: fast ? "" : selectedEffort, fast },
       );
       setMessages((items) => {
         const existing = items.some((item) => item.id === response.message.id);

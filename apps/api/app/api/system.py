@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import get_args
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
-from ..config import Settings, get_settings
+from ..config import ReasoningEffort, Settings, get_settings
 from ..database import get_db
 from ..models import Agent
 from ..schemas import BootstrapResponse, HealthResponse, Identity, ModelProviderStatus
@@ -54,6 +56,16 @@ def bootstrap(
                 if settings.active_model_provider == "openai"
                 else "scripted-double"
             ),
+            # The scripted double talks to no provider, so its only selectable
+            # "model" is itself — the composer must not offer a real allow-list a
+            # test deployment cannot honour.
+            selectable_models=(
+                settings.selectable_models
+                if settings.active_model_provider == "openai"
+                else ["scripted-double"]
+            ),
+            reasoning_efforts=list(get_args(ReasoningEffort)),
+            default_effort=settings.openai_reasoning_effort,
         ),
         feature_flags={
             "cited_memory": True,

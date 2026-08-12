@@ -60,7 +60,25 @@ export type Bootstrap = {
     /** True only when a real provider is answering. */
     configured: boolean;
     model: string;
+    /** The deployment's allow-list a per-turn model override must be drawn from. */
+    selectable_models: string[];
+    /** The reasoning-effort Literal values, for the composer's effort dropdown. */
+    reasoning_efforts: string[];
+    /** The deployment default effort — what an unset per-turn effort resolves to. */
+    default_effort: string;
   };
+};
+
+/**
+ * Per-turn overrides for one message: a model off the deployment allow-list, a
+ * reasoning effort, and the "fast" shortcut. All optional — absent fields leave
+ * the deployment defaults in force, so an unchanged composer sends exactly what
+ * it always did.
+ */
+export type MessageControls = {
+  model?: string;
+  effort?: string;
+  fast?: boolean;
 };
 
 export type Conversation = {
@@ -1326,6 +1344,7 @@ export class WorkspaceApi {
     conversationId: string,
     content: string,
     agentId?: string,
+    controls?: MessageControls,
   ): Promise<SendMessageResponse> {
     return this.request(
       `/api/conversations/${conversationId}/messages`,
@@ -1333,8 +1352,16 @@ export class WorkspaceApi {
         method: "POST",
         // A workspace with no agent bootstraps as "", and an empty agent_id is
         // not a valid selection — omitting the field lets the API pick the
-        // workspace's own agent instead of failing the turn.
-        body: JSON.stringify({ content, ...(agentId ? { agent_id: agentId } : {}) }),
+        // workspace's own agent instead of failing the turn. The per-turn
+        // controls follow the same conditional-spread rule: an absent field
+        // means "deployment default", so only present overrides go on the wire.
+        body: JSON.stringify({
+          content,
+          ...(agentId ? { agent_id: agentId } : {}),
+          ...(controls?.model ? { model: controls.model } : {}),
+          ...(controls?.effort ? { effort: controls.effort } : {}),
+          ...(controls?.fast ? { fast: true } : {}),
+        }),
       },
       true,
     );

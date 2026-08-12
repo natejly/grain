@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 from openai import OpenAI
 
-from ..config import Settings, get_settings
+from ..config import ReasoningEffort, Settings, get_settings
 from . import usage
 from .retrieval import Evidence
 
@@ -306,6 +306,8 @@ def stream_agent_response(
     tools: List[Dict[str, object]],
     instructions: str,
     operation: str = "",
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
 ) -> Iterator[Tuple[str, object]]:
     """Stream one agent turn as ("delta", text) events then ("completed", response).
 
@@ -322,6 +324,12 @@ def stream_agent_response(
     the step function that reaches this call having to be told: the distinction
     belongs to what *started* the run, not to this frame.
 
+    `model` and `effort` are the per-turn overrides. Each defaults to None and
+    falls back to `settings.openai_model` / `settings.openai_reasoning_effort`, so
+    a call that passes neither is byte-identical to before this feature. The
+    resolved model — not the default — is what the usage record is keyed on, so an
+    overridden turn is priced against the model it actually ran on.
+
     Annotation events (`response.output_text.annotation.added`) arrive
     interleaved with the deltas and are deliberately dropped here. Citations are
     read off the terminal response instead, which is what makes it structurally
@@ -330,12 +338,25 @@ def stream_agent_response(
     answer. Forwarding them live would buy a highlight during streaming and put
     that guarantee back in the hands of whoever wrote the consumer.
     """
+    # Per-turn overrides fall back to the deployment defaults, so a caller that
+    # passes neither runs exactly as before. The chosen model is captured once and
+    # reused for the usage record below: cost must be billed against the model
+    # actually requested, not the process-wide default, or a per-turn override
+    # would be mis-priced.
+    chosen_model = model or settings.openai_model
+    # `effort` arrives here as a plain `str` (a persisted run column), but it was
+    # validated as a `ReasoningEffort` at the request edge and the fallback is the
+    # setting's own Literal, so narrowing it back keeps the `reasoning=` dict
+    # checked against the provider's `Reasoning` TypedDict rather than an `Any`.
+    chosen_effort: ReasoningEffort = cast(
+        ReasoningEffort, effort or settings.openai_reasoning_effort
+    )
     stream = client.responses.create(
-        model=settings.openai_model,
+        model=chosen_model,
         instructions=instructions,
         input=cast(Any, input_items),
         tools=cast(Any, tools),
-        reasoning={"effort": settings.openai_reasoning_effort},
+        reasoning={"effort": chosen_effort},
         text={"verbosity": "low"},
         max_output_tokens=settings.openai_max_output_tokens,
         safety_identifier=privacy_safe_identifier(user_id),
@@ -349,7 +370,7 @@ def stream_agent_response(
         elif event_type == "response.completed":
             completed = getattr(event, "response", None)
             usage.record_model_usage(
-                model=settings.openai_model,
+                model=chosen_model,
                 operation=(
                     operation or usage.current_attribution().operation or usage.CHAT
                 ),

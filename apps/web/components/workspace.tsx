@@ -64,6 +64,12 @@ export function Workspace() {
     setView,
     draft,
     setDraft,
+    selectedModel,
+    setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
+    fast,
+    setFast,
     activeRun,
     runStatus,
     budgetPark,
@@ -452,6 +458,14 @@ export function Workspace() {
             apps={dashboardApps}
             draft={draft}
             setDraft={setDraft}
+            selectableModels={bootstrap?.model_provider.selectable_models ?? []}
+            efforts={bootstrap?.model_provider.reasoning_efforts ?? []}
+            selectedModel={selectedModel}
+            setSelectedModel={setSelectedModel}
+            selectedEffort={selectedEffort}
+            setSelectedEffort={setSelectedEffort}
+            fast={fast}
+            setFast={setFast}
             activeRun={activeRun}
             runStatus={runStatus}
             budgetPark={budgetPark}

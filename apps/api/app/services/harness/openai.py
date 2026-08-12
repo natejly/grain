@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ...config import Settings
 from ..model import _openai_client, stream_agent_response
@@ -25,6 +25,8 @@ class OpenAIHarness:
         prompt: str,
         user_id: str,
         evidence: List[Evidence],
+        model: Optional[str] = None,
+        effort: Optional[str] = None,
     ) -> ModelStep:
         client = _openai_client(settings)
 
@@ -38,6 +40,8 @@ class OpenAIHarness:
                 input_items=input_items,
                 tools=tools,
                 instructions=instructions,
+                model=model,
+                effort=effort,
             )
 
         return step

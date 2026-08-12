@@ -8,6 +8,13 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The reasoning-effort ladder, named once so the setting and the per-turn request
+# override cannot drift. It was inline on `openai_reasoning_effort`; a second copy
+# on `SendMessageRequest` would be a Literal that silently disagreed the day this
+# list changed, and a request validated against the stale one is a 422 for a value
+# the model actually accepts (or worse, a pass for one it rejects).
+ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh", "max"]
+
 
 class ModelPrice(BaseModel):
     """What one model costs, in USD per million tokens.
@@ -63,9 +70,12 @@ class Settings(BaseSettings):
     scripted_model_script: Optional[Path] = None
     openai_api_key: Optional[SecretStr] = None
     openai_model: str = "gpt-5.5"
-    openai_reasoning_effort: Literal[
-        "none", "low", "medium", "high", "xhigh", "max"
-    ] = "low"
+    openai_reasoning_effort: ReasoningEffort = "low"
+    # Optional deployment override for the per-turn model allow-list, comma
+    # separated. Unset derives the list from the priced models (see
+    # `selectable_models`); set it when a deployment prices models it does not
+    # want user-selectable, or wants to offer one it has not priced.
+    selectable_models_raw: str = ""
     openai_timeout_seconds: float = 60.0
     openai_max_output_tokens: int = 1200
     openai_embedding_model: str = "text-embedding-3-small"
@@ -683,6 +693,41 @@ class Settings(BaseSettings):
         one.
         """
         return self.model_prices.get(model.strip())
+
+    @property
+    def selectable_models(self) -> List[str]:
+        """The models a user may pick per turn — a deployment-controlled allow-list.
+
+        A per-turn override must never let a user hand an arbitrary model string
+        to the provider: an unpriced model would record a null cost, and a typo'd
+        one would 500 the turn. So the choice is bounded to models the deployment
+        has already vouched for.
+
+        `SELECTABLE_MODELS` (comma-separated) is the explicit list when set;
+        otherwise it derives from the priced models, because a price is exactly
+        the deployment saying "I have configured this model". `openai_model` is
+        always included so the current default can never become unselectable, and
+        the order is stable so the client dropdown does not reshuffle run to run.
+        """
+        if self.active_model_provider == "scripted":
+            # The scripted double ignores the model, so the picker and the
+            # allow-list agree on the one placeholder name bootstrap advertises —
+            # otherwise a dev picking "scripted-double" is refused by a check that
+            # was comparing against a real model name it never offered.
+            return ["scripted-double"]
+        if self.selectable_models_raw.strip():
+            names = [
+                name.strip()
+                for name in self.selectable_models_raw.split(",")
+                if name.strip()
+            ]
+        else:
+            names = sorted(self.model_prices)
+        ordered: List[str] = []
+        for name in [*names, self.openai_model]:
+            if name and name not in ordered:
+                ordered.append(name)
+        return ordered
 
     @property
     def active_model_provider(self) -> Literal["openai", "scripted"]:

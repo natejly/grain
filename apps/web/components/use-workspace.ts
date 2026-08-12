@@ -72,6 +72,15 @@ export function useWorkspace() {
   const [activeProject, setActiveProject] = useState<WorkspaceProject | null>(null);
   const [view, setView] = useState<View>("chat");
   const [draft, setDraft] = useState("");
+  /**
+   * Per-turn model/effort/fast overrides for the chat composer. They start
+   * empty and are seeded from the bootstrap once it arrives (below), so the
+   * selectors show the deployment's real defaults rather than a guess; a user's
+   * own choice sticks because the seed only fills a value still unset.
+   */
+  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedEffort, setSelectedEffort] = useState("");
+  const [fast, setFast] = useState(false);
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState("");
   /**
@@ -297,6 +306,16 @@ export function useWorkspace() {
     void loadWorkspace();
   }, [loadWorkspace]);
 
+  // Seed the composer's per-turn controls from the deployment defaults the
+  // moment the bootstrap lands, but never clobber a choice the user already
+  // made — the `current ||` guard is what lets the selectors show a concrete
+  // model/effort without overriding a selection between reloads of the lists.
+  useEffect(() => {
+    if (!bootstrap) return;
+    setSelectedModel((current) => current || bootstrap.model_provider.model);
+    setSelectedEffort((current) => current || bootstrap.model_provider.default_effort);
+  }, [bootstrap]);
+
   useEffect(() => {
     void refreshArtifacts().catch(() => undefined);
   }, [refreshArtifacts]);
@@ -431,6 +450,9 @@ export function useWorkspace() {
     conversations,
     messages,
     draft,
+    selectedModel,
+    selectedEffort,
+    fast,
     activeConversation,
     activeRun,
     setError,
@@ -519,6 +541,12 @@ export function useWorkspace() {
     setView,
     draft,
     setDraft,
+    selectedModel,
+    setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
+    fast,
+    setFast,
     activeRun,
     runStatus,
     budgetPark,
