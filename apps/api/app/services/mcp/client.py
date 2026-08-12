@@ -14,16 +14,21 @@ on tools the user has already been asked to approve.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
+import socket
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
+from urllib.parse import urlparse
 
 import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
+
+from ...config import get_settings
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 MAX_RESULT_CHARS = 8000
@@ -81,6 +86,47 @@ def _run_sync(coro_factory: Callable[[], Awaitable[T]], timeout: float) -> T:
         return pool.submit(runner).result(timeout=timeout + 10)
 
 
+def _guard_http_target(url: str) -> None:
+    """Refuse an http MCP endpoint on the API's own network before dialing it.
+
+    The SDK's streamable transport connects to `config.url` on every tool call
+    with no address check of its own, so without this a server registered at the
+    API host's loopback or the cloud-metadata address (169.254.169.254) would be
+    reached each time — a plain SSRF the OAuth discovery flow already guards but
+    this transport did not.
+
+    Refused only outside development: a `http://localhost` MCP server is a normal
+    local workflow that `api/mcp.py` registers on purpose, and the tests run
+    there, so gating on the environment keeps both working while a deployment —
+    where "localhost" is only ever the API's own box — is protected. RFC1918 is
+    left allowed, because an operator's internal MCP server in their own VPC is a
+    real thing; what is blocked is the range that is never a tenant's server and
+    always this host: loopback, link-local, multicast, unspecified.
+
+    Pre-connect only. The SDK owns the socket, so unlike the tool fetcher this
+    cannot read back the address the connection actually used — a host that
+    rebinds between this check and the dial is a residual, not a caught case.
+    """
+    if get_settings().is_dev_env:
+        return
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return  # let the transport surface the real resolution failure
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            raise McpError(
+                f"“{host}” resolves to {ip}, an address on this server's own "
+                "network; an MCP server may not point at the API host or the "
+                "cloud metadata service."
+            )
+
+
 async def _with_session(
     config: ServerConfig,
     timeout: float,
@@ -104,6 +150,7 @@ async def _with_session(
     if config.transport == "http":
         if not config.url:
             raise McpError("An HTTP server needs a URL")
+        _guard_http_target(config.url)
         async with streamablehttp_client(
             config.url, headers=dict(config.headers) or None
         ) as (read, write, _get_session_id):
