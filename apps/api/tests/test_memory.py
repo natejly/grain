@@ -143,7 +143,12 @@ def test_graph_rebuild_includes_memory_entities(client):
         headers={"Idempotency-Key": "memory-graph-rebuild"},
     )
     assert rebuilt.status_code == 202
-    for _ in range(50):
+    # 30s, not 5s. The rebuild runs as a background task and extracts entities
+    # from every memory in the workspace, so its wall time tracks machine load
+    # rather than anything the assertion is about. At 5s this passed alone in
+    # 0.27s and failed roughly one full-suite run in four — which is the margin
+    # that teaches people to re-run a real assertion until it is green.
+    for _ in range(300):
         graph = client.get("/api/graph").json()
         if graph["status"] == "ready":
             break
