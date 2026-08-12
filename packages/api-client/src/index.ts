@@ -50,6 +50,24 @@ export type DevOverride = {
   handle: string;
 };
 
+/**
+ * The prompt-injection screen's public posture — enough for a status
+ * indicator, and no more. The proxy URL is a server secret and is deliberately
+ * absent, the same discipline that keeps the cron secret out of bootstrap.
+ *
+ * - `enabled` off ⇒ untrusted content is never screened; behaviour is today's.
+ * - `mode` "shadow" records verdicts and changes nothing; "enforce" escalates a
+ *   flagged turn to the strictest approval posture so an injection cannot drive
+ *   an auto-approved write.
+ * - `backend` is the classifier answering: the built-in cheap model, or an
+ *   external screen proxy.
+ */
+export type ScreenStatus = {
+  enabled: boolean;
+  mode: "shadow" | "enforce";
+  backend: "builtin" | "proxy";
+};
+
 export type Bootstrap = {
   identity: Identity;
   default_agent_id: string;
@@ -67,6 +85,8 @@ export type Bootstrap = {
     /** The deployment default effort — what an unset per-turn effort resolves to. */
     default_effort: string;
   };
+  /** The prompt-injection screen's posture, for a status indicator. */
+  screen: ScreenStatus;
 };
 
 /**
@@ -1242,6 +1262,12 @@ export type AdminObservability = {
   cancelled: number;
   /** failed / (completed + failed + cancelled); 0 when the window is empty. */
   error_rate: number;
+  /**
+   * How many turns the prompt-injection screen flagged in the window — the
+   * count of `screen.flagged` run events. Optional: absent on a deployment
+   * whose backend predates the screen, which reads the same as zero.
+   */
+  screen_flags?: number;
   recent_failures: AdminFailedRun[];
   live_runs: AdminLiveRun[];
   retention: AdminRetention;

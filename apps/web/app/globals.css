@@ -895,6 +895,30 @@ select:focus-visible {
   font-weight: 600;
 }
 
+/* The prompt-injection screen's posture pill, mirroring .agent-pill so the two
+   status indicators read as one row. Coloured only in enforce — the mode that
+   actually gates a flagged turn — so a shadow deployment stays quiet chrome. */
+.screen-pill {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.screen-pill.enforce {
+  border-color: var(--red-border);
+  background: var(--red-muted);
+  color: var(--red);
+}
+
 .icon-button {
   width: 32px;
   height: 32px;
@@ -1152,6 +1176,40 @@ select:focus-visible {
 
 .citation-check.fabricated span {
   color: inherit;
+}
+
+/* The prompt-injection screen's mark on a flagged turn. Shares the citation
+   check's plate geometry so the two verdicts stack cleanly under an answer, and
+   the fabricated-citation red because a caught injection is likewise a defect
+   the reader must not miss. */
+.screen-flag {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  margin-left: 31px;
+  padding: 8px 11px;
+  border: 1px solid var(--red-border);
+  border-radius: 8px;
+  background: var(--red-muted);
+  color: var(--red);
+  font-size: 12px;
+}
+
+.screen-flag > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.screen-flag > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.screen-flag strong {
+  font-weight: 600;
 }
 
 .citations {

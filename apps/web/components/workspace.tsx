@@ -1,7 +1,7 @@
 "use client";
 
 import type { DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, LogOut, Menu, Plus, Trash2, X } from "lucide-react";
+import { BarChart3, CircleDot, LogOut, Menu, Plus, ShieldAlert, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
@@ -83,6 +83,7 @@ export function Workspace() {
     activeRun,
     runStatus,
     budgetPark,
+    flaggedRuns,
     provenance,
     setProvenance,
     loadingProvenance,
@@ -428,6 +429,19 @@ export function Workspace() {
               open={openGroup}
             />
             <ThemeToggle />
+            {/* The prompt-injection screen's posture, shown only when it is on:
+                a status indicator, not a control. "enforce" is the mode that
+                actually escalates a flagged turn, so it reads as active; shadow
+                reads as watching. The proxy URL never reaches the client. */}
+            {bootstrap?.screen.enabled && (
+              <div
+                className={`screen-pill ${bootstrap.screen.mode}`}
+                title={`Prompt-injection screen: ${bootstrap.screen.mode} mode, ${bootstrap.screen.backend} backend`}
+              >
+                <ShieldAlert size={13} aria-hidden="true" />
+                Screen: {bootstrap.screen.mode}
+              </div>
+            )}
             <div
               className="agent-pill"
               title={
@@ -483,6 +497,7 @@ export function Workspace() {
             activeRun={activeRun}
             runStatus={runStatus}
             budgetPark={budgetPark}
+            flaggedRuns={flaggedRuns}
             submitPrompt={submitPrompt}
             cancelActiveRun={cancelActiveRun}
             regenerate={regenerate}

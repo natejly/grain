@@ -71,6 +71,13 @@ export type ChatViewProps = {
    * rather than a tool card with different words in it.
    */
   budgetPark: BudgetPark | null;
+  /**
+   * Runs the prompt-injection screen flagged. A turn whose run is in here gets a
+   * visible mark so the reader knows untrusted content tried to steer the answer
+   * and — in enforce mode — was forced to ask before every tool call. Optional
+   * and defaulting to none: the panel beside a document does not track it.
+   */
+  flaggedRuns?: string[];
   submitPrompt: (event?: FormEvent) => Promise<void>;
   cancelActiveRun: () => Promise<void>;
   regenerate: () => Promise<void>;
@@ -542,6 +549,32 @@ function CitationVerdictNote({ report }: { report: CitationCheck }) {
   );
 }
 
+/**
+ * The prompt-injection screen's mark on a turn it flagged.
+ *
+ * Not a decoration and not tuned out like the clean citation case: it appears
+ * only when the screen actually caught untrusted content — a retrieved passage,
+ * the open document, or a tool result — trying to steer the assistant. In
+ * enforce mode that turn was already forced to ask before every tool call; this
+ * is what tells the reader an injection was the reason, so a parked write is not
+ * read as the assistant being needlessly cautious. `role="alert"` because a
+ * caught injection is exactly the event a screen reader should hear.
+ */
+function ScreenFlagNote() {
+  return (
+    <div className="screen-flag" role="alert">
+      <ShieldAlert size={14} aria-hidden="true" />
+      <div>
+        <strong>Prompt injection screened</strong>
+        <span>
+          Untrusted content in this turn tried to steer the assistant. Every tool
+          call was held for your approval.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function prettyArguments(raw: string): string {
   if (!raw || raw === "{}") return "";
   try {
@@ -712,6 +745,7 @@ export function ChatView({
   activeRun,
   runStatus,
   budgetPark,
+  flaggedRuns,
   submitPrompt,
   cancelActiveRun,
   regenerate,
@@ -816,6 +850,8 @@ export function ChatView({
                     frame — the first time a streamed message crossed the line
                     between naming an app and not. */}
                 <ChatDashboardEmbeds content={message.content} apps={apps} />
+                {message.role === "assistant" &&
+                  flaggedRuns?.includes(message.run_id) && <ScreenFlagNote />}
                 {message.citation_report && (
                   <CitationVerdictNote report={message.citation_report} />
                 )}
@@ -840,6 +876,16 @@ export function ChatView({
                 todos={call.id === checklistCallId(liveCalls) ? todos : undefined}
               />
             ))}
+            {/* The flagged turn's mark while it is still live: a run that parked
+                on the injection escalation has no assistant message yet, so the
+                per-message mark above cannot appear until it settles. Shown only
+                when this run has no message to carry it, to avoid a duplicate. */}
+            {activeRun &&
+              flaggedRuns?.includes(activeRun) &&
+              !messages.some(
+                (message) =>
+                  message.role === "assistant" && message.run_id === activeRun,
+              ) && <ScreenFlagNote />}
             {/* Sits where a tool card would, and is deliberately not one: the
                 run parked before it asked the model anything, so there is no
                 proposed call and an approve/deny pair would decide nothing. */}

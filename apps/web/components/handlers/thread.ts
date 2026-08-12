@@ -87,6 +87,13 @@ export type ThreadHandlerDeps = {
    * the document panel, which has no such attachment.
    */
   onSent?: () => void;
+  /**
+   * The prompt-injection screen flagged untrusted content in this run — a
+   * `screen.flagged` event. The rail records the run id so the transcript can
+   * mark the turn an injection was caught in; the document panel omits it and so
+   * shows no such mark. Optional for the same reason `onSent` is.
+   */
+  onScreenFlag?: (runId: string) => void;
 };
 
 /**
@@ -122,6 +129,7 @@ export function createThreadHandlers({
   onToolProposed,
   activeConversationRef,
   onSent,
+  onScreenFlag,
 }: ThreadHandlerDeps) {
   /**
    * Merge a tool event into the card list. Events arrive in stages (proposed →
@@ -291,6 +299,17 @@ export function createThreadHandlers({
             setBudgetPark(park);
             setRunStatus("");
           }
+        }
+        /**
+         * The prompt-injection screen caught untrusted content this turn spliced
+         * in — a retrieved passage, the open document, or a tool result — trying
+         * to steer the assistant. In enforce mode the backend has already forced
+         * this turn to park every tool call for a human; here we only record the
+         * run so the transcript can say an injection was caught, and never
+         * swallow it into the ordinary status line.
+         */
+        if (event.event === "screen.flagged") {
+          onScreenFlag?.(runId);
         }
         if (event.event === "retrieval.completed") {
           const count = Number(event.data.count || 0);

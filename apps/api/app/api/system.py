@@ -10,7 +10,13 @@ from ..auth import Actor, get_actor
 from ..config import ReasoningEffort, Settings, get_settings
 from ..database import get_db
 from ..models import Agent
-from ..schemas import BootstrapResponse, HealthResponse, Identity, ModelProviderStatus
+from ..schemas import (
+    BootstrapResponse,
+    HealthResponse,
+    Identity,
+    ModelProviderStatus,
+    ScreenStatus,
+)
 
 router = APIRouter(tags=["system"])
 
@@ -66,6 +72,11 @@ def bootstrap(
             ),
             reasoning_efforts=list(get_args(ReasoningEffort)),
             default_effort=settings.openai_reasoning_effort,
+        ),
+        screen=ScreenStatus(
+            enabled=settings.screen_enabled,
+            mode=settings.screen_mode,
+            backend=settings.screen_backend,
         ),
         feature_flags={
             "cited_memory": True,

@@ -106,6 +106,7 @@ export function ObservabilityPanel({
     failed,
     cancelled,
     error_rate,
+    screen_flags,
     recent_failures,
     live_runs,
     retention,
@@ -177,6 +178,17 @@ export function ObservabilityPanel({
               <strong>{cancelled.toLocaleString("en-US")}</strong>
               <span>cancelled</span>
             </div>
+            {/* Only when the screen caught something: a zero here would read as
+                "the screen is on and quiet" on a deployment where it is simply
+                off, which the absent field cannot distinguish from a real zero. */}
+            {typeof screen_flags === "number" && screen_flags > 0 && (
+              <div>
+                <strong className="observability-error">
+                  {screen_flags.toLocaleString("en-US")}
+                </strong>
+                <span>injections screened</span>
+              </div>
+            )}
           </div>
 
           <div className="observability-lists">

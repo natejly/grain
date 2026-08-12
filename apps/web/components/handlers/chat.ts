@@ -54,6 +54,8 @@ export type ChatHandlerDeps = {
   setActiveRun: Dispatch<SetStateAction<string | null>>;
   setRunStatus: Dispatch<SetStateAction<string>>;
   setBudgetPark: Dispatch<SetStateAction<BudgetPark | null>>;
+  /** Records a run the prompt-injection screen flagged, so the transcript can mark it. */
+  onScreenFlag: (runId: string) => void;
   setDraft: Dispatch<SetStateAction<string>>;
   setActiveProject: Dispatch<SetStateAction<WorkspaceProject | null>>;
   setActiveDocument: Dispatch<SetStateAction<WorkspaceDocument | null>>;
@@ -92,6 +94,7 @@ export function createChatHandlers({
   setActiveRun,
   setRunStatus,
   setBudgetPark,
+  onScreenFlag,
   setDraft,
   setActiveProject,
   setActiveDocument,
@@ -158,6 +161,7 @@ export function createChatHandlers({
     activeConversationRef,
     // The skill attachment is per-turn; drop it once the send is accepted.
     onSent: clearAttachedSkill,
+    onScreenFlag,
     /** Typing into an empty rail starts a thread rather than refusing. */
     ensureConversation: async () => {
       if (activeConversation) return activeConversation;

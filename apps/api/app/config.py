@@ -4,6 +4,7 @@ from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -133,6 +134,30 @@ class Settings(BaseSettings):
     # "low" trades recall for latency. Search is on the interactive path and the
     # stated constraint is that spend is fine and latency is not.
     web_search_context_size: Literal["low", "medium", "high"] = "medium"
+
+    # --- Prompt-injection screen (threat model) ----------------------------
+    # A classifier over the UNTRUSTED content a turn ingests — retrieved
+    # passages, the open document, web_search results, tool/MCP output — none of
+    # which the user typed. Off by default, and that default is the fail-safe
+    # one: when off, `classify` is never called and a turn behaves byte-for-byte
+    # as it does today. Opt in, and `_guard_screen` then insists the config can
+    # actually run, the same discipline as `_guard_sandbox`.
+    screen_enabled: bool = False
+    # shadow — record every hit (event + audit) and change nothing. The
+    #          measurement posture: see what would trip before it gates anyone.
+    # enforce — a hit escalates THAT turn to the strictest approval posture
+    #           (ask_all: every tool call parks for a human), so an injection
+    #           cannot ride a thread's bypass into an auto-approved write.
+    screen_mode: Literal["shadow", "enforce"] = "shadow"
+    # builtin — the cheap context model with a tight classification prompt.
+    # proxy   — an external HTTPS endpoint, SSRF-guarded like the tool fetch.
+    screen_backend: Literal["builtin", "proxy"] = "builtin"
+    # The proxy endpoint, required for SCREEN_BACKEND=proxy. A server-side
+    # destination, never exposed on bootstrap — same class as WORKFLOW_CRON_SECRET.
+    screen_proxy_url: str = ""
+    # Score at or above which a chunk is an injection. The any-high-means-high
+    # combine rule then makes one tripped chunk trip the whole passage.
+    screen_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
     # --- MCP authentication ------------------------------------------------
     # Remote MCP servers authenticate with OAuth 2.1 + dynamic client
@@ -501,6 +526,43 @@ class Settings(BaseSettings):
                 f"SANDBOX_PROVIDER={self.sandbox_provider} requires APP_ENV to be "
                 "development or test — it provides no isolation. Deploy with "
                 "SANDBOX_PROVIDER=container."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_screen(self) -> Settings:
+        """Refuse an incoherent prompt-injection screen at boot.
+
+        Same structural gate as `_guard_sandbox`: a screen the deployment cannot
+        actually run is worse than no screen, because an operator who configured
+        one in enforce mode believes untrusted content is being gated when it is
+        silently passing through. So a proxy backend with no reachable, allowed
+        HTTPS URL fails at startup, not on the first turn that ingests a source.
+
+        Only structural checks here — scheme, and host-on-allowlist as a string.
+        No DNS: the runtime call does the full `validate_public_https_url` +
+        `peer_is_blocked`, so a resolution that changes between boot and use is
+        caught where it matters rather than trusted here.
+        """
+        if not self.screen_enabled:
+            return self
+        if self.screen_backend != "proxy":
+            return self
+        url = self.screen_proxy_url.strip()
+        if not url:
+            raise ValueError(
+                "SCREEN_BACKEND=proxy requires SCREEN_PROXY_URL. Set the screen "
+                "proxy endpoint, or use SCREEN_BACKEND=builtin."
+            )
+        parsed = urlparse(url)
+        if parsed.scheme != "https":
+            raise ValueError("SCREEN_PROXY_URL must be an https URL")
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if not host or host not in self.allowed_tool_hosts:
+            raise ValueError(
+                "SCREEN_PROXY_URL host must be on TOOL_HOST_ALLOWLIST — the "
+                "screen proxy is fetched through the same SSRF guard as every "
+                "other tool destination."
             )
         return self
 

@@ -41,11 +41,26 @@ class ModelProviderStatus(BaseModel):
     default_effort: str = ""
 
 
+class ScreenStatus(BaseModel):
+    """The prompt-injection screen's posture — a minimal admin indicator.
+
+    Deliberately does NOT carry `screen_proxy_url`: the proxy endpoint is a
+    server-side destination, in the same class as WORKFLOW_CRON_SECRET, and
+    bootstrap is a client surface. Enabled/mode/backend is all a client needs to
+    show whether untrusted content is being screened and how hard.
+    """
+
+    enabled: bool
+    mode: Literal["shadow", "enforce"]
+    backend: Literal["builtin", "proxy"]
+
+
 class BootstrapResponse(ApiModel):
     identity: Identity
     feature_flags: Dict[str, bool]
     default_agent_id: str
     model_provider: ModelProviderStatus
+    screen: ScreenStatus
 
 
 class SignupIn(ApiModel):

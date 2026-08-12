@@ -100,6 +100,16 @@ export function useWorkspace() {
    * survive every re-render until the run either resumes or is cancelled.
    */
   const [budgetPark, setBudgetPark] = useState<BudgetPark | null>(null);
+  /**
+   * Runs the prompt-injection screen flagged this session, so the transcript can
+   * mark the turn an injection was caught in. Kept per-run rather than per-message
+   * because a flagged turn escalates to ask_all and may park before it produces a
+   * message at all; the id on every message ties the mark back to the right turn.
+   */
+  const [flaggedRuns, setFlaggedRuns] = useState<string[]>([]);
+  const recordScreenFlag = useCallback((runId: string) => {
+    setFlaggedRuns((runs) => (runs.includes(runId) ? runs : [...runs, runId]));
+  }, []);
   const [provenance, setProvenance] = useState<ProvenanceChunk | null>(null);
   const [loadingProvenance, setLoadingProvenance] = useState(false);
   const [editing, setEditing] = useState<string | "new" | null>(null);
@@ -540,6 +550,7 @@ export function useWorkspace() {
     setActiveRun,
     setRunStatus,
     setBudgetPark,
+    onScreenFlag: recordScreenFlag,
     setDraft,
     setActiveProject,
     setActiveDocument,
@@ -632,6 +643,7 @@ export function useWorkspace() {
     activeRun,
     runStatus,
     budgetPark,
+    flaggedRuns,
     provenance,
     setProvenance,
     loadingProvenance,
