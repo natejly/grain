@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0033_run_model_overrides"
-down_revision = "0031_agent_profiles"
+down_revision = "0032_approval_modes_and_todo_items"
 branch_labels = None
 depends_on = None
 
