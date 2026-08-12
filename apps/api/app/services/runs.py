@@ -130,6 +130,9 @@ def _complete_with_message(
             workspace_id=current.workspace_id,
             conversation_id=current.conversation_id,
             run_id=current.id,
+            # Attribute the answer to the member whose turn produced it, so a
+            # shared thread can show who said what.
+            created_by=current.created_by,
             role="assistant",
             content=content,
             citations_json=json.dumps(citations),

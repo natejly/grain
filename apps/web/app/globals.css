@@ -612,8 +612,10 @@ select:focus-visible {
   width: 100%;
   height: 34px;
   display: grid;
-  /* Two trailing action columns: open in a new pane, and delete. */
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  /* Three trailing action columns: share/unshare (open thread only), open in a
+     new pane, and delete. The share column is `auto`, so it collapses to zero
+     width on every row that does not render the toggle. */
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;
@@ -686,6 +688,41 @@ select:focus-visible {
 .thread-split:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+/* The share toggle rides only the open thread, so it stays visible rather than
+   revealing on hover the way the split/delete actions do — it is that thread's
+   primary affordance, not an incidental one. */
+.thread-share {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.thread-share:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Shared state gets the accent so a glance at the rail tells personal from
+   shared without reading the group heading. */
+.thread-share.shared {
+  color: var(--accent);
+}
+
+/* Sub-heading dividing the personal and shared groups within the rail. */
+.thread-group {
+  margin: 10px 10px 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .empty-threads {

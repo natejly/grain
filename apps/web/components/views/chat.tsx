@@ -41,6 +41,7 @@ import { ApprovalModeControl, BypassIndicator } from "./approval-mode";
 import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
+import { senderInitial, senderLabel } from "./shared";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
 
@@ -78,6 +79,13 @@ export type ChatViewProps = {
    * and defaulting to none: the panel beside a document does not track it.
    */
   flaggedRuns?: string[];
+  /**
+   * True when this thread is shared with the workspace, so each message is
+   * labelled with the member it is attributed to (`message.sender_name`) rather
+   * than a bare "You". Absent/false on a personal thread, where every message is
+   * the caller's and a name would be noise.
+   */
+  sharedThread?: boolean;
   submitPrompt: (event?: FormEvent) => Promise<void>;
   cancelActiveRun: () => Promise<void>;
   regenerate: () => Promise<void>;
@@ -746,6 +754,7 @@ export function ChatView({
   runStatus,
   budgetPark,
   flaggedRuns,
+  sharedThread,
   submitPrompt,
   cancelActiveRun,
   regenerate,
@@ -827,11 +836,16 @@ export function ChatView({
                   })()}
                 <div className="message-author">
                   {message.role === "user" ? (
-                    <div className="tiny-avatar">U</div>
+                    <div className="tiny-avatar">
+                      {senderInitial(message, Boolean(sharedThread))}
+                    </div>
                   ) : (
                     <div className="assistant-mark">A</div>
                   )}
-                  <span>{message.role === "user" ? "You" : "Assistant"}</span>
+                  {/* On a shared thread the sender's name says who spoke — a
+                      teammate's turn is not "You". On a personal thread every
+                      user message is the caller's, so the name would be noise. */}
+                  <span>{senderLabel(message, Boolean(sharedThread))}</span>
                   {message.role === "assistant" && message.content && (
                     <CopyButton value={message.content} label="Copy message" />
                   )}

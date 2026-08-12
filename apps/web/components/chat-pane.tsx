@@ -106,6 +106,7 @@ export function ChatPane({
         activeRun={thread.activeRun}
         runStatus={thread.runStatus}
         budgetPark={thread.budgetPark}
+        sharedThread={conversation.shared}
         submitPrompt={thread.submitPrompt}
         cancelActiveRun={thread.cancelActiveRun}
         regenerate={thread.regenerate}

@@ -1022,6 +1022,15 @@ ROUTE_CASES: List[RouteCase] = [
         note="Turning off another tenant's approval park is the worst of these.",
     ),
     RouteCase(
+        "PUT",
+        "/api/conversations/{conversation_id}/share",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"shared": True},
+        note="Sharing another workspace's thread must 404 on the workspace "
+        "filter, before the creator/owner gate is even reached.",
+    ),
+    RouteCase(
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
     ),
     RouteCase(

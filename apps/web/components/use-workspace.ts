@@ -327,6 +327,24 @@ export function useWorkspace() {
   }, []);
 
   /**
+   * Share or unshare the open thread, then replace its row so the rail's
+   * personal/shared grouping and the header control read the one authoritative
+   * copy rather than a private one that can drift. Owner-gated server-side; a
+   * refused member leaves the row unchanged and surfaces the error.
+   */
+  const shareConversation = useCallback(
+    async (conversationId: string, shared: boolean) => {
+      setError("");
+      try {
+        patchConversation(await api.setConversationShared(conversationId, shared));
+      } catch (caught) {
+        setError(describeError(caught, "Could not change who can see this thread"));
+      }
+    },
+    [patchConversation],
+  );
+
+  /**
    * Open a conversation in an extra pane beside the primary chat.
    *
    * Ignored when the cap is hit or the conversation is already the primary pane
@@ -756,6 +774,7 @@ export function useWorkspace() {
     focusPane,
     refreshConversations,
     patchConversation,
+    shareConversation,
     draft,
     setDraft,
     selectedAgentId,

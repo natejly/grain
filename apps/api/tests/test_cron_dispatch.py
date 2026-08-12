@@ -471,7 +471,10 @@ def test_the_migration_chain_builds_the_cron_table_the_orm_declares() -> None:
         migrated = inspect(create_engine(url))
         declared = inspect(engine)
         assert "crons" in migrated.get_table_names()
-        for table in ("crons", "runs"):
+        # `conversations`/`messages` gained columns in 0037; a shared thread's
+        # visibility rides `conversations.shared`, so a missing column would be a
+        # production-only leak or crash.
+        for table in ("crons", "runs", "conversations", "messages"):
             assert {column["name"] for column in migrated.get_columns(table)} == {
                 column["name"] for column in declared.get_columns(table)
             }, table

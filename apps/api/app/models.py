@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -166,6 +167,17 @@ class Conversation(Base):
     approval_mode: Mapped[str] = mapped_column(
         String(24), default="ask_writes", server_default="ask_writes"
     )
+    #: Personal (False) vs shared (True). A personal thread is visible only to
+    #: its creator within the workspace; a shared thread is visible to every
+    #: member of the SAME workspace — a collaborative multiplayer thread. Default
+    #: False (personal) for new threads; migration 0037 backfills existing rows
+    #: to True so no thread that is member-visible today becomes hidden. Sharing
+    #: ONLY relaxes the within-workspace `created_by` filter — the workspace_id
+    #: filter is never removed, so a shared thread is never visible cross-workspace
+    #: and a personal thread is never visible to another member.
+    shared: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -201,6 +213,13 @@ class Message(Base):
     run_id: Mapped[str] = mapped_column(String(36), index=True)
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
+    #: The workspace member this message is attributed to: the sender for a
+    #: `user` message, and `run.created_by` (the member whose turn produced it)
+    #: for an `assistant` message. Lets a shared thread show who said what.
+    #: Not a FK — a message is a historical record that must survive a user row
+    #: change, matching the string-for-unset convention used elsewhere. "" for
+    #: messages predating the column (backfilled from the run in 0037).
+    created_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
     citations_json: Mapped[str] = mapped_column(Text, default="[]")
     # The citation validator's verdict on *this* answer — the payload of the
     # `run.citations` event, kept where a reader will meet it again. Empty means

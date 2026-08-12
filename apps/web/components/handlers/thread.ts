@@ -341,6 +341,10 @@ export function createThreadHandlers({
                 // Not yet checked: the validator runs on the finished answer,
                 // and a verdict on half a sentence would be a lie either way.
                 citation_report: null,
+                // Attribution rides only user messages in the transcript; an
+                // assistant message shows "Assistant", so these stay unset.
+                sender_id: "",
+                sender_name: "",
                 created_at: new Date().toISOString(),
               },
             ];
@@ -390,6 +394,8 @@ export function createThreadHandlers({
             content: String(event.data.content || ""),
             citations: (event.data.citations || []) as Citation[],
             citation_report: citationReport,
+            sender_id: "",
+            sender_name: "",
             created_at: new Date().toISOString(),
           };
           setMessages((items) => {

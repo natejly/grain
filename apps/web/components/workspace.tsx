@@ -1,7 +1,7 @@
 "use client";
 
-import type { DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, Columns2, LogOut, Menu, Plus, ShieldAlert, Trash2, X } from "lucide-react";
+import type { Conversation, DocumentKind } from "@workspace/api-client";
+import { BarChart3, CircleDot, Columns2, LogOut, Menu, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
@@ -33,7 +33,13 @@ import {
 } from "./views/navigation";
 import { ProjectsView } from "./views/projects";
 import { SandboxToolsView } from "./views/sandbox-tools";
-import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
+import {
+  PAGE_TITLES,
+  formatRelative,
+  groupThreads,
+  shareControl,
+  type View,
+} from "./views/shared";
 import { SkillsView } from "./views/skills";
 import { SourcesView } from "./views/sources";
 import { TodosView } from "./views/todos";
@@ -75,6 +81,7 @@ export function Workspace() {
     focusPane,
     refreshConversations,
     patchConversation,
+    shareConversation,
     draft,
     setDraft,
     selectedAgentId,
@@ -195,6 +202,68 @@ export function Workspace() {
   // bypass indicator cannot disagree about which mode is in force.
   const activeThread = conversations.find((item) => item.id === activeConversation);
   const activeTitle = activeThread?.title || "New conversation";
+
+  // The rail's two audiences. A thread is shared with the whole workspace or it
+  // is the caller's own — the server never returns another member's personal
+  // thread, so `shared` alone tells the groups apart.
+  const { personal: personalThreads, shared: sharedThreads } = groupThreads(conversations);
+
+  /**
+   * One rail row. The share/unshare toggle rides only the OPEN thread and only
+   * when the caller may change its visibility (its creator or a workspace
+   * owner) — a member seeing it on every row could not act on most of them, and
+   * a control that 403s on click is worse than no control.
+   */
+  const renderThread = (conversation: Conversation) => {
+    const share = shareControl(conversation, activeConversation);
+    return (
+    <div
+      key={conversation.id}
+      className={activeConversation === conversation.id ? "thread active" : "thread"}
+    >
+      <button
+        className="thread-open"
+        onClick={() => selectConversation(conversation.id)}
+      >
+        <span>{conversation.title}</span>
+        <time>{formatRelative(conversation.updated_at)}</time>
+      </button>
+      {share && (
+        <button
+          className={share.shared ? "thread-share shared" : "thread-share"}
+          title={share.title}
+          aria-label={share.ariaLabel}
+          aria-pressed={share.pressed}
+          onClick={(event) => {
+            event.stopPropagation();
+            void shareConversation(conversation.id, !conversation.shared);
+          }}
+        >
+          {share.shared ? <Users size={13} /> : <Share2 size={13} />}
+        </button>
+      )}
+      <button
+        className="thread-split"
+        title="Open in a new pane"
+        aria-label={`Open ${conversation.title} in a new pane`}
+        onClick={(event) => {
+          event.stopPropagation();
+          openInNewPane(conversation.id);
+        }}
+      >
+        <Columns2 size={13} />
+      </button>
+      <button
+        className="thread-delete"
+        title="Delete chat"
+        aria-label={`Delete ${conversation.title}`}
+        onClick={(event) => void removeConversation(conversation, event)}
+      >
+        <Trash2 size={13} />
+      </button>
+    </div>
+    );
+  };
 
   // Per-view badge numbers. A view with no count (Chat, Graph, Activity) is
   // absent: Graph's size is a projection of Sources, so counting it in the
@@ -346,6 +415,12 @@ export function Workspace() {
           </nav>
         )}
 
+        {/* Personal threads (only their creator sees them) and the workspace's
+            shared threads are two different audiences, so they get two labelled
+            groups rather than one flat list that hides which teammates can read
+            what. The server already returns only the caller's own personal
+            threads plus every shared thread in the workspace, so `shared` alone
+            splits them. */}
         <div className="thread-heading">
           <span>Recent threads</span>
         </div>
@@ -353,41 +428,20 @@ export function Workspace() {
           {conversations.length === 0 ? (
             <p className="empty-threads">No conversations.</p>
           ) : (
-            conversations.map((conversation) => (
-              <div
-                key={conversation.id}
-                className={
-                  activeConversation === conversation.id ? "thread active" : "thread"
-                }
-              >
-                <button
-                  className="thread-open"
-                  onClick={() => selectConversation(conversation.id)}
-                >
-                  <span>{conversation.title}</span>
-                  <time>{formatRelative(conversation.updated_at)}</time>
-                </button>
-                <button
-                  className="thread-split"
-                  title="Open in a new pane"
-                  aria-label={`Open ${conversation.title} in a new pane`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    openInNewPane(conversation.id);
-                  }}
-                >
-                  <Columns2 size={13} />
-                </button>
-                <button
-                  className="thread-delete"
-                  title="Delete chat"
-                  aria-label={`Delete ${conversation.title}`}
-                  onClick={(event) => void removeConversation(conversation, event)}
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))
+            <>
+              {personalThreads.length > 0 && (
+                <>
+                  <div className="thread-group">Personal</div>
+                  {personalThreads.map(renderThread)}
+                </>
+              )}
+              {sharedThreads.length > 0 && (
+                <>
+                  <div className="thread-group">Shared</div>
+                  {sharedThreads.map(renderThread)}
+                </>
+              )}
+            </>
           )}
         </div>
 
@@ -540,6 +594,7 @@ export function Workspace() {
                 runStatus={runStatus}
                 budgetPark={budgetPark}
                 flaggedRuns={flaggedRuns}
+                sharedThread={activeThread?.shared}
                 submitPrompt={submitPrompt}
                 cancelActiveRun={cancelActiveRun}
                 regenerate={regenerate}

@@ -290,8 +290,26 @@ class ConversationOut(ApiModel):
     document_id: str = ""
     #: ask_writes | ask_all | auto_writes, governing this thread and no other.
     approval_mode: ApprovalMode = "ask_writes"
+    #: Personal (False) vs shared (True). A shared thread is visible to every
+    #: member of the same workspace; a personal thread only to its creator.
+    shared: bool = False
+    #: True when the caller authored it (a personal thread only they can see).
+    owned: bool = False
+    #: True when the caller may toggle `shared` (creator or workspace owner) —
+    #: lets the rail disable the control rather than surprise a member with a 403.
+    can_share: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+class ConversationShareRequest(BaseModel):
+    """The body of `PUT /api/conversations/{id}/share`.
+
+    A single flag: sharing a thread is a one-bit within-workspace visibility
+    change (creator-private -> member-visible), owner-gated at the route.
+    """
+
+    shared: bool
 
 
 class ApprovalModeRequest(BaseModel):
@@ -355,6 +373,12 @@ class MessageOut(ApiModel):
     #: None means this answer was never checked — a denied tool call, a budget
     #: park — which is a different fact from "checked and found clean".
     citation_report: Optional[CitationCheck] = None
+    #: The member this message is attributed to; "" for pre-column messages.
+    sender_id: str = ""
+    #: That member's display name, resolved server-side (the members list is
+    #: owner-gated, so a plain member could not resolve it client-side). "" when
+    #: unattributed or the user row is gone.
+    sender_name: str = ""
     created_at: datetime
 
 

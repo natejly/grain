@@ -121,6 +121,18 @@ export type Conversation = {
    */
   document_id: string;
   approval_mode: ApprovalMode;
+  /**
+   * Personal (false) vs shared (true). A personal thread is visible only to its
+   * creator within the workspace; a shared thread is visible to every member of
+   * the SAME workspace. Sharing only relaxes the within-workspace creator filter
+   * — it never exposes a thread cross-workspace.
+   */
+  shared: boolean;
+  /** True when the caller authored this thread (the personal threads only they see). */
+  owned: boolean;
+  /** True when the caller may toggle `shared` (its creator, or a workspace owner).
+   *  Lets the rail disable the control rather than surprise a member with a 403. */
+  can_share: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -183,6 +195,14 @@ export type Message = {
    * and clean", and must never be rendered as one.
    */
   citation_report: CitationCheck | null;
+  /**
+   * The workspace member this message is attributed to — the sender for a user
+   * message, the member whose turn produced an assistant message. "" for
+   * messages predating the column. Lets a shared thread show who said what.
+   */
+  sender_id: string;
+  /** That member's display name, resolved server-side; "" for pre-column messages. */
+  sender_name: string;
   created_at: string;
 };
 
@@ -1754,6 +1774,22 @@ export class WorkspaceApi {
     return this.request(`/api/conversations/${conversationId}/approval-mode`, {
       method: "PUT",
       body: JSON.stringify({ mode }),
+    });
+  }
+
+  /**
+   * Share or unshare a thread within its workspace.
+   *
+   * A PUT of a boolean, so a retry lands on the same state and no
+   * `Idempotency-Key` rides along — the server audits every call. Owner-gated
+   * server-side (the creator or a workspace owner); a plain member is refused
+   * with a 403. Sharing only relaxes the within-workspace creator filter — it
+   * never exposes the thread cross-workspace.
+   */
+  setConversationShared(conversationId: string, shared: boolean): Promise<Conversation> {
+    return this.request(`/api/conversations/${conversationId}/share`, {
+      method: "PUT",
+      body: JSON.stringify({ shared }),
     });
   }
 
