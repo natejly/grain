@@ -50,6 +50,24 @@ export type DevOverride = {
   handle: string;
 };
 
+/**
+ * The prompt-injection screen's public posture — enough for a status
+ * indicator, and no more. The proxy URL is a server secret and is deliberately
+ * absent, the same discipline that keeps the cron secret out of bootstrap.
+ *
+ * - `enabled` off ⇒ untrusted content is never screened; behaviour is today's.
+ * - `mode` "shadow" records verdicts and changes nothing; "enforce" escalates a
+ *   flagged turn to the strictest approval posture so an injection cannot drive
+ *   an auto-approved write.
+ * - `backend` is the classifier answering: the built-in cheap model, or an
+ *   external screen proxy.
+ */
+export type ScreenStatus = {
+  enabled: boolean;
+  mode: "shadow" | "enforce";
+  backend: "builtin" | "proxy";
+};
+
 export type Bootstrap = {
   identity: Identity;
   default_agent_id: string;
@@ -60,7 +78,35 @@ export type Bootstrap = {
     /** True only when a real provider is answering. */
     configured: boolean;
     model: string;
+    /** The deployment's allow-list a per-turn model override must be drawn from. */
+    selectable_models: string[];
+    /** The reasoning-effort Literal values, for the composer's effort dropdown. */
+    reasoning_efforts: string[];
+    /** The deployment default effort — what an unset per-turn effort resolves to. */
+    default_effort: string;
   };
+  /** The prompt-injection screen's posture, for a status indicator. */
+  screen: ScreenStatus;
+};
+
+/**
+ * Per-turn overrides for one message: a model off the deployment allow-list, a
+ * reasoning effort, and the "fast" shortcut. All optional — absent fields leave
+ * the deployment defaults in force, so an unchanged composer sends exactly what
+ * it always did.
+ */
+export type MessageControls = {
+  model?: string;
+  effort?: string;
+  fast?: boolean;
+  /**
+   * A skill to inject into this one turn, and the values for its declared args.
+   * Per-turn like the model/effort above: absent means today's behaviour, and
+   * the skill never becomes part of the conversation. `skillArgs` only rides the
+   * wire when `skillId` is set.
+   */
+  skillId?: string;
+  skillArgs?: Record<string, unknown>;
 };
 
 export type Conversation = {
@@ -75,6 +121,18 @@ export type Conversation = {
    */
   document_id: string;
   approval_mode: ApprovalMode;
+  /**
+   * Personal (false) vs shared (true). A personal thread is visible only to its
+   * creator within the workspace; a shared thread is visible to every member of
+   * the SAME workspace. Sharing only relaxes the within-workspace creator filter
+   * — it never exposes a thread cross-workspace.
+   */
+  shared: boolean;
+  /** True when the caller authored this thread (the personal threads only they see). */
+  owned: boolean;
+  /** True when the caller may toggle `shared` (its creator, or a workspace owner).
+   *  Lets the rail disable the control rather than surprise a member with a 403. */
+  can_share: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -137,6 +195,14 @@ export type Message = {
    * and clean", and must never be rendered as one.
    */
   citation_report: CitationCheck | null;
+  /**
+   * The workspace member this message is attributed to — the sender for a user
+   * message, the member whose turn produced an assistant message. "" for
+   * messages predating the column. Lets a shared thread show who said what.
+   */
+  sender_id: string;
+  /** That member's display name, resolved server-side; "" for pre-column messages. */
+  sender_name: string;
   created_at: string;
 };
 
@@ -277,6 +343,72 @@ export type AgentUpdateBody = {
   enabled?: boolean;
   allowed_tools?: string[] | null;
   clear_allowed_tools?: boolean;
+};
+
+/**
+ * One parameter a skill declares. The workflow InputSpec shape, minus the
+ * workflow-only bits — a name, a type the value is coerced to, and the usual
+ * label/required/default/choices affordances an editor needs to render a field.
+ */
+export type SkillArg = {
+  name: string;
+  type: "string" | "number" | "integer" | "boolean";
+  label: string;
+  description: string;
+  required: boolean;
+  default: unknown;
+  choices: unknown[];
+};
+
+/**
+ * A reusable, named instruction block a user authors once and invokes per turn.
+ *
+ * `can_share`/`can_edit` are the caller's rights on this row, resolved by the
+ * server rather than guessed by the client: a member sees a shared skill but may
+ * not edit it or flip its `shared` flag, so the editor disables those controls
+ * instead of surprising them with a 403.
+ */
+export type Skill = {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  body: string;
+  args: SkillArg[];
+  shared: boolean;
+  version: number;
+  can_share: boolean;
+  can_edit: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One retained snapshot of a skill, for the versions list and its restore. */
+export type SkillVersion = {
+  id: string;
+  version: number;
+  title: string;
+  created_at: string;
+};
+
+export type SkillCreateBody = {
+  name: string;
+  title: string;
+  description?: string;
+  body: string;
+  args?: SkillArg[];
+  /** Ignored server-side for a non-owner; the editor hides it unless permitted. */
+  shared?: boolean;
+};
+
+/** Every field optional; omitted means "leave alone". A member sending
+ * `shared` is refused — sharing is gated to an owner/admin. */
+export type SkillUpdateBody = {
+  title?: string;
+  description?: string;
+  body?: string;
+  args?: SkillArg[];
+  shared?: boolean;
 };
 
 /** One registry tool, as the provisioning checklist renders it. */
@@ -546,6 +678,40 @@ export type McpServerInput = {
   url?: string;
   /** stdio env vars or HTTP headers; write-only, never returned by the API. */
   secrets?: Record<string, string>;
+};
+
+/**
+ * A workspace-defined tool the agent can call, executed in the session sandbox
+ * under this tool's own egress allowlist and approval policy.
+ *
+ * `name` is the slug the model calls; `argv` is the command template whose
+ * `{{param}}` placeholders are filled from a validated call and run as argv
+ * (never a shell line). `egress_hosts` is the ONLY hosts an execution may
+ * reach — it tightens the workspace sandbox default and can never widen the
+ * sandbox's metadata/RFC1918/loopback denials. `approval="always"` forces a
+ * human approval even where the workspace policy would allow; it may only
+ * tighten, never loosen a deny.
+ */
+export type SandboxTool = {
+  id: string;
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  argv: string[];
+  egress_hosts: string[];
+  approval: "inherit" | "always";
+  enabled: boolean;
+  created_at: string;
+};
+
+export type SandboxToolInput = {
+  name: string;
+  description?: string;
+  input_schema?: Record<string, unknown>;
+  argv?: string[];
+  egress_hosts?: string[];
+  approval?: "inherit" | "always";
+  enabled?: boolean;
 };
 
 export type AuditEvent = {
@@ -1081,6 +1247,87 @@ export type AdminUsage = {
 };
 
 /**
+ * One metric's latency distribution, in milliseconds. Percentiles are computed
+ * server-side over the runs in the window (capped), and every one is null when
+ * no run contributed a sample — null means "nothing measured", never zero,
+ * because a zero here would read as an instantaneous response.
+ */
+export type AdminLatencyStats = {
+  samples: number;
+  p50_ms: number | null;
+  p90_ms: number | null;
+  p99_ms: number | null;
+  max_ms: number | null;
+};
+
+/** Run count in one equal-width time bucket of the window. */
+export type AdminThroughputBucket = {
+  start: string;
+  count: number;
+};
+
+/** A run that has not reached a terminal state — queued, running, cancelling. */
+export type AdminLiveRun = {
+  run_id: string;
+  conversation_id: string;
+  agent_id: string;
+  status: string;
+  created_at: string;
+  age_seconds: number;
+};
+
+/** A recently failed run and the reason it gives, clipped server-side. */
+export type AdminFailedRun = {
+  run_id: string;
+  conversation_id: string;
+  error: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * Active distinct members over the three standard windows. Counts only — the
+ * endpoint never returns user ids, which keeps it a workspace aggregate rather
+ * than a roster.
+ */
+export type AdminRetention = {
+  dau: number;
+  wau: number;
+  mau: number;
+};
+
+/**
+ * Admin observability: how fast runs answer, how many there are, how often they
+ * fail, what is live right now, and whether people keep coming back — all
+ * derived from timing the app already records, scoped to the workspace.
+ */
+export type AdminObservability = {
+  window_hours: number;
+  since: string;
+  /** Time-to-first-token, over completed runs that produced a delta. */
+  ttft: AdminLatencyStats;
+  /** Total wall latency, over terminal runs. */
+  total: AdminLatencyStats;
+  /** True count in the window, before the percentile-sampling cap. */
+  runs_in_window: number;
+  throughput: AdminThroughputBucket[];
+  completed: number;
+  failed: number;
+  cancelled: number;
+  /** failed / (completed + failed + cancelled); 0 when the window is empty. */
+  error_rate: number;
+  /**
+   * How many turns the prompt-injection screen flagged in the window — the
+   * count of `screen.flagged` run events. Optional: absent on a deployment
+   * whose backend predates the screen, which reads the same as zero.
+   */
+  screen_flags?: number;
+  recent_failures: AdminFailedRun[];
+  live_runs: AdminLiveRun[];
+  retention: AdminRetention;
+};
+
+/**
  * The spend ceiling (ADR 0008): what a workspace *may* spend, next to what it
  * already has.
  *
@@ -1352,6 +1599,34 @@ export class WorkspaceApi {
     }
   }
 
+  /**
+   * True when the API has anonymous playground mode turned on. Public and
+   * unauthenticated like `devOverride`, so the sign-in screen can decide
+   * whether to show a "Try it" button before any session exists. A swallowed
+   * error is the disabled answer — a missing or 404 endpoint is not a button.
+   */
+  async playgroundAvailable(): Promise<boolean> {
+    try {
+      return (
+        await this.request<{ enabled: boolean }>("/api/auth/playground")
+      ).enabled;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Mints an ephemeral anonymous session over a throwaway, fully-isolated
+   * playground workspace. No credentials — the visitor is trying the app.
+   */
+  async playgroundLogin(): Promise<AuthSession> {
+    return this.adopt(
+      await this.request<AuthSession>("/api/auth/playground", {
+        method: "POST",
+      }),
+    );
+  }
+
   /** Does not sign the caller in — the account still has to confirm by email. */
   signup(
     email: string,
@@ -1380,6 +1655,32 @@ export class WorkspaceApi {
       method: "POST",
       body: JSON.stringify({ email }),
     });
+  }
+
+  /**
+   * Asks the API to email a one-time sign-in link. Returns the same
+   * deliberately uninformative acknowledgement as signup and reset — identical
+   * whether or not the address has an account — so callers must render its
+   * `detail` verbatim and never read an outcome out of it.
+   */
+  requestLoginLink(email: string): Promise<AuthAcknowledgement> {
+    return this.request("/api/auth/login-link/request", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  /**
+   * Redeems a magic-link token for a real session, exactly like `login`. The
+   * link is single-use and short-lived; a spent or expired token is a 400.
+   */
+  async consumeLoginLink(token: string): Promise<AuthSession> {
+    return this.adopt(
+      await this.request<AuthSession>("/api/auth/login-link/consume", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    );
   }
 
   confirmPasswordReset(
@@ -1476,6 +1777,22 @@ export class WorkspaceApi {
     });
   }
 
+  /**
+   * Share or unshare a thread within its workspace.
+   *
+   * A PUT of a boolean, so a retry lands on the same state and no
+   * `Idempotency-Key` rides along — the server audits every call. Owner-gated
+   * server-side (the creator or a workspace owner); a plain member is refused
+   * with a 403. Sharing only relaxes the within-workspace creator filter — it
+   * never exposes the thread cross-workspace.
+   */
+  setConversationShared(conversationId: string, shared: boolean): Promise<Conversation> {
+    return this.request(`/api/conversations/${conversationId}/share`, {
+      method: "PUT",
+      body: JSON.stringify({ shared }),
+    });
+  }
+
   deleteConversation(conversationId: string): Promise<void> {
     return this.request(
       `/api/conversations/${conversationId}`,
@@ -1492,6 +1809,7 @@ export class WorkspaceApi {
     conversationId: string,
     content: string,
     agentId?: string,
+    controls?: MessageControls,
   ): Promise<SendMessageResponse> {
     return this.request(
       `/api/conversations/${conversationId}/messages`,
@@ -1499,8 +1817,22 @@ export class WorkspaceApi {
         method: "POST",
         // A workspace with no agent bootstraps as "", and an empty agent_id is
         // not a valid selection — omitting the field lets the API pick the
-        // workspace's own agent instead of failing the turn.
-        body: JSON.stringify({ content, ...(agentId ? { agent_id: agentId } : {}) }),
+        // workspace's own agent instead of failing the turn. The per-turn
+        // controls follow the same conditional-spread rule: an absent field
+        // means "deployment default", so only present overrides go on the wire.
+        body: JSON.stringify({
+          content,
+          ...(agentId ? { agent_id: agentId } : {}),
+          ...(controls?.model ? { model: controls.model } : {}),
+          ...(controls?.effort ? { effort: controls.effort } : {}),
+          ...(controls?.fast ? { fast: true } : {}),
+          // A skill is injected for this turn only, so it rides the send like the
+          // other per-turn controls. `skill_args` only travels with a skill.
+          ...(controls?.skillId ? { skill_id: controls.skillId } : {}),
+          ...(controls?.skillId && controls?.skillArgs
+            ? { skill_args: controls.skillArgs }
+            : {}),
+        }),
       },
       true,
     );
@@ -1632,6 +1964,44 @@ export class WorkspaceApi {
 
   deleteAgent(agentId: string): Promise<undefined> {
     return this.request(`/api/agents/${agentId}`, { method: "DELETE" });
+  }
+
+  // --- Skills (authored instruction blocks, invoked per turn) ---
+
+  /** The skills visible to the caller: their own, plus the workspace's shared. */
+  listSkills(): Promise<Skill[]> {
+    return this.request("/api/skills");
+  }
+
+  getSkill(skillId: string): Promise<Skill> {
+    return this.request(`/api/skills/${skillId}`);
+  }
+
+  createSkill(body: SkillCreateBody): Promise<Skill> {
+    return this.request("/api/skills", { method: "POST", body: JSON.stringify(body) }, true);
+  }
+
+  updateSkill(skillId: string, body: SkillUpdateBody): Promise<Skill> {
+    return this.request(`/api/skills/${skillId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  deleteSkill(skillId: string): Promise<undefined> {
+    return this.request(`/api/skills/${skillId}`, { method: "DELETE" });
+  }
+
+  listSkillVersions(skillId: string): Promise<SkillVersion[]> {
+    return this.request(`/api/skills/${skillId}/versions`);
+  }
+
+  /** Apply a retained snapshot as a new version; returns the skill at that new head. */
+  restoreSkillVersion(skillId: string, versionId: string): Promise<Skill> {
+    return this.request(
+      `/api/skills/${skillId}/versions/${versionId}/restore`,
+      { method: "POST" },
+    );
   }
 
   /** The live tool registry, for the agent editor's provisioning checklist. */
@@ -1992,6 +2362,29 @@ export class WorkspaceApi {
     return this.request(`/api/mcp/servers/${serverId}/disconnect`, { method: "POST" });
   }
 
+  listSandboxTools(): Promise<SandboxTool[]> {
+    return this.request("/api/sandbox-tools");
+  }
+
+  createSandboxTool(input: SandboxToolInput): Promise<SandboxTool> {
+    return this.request("/api/sandbox-tools", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** Partial update — the toggle sends only `{ enabled }`, the editor the rest. */
+  updateSandboxTool(id: string, input: Partial<SandboxToolInput>): Promise<SandboxTool> {
+    return this.request(`/api/sandbox-tools/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+
+  deleteSandboxTool(id: string): Promise<void> {
+    return this.request(`/api/sandbox-tools/${id}`, { method: "DELETE" }, true);
+  }
+
   listAuditEvents(): Promise<AuditEvent[]> {
     return this.request("/api/audit-events");
   }
@@ -2317,6 +2710,18 @@ export class WorkspaceApi {
   }
 
   /**
+   * Latency, throughput, error rate, live runs, and retention over a window.
+   *
+   * Owner-only like the rest of `/api/admin`; a non-owner gets the same 403 the
+   * usage and budget reads give. The API caps `hours` at 720 (30 days), because
+   * time-to-first-token is derived from the run-events table and the window is
+   * what bounds that scan.
+   */
+  getAdminObservability(hours = 24): Promise<AdminObservability> {
+    return this.request(`/api/admin/observability?hours=${hours}`);
+  }
+
+  /**
    * The spend ceiling, the spend against it, and the runs it is holding.
    *
    * Owner-only like the rest of `/api/admin`, and a member who is not an owner
@@ -2480,6 +2885,52 @@ export class WorkspaceApi {
   /** One run with every node's state, including the ones that never ran. */
   getWorkflowRun(workflowRunId: string): Promise<WorkflowRunDetail> {
     return this.request(`/api/workflows/runs/${workflowRunId}`);
+  }
+
+  // --- Personal crons (automation) ------------------------------------------
+  // Plain `this.request`, not `workflowWrite`: a cron does not compile, so
+  // there is no findings report to preserve — a bad schedule or IANA zone is a
+  // single-sentence 422 that `request` already surfaces next to the form. The
+  // ticker that dispatches these is the same one workflows use, so its armed
+  // state is read through `workflowSchedulingEnabled()` above, not a second
+  // probe.
+
+  listCrons(): Promise<Cron[]> {
+    return this.request("/api/crons");
+  }
+
+  createCron(payload: CronCreateInput): Promise<Cron> {
+    return this.request(
+      "/api/crons",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  getCron(cronId: string): Promise<Cron> {
+    return this.request(`/api/crons/${cronId}`);
+  }
+
+  /** Edit fields or flip `enabled`; a disabled cron never fires. */
+  updateCron(cronId: string, payload: CronUpdateInput): Promise<Cron> {
+    return this.request(
+      `/api/crons/${cronId}`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  deleteCron(cronId: string): Promise<void> {
+    return this.request(`/api/crons/${cronId}`, { method: "DELETE" }, true);
+  }
+
+  /**
+   * Fire this cron now, ignoring its schedule. 202: a task cron enqueues a
+   * fresh unattended run, a message cron posts synchronously. The claim column
+   * is untouched, so the next scheduled minute still fires on its own.
+   */
+  runCronNow(cronId: string): Promise<void> {
+    return this.request(`/api/crons/${cronId}/run-now`, { method: "POST" }, true);
   }
 
   /**
@@ -2875,3 +3326,56 @@ async function workflowFailure(response: Response): Promise<ApiError> {
     response.status,
   );
 }
+
+// --- Personal crons (automation) --------------------------------------------
+// A recurring job an external cron fires unattended, grounded on the same
+// schedule machinery as workflows (services/workflows/schedule.py) and armed by
+// the same POST /api/workflows/tick. A `kind="task"` fire re-runs `prompt` as a
+// fresh chat turn at WORKFLOW policy scope — so its first write-capable tool
+// parks for a human, exactly as a scheduled workflow does — and a `kind="message"`
+// fire posts `body` verbatim into a create-or-named conversation. Mirrors
+// services/crons.py and api/crons.py field for field.
+
+export type CronKind = "task" | "message";
+
+export type Cron = {
+  id: string;
+  name: string;
+  /** "task" re-runs `prompt` as a turn; "message" posts `body` to a conversation. */
+  kind: CronKind;
+  /** 5-field cron expression, shown verbatim — never reworded into prose. */
+  schedule_cron: string;
+  schedule_timezone: string;
+  enabled: boolean;
+  /** kind="task": re-run as a fresh unattended chat turn. "" for a message cron. */
+  prompt: string;
+  /** kind="message": posted verbatim into the target conversation. "" for a task. */
+  body: string;
+  /** The conversation a message cron posts into; "" until the first fire names one. */
+  target_conversation_id: string;
+  /** The atomic claim column: when the ticker last fired this cron, null if never. */
+  last_dispatched_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CronCreateInput = {
+  name: string;
+  kind: CronKind;
+  schedule_cron: string;
+  schedule_timezone: string;
+  /** Supply for kind="task"; ignored for a message cron. */
+  prompt?: string;
+  /** Supply for kind="message"; ignored for a task cron. */
+  body?: string;
+};
+
+export type CronUpdateInput = {
+  name?: string;
+  schedule_cron?: string;
+  schedule_timezone?: string;
+  /** The enable/disable toggle: a disabled cron never fires. */
+  enabled?: boolean;
+  prompt?: string;
+  body?: string;
+};

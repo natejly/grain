@@ -57,6 +57,9 @@ CONTEXT_BLURB = "context_blurb"
 MEMORY_EXTRACTION = "memory_extraction"
 GRAPH_EXTRACTION = "graph_extraction"
 WORKFLOW_COMPILE = "workflow_compile"
+# The prompt-injection screen's builtin classifier. Billed like every other
+# small-model call so an operator sees what screening the ingested content costs.
+SCREEN = "screen"
 
 OPERATIONS = (
     CHAT,
@@ -67,6 +70,7 @@ OPERATIONS = (
     MEMORY_EXTRACTION,
     GRAPH_EXTRACTION,
     WORKFLOW_COMPILE,
+    SCREEN,
 )
 
 TOKENS_PER_MILLION = 1_000_000

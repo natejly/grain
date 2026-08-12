@@ -15,7 +15,112 @@ from typing import List, Optional
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from ..models import AgentToolCall, Conversation, Message, Run, RunEvent, ToolCall
+from ..models import (
+    AgentToolCall,
+    Conversation,
+    Message,
+    Run,
+    RunEvent,
+    ToolCall,
+    WorkflowRun,
+)
+
+
+def resolve_visible(
+    db: Session, *, workspace_id: str, user_id: str, conversation_id: str
+) -> Optional[Conversation]:
+    """The one within-workspace visibility rule, in one place.
+
+    A conversation is visible when, within the caller's workspace, it is the
+    caller's own, OR it is shared, OR it is a document thread (reached through the
+    workspace-scoped document, not the rail). Returns None so a foreign
+    workspace_id or another member's personal thread becomes a 404 at the call
+    site, never a leak.
+
+    The `workspace_id` filter is ALWAYS applied and is never removed: sharing
+    only relaxes the *within-workspace* `created_by` filter from "creator only"
+    to "creator OR any member". It can never expose a thread cross-workspace.
+
+    The `document_id != ""` clause is load-bearing: a document thread is opened by
+    any member beside a workspace-shared document, so gating it on personal/shared
+    would break the document chat panel. (Existing document rows are also
+    backfilled to shared, so this is belt-and-suspenders.)
+    """
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.workspace_id == workspace_id,  # NEVER removed
+        )
+    )
+    if conversation is None:
+        return None
+    if (
+        conversation.created_by == user_id
+        or conversation.shared
+        or conversation.document_id != ""
+    ):
+        return conversation
+    return None
+
+
+def run_activity_visible(
+    db: Session, *, actor_workspace_id: str, actor_user_id: str, run: Run
+) -> bool:
+    """Whether a run's activity — its events, approvals, cancel, pending edits —
+    is visible to this actor *within their workspace*.
+
+    The sibling of `resolve_visible` for the run/tool-call surfaces. A run's
+    conversation-scoped chat activity leaks to another member exactly as a
+    personal thread's messages would, so the same within-workspace gate has to
+    guard it. It is visible when EITHER:
+
+    (a) the run is workspace-level AUTOMATION — workflow-backed (a WorkflowRun
+        names it), a cron run (`cron_id != ""`), or a run with no chat
+        conversation at all (`conversation_id == ""`). These are the Activity
+        queue any member reviews, and they stay workspace-visible; OR
+    (b) the run's conversation is visible to the actor via `resolve_visible`
+        (own, shared, or a document thread).
+
+    The caller has already loaded `run` under `workspace_id == actor_workspace_id`,
+    so this only ever ADDS a within-workspace gate; it never relaxes the
+    cross-workspace filter, which stays on every query.
+    """
+    if run.cron_id != "" or run.conversation_id == "":
+        return True
+    workflow_backed = db.scalar(
+        select(WorkflowRun.id).where(WorkflowRun.run_id == run.id)
+    )
+    if workflow_backed is not None:
+        return True
+    return (
+        resolve_visible(
+            db,
+            workspace_id=actor_workspace_id,
+            user_id=actor_user_id,
+            conversation_id=run.conversation_id,
+        )
+        is not None
+    )
+
+
+def run_activity_predicate(*, actor_user_id: str):  # type: ignore[no-untyped-def]
+    """The SQL half of `run_activity_visible`, for the LIST surfaces.
+
+    Keeps a listing one query: apply it with a LEFT JOIN of `Conversation` onto
+    `Run.conversation_id`, alongside the `workspace_id` filter that is never
+    removed. A row is kept when the run is automation (cron, workflow-backed, or
+    has no chat conversation — the LEFT JOIN yields NULL) OR its conversation is
+    visible to the actor (shared, own, or a document thread), mirroring
+    `run_activity_visible` clause for clause.
+    """
+    return (
+        (Run.cron_id != "")
+        | Run.id.in_(select(WorkflowRun.run_id).where(WorkflowRun.run_id.isnot(None)))
+        | (Conversation.id.is_(None))
+        | (Conversation.shared.is_(True))
+        | (Conversation.created_by == actor_user_id)
+        | (Conversation.document_id != "")
+    )
 
 
 def for_document(

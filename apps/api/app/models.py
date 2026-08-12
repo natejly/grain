@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -166,6 +167,17 @@ class Conversation(Base):
     approval_mode: Mapped[str] = mapped_column(
         String(24), default="ask_writes", server_default="ask_writes"
     )
+    #: Personal (False) vs shared (True). A personal thread is visible only to
+    #: its creator within the workspace; a shared thread is visible to every
+    #: member of the SAME workspace — a collaborative multiplayer thread. Default
+    #: False (personal) for new threads; migration 0037 backfills existing rows
+    #: to True so no thread that is member-visible today becomes hidden. Sharing
+    #: ONLY relaxes the within-workspace `created_by` filter — the workspace_id
+    #: filter is never removed, so a shared thread is never visible cross-workspace
+    #: and a personal thread is never visible to another member.
+    shared: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -201,6 +213,13 @@ class Message(Base):
     run_id: Mapped[str] = mapped_column(String(36), index=True)
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
+    #: The workspace member this message is attributed to: the sender for a
+    #: `user` message, and `run.created_by` (the member whose turn produced it)
+    #: for an `assistant` message. Lets a shared thread show who said what.
+    #: Not a FK — a message is a historical record that must survive a user row
+    #: change, matching the string-for-unset convention used elsewhere. "" for
+    #: messages predating the column (backfilled from the run in 0037).
+    created_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
     citations_json: Mapped[str] = mapped_column(Text, default="[]")
     # The citation validator's verdict on *this* answer — the payload of the
     # `run.citations` event, kept where a reader will meet it again. Empty means
@@ -234,6 +253,33 @@ class Run(Base):
     # have needed each of them edited, and would have been wrong wherever one
     # was missed.
     paused_reason: Mapped[str] = mapped_column(String(16), default="")
+    # Per-turn overrides chosen when the message was sent, persisted here because
+    # `process_run` re-opens a fresh session and reads the run off the row — the
+    # HTTP request is long gone. "" means "unset", the same string-for-unset
+    # convention `paused_reason` uses, and resolves to the deployment defaults in
+    # `stream_agent_response`. Persisting them (rather than passing them in
+    # memory) also makes a turn resumed in another process after an approval or a
+    # budget park use the same model and effort the user originally chose.
+    requested_model: Mapped[str] = mapped_column(String(80), default="")
+    requested_effort: Mapped[str] = mapped_column(String(16), default="")
+    # The skill invoked for this one turn, or "" for none. Deliberately not a
+    # ForeignKey: a run is a historical record and must survive the skill's
+    # deletion, exactly as `requested_model` outlives a renamed deployment. The
+    # body is resolved and spliced into this turn's instructions in
+    # `agent_loop.resolve_directives`; it does not change the conversation.
+    skill_id: Mapped[str] = mapped_column(String(36), default="")
+    # The resolved args for that invocation, a JSON object keyed by arg name.
+    # "" means none, the same string-for-unset convention the columns above use.
+    skill_args_json: Mapped[str] = mapped_column(Text, default="")
+    # The skill VERSION invoked, pinned at send time so a run parked over an edit
+    # resumes with the body its sender saw. 0 means none / pre-pinning.
+    skill_version: Mapped[int] = mapped_column(Integer, default=0)
+    # Set when the workflow-less cron scheduler created this run, "" otherwise.
+    # It is the marker `policy_scope_for_run` reads to run the turn at WORKFLOW
+    # scope — a cron task fires with nobody watching, so a standing chat "always
+    # allow" must not reach it. Not a FK: a run is a historical record and must
+    # survive the cron's deletion, exactly as `skill_id` survives a skill's.
+    cron_id: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -753,6 +799,45 @@ class SandboxExecution(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class SandboxTool(Base):
+    """A workspace-defined tool the agent can call, executed in the session
+    sandbox under this tool's own egress allowlist and approval policy.
+
+    The slug ``name`` is unique per workspace and is the name the model calls, so
+    it must not collide with a builtin (run_python, …) — enforced at the create
+    route, which is the only writer. ``egress_hosts_json`` is the ONLY hosts an
+    execution of this tool may reach: it tightens the workspace sandbox default
+    and can never widen policy.py's metadata/RFC1918/loopback denials, which are
+    reapplied unconditionally by egress_rules. ``approval`` may only tighten.
+    """
+
+    __tablename__ = "sandbox_tools"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(60))
+    description: Mapped[str] = mapped_column(Text, default="")
+    #: JSON Schema (object) shown to the model as the tool's parameters.
+    input_schema_json: Mapped[str] = mapped_column(
+        Text, default='{"type":"object","properties":{}}'
+    )
+    #: JSON list of argv tokens; a token may contain {{param}} placeholders.
+    #: Executed as argv, never as a shell line — see services/sandbox/custom.py.
+    argv_json: Mapped[str] = mapped_column(Text, default="[]")
+    #: JSON list of hostnames. Empty = no egress (strictest). Non-empty = the
+    #: only hosts this tool's execution may reach.
+    egress_hosts_json: Mapped[str] = mapped_column(Text, default="[]")
+    #: "inherit" | "always". "always" forces a human approval; tighten-only.
+    approval: Mapped[str] = mapped_column(String(16), default="inherit")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+
 class McpServer(Base):
     """A configured MCP server: a stdio subprocess or a streamable HTTP endpoint."""
 
@@ -1054,6 +1139,73 @@ class DatasetVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class Skill(Base):
+    """A reusable, named instruction block a person authors once and invokes per turn.
+
+    Mirrors the `Dataset`/`DatasetVersion` split: this row holds the *current*
+    content plus a `version` pointer, and each edit appends an immutable
+    `SkillVersion` snapshot so prior versions stay restorable. An edit that
+    changes nothing (same `content_hash`) writes no new version.
+
+    `shared` is the sharing gate's one bit: a member may author a private skill,
+    but flipping this True is owner/admin-only, enforced in `api/skills.py`. The
+    slug `name` is unique per workspace and is what the composer's "/name" picker
+    types.
+    """
+
+    __tablename__ = "skills"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    #: The instructions injected into a turn, with literal `{{ name }}` placeholders.
+    body: Mapped[str] = mapped_column(Text)
+    #: JSON list of SkillArg-shaped param declarations. "[]" means no args.
+    args_json: Mapped[str] = mapped_column(Text, default="[]")
+    shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Current version number, bumped on every content edit; SkillVersion retains
+    #: each one.
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    #: sha256 of (title | description | body | args_json). An edit that leaves it
+    #: unchanged is a no-op — no version, no new snapshot.
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SkillVersion(Base):
+    """An immutable snapshot of a skill at one version, retained and restorable.
+
+    Append-only, like `DatasetVersion`: a restore reads a snapshot and applies it
+    as a *new* version rather than mutating history, so the trail of what a skill
+    has been stays intact.
+    """
+
+    __tablename__ = "skill_versions"
+    __table_args__ = (
+        UniqueConstraint("skill_id", "version"),
+        Index("ix_skill_versions_workspace_skill", "workspace_id", "skill_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text)
+    args_json: Mapped[str] = mapped_column(Text, default="[]")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    #: Who authored this version. Empty for rows predating the column, mirroring
+    #: `DocumentVersion.created_by`.
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Dashboard(Base):
     """One saved view over one dataset: a query and how to draw its answer.
 
@@ -1339,6 +1491,47 @@ class WorkflowNodeRun(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Cron(Base):
+    """A personal recurring job an external cron fires unattended.
+
+    Grounded on the workflow-schedule machinery (services/workflows/schedule.py):
+    the same conditional-UPDATE claim on `last_dispatched_at`, the same CATCHUP
+    window, armed by the same POST /api/workflows/tick. It carries no authority
+    of its own — a `kind="task"` fire runs at WORKFLOW policy scope, so the first
+    write-capable tool parks for a human exactly as a scheduled workflow does.
+    """
+
+    __tablename__ = "crons"
+    __table_args__ = (Index("ix_crons_workspace_enabled", "workspace_id", "enabled"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    # task | message
+    kind: Mapped[str] = mapped_column(String(16), default="task")
+    # 5-field cron + IANA zone, validated exactly as a workflow trigger is
+    # (services/workflows/validate.cron_error / cron_matches).
+    schedule_cron: Mapped[str] = mapped_column(String(120), default="")
+    schedule_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # kind="task": re-run as a fresh unattended chat turn.
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    # kind="message": posted verbatim into the target conversation.
+    body: Mapped[str] = mapped_column(Text, default="")
+    # The conversation kind="message" posts into, created-or-named on first fire.
+    # "" until the first dispatch names one; not a FK for the same reason
+    # Run.skill_id is not — the cron outlives a purged conversation.
+    target_conversation_id: Mapped[str] = mapped_column(String(36), default="")
+    # The atomic claim column, truncated to the minute. The ticker advances it
+    # with a conditional UPDATE, so two ticks in one minute produce one fire.
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class ModelUsage(Base):

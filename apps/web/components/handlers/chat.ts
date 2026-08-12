@@ -7,6 +7,7 @@ import type {
   Conversation,
   DocumentVersion,
   Message,
+  Skill,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
@@ -28,6 +29,16 @@ export type ChatHandlerDeps = {
   bootstrap: Bootstrap | null;
   selectedAgentId: string;
   setSelectedAgentId: Dispatch<SetStateAction<string>>;
+  /** Per-turn composer overrides; `fast` omits the effort so the backend's
+   * fast→low mapping applies, and an empty model/effort is the deployment default. */
+  selectedModel: string;
+  selectedEffort: string;
+  fast: boolean;
+  /** The skill attached to the next turn, its arg values, and the way to drop
+   * it once the send lands. All three are per-turn, like the draft. */
+  attachedSkill: Skill | null;
+  skillArgs: Record<string, unknown>;
+  clearAttachedSkill: () => void;
   conversations: Conversation[];
   messages: Message[];
   draft: string;
@@ -43,6 +54,8 @@ export type ChatHandlerDeps = {
   setActiveRun: Dispatch<SetStateAction<string | null>>;
   setRunStatus: Dispatch<SetStateAction<string>>;
   setBudgetPark: Dispatch<SetStateAction<BudgetPark | null>>;
+  /** Records a run the prompt-injection screen flagged, so the transcript can mark it. */
+  onScreenFlag: (runId: string) => void;
   setDraft: Dispatch<SetStateAction<string>>;
   setActiveProject: Dispatch<SetStateAction<WorkspaceProject | null>>;
   setActiveDocument: Dispatch<SetStateAction<WorkspaceDocument | null>>;
@@ -60,6 +73,12 @@ export function createChatHandlers({
   bootstrap,
   selectedAgentId,
   setSelectedAgentId,
+  selectedModel,
+  selectedEffort,
+  fast,
+  attachedSkill,
+  skillArgs,
+  clearAttachedSkill,
   conversations,
   messages,
   draft,
@@ -75,6 +94,7 @@ export function createChatHandlers({
   setActiveRun,
   setRunStatus,
   setBudgetPark,
+  onScreenFlag,
   setDraft,
   setActiveProject,
   setActiveDocument,
@@ -116,6 +136,17 @@ export function createChatHandlers({
 
   const thread = createThreadHandlers({
     agentId: selectedAgentId || bootstrap?.default_agent_id,
+    // Fast omits the effort so the backend's fast→low mapping wins; the
+    // api-client drops an empty-string model or effort off the wire. An attached
+    // skill and its args ride the same per-turn channel; `skillId` unset means
+    // no skill, exactly today's behaviour.
+    controls: {
+      model: selectedModel,
+      effort: fast ? "" : selectedEffort,
+      fast,
+      skillId: attachedSkill?.id,
+      skillArgs,
+    },
     messages,
     draft,
     activeConversation,
@@ -128,6 +159,9 @@ export function createChatHandlers({
     setBudgetPark,
     setDraft,
     activeConversationRef,
+    // The skill attachment is per-turn; drop it once the send is accepted.
+    onSent: clearAttachedSkill,
+    onScreenFlag,
     /** Typing into an empty rail starts a thread rather than refusing. */
     ensureConversation: async () => {
       if (activeConversation) return activeConversation;

@@ -6,7 +6,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
 import { describeError } from "../views/shared";
 
-type Mode = "signin" | "signup" | "forgot" | "sent";
+type Mode = "signin" | "signup" | "forgot" | "link" | "sent";
 
 export type AuthPanelProps = {
   /** Called once the API has issued a session. */
@@ -54,6 +54,7 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
     enabled: false,
     handle: "",
   });
+  const [playground, setPlayground] = useState(false);
 
   // The button is hidden rather than rendered-and-broken: the API answers 503
   // when no login client is configured, which is the only way to know.
@@ -64,6 +65,11 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
     });
     void api.devOverride().then((override) => {
       if (!cancelled) setDevOverride(override);
+    });
+    // Same discovery-before-session pattern: the "Try it" button appears only
+    // when the deployment opted anonymous playground mode in.
+    void api.playgroundAvailable().then((ok) => {
+      if (!cancelled) setPlayground(ok);
     });
     return () => {
       cancelled = true;
@@ -89,6 +95,19 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
     }
   }
 
+  async function tryPlayground() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      onSignedIn(await api.playgroundLogin());
+    } catch (caught) {
+      setError(describeError(caught, "Could not open the playground."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -105,6 +124,14 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
         const ack = await api.signup(email.trim(), password, name.trim());
         setSent({ title: "Check your email", body: ack.detail });
         setPassword("");
+        setMode("sent");
+        return;
+      }
+      if (mode === "link") {
+        // Same non-oracle discipline as reset: one acknowledgement, rendered
+        // verbatim, whether or not the address has an account.
+        const ack = await api.requestLoginLink(email.trim());
+        setSent({ title: "Check your email", body: ack.detail });
         setMode("sent");
         return;
       }
@@ -138,7 +165,9 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
       ? "Sign in"
       : mode === "signup"
         ? "Create your workspace"
-        : "Reset your password";
+        : mode === "link"
+          ? "Sign in with a link"
+          : "Reset your password";
 
   const showDevOverride = mode === "signin" && devOverride.enabled && !!devOverride.handle;
   const handleLabel =
@@ -149,6 +178,7 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
       <header className="auth-head">
         <h1>{heading}</h1>
         {mode === "forgot" && <p>We will email a link to set a new password.</p>}
+        {mode === "link" && <p>We will email a one-time link that signs you in.</p>}
       </header>
 
       {notice && (
@@ -166,6 +196,22 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
             onClick={() => void continueAsDev()}
           >
             {busy ? "Working…" : `Continue as ${handleLabel}`}
+          </button>
+          <div className="auth-divider">
+            <span>or</span>
+          </div>
+        </>
+      )}
+
+      {mode === "signin" && playground && (
+        <>
+          <button
+            type="button"
+            className="auth-google"
+            disabled={busy}
+            onClick={() => void tryPlayground()}
+          >
+            {busy ? "Working…" : "Try the playground"}
           </button>
           <div className="auth-divider">
             <span>or</span>
@@ -216,7 +262,7 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
           />
         </label>
 
-        {mode !== "forgot" && (
+        {mode !== "forgot" && mode !== "link" && (
           <label>
             Password
             <input
@@ -243,13 +289,18 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
               ? "Sign in"
               : mode === "signup"
                 ? "Create account"
-                : "Send reset link"}
+                : mode === "link"
+                  ? "Send sign-in link"
+                  : "Send reset link"}
         </button>
       </form>
 
       <footer className="auth-foot">
         {mode === "signin" && (
           <>
+            <button className="auth-link" onClick={() => go("link")}>
+              Email me a sign-in link
+            </button>
             <button className="auth-link" onClick={() => go("forgot")}>
               Forgot your password?
             </button>
@@ -263,7 +314,7 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
             Already have an account? Sign in
           </button>
         )}
-        {mode === "forgot" && (
+        {(mode === "forgot" || mode === "link") && (
           <button className="auth-link" onClick={() => go("signin")}>
             <ArrowLeft size={13} /> Back to sign in
           </button>

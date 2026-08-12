@@ -17,6 +17,7 @@ from .api import (
     bibliography,
     board_ops,
     chat,
+    crons,
     dashboards,
     dbconnect,
     doc_pending,
@@ -28,6 +29,8 @@ from .api import (
     memory,
     projects,
     sandbox,
+    sandbox_tools,
+    skills,
     sources,
     system,
     todos,
@@ -96,6 +99,7 @@ app.include_router(auth_router)
 app.include_router(system.router)
 app.include_router(chat.router)
 app.include_router(agents.router)
+app.include_router(skills.router)
 app.include_router(sources.router)
 app.include_router(tools.router)
 app.include_router(audit.router)
@@ -112,8 +116,10 @@ app.include_router(folders.router)
 app.include_router(projects.router)
 app.include_router(bibliography.router)
 app.include_router(sandbox.router)
+app.include_router(sandbox_tools.router)
 app.include_router(analytics.router)
 app.include_router(dashboards.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)
+app.include_router(crons.router)
 app.include_router(admin.router)

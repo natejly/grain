@@ -23,12 +23,27 @@ import type {
   PendingDocumentEdit,
   ProjectSummary,
   ProvenanceChunk,
+  SandboxTool,
+  Skill,
   Source,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import {
+  CHAT_PANES_KEY,
+  addPane,
+  newPaneId,
+  parseStoredPanes,
+  prunePanes,
+  refocusAfterClose,
+  removePane,
+  serializeStoredPanes,
+  type ChatPane,
+} from "./chat-panes";
+
+export type { ChatPane } from "./chat-panes";
 import { createBoardHandlers } from "./handlers/boards";
 import { createChatHandlers } from "./handlers/chat";
 import { createDashboardHandlers } from "./handlers/dashboards";
@@ -38,12 +53,28 @@ import { createGraphHandlers } from "./handlers/graph";
 import { createInfraHandlers } from "./handlers/infra";
 import { createIntegrationHandlers } from "./handlers/integrations";
 import { createMcpHandlers } from "./handlers/mcp";
+import { createSandboxToolHandlers } from "./handlers/sandbox-tools";
 import { createSourceHandlers } from "./handlers/sources";
 import { createTodoHandlers } from "./handlers/todos";
 import type { BudgetPark } from "./views/budget-format";
 import type { DashboardResultState } from "./views/dashboard-grid";
 import { baseName, describeError, isTabular, type View } from "./views/shared";
 import { isTodoList, todoListsFrom } from "./views/todo-format";
+
+/**
+ * The persisted pane layout, or none. Guarded for private-mode / server render
+ * exactly like the workspace selection: a throwing or absent store is simply an
+ * empty split, never a crash. The decode itself lives in `chat-panes` so it can
+ * be tested without a DOM; this wrapper only adds the `window` guard.
+ */
+function readStoredPanes(): ChatPane[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return parseStoredPanes(window.localStorage.getItem(CHAT_PANES_KEY));
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Every piece of workspace state and the actions over it. The shell renders the
@@ -63,6 +94,7 @@ export function useWorkspace() {
   const [apps, setApps] = useState<GeneratedApp[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationProvider[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [sandboxTools, setSandboxTools] = useState<SandboxTool[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [activeDocument, setActiveDocument] = useState<WorkspaceDocument | null>(null);
@@ -73,10 +105,30 @@ export function useWorkspace() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [activeProject, setActiveProject] = useState<WorkspaceProject | null>(null);
   const [view, setView] = useState<View>("chat");
+  // Extra chat panes open beside the primary shell chat, and which one holds the
+  // split's focus. An empty list is today's single-pane shell — a guaranteed
+  // no-regression path — so pane 0 (the shell's `activeConversation`) is
+  // implicit and only the EXTRA panes live here. Persisted like the workspace
+  // selection so a split survives a reload; hydrated lazily so the server render
+  // never touches localStorage. `focusedPane` is null when the primary is focused.
+  const [extraPanes, setExtraPanes] = useState<ChatPane[]>(() => readStoredPanes());
+  const [focusedPane, setFocusedPane] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // Which authored agent answers the next message; "" is the workspace
   // default. Session state on purpose — a conversation does not remember it.
   const [selectedAgentId, setSelectedAgentId] = useState("");
+  // Per-turn model / reasoning-effort / fast overrides for the composer, session
+  // state like the agent selection above. The model stays "" (the deployment's
+  // own) until the user picks one; the effort seeds from the deployment default
+  // once bootstrap arrives; "fast" is the low-effort shortcut.
+  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedEffort, setSelectedEffort] = useState("");
+  const [fast, setFast] = useState(false);
+  // The skill attached to the next turn and the values for its declared args.
+  // Per-turn session state like the controls above: the composer's slash picker
+  // sets it, the send consumes it, and it never becomes part of the conversation.
+  const [attachedSkill, setAttachedSkill] = useState<Skill | null>(null);
+  const [skillArgs, setSkillArgs] = useState<Record<string, unknown>>({});
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState("");
   /**
@@ -87,6 +139,16 @@ export function useWorkspace() {
    * survive every re-render until the run either resumes or is cancelled.
    */
   const [budgetPark, setBudgetPark] = useState<BudgetPark | null>(null);
+  /**
+   * Runs the prompt-injection screen flagged this session, so the transcript can
+   * mark the turn an injection was caught in. Kept per-run rather than per-message
+   * because a flagged turn escalates to ask_all and may park before it produces a
+   * message at all; the id on every message ties the mark back to the right turn.
+   */
+  const [flaggedRuns, setFlaggedRuns] = useState<string[]>([]);
+  const recordScreenFlag = useCallback((runId: string) => {
+    setFlaggedRuns((runs) => (runs.includes(runId) ? runs : [...runs, runId]));
+  }, []);
   const [provenance, setProvenance] = useState<ProvenanceChunk | null>(null);
   const [loadingProvenance, setLoadingProvenance] = useState(false);
   const [editing, setEditing] = useState<string | "new" | null>(null);
@@ -190,6 +252,7 @@ export function useWorkspace() {
       nextApps,
       nextIntegrations,
       nextMcp,
+      nextSandboxTools,
     ] = await Promise.all([
       api.getGraph(),
       api.listMemory(),
@@ -197,6 +260,7 @@ export function useWorkspace() {
       api.listApps(),
       api.listIntegrations(),
       api.listMcpServers(),
+      api.listSandboxTools(),
     ]);
     setGraph(nextGraph);
     setMemories(nextMemories);
@@ -204,6 +268,7 @@ export function useWorkspace() {
     setApps(nextApps);
     setIntegrations(nextIntegrations);
     setMcpServers(nextMcp);
+    setSandboxTools(nextSandboxTools);
   }, []);
 
   /** Everything the home screen reads: what exists, what is bindable, what is pinned. */
@@ -247,6 +312,97 @@ export function useWorkspace() {
     setPendingEdits(await api.listPendingDocumentEdits());
   }, []);
 
+  /** Re-read the rail's conversations list — what an extra pane's finished run
+   *  needs the shell to catch up on, and nothing else. */
+  const refreshConversations = useCallback(async () => {
+    setConversations(await api.listConversations());
+  }, []);
+
+  /** Replace one conversation row in the rail's list. An extra pane changing its
+   *  approval mode hands the updated row here so the mode keeps one home. */
+  const patchConversation = useCallback((updated: Conversation) => {
+    setConversations((items) =>
+      items.map((item) => (item.id === updated.id ? updated : item)),
+    );
+  }, []);
+
+  /**
+   * Share or unshare the open thread, then replace its row so the rail's
+   * personal/shared grouping and the header control read the one authoritative
+   * copy rather than a private one that can drift. Owner-gated server-side; a
+   * refused member leaves the row unchanged and surfaces the error.
+   */
+  const shareConversation = useCallback(
+    async (conversationId: string, shared: boolean) => {
+      setError("");
+      try {
+        patchConversation(await api.setConversationShared(conversationId, shared));
+      } catch (caught) {
+        setError(describeError(caught, "Could not change who can see this thread"));
+      }
+    },
+    [patchConversation],
+  );
+
+  /**
+   * Open a conversation in an extra pane beside the primary chat.
+   *
+   * Ignored when the cap is hit or the conversation is already the primary pane
+   * — that thread is on screen, and a second copy of what pane 0 already shows
+   * is not what "split" is for. Switches to Chat so the new pane is visible even
+   * when the action is fired from the rail on another view.
+   */
+  const openInNewPane = useCallback((conversationId: string) => {
+    // The early return gates the SIDE EFFECTS — a no-op open must not yank the
+    // view to Chat or shut the rail. `addPane` re-checks the same guard so it
+    // stays a total pure function, but the list decision and the view switch
+    // are two separate concerns.
+    if (conversationId === activeConversationRef.current) return;
+    setExtraPanes((panes) =>
+      addPane(panes, conversationId, activeConversationRef.current, newPaneId()),
+    );
+    setView("chat");
+    setSidebarOpen(false);
+  }, []);
+
+  const closePane = useCallback((paneId: string) => {
+    setExtraPanes((panes) => removePane(panes, paneId));
+    setFocusedPane((current) => refocusAfterClose(current, paneId));
+  }, []);
+
+  const focusPane = useCallback((paneId: string | null) => {
+    setFocusedPane(paneId);
+  }, []);
+
+  // Persist the split, and prune panes whose conversation no longer exists.
+  // The persist mirrors the workspace-selection guard; the prune fires whenever
+  // the conversations list changes — a delete included — but only once the list
+  // has actually loaded, so a persisted split is not wiped by the empty list the
+  // first render holds before `loadWorkspace` resolves.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(CHAT_PANES_KEY, serializeStoredPanes(extraPanes));
+    } catch {
+      // Private mode: the split just does not survive a reload.
+    }
+  }, [extraPanes]);
+
+  useEffect(() => {
+    if (conversations.length === 0) return;
+    const known = new Set(conversations.map((item) => item.id));
+    setExtraPanes((panes) => prunePanes(panes, known));
+    // A pruned pane may have held the split's focus; if the focused id no longer
+    // names a pane whose conversation survived, hand focus back to the primary
+    // rather than leave it pointing at a pane about to leave the screen.
+    setFocusedPane((current) =>
+      current &&
+      !extraPanes.some((pane) => pane.id === current && known.has(pane.conversationId))
+        ? null
+        : current,
+    );
+  }, [conversations, extraPanes]);
+
   /**
    * Catch up after something changed the workspace without going through chat.
    *
@@ -281,6 +437,7 @@ export function useWorkspace() {
         nextApps,
         nextIntegrations,
         nextMcp,
+        nextSandboxTools,
       ] = await Promise.all([
         api.bootstrap(),
         api.listConversations(),
@@ -293,6 +450,7 @@ export function useWorkspace() {
         api.listApps(),
         api.listIntegrations(),
         api.listMcpServers(),
+        api.listSandboxTools(),
       ]);
       setBootstrap(boot);
       setConversations((current) => {
@@ -311,6 +469,7 @@ export function useWorkspace() {
       setApps(nextApps);
       setIntegrations(nextIntegrations);
       setMcpServers(nextMcp);
+      setSandboxTools(nextSandboxTools);
       setError("");
       if (chats[0] && !activeConversationRef.current) {
         setActiveConversation(chats[0].id);
@@ -325,6 +484,14 @@ export function useWorkspace() {
   useEffect(() => {
     void loadWorkspace();
   }, [loadWorkspace]);
+
+  // Seed the composer's effort from the deployment default the first time
+  // bootstrap arrives, and never again — `current || preset` leaves a value the
+  // user has since picked alone.
+  useEffect(() => {
+    const preset = bootstrap?.model_provider.default_effort;
+    if (preset) setSelectedEffort((current) => current || preset);
+  }, [bootstrap]);
 
   useEffect(() => {
     void refreshArtifacts().catch(() => undefined);
@@ -473,6 +640,29 @@ export function useWorkspace() {
 
   const mcpHandlers = createMcpHandlers({ setError, setMcpServers });
 
+  const sandboxToolHandlers = createSandboxToolHandlers({ setError, setSandboxTools });
+
+  /**
+   * The composer's slash-picker actions. Attaching seeds each declared arg with
+   * its default so a skill with sensible defaults is sendable on sight; clearing
+   * drops both the skill and its args, which is what the send does per-turn.
+   */
+  const attachSkill = useCallback((skill: Skill) => {
+    setAttachedSkill(skill);
+    const seeded: Record<string, unknown> = {};
+    for (const arg of skill.args) {
+      if (arg.default !== null && arg.default !== undefined) seeded[arg.name] = arg.default;
+    }
+    setSkillArgs(seeded);
+  }, []);
+  const detachSkill = useCallback(() => {
+    setAttachedSkill(null);
+    setSkillArgs({});
+  }, []);
+  const setSkillArg = useCallback((name: string, value: unknown) => {
+    setSkillArgs((current) => ({ ...current, [name]: value }));
+  }, []);
+
   const chatHandlers = createChatHandlers({
     bootstrap,
     conversations,
@@ -482,6 +672,12 @@ export function useWorkspace() {
     activeRun,
     selectedAgentId,
     setSelectedAgentId,
+    selectedModel,
+    selectedEffort,
+    fast,
+    attachedSkill,
+    skillArgs,
+    clearAttachedSkill: detachSkill,
     setError,
     setView,
     setSidebarOpen,
@@ -492,6 +688,7 @@ export function useWorkspace() {
     setActiveRun,
     setRunStatus,
     setBudgetPark,
+    onScreenFlag: recordScreenFlag,
     setDraft,
     setActiveProject,
     setActiveDocument,
@@ -555,6 +752,7 @@ export function useWorkspace() {
     apps,
     integrations,
     mcpServers,
+    sandboxTools,
     documents,
     folders,
     activeDocument,
@@ -566,13 +764,36 @@ export function useWorkspace() {
     activeProject,
     view,
     setView,
+    // Multi-pane split: the extra panes beside the primary chat, which one is
+    // focused, and the actions over them. An empty `extraPanes` is the shell as
+    // it has always been.
+    extraPanes,
+    focusedPane,
+    openInNewPane,
+    closePane,
+    focusPane,
+    refreshConversations,
+    patchConversation,
+    shareConversation,
     draft,
     setDraft,
     selectedAgentId,
     setSelectedAgentId,
+    selectedModel,
+    setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
+    fast,
+    setFast,
+    attachedSkill,
+    skillArgs,
+    attachSkill,
+    detachSkill,
+    setSkillArg,
     activeRun,
     runStatus,
     budgetPark,
+    flaggedRuns,
     provenance,
     setProvenance,
     loadingProvenance,
@@ -613,6 +834,7 @@ export function useWorkspace() {
     ...todoHandlers,
     ...infraHandlers,
     ...mcpHandlers,
+    ...sandboxToolHandlers,
     ...chatHandlers,
     ...sourceHandlers,
     ...graphHandlers,

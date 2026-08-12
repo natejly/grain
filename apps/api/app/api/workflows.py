@@ -39,8 +39,10 @@ from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import Agent, Workflow, WorkflowNodeRun, WorkflowRun
 from ..schemas import ApiModel
+from ..services import crons as cron_service
 from ..services.audit import record_audit
 from ..services.llm_tools import ToolContext, build_registry
+from ..services.runs import process_run
 from ..services.workflows import (
     CompiledWorkflow,
     WorkflowCompileError,
@@ -139,6 +141,11 @@ class WorkflowTickOut(ApiModel):
     #: because "we started something new" and "we picked something up off the
     #: floor" are different facts about a deployment's health.
     recovered: List[str]
+    #: Task runs the same tick started for due personal crons (services/crons.py),
+    #: enqueued on the same background path a chat turn uses. A message cron fires
+    #: synchronously and is not counted here. Reported separately so "a workflow
+    #: fired" and "a cron fired" stay distinct facts about one tick.
+    crons_dispatched: List[str]
     moment: datetime
 
 
@@ -690,12 +697,20 @@ def tick(
     # promises. Claiming is a handful of UPDATEs; the graphs run in the
     # background, so a slow recovery cannot make a cron call time out.
     recovered = executor.claim_orphaned_runs(db, settings=settings)
+    # Personal crons share this one tick and this one secret rather than a second
+    # scheduler: the same conditional claim on the same clock. A task cron enqueues
+    # an ordinary Run on the chat background path — `recover_durable_work` will
+    # re-run it if a process dies mid-turn, so no cron-specific recovery is needed.
+    cron_run_ids = cron_service.dispatch_due(db)
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
     for workflow_run_id in recovered:
         background_tasks.add_task(executor.process_workflow_run, workflow_run_id)
+    for cron_run_id in cron_run_ids:
+        background_tasks.add_task(process_run, cron_run_id)
     return WorkflowTickOut(
         dispatched=[workflow_run.id for workflow_run in started],
         recovered=recovered,
+        crons_dispatched=cron_run_ids,
         moment=schedule.floor_minute(utcnow()),
     )

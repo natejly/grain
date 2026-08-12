@@ -270,6 +270,119 @@ describe("WorkspaceApi", () => {
     ]);
   });
 
+  /**
+   * The whole promise of the per-turn controls is that an *unchanged* composer
+   * behaves exactly as before: absent, empty, and default-false controls must
+   * leave the wire body byte-identical to the pre-feature request, or every
+   * existing deployment silently starts sending fields the API never validated.
+   */
+  it("keeps the message body free of per-turn keys when nothing is overridden", async () => {
+    const bodies: unknown[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+    const api = new WorkspaceApi("http://example.test");
+
+    // No controls argument at all — the pre-feature call shape.
+    await api.sendMessage("conv-1", "hello", "agent-1");
+    // Controls present but every field at its "use the default" resting value:
+    // "" model, "" effort, fast off. Each must be omitted, not sent empty.
+    await api.sendMessage("conv-1", "hello", "agent-1", {
+      model: "",
+      effort: "",
+      fast: false,
+    });
+
+    for (const body of bodies) {
+      expect(body).toEqual({ content: "hello", agent_id: "agent-1" });
+      expect(body).not.toHaveProperty("model");
+      expect(body).not.toHaveProperty("effort");
+      expect(body).not.toHaveProperty("fast");
+    }
+  });
+
+  /**
+   * When the user does choose, the overrides go on the wire under the exact
+   * field names the API validates — `model`, `effort`, `fast` — and `fast` is
+   * sent as a literal `true`, never echoing whatever truthy value arrived.
+   */
+  it("puts present per-turn overrides on the wire under the agreed field names", async () => {
+    let sent: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+
+    await new WorkspaceApi("http://example.test").sendMessage("conv-1", "hi", "agent-1", {
+      model: "gpt-fast",
+      effort: "high",
+      fast: true,
+    });
+
+    expect(sent).toEqual({
+      content: "hi",
+      agent_id: "agent-1",
+      model: "gpt-fast",
+      effort: "high",
+      fast: true,
+    });
+  });
+
+  /**
+   * A skill is a per-turn injection like the model/effort overrides, so it
+   * rides the same conditional spread: `skill_id` under the name the API
+   * validates, and `skill_args` *only* when a skill is actually attached — a
+   * stray args map with no skill would be an unbound payload the server never
+   * asked for.
+   */
+  it("sends the attached skill and its args under the agreed field names", async () => {
+    let sent: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+
+    await new WorkspaceApi("http://example.test").sendMessage("conv-1", "go", "agent-1", {
+      skillId: "skill-9",
+      skillArgs: { topic: "roadmap", verbose: true },
+    });
+
+    expect(sent).toEqual({
+      content: "go",
+      agent_id: "agent-1",
+      skill_id: "skill-9",
+      skill_args: { topic: "roadmap", verbose: true },
+    });
+  });
+
+  it("omits skill_args unless a skill is attached, and both when none is", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+    const api = new WorkspaceApi("http://example.test");
+
+    // Args present but no skill: the args are orphaned and must not be sent.
+    await api.sendMessage("conv-1", "hi", "agent-1", { skillArgs: { topic: "x" } });
+    // A skill with no declared args: skill_id rides, skill_args does not.
+    await api.sendMessage("conv-1", "hi", "agent-1", { skillId: "skill-9" });
+
+    expect(bodies[0]).toEqual({ content: "hi", agent_id: "agent-1" });
+    expect(bodies[0]).not.toHaveProperty("skill_args");
+    expect(bodies[1]).toEqual({ content: "hi", agent_id: "agent-1", skill_id: "skill-9" });
+    expect(bodies[1]).not.toHaveProperty("skill_args");
+  });
+
   it("parses ordered resumable SSE events", async () => {
     const body = [
       "id: 3",

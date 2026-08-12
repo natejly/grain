@@ -1,8 +1,15 @@
-import { ApiError, type DocumentKind, type Source } from "@workspace/api-client";
+import {
+  ApiError,
+  type Conversation,
+  type DocumentKind,
+  type Message,
+  type Source,
+} from "@workspace/api-client";
 
 export type View =
   | "chat"
   | "agents"
+  | "skills"
   | "sources"
   | "memory"
   | "graph"
@@ -14,9 +21,11 @@ export type View =
   | "data"
   | "projects"
   | "mcp"
+  | "sandbox-tools"
   | "activity"
   | "admin"
-  | "workflows";
+  | "workflows"
+  | "crons";
 
 /**
  * An unreachable API already has a dedicated banner with a retry, so it returns
@@ -70,6 +79,7 @@ export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
 export const PAGE_TITLES: Record<View, string> = {
   chat: "Chat",
   agents: "Agents",
+  skills: "Skills",
   sources: "Sources",
   memory: "Memory",
   graph: "Graph",
@@ -81,9 +91,16 @@ export const PAGE_TITLES: Record<View, string> = {
   projects: "Projects",
   integrations: "Integrations",
   mcp: "MCP servers",
+  // A tools-*management* destination, not the sandbox itself: you come here to
+  // author the custom tools the agent may run and to set each one's egress and
+  // approval, exactly as MCP is where you register servers. This is not the
+  // "sandbox" destination the docstring above refuses — nobody operates a
+  // machine here, they configure a capability.
+  "sandbox-tools": "Sandbox tools",
   activity: "Activity",
   admin: "Admin",
   workflows: "Workflows",
+  crons: "Automations",
 };
 
 export function formatBytes(bytes: number): string {
@@ -103,6 +120,90 @@ export function formatRelative(value: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+/**
+ * The rail's two audiences, split from the one list the server returns.
+ *
+ * `listConversations` returns the caller's OWN personal threads together with
+ * every SHARED thread in the workspace and never another member's personal
+ * thread, so `shared` alone tells the two groups apart — the rail must not try
+ * to re-derive this from ownership and accidentally file a shared thread the
+ * caller does not own under the wrong heading. Order within each group is left
+ * untouched so the server's recency sort survives the split.
+ */
+export function groupThreads(conversations: Conversation[]): {
+  personal: Conversation[];
+  shared: Conversation[];
+} {
+  const personal: Conversation[] = [];
+  const shared: Conversation[] = [];
+  for (const conversation of conversations) {
+    (conversation.shared ? shared : personal).push(conversation);
+  }
+  return { personal, shared };
+}
+
+/** The strings the rail's share/unshare toggle needs once it is allowed to render. */
+export type ShareControl = {
+  shared: boolean;
+  title: string;
+  ariaLabel: string;
+  pressed: boolean;
+};
+
+/**
+ * The share/unshare toggle for one rail row, or null when it must not render.
+ *
+ * The control rides ONLY the open thread and ONLY when the caller may change
+ * its visibility (`can_share` — the thread's creator or a workspace owner). A
+ * member seeing it on a thread they cannot act on would get a 403 on click,
+ * which is worse than no control at all; returning null keeps that button out
+ * of the tree rather than leaving a dead affordance on every row.
+ */
+export function shareControl(
+  conversation: Conversation,
+  activeConversationId: string | null,
+): ShareControl | null {
+  if (conversation.id !== activeConversationId || !conversation.can_share) {
+    return null;
+  }
+  return {
+    shared: conversation.shared,
+    title: conversation.shared
+      ? "Shared with the workspace — make personal"
+      : "Share with the workspace",
+    ariaLabel: conversation.shared
+      ? `Make ${conversation.title} personal`
+      : `Share ${conversation.title} with the workspace`,
+    pressed: conversation.shared,
+  };
+}
+
+/**
+ * The name shown above a message.
+ *
+ * On a shared thread a user message carries the sender's name, so a teammate's
+ * turn is not mislabelled "You"; on a personal thread every user message is the
+ * caller's, so the name would be noise and the label stays "You". A message
+ * with no attribution (one written before the sender column existed) also falls
+ * back to "You". Anything that is not a user turn is the "Assistant".
+ */
+export function senderLabel(message: Message, sharedThread: boolean): string {
+  if (message.role !== "user") return "Assistant";
+  return sharedThread && message.sender_name ? message.sender_name : "You";
+}
+
+/**
+ * The single-letter avatar for a message. A user's initial is taken from the
+ * attributed sender on a shared thread — so two members show different marks —
+ * and falls back to "U" on a personal thread or an unattributed message;
+ * assistant and tool rows always show "A".
+ */
+export function senderInitial(message: Message, sharedThread: boolean): string {
+  if (message.role !== "user") return "A";
+  const source = sharedThread && message.sender_name ? message.sender_name : "U";
+  return source.slice(0, 1).toUpperCase();
 }
 
 export function statusLabel(status: Source["status"]): string {

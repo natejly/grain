@@ -29,11 +29,19 @@ logger = logging.getLogger("app.auth.email")
 
 PURPOSE_VERIFY_EMAIL = "verify_email"
 PURPOSE_PASSWORD_RESET = "password_reset"
+# A passwordless sign-in link. Fits `EmailToken.purpose` (String(24)) beside the
+# two above, so it reuses the whole single-use/expiry/hash-at-rest mechanism with
+# no schema change.
+PURPOSE_LOGIN = "login"
 
 VERIFY_TOKEN_TTL = timedelta(hours=24)
 # Deliberately shorter than verification: a reset link is a live credential for
 # as long as it is valid.
 RESET_TOKEN_TTL = timedelta(minutes=30)
+# A magic link *is* a live sign-in credential — the same class as a reset link,
+# so it gets the same short window, not verification's 24h. Tightened further
+# because clicking it lands you in a session directly, with no password step.
+LOGIN_TOKEN_TTL = timedelta(minutes=15)
 
 
 @dataclass(frozen=True)
@@ -200,6 +208,16 @@ def password_reset_email(
         to=to,
         subject="Reset your password",
         body=f"Reset your password (link expires in {minutes} minutes):\n{link}\n",
+    )
+
+
+def login_link_email(settings: Settings, *, to: str, raw_token: str) -> OutboundEmail:
+    link = f"{settings.primary_web_origin}/auth/login-link?token={raw_token}"
+    minutes = int(LOGIN_TOKEN_TTL.total_seconds() // 60)
+    return OutboundEmail(
+        to=to,
+        subject="Your sign-in link",
+        body=f"Sign in (link expires in {minutes} minutes):\n{link}\n",
     )
 
 

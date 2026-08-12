@@ -52,6 +52,7 @@ from app.models import (
     BoardColumn,
     Chunk,
     Conversation,
+    Cron,
     Dashboard,
     DashboardPin,
     DashboardTemplate,
@@ -77,6 +78,9 @@ from app.models import (
     RunEvent,
     SandboxExecution,
     SandboxSession,
+    SandboxTool,
+    Skill,
+    SkillVersion,
     Source,
     SyncJob,
     Tool,
@@ -636,6 +640,26 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["sandbox_execution"] = execution.id
 
+        # A workspace-defined sandbox tool. Written directly for the same reason
+        # the sessions are: the point is to own a row whose id another tenant can
+        # name, not to exercise the create route. The description carries the
+        # marker string so the id-less leak scan catches it if a list route ever
+        # answered with a foreign workspace's tools.
+        sandbox_tool = SandboxTool(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label.lower()}-probe",
+            description=f"{label} secret sandbox tool",
+            input_schema_json='{"type":"object","properties":{}}',
+            argv_json=json.dumps(["echo", "hi"]),
+            egress_hosts_json="[]",
+            approval="inherit",
+            enabled=True,
+        )
+        db.add(sandbox_tool)
+        db.flush()
+        ids["sandbox_tool"] = sandbox_tool.id
+
         # A stored automation, one execution of it, and one node inside that
         # execution. Written directly for the same reason the sandbox rows are:
         # the point is to own a workflow whose id another tenant can name, not
@@ -698,6 +722,23 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["workflow_node_run"] = node_run.id
 
+        # A personal cron whose id another tenant can name: naming it would let
+        # you read its prompt, fire it unattended, or delete it. `run-now`'s DENY
+        # is the sharp one — it proves a foreign cron cannot be fired.
+        cron = Cron(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} secret cron",
+            kind="task",
+            schedule_cron="0 9 * * *",
+            schedule_timezone="UTC",
+            prompt=f"{label} secret cron prompt",
+            enabled=True,
+        )
+        db.add(cron)
+        db.flush()
+        ids["cron"] = cron.id
+
         # A standing chat grant, so the scope split has something to be wrong
         # about: `test_workflow_policy_scope.py` proves this row does not reach
         # an unattended run, and the tamper digest proves the sweep never adds a
@@ -737,6 +778,39 @@ def build_tenant(label: str) -> Tenant:
         db.add(model_usage)
         db.flush()
         ids["model_usage"] = model_usage.id
+
+        # A *private* skill, so the DENY cases bite on the workspace filter: a
+        # foreign workspace's skill must 404 whether or not it is shared, and a
+        # private one also proves a same-workspace member cannot reach it. The
+        # marker body is what a leaked read would surface beyond the id.
+        skill = Skill(
+            workspace_id=workspace_id,
+            name=f"{label.lower()}-skill",
+            title=f"{label} skill",
+            description=f"{label} secret skill description",
+            body=f"{label} secret skill body",
+            args_json="[]",
+            shared=False,
+            version=1,
+            content_hash="",
+            created_by=user_id,
+        )
+        db.add(skill)
+        db.flush()
+        ids["skill"] = skill.id
+        skill_version = SkillVersion(
+            workspace_id=workspace_id,
+            skill_id=skill.id,
+            version=1,
+            title=skill.title,
+            description=skill.description,
+            body=skill.body,
+            args_json="[]",
+            created_by=user_id,
+        )
+        db.add(skill_version)
+        db.flush()
+        ids["skill_version"] = skill_version.id
 
         db.commit()
     finally:
@@ -912,6 +986,10 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase("GET", "/api/auth/google/callback", PUBLIC),
     RouteCase("GET", "/api/auth/dev-override", PUBLIC),
     RouteCase("POST", "/api/auth/dev-login", PUBLIC),
+    RouteCase("POST", "/api/auth/login-link/request", PUBLIC),
+    RouteCase("POST", "/api/auth/login-link/consume", PUBLIC),
+    RouteCase("GET", "/api/auth/playground", PUBLIC),
+    RouteCase("POST", "/api/auth/playground", PUBLIC),
     # -- chat --------------------------------------------------------------
     RouteCase("GET", "/api/conversations", SCOPED),
     RouteCase("POST", "/api/conversations", SCOPED, body={"title": "mine"}),
@@ -942,6 +1020,15 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"conversation_id": "conversation"},
         body={"mode": "auto_writes"},
         note="Turning off another tenant's approval park is the worst of these.",
+    ),
+    RouteCase(
+        "PUT",
+        "/api/conversations/{conversation_id}/share",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"shared": True},
+        note="Sharing another workspace's thread must 404 on the workspace "
+        "filter, before the creator/owner gate is even reached.",
     ),
     RouteCase(
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
@@ -1052,6 +1139,44 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/agents/{agent_id}",
         DENY,
         path_ids={"agent_id": "agent"},
+    ),
+    # -- skills ------------------------------------------------------------
+    # A skill carries a workspace's instructions verbatim, so a cross-tenant read
+    # is a prompt leak and a cross-tenant PATCH rewrites what another workspace's
+    # turn is told to do. Visibility is own-or-shared within one workspace; the
+    # fixture skill is private, so every id route 404s on the workspace filter
+    # regardless of the sharing gate behind it. Create/list take no foreign id.
+    RouteCase("GET", "/api/skills", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/skills",
+        SCOPED,
+        body={"name": "mine-skill", "title": "Mine", "body": "do the thing"},
+    ),
+    RouteCase(
+        "GET", "/api/skills/{skill_id}", DENY, path_ids={"skill_id": "skill"}
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/skills/{skill_id}",
+        DENY,
+        path_ids={"skill_id": "skill"},
+        body={"title": "leaked"},
+    ),
+    RouteCase(
+        "DELETE", "/api/skills/{skill_id}", DENY, path_ids={"skill_id": "skill"}
+    ),
+    RouteCase(
+        "GET",
+        "/api/skills/{skill_id}/versions",
+        DENY,
+        path_ids={"skill_id": "skill"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/skills/{skill_id}/versions/{version_id}/restore",
+        DENY,
+        path_ids={"skill_id": "skill", "version_id": "skill_version"},
     ),
     # -- audit / graph / memory -------------------------------------------
     RouteCase("GET", "/api/audit-events", SCOPED),
@@ -1496,6 +1621,30 @@ ROUTE_CASES: List[RouteCase] = [
         DENY,
         path_ids={"session_id": "sandbox_session"},
     ),
+    # A custom sandbox tool is workspace data: listing another tenant's tools
+    # would leak their names, descriptions, and egress, and naming one by id to
+    # edit or delete it is a cross-tenant write. List/create are SCOPED; every
+    # id-taking route is a DENY.
+    RouteCase("GET", "/api/sandbox-tools", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/sandbox-tools",
+        SCOPED,
+        body={"name": "mine-probe", "argv": ["echo", "hi"]},
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/sandbox-tools/{tool_id}",
+        DENY,
+        path_ids={"tool_id": "sandbox_tool"},
+        body={"enabled": False},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/sandbox-tools/{tool_id}",
+        DENY,
+        path_ids={"tool_id": "sandbox_tool"},
+    ),
     # -- workflows ---------------------------------------------------------
     # A workflow id is worth more than most: naming another tenant's automation
     # would let you read the graph (which names their tools and datasets), run it
@@ -1555,6 +1704,37 @@ ROUTE_CASES: List[RouteCase] = [
     # resource to point it at, and with WORKFLOW_CRON_SECRET unset (as it is
     # here) it refuses outright. See api/workflows.py:tick.
     RouteCase("POST", "/api/workflows/tick", PUBLIC),
+    # -- crons -------------------------------------------------------------
+    # A cron id is worth as much as a workflow id: naming another tenant's
+    # automation would let you read its prompt, fire it unattended, or delete it.
+    # Every id-taking route is a DENY; `run-now`'s DENY is what proves a foreign
+    # cron cannot be fired. Dispatch has no route of its own — the shared
+    # /api/workflows/tick claims and enqueues due crons.
+    RouteCase("GET", "/api/crons", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/crons",
+        SCOPED,
+        body={
+            "name": "mine",
+            "kind": "task",
+            "schedule_cron": "0 9 * * *",
+            "schedule_timezone": "UTC",
+            "prompt": "do it",
+        },
+    ),
+    RouteCase("GET", "/api/crons/{cron_id}", DENY, path_ids={"cron_id": "cron"}),
+    RouteCase(
+        "PATCH",
+        "/api/crons/{cron_id}",
+        DENY,
+        path_ids={"cron_id": "cron"},
+        body={"enabled": False},
+    ),
+    RouteCase("DELETE", "/api/crons/{cron_id}", DENY, path_ids={"cron_id": "cron"}),
+    RouteCase(
+        "POST", "/api/crons/{cron_id}/run-now", DENY, path_ids={"cron_id": "cron"}
+    ),
     # -- integrations ------------------------------------------------------
     RouteCase("GET", "/api/integrations", SCOPED),
     RouteCase(
@@ -1678,6 +1858,11 @@ ROUTE_CASES: List[RouteCase] = [
     # aggregating rows it should not see, which is exactly what the leak scan
     # over every id and marker string catches.
     RouteCase("GET", "/api/admin/usage", SCOPED),
+    # Latency/throughput/error/liveness/retention rollups. Like /usage it takes
+    # no id, only a window, so the only cross-tenant risk is aggregating rows it
+    # should not see — the leak scan over the victim's run/conversation ids and
+    # marker strings is what proves it does not.
+    RouteCase("GET", "/api/admin/observability", SCOPED),
     # The spend ceiling. Both take no id: the ceiling they read and write is the
     # caller's own workspace's, named by `actor.workspace_id` and by nothing in
     # the request. The PUT is the one that matters here — it lists and *releases*

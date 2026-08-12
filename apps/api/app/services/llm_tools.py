@@ -59,6 +59,10 @@ class ToolSpec:
     executor: ToolExecutor
     read_only: bool = True
     preview: Optional[ToolPreview] = None
+    #: Tighten-only approval flag. A custom sandbox tool with approval="always"
+    #: sets this so `evaluate_policy` clamps any resulting `allow` to `ask` — it
+    #: can only escalate an allow to a prompt, never loosen a deny.
+    force_ask: bool = False
 
 
 def _search_sources(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
@@ -291,6 +295,7 @@ def registry_families(
         ("databases", database_tools(db, context)),
         ("mcp", mcp_tools(db, context)),
         ("sandbox", sandbox_tools(db, context)),
+        ("sandbox_tools", sandbox_custom_tools(db, context)),
     ]
 
 
@@ -377,5 +382,18 @@ def sandbox_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
     simply has no run tools rather than tools that fail on first use.
     """
     from .sandbox import registry_tools
+
+    return registry_tools(db, context)
+
+
+def sandbox_custom_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
+    """Workspace-defined tools executed in the session sandbox (0036).
+
+    A separate family from the builtin run_* tools: these are authored per
+    workspace, each carrying its own egress allowlist and approval policy. Empty
+    when SANDBOX_ENABLED=0 for the same reason the builtin family is — no
+    execution provider means no tool that could run.
+    """
+    from .sandbox.custom import registry_tools
 
     return registry_tools(db, context)

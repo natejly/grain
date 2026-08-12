@@ -6,6 +6,7 @@ import type {
   AdminBudget,
   AdminMcpServer,
   AdminMember,
+  AdminObservability,
   AdminSandboxSession,
   AdminStorage,
   AdminUsage,
@@ -15,6 +16,7 @@ import { RefreshCw, ShieldCheck, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useWorkspaceSelection } from "../workspace-selection";
+import { ObservabilityPanel } from "./admin-observability";
 import { UsagePanel } from "./admin-usage";
 import { BudgetPanel } from "./budget";
 import { describeError, formatBytes, formatRelative } from "./shared";
@@ -38,6 +40,8 @@ export type AdminViewProps = {
 const AUDIT_PAGE = 25;
 /** Long enough to cover a billing month; the API allows 1–365. */
 const DEFAULT_USAGE_DAYS = 30;
+/** A day is the window an owner opens this on; the API allows 1–720 hours. */
+const DEFAULT_OBS_HOURS = 24;
 
 type AdminData = {
   members: AdminMember[];
@@ -47,6 +51,7 @@ type AdminData = {
   storage: AdminStorage;
   usage: AdminUsage;
   budget: AdminBudget;
+  observability: AdminObservability;
 };
 
 /** A status → count map as a row of pills, in a stable order. */
@@ -96,14 +101,15 @@ export function AdminView({ setError }: AdminViewProps) {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState("");
   const [usageDays, setUsageDays] = useState(DEFAULT_USAGE_DAYS);
+  const [obsHours, setObsHours] = useState(DEFAULT_OBS_HOURS);
 
-  // The usage window is part of `load` rather than a fetch of its own: changing
-  // it re-runs the same six aggregates through the same 403 handling, and one
+  // Both windows are part of `load` rather than fetches of their own: changing
+  // either re-runs the same aggregates through the same 403 handling, and one
   // path that can fail is easier to keep right than two. The old panels stay on
   // screen while it re-fetches, because `setData` only fires on success.
   const load = useCallback(async () => {
     try {
-      const [members, activity, sandboxes, mcpServers, storage, usage, budget] =
+      const [members, activity, sandboxes, mcpServers, storage, usage, budget, observability] =
         await Promise.all([
           api.listAdminMembers(),
           api.getAdminActivity(),
@@ -112,8 +118,18 @@ export function AdminView({ setError }: AdminViewProps) {
           api.getAdminStorage(),
           api.getAdminUsage(usageDays),
           api.getAdminBudget(),
+          api.getAdminObservability(obsHours),
         ]);
-      setData({ members, activity, sandboxes, mcpServers, storage, usage, budget });
+      setData({
+        members,
+        activity,
+        sandboxes,
+        mcpServers,
+        storage,
+        usage,
+        budget,
+        observability,
+      });
       setForbidden(false);
     } catch (caught) {
       // 403 is the API answering, not failing: this member is not an owner.
@@ -122,7 +138,7 @@ export function AdminView({ setError }: AdminViewProps) {
     } finally {
       setLoaded(true);
     }
-  }, [setError, usageDays]);
+  }, [setError, usageDays, obsHours]);
 
   useEffect(() => {
     void load();
@@ -207,7 +223,8 @@ export function AdminView({ setError }: AdminViewProps) {
     );
   }
 
-  const { members, activity, sandboxes, mcpServers, storage, usage, budget } = data;
+  const { members, activity, sandboxes, mcpServers, storage, usage, budget, observability } =
+    data;
   const live = sandboxes.filter((row) => ["running", "paused"].includes(row.status));
 
   return (
@@ -240,6 +257,15 @@ export function AdminView({ setError }: AdminViewProps) {
           onSaved={(saved) =>
             setData((current) => (current ? { ...current, budget: saved } : current))
           }
+        />
+
+        {/* Full width under the money panels: it is about the same run history,
+            asked as a question of health rather than cost, and its bars and
+            tables want the room for the same reason the spend breakdown does. */}
+        <ObservabilityPanel
+          observability={observability}
+          hours={obsHours}
+          onHoursChange={setObsHours}
         />
 
         <Panel title="Members and roles" count={members.length}>

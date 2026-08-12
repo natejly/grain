@@ -31,6 +31,7 @@ same query would be a second place for the membership filter to be wrong.
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -55,9 +56,11 @@ from ..models import (
     MemoryItem,
     ModelUsage,
     Run,
+    RunEvent,
     SandboxSession,
     Source,
     User,
+    UserSession,
     WorkspaceBudget,
 )
 from ..schemas import ApiModel
@@ -68,7 +71,7 @@ from ..services.agent_loop import (
     policy_scope_for_run,
 )
 from ..services.audit import record_audit
-from ..services.runs import resume_run_after_budget
+from ..services.runs import TERMINAL_RUN_STATES, resume_run_after_budget
 from ..services.sandbox import session as sessions
 from ..services.sandbox.types import SandboxError
 
@@ -1076,4 +1079,297 @@ def set_budget(
         background_tasks.add_task(resume_run_after_budget, run.id)
     return _budget_out(
         db, workspace_id=actor.workspace_id, settings=settings, resumed=resumed
+    )
+
+
+# --------------------------------------------------------------------------
+# Observability (latency, throughput, errors, liveness, retention)
+#
+# Everything here is *derived* from rows the app already writes — no new column,
+# no write on the hot path, so a run behaves identically whether or not this page
+# is ever opened. Total wall latency is `updated_at − created_at` on a terminal
+# run (the terminal write is the last write). TTFT is the first `message.delta`
+# event's timestamp minus the run's `created_at`, measured from the same origin
+# as total so queue + retrieval + recall latency is folded into the
+# user-perceived number and no second event query is needed.
+#
+# The cost is entirely at read time and bounded on both axes: the window is
+# capped at 30 days and the runs sampled for percentiles are capped at
+# MAX_LATENCY_RUNS, so the one scan over the highest-volume table (run_events for
+# TTFT) is restricted to that already-bounded set of run ids. Like every other
+# panel here it carries only ids, counts and timings — no content, no secrets,
+# and retention is counts of distinct users, never their ids.
+
+# Runs sampled for the latency distributions and throughput buckets. The true
+# count of runs in the window is reported separately (`runs_in_window`); this
+# only bounds the per-run millisecond lists and the single run_events scan.
+MAX_LATENCY_RUNS = 2000
+RECENT_FAILURES_LIMIT = 20
+LIVE_RUNS_LIMIT = 50
+# Equal-width time buckets for the throughput sparkline, computed in Python so
+# the route is portable across SQLite and Postgres (no date_trunc).
+THROUGHPUT_BUCKETS = 24
+# A run parked on an approval or a budget ceiling is waiting on a person, not
+# occupying a worker; "live" is only what is actually executing or draining.
+LIVE_RUN_STATES = ("queued", "running", "cancelling")
+
+
+class AdminLatencyStatsOut(ApiModel):
+    """One metric's distribution. Every percentile is None on an empty sample —
+    never 0, which would read as an instant response rather than no data."""
+
+    samples: int
+    p50_ms: Optional[int]
+    p90_ms: Optional[int]
+    p99_ms: Optional[int]
+    max_ms: Optional[int]
+
+
+class AdminThroughputBucketOut(ApiModel):
+    start: datetime
+    count: int
+
+
+class AdminLiveRunOut(ApiModel):
+    run_id: str
+    conversation_id: str
+    agent_id: str
+    status: str
+    created_at: datetime
+    age_seconds: int
+
+
+class AdminFailedRunOut(ApiModel):
+    run_id: str
+    conversation_id: str
+    # Clipped like every other free-text preview on this router.
+    error: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminRetentionOut(ApiModel):
+    """Distinct active members over three windows. Counts only — a user id here
+    would be a foreign identifier this route has no reason to emit."""
+
+    dau: int
+    wau: int
+    mau: int
+
+
+class AdminObservabilityOut(ApiModel):
+    window_hours: int
+    since: datetime
+    # Completed/terminal runs that produced at least one streamed delta.
+    ttft: AdminLatencyStatsOut
+    # Terminal runs (completed, failed, cancelled).
+    total: AdminLatencyStatsOut
+    runs_in_window: int
+    throughput: List[AdminThroughputBucketOut]
+    completed: int
+    failed: int
+    cancelled: int
+    # failed / (completed + failed + cancelled); 0.0 when there are no terminal
+    # runs, so the panel never divides by zero.
+    error_rate: float
+    recent_failures: List[AdminFailedRunOut]
+    live_runs: List[AdminLiveRunOut]
+    retention: AdminRetentionOut
+
+
+def _latency_stats(values: List[int]) -> AdminLatencyStatsOut:
+    """Nearest-rank percentiles over a per-run millisecond list, in Python.
+
+    SQLite has no `percentile_cont` and this app runs on both backends, so the
+    distribution is computed here rather than in SQL. An empty sample yields
+    None everywhere — the caller must be able to tell "no runs" from "instant".
+    """
+    if not values:
+        return AdminLatencyStatsOut(
+            samples=0, p50_ms=None, p90_ms=None, p99_ms=None, max_ms=None
+        )
+    ordered = sorted(values)
+    count = len(ordered)
+
+    def rank(percentile: int) -> int:
+        # Nearest-rank: the value at ceil(p/100 * n), 1-indexed, clamped in.
+        index = math.ceil(percentile / 100 * count) - 1
+        return ordered[min(max(index, 0), count - 1)]
+
+    return AdminLatencyStatsOut(
+        samples=count,
+        p50_ms=rank(50),
+        p90_ms=rank(90),
+        p99_ms=rank(99),
+        max_ms=ordered[-1],
+    )
+
+
+@router.get("/observability", response_model=AdminObservabilityOut)
+def get_observability(
+    hours: int = Query(default=24, ge=1, le=720),
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> AdminObservabilityOut:
+    """Latency, throughput, errors, live runs and retention over a window.
+
+    One capped select of the window's runs feeds latency, throughput and the
+    error counts; a single grouped MIN over `run_events` — restricted to those
+    run ids — gives TTFT; retention reaches `user_sessions` only through the
+    memberships join, so it stays workspace-scoped over a table that carries no
+    workspace of its own.
+    """
+    workspace = actor.workspace_id
+    now = utcnow()
+    since = now - timedelta(hours=hours)
+
+    windowed = list(
+        db.scalars(
+            select(Run)
+            .where(Run.workspace_id == workspace, Run.created_at >= since)
+            .order_by(Run.created_at.desc(), Run.id.desc())
+            .limit(MAX_LATENCY_RUNS)
+        )
+    )
+    runs_in_window = _total(
+        db, Run, Run.workspace_id == workspace, Run.created_at >= since
+    )
+
+    # Total wall latency: terminal runs only, where updated_at is the completion.
+    # This is wall-clock, so a run that streamed its first token in 200ms but then
+    # parked for hours on an approval or the budget ceiling contributes those hours
+    # here — deliberately, since it is the true end-to-end time. TTFT below is the
+    # responsiveness metric that is not distorted by a park.
+    total_values = [
+        int((run.updated_at - run.created_at).total_seconds() * 1000)
+        for run in windowed
+        if run.status in TERMINAL_RUN_STATES
+    ]
+
+    # TTFT: first streamed delta minus the run's origin, for the windowed runs
+    # that produced one. A denied or parked run emits no delta and is excluded.
+    run_ids = [run.id for run in windowed]
+    first_delta: Dict[str, datetime] = {}
+    if run_ids:
+        first_delta = {
+            str(rid): stamp
+            for rid, stamp in db.execute(
+                select(RunEvent.run_id, func.min(RunEvent.created_at))
+                .where(
+                    RunEvent.workspace_id == workspace,
+                    RunEvent.event_type == "message.delta",
+                    RunEvent.run_id.in_(run_ids),
+                )
+                .group_by(RunEvent.run_id)
+            ).all()
+        }
+    ttft_values = [
+        max(0, int((first_delta[run.id] - run.created_at).total_seconds() * 1000))
+        for run in windowed
+        if run.id in first_delta
+    ]
+
+    # Throughput: an exact count per equal-width bucket over the WHOLE window.
+    # Not derived from `windowed` — that list is capped at MAX_LATENCY_RUNS for the
+    # percentile sample, so bucketing it would silently undercount a busy workspace
+    # while the sparkline claims exact counts. One bounded COUNT per bucket
+    # (THROUGHPUT_BUCKETS of them) is exact and portable, and never loads a row.
+    span = (now - since) / THROUGHPUT_BUCKETS
+    throughput = []
+    for i in range(THROUGHPUT_BUCKETS):
+        start = since + span * i
+        conditions = [Run.workspace_id == workspace, Run.created_at >= start]
+        # The last bucket stays open-ended so a run created at the query instant
+        # (created_at == now) is counted rather than dropped by a strict upper bound.
+        if i < THROUGHPUT_BUCKETS - 1:
+            conditions.append(Run.created_at < since + span * (i + 1))
+        throughput.append(
+            AdminThroughputBucketOut(start=start, count=_total(db, Run, *conditions))
+        )
+
+    status_counts = _counts(
+        db, Run.status, Run.workspace_id == workspace, Run.created_at >= since
+    )
+    completed = status_counts.get("completed", 0)
+    failed = status_counts.get("failed", 0)
+    cancelled = status_counts.get("cancelled", 0)
+    terminal = completed + failed + cancelled
+    error_rate = failed / terminal if terminal else 0.0
+
+    failures = list(
+        db.scalars(
+            select(Run)
+            .where(Run.workspace_id == workspace, Run.status == "failed")
+            .order_by(Run.updated_at.desc(), Run.id.desc())
+            .limit(RECENT_FAILURES_LIMIT)
+        )
+    )
+    live = list(
+        db.scalars(
+            select(Run)
+            .where(
+                Run.workspace_id == workspace,
+                Run.status.in_(LIVE_RUN_STATES),
+            )
+            .order_by(Run.created_at.desc(), Run.id.desc())
+            .limit(LIVE_RUNS_LIMIT)
+        )
+    )
+
+    def _active_members(days: int) -> int:
+        # `user_sessions` carries no workspace, so activity is joined to this
+        # workspace's memberships. A user active in *another* workspace still counts
+        # here if they are also a member of this one — so for a person in several
+        # workspaces this is an upper bound on this workspace's own activity, not an
+        # exact attribution. Named here rather than hidden.
+        cutoff = now - timedelta(days=days)
+        return int(
+            db.scalar(
+                select(func.count(func.distinct(UserSession.user_id)))
+                .join(Membership, Membership.user_id == UserSession.user_id)
+                .where(
+                    Membership.workspace_id == workspace,
+                    UserSession.last_seen_at >= cutoff,
+                )
+            )
+            or 0
+        )
+
+    return AdminObservabilityOut(
+        window_hours=hours,
+        since=since,
+        ttft=_latency_stats(ttft_values),
+        total=_latency_stats(total_values),
+        runs_in_window=runs_in_window,
+        throughput=throughput,
+        completed=completed,
+        failed=failed,
+        cancelled=cancelled,
+        error_rate=error_rate,
+        recent_failures=[
+            AdminFailedRunOut(
+                run_id=run.id,
+                conversation_id=run.conversation_id,
+                error=_clip(run.error),
+                created_at=run.created_at,
+                updated_at=run.updated_at,
+            )
+            for run in failures
+        ],
+        live_runs=[
+            AdminLiveRunOut(
+                run_id=run.id,
+                conversation_id=run.conversation_id,
+                agent_id=run.agent_id,
+                status=run.status,
+                created_at=run.created_at,
+                age_seconds=int((now - run.created_at).total_seconds()),
+            )
+            for run in live
+        ],
+        retention=AdminRetentionOut(
+            dau=_active_members(1),
+            wau=_active_members(7),
+            mau=_active_members(30),
+        ),
     )

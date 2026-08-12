@@ -11,7 +11,15 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..database import get_db
-from ..models import AgentToolCall, Run, Tool, ToolCall, ToolPolicy, WorkflowRun
+from ..models import (
+    AgentToolCall,
+    Conversation,
+    Run,
+    Tool,
+    ToolCall,
+    ToolPolicy,
+    WorkflowRun,
+)
 from ..schemas import (
     AgentApprovalRequest,
     AgentToolCallOut,
@@ -22,6 +30,7 @@ from ..schemas import (
     ToolPolicyOut,
     ToolPolicyRequest,
 )
+from ..services import conversations
 from ..services.agent_loop import open_document, policy_scope_for_run
 from ..services.artifacts import documents, proposals
 from ..services.audit import record_audit
@@ -132,7 +141,14 @@ def list_agent_tool_calls(
     rows = db.execute(
         select(AgentToolCall, Run.conversation_id)
         .join(Run, Run.id == AgentToolCall.run_id)
-        .where(AgentToolCall.workspace_id == actor.workspace_id)
+        # LEFT JOIN so a run with no chat conversation (automation) still lists.
+        .outerjoin(Conversation, Conversation.id == Run.conversation_id)
+        .where(
+            AgentToolCall.workspace_id == actor.workspace_id,
+            # Within-workspace gate: a personal thread's parked call must not
+            # list for another member. Automation and visible threads still do.
+            conversations.run_activity_predicate(actor_user_id=actor.user_id),
+        )
         .order_by(AgentToolCall.created_at.desc())
         .limit(50)
     ).all()
@@ -148,7 +164,14 @@ def list_tool_calls(
         select(ToolCall, Tool, Run.conversation_id)
         .join(Tool, Tool.id == ToolCall.tool_id)
         .join(Run, Run.id == ToolCall.run_id)
-        .where(ToolCall.workspace_id == actor.workspace_id)
+        # LEFT JOIN so a run with no chat conversation (automation) still lists.
+        .outerjoin(Conversation, Conversation.id == Run.conversation_id)
+        .where(
+            ToolCall.workspace_id == actor.workspace_id,
+            # Within-workspace gate: a personal thread's parked call must not
+            # list for another member. Automation and visible threads still do.
+            conversations.run_activity_predicate(actor_user_id=actor.user_id),
+        )
         .order_by(ToolCall.created_at.desc())
         .limit(50)
     ).all()
@@ -185,6 +208,16 @@ def decide_tool_call(
         )
     )
     if run is None:
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    # A member must not decide a call parked on another member's personal thread:
+    # its run resolves by workspace_id but its conversation is not visible to
+    # them. Automation and shared/own/document threads pass — same gate as list.
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
+    ):
         raise HTTPException(status_code=404, detail="Tool call not found")
     replay = find_replay(
         db,
@@ -503,6 +536,16 @@ def decide_agent_tool_call(
         )
     )
     if run is None:
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    # A member must not decide a call parked on another member's personal thread:
+    # its run resolves by workspace_id but its conversation is not visible to
+    # them. Automation and shared/own/document threads pass — same gate as list.
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
+    ):
         raise HTTPException(status_code=404, detail="Tool call not found")
     replay = find_replay(
         db,

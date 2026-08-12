@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,19 +17,16 @@ from ..models import (
     Conversation,
     Document,
     Run,
+    RunEvent,
     ToolPolicy,
     WorkflowRun,
 )
-from . import budget, usage
+from . import budget, screen, skills, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
+from .harness import ModelStep, resolve_harness
 from .llm_tools import ToolContext, ToolResult, ToolSpec, build_registry
-from .model import (
-    CHAT_INSTRUCTIONS,
-    _openai_client,
-    _openai_input,
-    stream_agent_response,
-)
+from .model import CHAT_INSTRUCTIONS, _openai_input
 from .retrieval import Evidence
 from .usage import usage_scope
 from .web_search import (
@@ -42,16 +39,18 @@ from .web_search import (
 
 MAX_ITERATIONS = 6
 
-# A model step takes (input_items, tools, instructions) and returns an iterable of
-# ("delta", text) events followed by ("completed", response), where response
-# exposes .output (function calls have .type == "function_call", .name, .call_id,
-# .arguments) and .output_text. Injectable so tests can script a model offline.
-ModelStep = Callable[[List[Any], List[Dict[str, Any]], str], Iterable[Tuple[str, Any]]]
-
 DENIAL_OUTPUT = (
     "The user denied this tool call. Do not retry it. Continue using what you "
     "already have, and tell the user what you could not do."
 )
+
+#: The run event a prompt-injection hit writes. It is both the observability
+#: flag (visible in the activity feed and admin observability, like every other
+#: run event) AND the per-turn escalation signal: `approval_mode_for_run` reads
+#: it back to force a flagged turn to `ask_all`. Living on `run_events` is why
+#: this feature needs no migration and why the flag survives a park/resume in
+#: another process — the turn's history carries it.
+SCREEN_FLAGGED = "screen.flagged"
 
 
 @dataclass
@@ -199,27 +198,21 @@ def _default_model_step(
     How the turn is *billed* is not an argument, because this function is also
     the seam tests replace: it is carried by the `usage_scope` the caller has
     already opened, and read back inside `stream_agent_response`.
+
+    The provider branch itself lives in the harness registry now; this stays as
+    the thin injectable seam that resolves it, so every `model_step=` override
+    keeps its single point of interception.
     """
-    if settings.active_model_provider == "scripted":
-        from .scripted_model import scripted_model_step
-
-        return scripted_model_step(settings, prompt=run.prompt, evidence=evidence)
-
-    client = _openai_client(settings)
-
-    def step(
-        input_items: List[Any], tools: List[Dict[str, Any]], instructions: str
-    ) -> Iterable[Tuple[str, Any]]:
-        return stream_agent_response(
-            client,
-            settings,
-            user_id=run.created_by,
-            input_items=input_items,
-            tools=tools,
-            instructions=instructions,
-        )
-
-    return step
+    return resolve_harness(settings).build_step(
+        settings,
+        prompt=run.prompt,
+        user_id=run.created_by,
+        evidence=list(evidence),
+        # "" is the unset convention; None lets the harness fall back to the
+        # deployment defaults, so a run with no override is identical to today.
+        model=run.requested_model or None,
+        effort=run.requested_effort or None,
+    )
 
 
 def _tool_payload(
@@ -389,13 +382,24 @@ def evaluate_policy(
             base = "allow" if spec.read_only else "ask"
 
     if scope != CHAT_SCOPE or mode == ASK_WRITES or base == "deny":
-        return Verdict(policy=base)
-    if mode == ASK_ALL:
+        result = Verdict(policy=base)
+    elif mode == ASK_ALL:
+        result = Verdict(policy="ask")
+    else:
+        # auto_writes. `by_mode` is set only where the mode changed the answer: a
+        # tool a row already allowed was not let through by the bypass, and
+        # saying it was would put a claim on the audit row that the policy table
+        # contradicts.
+        result = Verdict(policy="allow", by_mode=AUTO_WRITES if base == "ask" else "")
+
+    # A custom sandbox tool with approval="always" carries `force_ask`, which may
+    # only tighten: any `allow` this arrives at — from a policy row, the tool's
+    # own default, or an `auto_writes` bypass, in chat scope or workflow scope —
+    # becomes an `ask`. A `deny` is never reached here (it returned above), so a
+    # prohibition still prohibits, mirroring how a deny survives every mode.
+    if spec is not None and spec.force_ask and result.policy == "allow":
         return Verdict(policy="ask")
-    # auto_writes. `by_mode` is set only where the mode changed the answer: a
-    # tool a row already allowed was not let through by the bypass, and saying it
-    # was would put a claim on the audit row that the policy table contradicts.
-    return Verdict(policy="allow", by_mode=AUTO_WRITES if base == "ask" else "")
+    return result
 
 
 def resolve_policy(
@@ -419,8 +423,94 @@ def resolve_policy(
     ).policy
 
 
+def _run_was_flagged(db: Session, run: Run) -> bool:
+    """Whether a prompt-injection screen has flagged this run's turn.
+
+    A cheap existence query over `run_events`. One hit is enough — a turn that
+    ingested injected content stays flagged for the rest of its tool calls, which
+    is the point: the escalation must not lapse just because the *next* source
+    the same turn reads happens to be clean.
+    """
+    return (
+        db.scalar(
+            select(RunEvent.id)
+            .where(
+                RunEvent.run_id == run.id,
+                RunEvent.event_type == SCREEN_FLAGGED,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _screen(
+    db: Session, run: Run, *, kind: str, text: str, settings: Settings
+) -> None:
+    """Screen one untrusted string; record a hit and, in enforce, flag the run.
+
+    Called at each injection point — the retrieved passages and open document at
+    turn start, tool/MCP output as it is folded back, web_search results as they
+    are harvested. `classify` decides nothing about the run; the mode is applied
+    here:
+
+    - A clean verdict records nothing and changes nothing.
+    - An injection verdict, or a `ScreenError` (fail-closed: a backend that could
+      not answer is treated as a hit, never a silent pass), writes a
+      `screen.flagged` event + audit row. The event is the escalation signal
+      `approval_mode_for_run` reads, and it is written in both modes so a hit is
+      observable either way — shadow simply never escalates, because that read is
+      gated on enforce.
+
+    Off by default: with `screen_enabled` false this returns before any classify
+    call, so a turn is byte-identical to today.
+    """
+    if not settings.screen_enabled:
+        return
+    body = text or ""
+    if not body.strip():
+        return
+    try:
+        verdict = screen.classify(body, kind=kind, settings=settings)
+        if verdict.label != "injection":
+            return
+        score: Optional[float] = round(verdict.score, 3)
+        reason = "injection"
+    except screen.ScreenError as exc:
+        score = None
+        reason = f"backend_error: {str(exc)[:200]}"
+    enforced = settings.screen_mode == "enforce"
+    payload: Dict[str, Any] = {
+        "kind": kind,
+        "backend": settings.screen_backend,
+        "mode": settings.screen_mode,
+        "score": score,
+        "reason": reason,
+        # Whether this hit will actually gate the turn. True only in enforce;
+        # shadow records the identical flag and leaves the turn unchanged.
+        "enforced": enforced,
+    }
+    append_event(
+        db,
+        workspace_id=run.workspace_id,
+        run_id=run.id,
+        event_type=SCREEN_FLAGGED,
+        payload=payload,
+    )
+    record_audit(
+        db,
+        workspace_id=run.workspace_id,
+        actor_id=run.created_by,
+        action="screen.flagged",
+        resource_type="run",
+        resource_id=run.id,
+        detail=payload,
+    )
+    db.commit()
+
+
 def approval_mode_for_run(
-    db: Session, run: Run, *, scope: PolicyScope
+    db: Session, run: Run, *, scope: PolicyScope, settings: Optional[Settings] = None
 ) -> ApprovalMode:
     """The mode governing this run's next tool call.
 
@@ -433,9 +523,21 @@ def approval_mode_for_run(
     which ignores the mode at workflow scope regardless of what it is handed). A
     workflow's backing Run has a Conversation of its own, so a single missing
     guard would let a mode reach a run nobody is watching.
+
+    The prompt-injection escalation lands here rather than in a parallel gate: a
+    turn flagged by the screen is forced to `ask_all` — the strictest posture,
+    every tool call parks — which *overrides* the conversation's stored mode,
+    `auto_writes` included. That is the whole safety argument for the escalation:
+    an injection cannot ride a thread's bypass into an unreviewed write. Gated on
+    enforce mode (shadow records the same flag but never escalates) and on chat
+    scope like the rest of this function. Read per call, so a hit recorded from a
+    tool output mid-turn escalates the very next call in the same turn.
     """
     if scope != CHAT_SCOPE or not run.conversation_id:
         return ASK_WRITES
+    settings = settings or get_settings()
+    if settings.screen_mode == "enforce" and _run_was_flagged(db, run):
+        return ASK_ALL
     conversation = db.get(Conversation, run.conversation_id)
     if conversation is None or conversation.workspace_id != run.workspace_id:
         return ASK_WRITES
@@ -482,7 +584,14 @@ def policy_scope_for_run(db: Session, run: Run) -> PolicyScope:
     injection scenario ends at an agent node honouring instructions it read out
     of a fetched document, and an agent node resolving at chat scope would
     inherit the very standing grant the scope split exists to withhold.
+
+    A cron task run has no WorkflowRun backing it — a fresh turn *is* its
+    execution — but it is no less unattended, so `cron_id` classifies it as
+    `workflow` by construction. The whole policy/approval/billing chain then
+    treats it like a scheduled workflow without a second code path.
     """
+    if run.cron_id:
+        return WORKFLOW_SCOPE
     backing = db.scalar(select(WorkflowRun.id).where(WorkflowRun.run_id == run.id))
     return WORKFLOW_SCOPE if backing is not None else CHAT_SCOPE
 
@@ -795,6 +904,7 @@ def _drain_pending(
     registry: Dict[str, ToolSpec],
     context: ToolContext,
     scope: PolicyScope,
+    settings: Settings,
 ) -> Optional[Outcome]:
     """Run queued calls until one needs approval. None means the queue emptied."""
     while state.pending_calls:
@@ -815,7 +925,7 @@ def _drain_pending(
                 workspace_id=run.workspace_id,
                 spec=spec,
                 scope=scope,
-                mode=approval_mode_for_run(db, run, scope=scope),
+                mode=approval_mode_for_run(db, run, scope=scope, settings=settings),
             )
             if verdict.policy == "ask" and spec is not None:
                 return _park_for_approval(db, run, state, call, spec, context)
@@ -831,6 +941,22 @@ def _drain_pending(
             existing_id=call.get("tool_call_id"),
             denied=decision == "denied",
             decided_by=decided_by,
+        )
+        # Tool/MCP output is untrusted content re-injected as function_call_output
+        # — screened before it is folded in, so a hit escalates the *next* call in
+        # this same queue (approval_mode_for_run is re-read per call above). Both
+        # halves the model reads are screened: the rendered content AND the tool's
+        # evidence excerpts (extended into state.evidence below and spliced by
+        # _render_result), so a tool that hides an injection in an excerpt rather
+        # than the body does not slip past.
+        _screen(
+            db,
+            run,
+            kind="tool_output",
+            text="\n\n".join(
+                [result.content or "", *(item.excerpt for item in result.evidence)]
+            ),
+            settings=settings,
         )
         state.input_items.append(
             {
@@ -879,6 +1005,19 @@ def _apply_web_search(
             payload=outcome.event_payload(),
         )
         db.commit()
+    # The harvested excerpts are untrusted content spliced into the turn. Screen
+    # them too — the weakest vector (the provider already ingested the page text
+    # model-side and the excerpt is a slice of the model's own answer), but a
+    # source class exempt from the screen is a gap, so it is covered for
+    # completeness.
+    if outcome.evidence:
+        _screen(
+            db,
+            run,
+            kind="web_search",
+            text="\n\n".join(item.excerpt for item in outcome.evidence),
+            settings=settings,
+        )
     return anchor_citations(text, outcome.anchors)
 
 
@@ -927,6 +1066,14 @@ def resolve_directives(db: Session, run: Run) -> AgentDirectives:
                 parsed = None
             if isinstance(parsed, list):
                 allowed = frozenset(str(item) for item in parsed)
+    # A skill invoked for this turn is spliced onto the agent's voice, not in
+    # place of it: same instruction path, resolved once per loop entry, so a
+    # turn that parks and resumes re-injects the identical body. A deleted skill
+    # renders to "" and degrades to no injection, exactly like the missing agent.
+    if run.skill_id:
+        injected = skills.render_for_run(db, run)
+        if injected:
+            instructions = f"{instructions}\n\n{injected}"
     return AgentDirectives(instructions=instructions, allowed=allowed)
 
 
@@ -945,7 +1092,13 @@ def _advance(
     tools = _tool_payload(registry, settings)
     while True:
         blocked = _drain_pending(
-            db, run, state, registry=registry, context=context, scope=scope
+            db,
+            run,
+            state,
+            registry=registry,
+            context=context,
+            scope=scope,
+            settings=settings,
         )
         if blocked is not None:
             return blocked
@@ -1034,10 +1187,18 @@ def run_agent_turn(
     unclean stop, and without this the recovery sweep would staple a chat turn
     onto an automation. Failing loudly is the correct outcome — the workflow run
     is the record that matters, and it can be re-run.
+
+    The guard keys on the *actual* danger — a WorkflowRun backing the run — not
+    on policy scope. A cron task run is at `workflow` scope (via `cron_id`) yet
+    has no DAG: a fresh turn is its correct execution and recovery, so it must be
+    allowed through here exactly as a chat run is.
     """
     settings = settings or get_settings()
     scope = policy_scope_for_run(db, run)
-    if not workflow_node and scope == WORKFLOW_SCOPE:
+    backs_workflow = (
+        db.scalar(select(WorkflowRun.id).where(WorkflowRun.run_id == run.id)) is not None
+    )
+    if not workflow_node and backs_workflow:
         raise RuntimeError("This run belongs to a workflow; start it through the executor")
     document = open_document(db, run)
     context = ToolContext(
@@ -1073,6 +1234,30 @@ def run_agent_turn(
         user_id=run.created_by,
         operation=_billing_operation(scope),
     ):
+        # The turn-start injection points: the retrieved passages, the open
+        # document, and the long-term memory are all content the user did not
+        # type. Screened once here, before the first model call, and inside the
+        # usage scope so the builtin classifier's own spend is billed to this
+        # run. A hit flags the run; enforce then reads that flag on every tool
+        # call below. Resumes do not re-screen — the flag is a run event that
+        # persists across a park/resume. The user's own `run.prompt` is trusted
+        # input and is deliberately not screened as an attack on itself.
+        if settings.screen_enabled:
+            _screen(
+                db,
+                run,
+                kind="evidence",
+                text="\n\n".join(item.excerpt for item in evidence),
+                settings=settings,
+            )
+            _screen(
+                db,
+                run,
+                kind="document",
+                text=document.content if document else "",
+                settings=settings,
+            )
+            _screen(db, run, kind="memory", text=memory_context, settings=settings)
         outcome = _advance(
             db,
             run,

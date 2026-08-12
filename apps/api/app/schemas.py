@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .config import ReasoningEffort
+
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -29,6 +31,28 @@ class ModelProviderStatus(BaseModel):
     provider: Literal["openai", "scripted"]
     configured: bool
     model: str
+    # The per-turn controls the composer offers. `selectable_models` is the
+    # deployment's allow-list (the scripted double lists only itself); the client
+    # must not send a model outside it. `reasoning_efforts` is the effort ladder
+    # for the dropdown and `default_effort` the one pre-selected — the deployment
+    # default, so an untouched composer reproduces today's behaviour exactly.
+    selectable_models: List[str] = []
+    reasoning_efforts: List[str] = []
+    default_effort: str = ""
+
+
+class ScreenStatus(BaseModel):
+    """The prompt-injection screen's posture — a minimal admin indicator.
+
+    Deliberately does NOT carry `screen_proxy_url`: the proxy endpoint is a
+    server-side destination, in the same class as WORKFLOW_CRON_SECRET, and
+    bootstrap is a client surface. Enabled/mode/backend is all a client needs to
+    show whether untrusted content is being screened and how hard.
+    """
+
+    enabled: bool
+    mode: Literal["shadow", "enforce"]
+    backend: Literal["builtin", "proxy"]
 
 
 class BootstrapResponse(ApiModel):
@@ -36,6 +60,7 @@ class BootstrapResponse(ApiModel):
     feature_flags: Dict[str, bool]
     default_agent_id: str
     model_provider: ModelProviderStatus
+    screen: ScreenStatus
 
 
 class SignupIn(ApiModel):
@@ -117,6 +142,19 @@ class DevOverrideOut(ApiModel):
     handle: str = ""
 
 
+class PlaygroundOut(ApiModel):
+    """Whether the anonymous "try it" mode is available.
+
+    Public and unauthenticated for the same reason as DevOverrideOut: the login
+    screen has to know whether to render the "Try the playground" button before
+    any session exists. Not folded into /api/bootstrap, which is auth-gated and
+    therefore unreachable pre-login. Off by default and outside an opted-in
+    deployment.
+    """
+
+    enabled: bool
+
+
 class AgentOut(ApiModel):
     id: str
     name: str
@@ -152,6 +190,75 @@ class AgentUpdate(BaseModel):
     clear_allowed_tools: bool = False
 
 
+class SkillArg(BaseModel):
+    """One skill parameter: the workflow `InputSpec` shape, minus workflow-only bits.
+
+    A skill runs inside one chat turn, so it needs no `object`/`array` inputs and
+    no reference grammar — only the scalar kinds a person types into a composer
+    field. `required`/`default`/`choices` carry the same meaning they do for a
+    workflow input: whether a run may omit it, what pre-fills it, and the closed
+    set it must belong to.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=60)
+    type: Literal["string", "number", "integer", "boolean"] = "string"
+    label: str = Field(default="", max_length=120)
+    description: str = Field(default="", max_length=500)
+    required: bool = True
+    default: Any = None
+    choices: List[Any] = Field(default_factory=list)
+
+
+class SkillOut(ApiModel):
+    id: str
+    name: str
+    title: str
+    description: str = ""
+    body: str
+    #: Deserialized from `Skill.args_json`.
+    args: List[SkillArg] = []
+    shared: bool = False
+    version: int
+    #: True when the caller may toggle `shared` (owner/admin). Lets the editor
+    #: disable the control rather than surprise a member with a 403.
+    can_share: bool = False
+    #: True when the caller authored it; a member sees shared skills read-only.
+    can_edit: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=500)
+    body: str = Field(min_length=1, max_length=20000)
+    args: List[SkillArg] = Field(default_factory=list, max_length=20)
+    #: Owner/admin only. A non-owner sending shared=True is refused 403 by
+    #: create_skill — the sharing gate is enforced server-side, not silently.
+    shared: bool = False
+
+
+class SkillUpdate(BaseModel):
+    """A partial edit. None means "leave alone" on every field."""
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    description: Optional[str] = Field(default=None, max_length=500)
+    body: Optional[str] = Field(default=None, min_length=1, max_length=20000)
+    args: Optional[List[SkillArg]] = Field(default=None, max_length=20)
+    #: Owner-only; a member sending it is refused 403.
+    shared: Optional[bool] = None
+
+
+class SkillVersionOut(ApiModel):
+    id: str
+    version: int
+    title: str
+    created_at: datetime
+
+
 class ToolInfoOut(ApiModel):
     """One registry tool, for the provisioning checklist."""
 
@@ -183,8 +290,26 @@ class ConversationOut(ApiModel):
     document_id: str = ""
     #: ask_writes | ask_all | auto_writes, governing this thread and no other.
     approval_mode: ApprovalMode = "ask_writes"
+    #: Personal (False) vs shared (True). A shared thread is visible to every
+    #: member of the same workspace; a personal thread only to its creator.
+    shared: bool = False
+    #: True when the caller authored it (a personal thread only they can see).
+    owned: bool = False
+    #: True when the caller may toggle `shared` (creator or workspace owner) —
+    #: lets the rail disable the control rather than surprise a member with a 403.
+    can_share: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+class ConversationShareRequest(BaseModel):
+    """The body of `PUT /api/conversations/{id}/share`.
+
+    A single flag: sharing a thread is a one-bit within-workspace visibility
+    change (creator-private -> member-visible), owner-gated at the route.
+    """
+
+    shared: bool
 
 
 class ApprovalModeRequest(BaseModel):
@@ -248,12 +373,38 @@ class MessageOut(ApiModel):
     #: None means this answer was never checked — a denied tool call, a budget
     #: park — which is a different fact from "checked and found clean".
     citation_report: Optional[CitationCheck] = None
+    #: The member this message is attributed to; "" for pre-column messages.
+    sender_id: str = ""
+    #: That member's display name, resolved server-side (the members list is
+    #: owner-gated, so a plain member could not resolve it client-side). "" when
+    #: unattributed or the user row is gone.
+    sender_name: str = ""
     created_at: datetime
 
 
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     agent_id: Optional[str] = None
+    # Per-turn overrides, all optional — absent means the deployment defaults, so
+    # a client that never sends them behaves byte-identically to today.
+    #: Model to run this turn on. Free string here (pydantic cannot see the
+    #: allow-list), validated against `settings.selectable_models` in the endpoint.
+    model: Optional[str] = None
+    #: Reasoning effort for this turn. A `ReasoningEffort` Literal, so a value off
+    #: the ladder is refused as 422 by pydantic with no endpoint code.
+    effort: Optional[ReasoningEffort] = None
+    #: Shortcut for the lowest-latency *honest* effort. It maps to "low", not
+    #: "none": the small models reject "none" outright (see services/model.py), so
+    #: "fast" must not promise a setting some models cannot honour. An explicit
+    #: `effort` always wins over `fast`.
+    fast: bool = False
+    #: Invoke this skill for this turn only. Must be visible to the caller (own or
+    #: shared). Absent = today's behaviour exactly; the skill's body is spliced
+    #: into the turn's instructions and does not change the conversation.
+    skill_id: Optional[str] = None
+    #: Values for the skill's declared args, keyed by name. Validated against the
+    #: skill's `args` at send time, then substituted into the body before injection.
+    skill_args: Optional[Dict[str, Any]] = None
 
 
 class RunOut(ApiModel):
@@ -602,6 +753,43 @@ class McpServerRequest(BaseModel):
     url: str = Field(default="", max_length=600)
     # stdio env vars or HTTP headers; encrypted at rest and never read back.
     secrets: Dict[str, str] = Field(default_factory=dict)
+
+
+class SandboxToolOut(ApiModel):
+    id: str
+    name: str
+    description: str
+    input_schema: Dict[str, Any]
+    argv: List[str]
+    egress_hosts: List[str]
+    approval: Literal["inherit", "always"]
+    enabled: bool
+    created_at: datetime
+
+
+class SandboxToolRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    description: str = ""
+    input_schema: Dict[str, Any] = Field(
+        default_factory=lambda: {"type": "object", "properties": {}}
+    )
+    argv: List[str] = Field(default_factory=list)
+    egress_hosts: List[str] = Field(default_factory=list)
+    approval: Literal["inherit", "always"] = "inherit"
+    enabled: bool = True
+
+
+class SandboxToolUpdate(BaseModel):
+    """A partial edit: every field optional so a PATCH can flip `enabled` alone
+    without resending the schema and argv it does not mean to change."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    description: Optional[str] = None
+    input_schema: Optional[Dict[str, Any]] = None
+    argv: Optional[List[str]] = None
+    egress_hosts: Optional[List[str]] = None
+    approval: Optional[Literal["inherit", "always"]] = None
+    enabled: Optional[bool] = None
 
 
 class AuditEventOut(ApiModel):

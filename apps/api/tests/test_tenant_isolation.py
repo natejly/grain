@@ -778,6 +778,9 @@ DB_GET_ALLOWLIST = {
     ("app/services/connectors/sync_jobs.py", "SyncJob"): "worker; scoped id",
     ("app/services/connectors/sync_jobs.py", "IntegrationAccount"): "read off the job",
     ("app/services/mcp/registry.py", "McpServer"): "id bound from a scoped query",
+    ("app/services/sandbox/custom.py", "SandboxTool"): (
+        "workspace re-checked on the next line before preview or execution"
+    ),
     ("app/services/workflows/executor.py", "WorkflowRun"): (
         "worker; id from an authorized route or the run's own row"
     ),

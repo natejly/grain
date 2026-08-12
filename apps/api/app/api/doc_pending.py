@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import AgentToolCall, Run
+from ..models import AgentToolCall, Conversation, Run
 from ..schemas import ApiModel
+from ..services import conversations
 from ..services.agent_loop import open_document
 from ..services.artifacts import proposals
 
@@ -79,11 +80,17 @@ def list_pending_document_edits(
     calls = db.scalars(
         select(AgentToolCall)
         .join(Run, Run.id == AgentToolCall.run_id)
+        # LEFT JOIN so a run with no chat conversation (automation) still lists.
+        .outerjoin(Conversation, Conversation.id == Run.conversation_id)
         .where(
             AgentToolCall.workspace_id == actor.workspace_id,
             AgentToolCall.status == "proposed",
             AgentToolCall.name.in_(DOCUMENT_TOOLS),
             Run.status == "waiting_for_approval",
+            # Within-workspace gate: another member's personal thread's proposed
+            # edits must not list here. A document thread stays visible via the
+            # `document_id != ""` clause, and automation via cron/workflow/no-conv.
+            conversations.run_activity_predicate(actor_user_id=actor.user_id),
         )
         .order_by(AgentToolCall.created_at.desc())
         .limit(MAX_PENDING)

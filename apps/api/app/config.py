@@ -4,9 +4,17 @@ from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The reasoning-effort ladder, named once so the setting and the per-turn request
+# override cannot drift. It was inline on `openai_reasoning_effort`; a second copy
+# on `SendMessageRequest` would be a Literal that silently disagreed the day this
+# list changed, and a request validated against the stale one is a 422 for a value
+# the model actually accepts (or worse, a pass for one it rejects).
+ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh", "max"]
 
 
 class ModelPrice(BaseModel):
@@ -63,9 +71,12 @@ class Settings(BaseSettings):
     scripted_model_script: Optional[Path] = None
     openai_api_key: Optional[SecretStr] = None
     openai_model: str = "gpt-5.5"
-    openai_reasoning_effort: Literal[
-        "none", "low", "medium", "high", "xhigh", "max"
-    ] = "low"
+    openai_reasoning_effort: ReasoningEffort = "low"
+    # Optional deployment override for the per-turn model allow-list, comma
+    # separated. Unset derives the list from the priced models (see
+    # `selectable_models`); set it when a deployment prices models it does not
+    # want user-selectable, or wants to offer one it has not priced.
+    selectable_models_raw: str = ""
     openai_timeout_seconds: float = 60.0
     openai_max_output_tokens: int = 1200
     openai_embedding_model: str = "text-embedding-3-small"
@@ -123,6 +134,30 @@ class Settings(BaseSettings):
     # "low" trades recall for latency. Search is on the interactive path and the
     # stated constraint is that spend is fine and latency is not.
     web_search_context_size: Literal["low", "medium", "high"] = "medium"
+
+    # --- Prompt-injection screen (threat model) ----------------------------
+    # A classifier over the UNTRUSTED content a turn ingests — retrieved
+    # passages, the open document, web_search results, tool/MCP output — none of
+    # which the user typed. Off by default, and that default is the fail-safe
+    # one: when off, `classify` is never called and a turn behaves byte-for-byte
+    # as it does today. Opt in, and `_guard_screen` then insists the config can
+    # actually run, the same discipline as `_guard_sandbox`.
+    screen_enabled: bool = False
+    # shadow — record every hit (event + audit) and change nothing. The
+    #          measurement posture: see what would trip before it gates anyone.
+    # enforce — a hit escalates THAT turn to the strictest approval posture
+    #           (ask_all: every tool call parks for a human), so an injection
+    #           cannot ride a thread's bypass into an auto-approved write.
+    screen_mode: Literal["shadow", "enforce"] = "shadow"
+    # builtin — the cheap context model with a tight classification prompt.
+    # proxy   — an external HTTPS endpoint, SSRF-guarded like the tool fetch.
+    screen_backend: Literal["builtin", "proxy"] = "builtin"
+    # The proxy endpoint, required for SCREEN_BACKEND=proxy. A server-side
+    # destination, never exposed on bootstrap — same class as WORKFLOW_CRON_SECRET.
+    screen_proxy_url: str = ""
+    # Score at or above which a chunk is an injection. The any-high-means-high
+    # combine rule then makes one tripped chunk trip the whole passage.
+    screen_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
     # --- MCP authentication ------------------------------------------------
     # Remote MCP servers authenticate with OAuth 2.1 + dynamic client
@@ -357,6 +392,22 @@ class Settings(BaseSettings):
     # issues a real session without email/password. Refused outside
     # development/test the same way DEV_AUTO_LOGIN is.
     dev_user: str = ""
+    # Anonymous "try it" mode. OFF by default like sandbox_enabled: the safe
+    # state and the off state are the same. Unlike DEV_USER/DEV_AUTO_LOGIN this
+    # is *not* forbidden in production — it is a legitimate public demo, not an
+    # auth bypass: it mints a real session (opaque hashed token, CSRF secret,
+    # secure cross-site cookie) over a genuinely isolated throwaway workspace,
+    # reached through the same membership scoping every request enforces. But it
+    # mints a *credential-free* session, so _guard_playground fences the one
+    # posture that would make that unsafe. Document this as public-demo-only.
+    playground_enabled: bool = False
+    #: Hard ceiling on live playground guest accounts. Each anonymous POST
+    #: /api/auth/playground seeds a throwaway workspace, and nothing here cascades
+    #: on delete, so without a bound an unauthenticated caller could grow the
+    #: database without limit. At the ceiling the endpoint refuses (429) rather
+    #: than growing; a demo operator sizes this, and reclaiming old guests is an
+    #: operational task (they carry a @playground.local marker).
+    playground_max_sessions: int = Field(default=200, ge=1)
 
     # Anchored to the repo root for the same reason the sqlite and objects paths
     # are: a bare ".env" resolves against the working directory, and `make
@@ -495,6 +546,43 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _guard_screen(self) -> Settings:
+        """Refuse an incoherent prompt-injection screen at boot.
+
+        Same structural gate as `_guard_sandbox`: a screen the deployment cannot
+        actually run is worse than no screen, because an operator who configured
+        one in enforce mode believes untrusted content is being gated when it is
+        silently passing through. So a proxy backend with no reachable, allowed
+        HTTPS URL fails at startup, not on the first turn that ingests a source.
+
+        Only structural checks here — scheme, and host-on-allowlist as a string.
+        No DNS: the runtime call does the full `validate_public_https_url` +
+        `peer_is_blocked`, so a resolution that changes between boot and use is
+        caught where it matters rather than trusted here.
+        """
+        if not self.screen_enabled:
+            return self
+        if self.screen_backend != "proxy":
+            return self
+        url = self.screen_proxy_url.strip()
+        if not url:
+            raise ValueError(
+                "SCREEN_BACKEND=proxy requires SCREEN_PROXY_URL. Set the screen "
+                "proxy endpoint, or use SCREEN_BACKEND=builtin."
+            )
+        parsed = urlparse(url)
+        if parsed.scheme != "https":
+            raise ValueError("SCREEN_PROXY_URL must be an https URL")
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if not host or host not in self.allowed_tool_hosts:
+            raise ValueError(
+                "SCREEN_PROXY_URL host must be on TOOL_HOST_ALLOWLIST — the "
+                "screen proxy is fetched through the same SSRF guard as every "
+                "other tool destination."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _guard_auth(self) -> Settings:
         """Refuse the configurations that would hand out identities.
 
@@ -539,6 +627,36 @@ class Settings(BaseSettings):
             )
         if self.email_sender == "smtp" and not self.smtp_host.strip():
             raise ValueError("EMAIL_SENDER=smtp requires SMTP_HOST")
+        return self
+
+    @model_validator(mode="after")
+    def _guard_playground(self) -> Settings:
+        """Fence the anonymous try-it door.
+
+        Playground mints a credential-free session — the class _guard_auth
+        restricts. Unlike DEV_AUTO_LOGIN/DEV_USER it is *allowed* in production,
+        because it is a public demo rather than an auth bypass: a fresh,
+        isolated, owner-only throwaway workspace reached through the same
+        membership scoping every request already enforces. So the gate is not
+        is_dev_env. But it is only safe when the session posture that protects a
+        real login also protects it, so the one combination that would make a
+        credential-free session unsafe — an insecure cookie any visitor can mint
+        at will and a network attacker can read — is refused. _guard_auth already
+        forces SESSION_COOKIE_SECURE in production; asserting it here as well
+        ties the guarantee to *this* feature, so a future relaxation of one
+        cannot silently weaken the other. Off is the fail-safe default; there is
+        nothing to check when off.
+        """
+        if not self.playground_enabled:
+            return self
+        if self.is_dev_env:
+            return self
+        if not self.session_cookie_secure:
+            raise ValueError(
+                "PLAYGROUND_ENABLED=1 outside development requires "
+                "SESSION_COOKIE_SECURE=true — an anonymous session anybody can "
+                "mint must not ride an insecure cross-site cookie."
+            )
         return self
 
     @property
@@ -683,6 +801,41 @@ class Settings(BaseSettings):
         one.
         """
         return self.model_prices.get(model.strip())
+
+    @property
+    def selectable_models(self) -> List[str]:
+        """The models a user may pick per turn — a deployment-controlled allow-list.
+
+        A per-turn override must never let a user hand an arbitrary model string
+        to the provider: an unpriced model would record a null cost, and a typo'd
+        one would 500 the turn. So the choice is bounded to models the deployment
+        has already vouched for.
+
+        `SELECTABLE_MODELS` (comma-separated) is the explicit list when set;
+        otherwise it derives from the priced models, because a price is exactly
+        the deployment saying "I have configured this model". `openai_model` is
+        always included so the current default can never become unselectable, and
+        the order is stable so the client dropdown does not reshuffle run to run.
+        """
+        if self.active_model_provider == "scripted":
+            # The scripted double ignores the model, so the picker and the
+            # allow-list agree on the one placeholder name bootstrap advertises —
+            # otherwise a dev picking "scripted-double" is refused by a check that
+            # was comparing against a real model name it never offered.
+            return ["scripted-double"]
+        if self.selectable_models_raw.strip():
+            names = [
+                name.strip()
+                for name in self.selectable_models_raw.split(",")
+                if name.strip()
+            ]
+        else:
+            names = sorted(self.model_prices)
+        ordered: List[str] = []
+        for name in [*names, self.openai_model]:
+            if name and name not in ordered:
+                ordered.append(name)
+        return ordered
 
     @property
     def active_model_provider(self) -> Literal["openai", "scripted"]:

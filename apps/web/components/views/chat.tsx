@@ -11,6 +11,7 @@ import {
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Square,
   Wrench,
   X,
@@ -25,6 +26,7 @@ import type {
   CitationCheck,
   GeneratedApp,
   Message,
+  Skill,
   Source,
 } from "@workspace/api-client";
 import { FormEvent, useEffect, useState } from "react";
@@ -39,6 +41,7 @@ import { ApprovalModeControl, BypassIndicator } from "./approval-mode";
 import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
+import { senderInitial, senderLabel } from "./shared";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
 
@@ -69,6 +72,20 @@ export type ChatViewProps = {
    * rather than a tool card with different words in it.
    */
   budgetPark: BudgetPark | null;
+  /**
+   * Runs the prompt-injection screen flagged. A turn whose run is in here gets a
+   * visible mark so the reader knows untrusted content tried to steer the answer
+   * and — in enforce mode — was forced to ask before every tool call. Optional
+   * and defaulting to none: the panel beside a document does not track it.
+   */
+  flaggedRuns?: string[];
+  /**
+   * True when this thread is shared with the workspace, so each message is
+   * labelled with the member it is attributed to (`message.sender_name`) rather
+   * than a bare "You". Absent/false on a personal thread, where every message is
+   * the caller's and a name would be noise.
+   */
+  sharedThread?: boolean;
   submitPrompt: (event?: FormEvent) => Promise<void>;
   cancelActiveRun: () => Promise<void>;
   regenerate: () => Promise<void>;
@@ -105,6 +122,36 @@ export type ChatViewProps = {
   // the same way it mounts without `onAttach` or `approval`.
   selectedAgentId?: string;
   onSelectAgent?: (agentId: string) => void;
+  /**
+   * Per-turn model / reasoning-effort / fast overrides for the composer, with
+   * the deployment's allow-lists to draw from. Optional and grouped for the same
+   * reason as `approval`: the document panel mounts ChatView without them and so
+   * renders no such controls.
+   */
+  turnControls?: {
+    models: string[];
+    efforts: string[];
+    model: string;
+    setModel: (value: string) => void;
+    effort: string;
+    setEffort: (value: string) => void;
+    fast: boolean;
+    setFast: (value: boolean) => void;
+  };
+  /**
+   * The composer's slash-command picker: the skill attached to the next turn,
+   * the values for its declared args, and the ways to change them. Optional and
+   * grouped like `approval`/`turnControls` — the document panel mounts ChatView
+   * without it and so shows no picker. The attachment is per-turn state the
+   * caller clears once the send lands; here we only read and edit it.
+   */
+  skills?: {
+    attached: Skill | null;
+    argValues: Record<string, unknown>;
+    attach: (skill: Skill) => void;
+    detach: () => void;
+    setArg: (name: string, value: unknown) => void;
+  };
 };
 
 /**
@@ -148,6 +195,245 @@ function AgentSelect({
         </option>
       ))}
     </select>
+  );
+}
+
+/**
+ * The per-turn model, reasoning effort and fast shortcut, drawn from the
+ * deployment's allow-lists. Each part renders only when the deployment offers
+ * choices for it — a scripted provider with no models or efforts shows nothing.
+ * "Fast" is the low-effort shortcut, so it disables the effort dropdown while on
+ * (the backend ignores the effort under fast) and pairs with that dropdown.
+ */
+function TurnControls({
+  models,
+  efforts,
+  model,
+  setModel,
+  effort,
+  setEffort,
+  fast,
+  setFast,
+  disabled,
+}: NonNullable<ChatViewProps["turnControls"]> & { disabled: boolean }) {
+  return (
+    <>
+      {models.length > 0 && (
+        <select
+          className="composer-select"
+          value={model}
+          onChange={(event) => setModel(event.target.value)}
+          disabled={disabled}
+          aria-label="Model"
+        >
+          <option value="">Default model</option>
+          {models.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      )}
+      {efforts.length > 0 && (
+        <>
+          <select
+            className="composer-select"
+            value={effort}
+            onChange={(event) => setEffort(event.target.value)}
+            disabled={disabled || fast}
+            aria-label="Reasoning effort"
+          >
+            {efforts.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className={fast ? "composer-toggle on" : "composer-toggle"}
+            onClick={() => setFast(!fast)}
+            disabled={disabled}
+            aria-pressed={fast}
+            title="Fast: skip extended reasoning"
+          >
+            <Zap size={13} aria-hidden="true" /> Fast
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * The skills the composer's slash picker offers, fetched once when a surface
+ * that has a picker mounts. Gated on `enabled` because ChatView is also mounted
+ * beside a document, where there is no picker and so no reason to ask for the
+ * list. Mirrors how AgentSelect fetches the agent list for itself.
+ */
+function useVisibleSkills(enabled: boolean): Skill[] {
+  const [skills, setSkills] = useState<Skill[]>([]);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    void api
+      .listSkills()
+      .then((rows) => {
+        if (!cancelled) setSkills(rows);
+      })
+      .catch(() => undefined); // the composer works without a picker
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+  return skills;
+}
+
+/** Skills whose name/title/description contain the text typed after the "/". */
+export function matchSkills(skills: Skill[], query: string): Skill[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return skills;
+  return skills.filter((skill) =>
+    `${skill.name} ${skill.title} ${skill.description}`.toLowerCase().includes(needle),
+  );
+}
+
+/**
+ * Whether an attached skill's required args are all filled, so the send button
+ * can refuse a turn the server would only 422 anyway. A boolean arg is always
+ * satisfied (its absence reads as false); everything else must be non-empty.
+ */
+export function argsSatisfied(skill: Skill | null, values: Record<string, unknown>): boolean {
+  if (!skill) return true;
+  return skill.args.every((arg) => {
+    if (!arg.required || arg.type === "boolean") return true;
+    const value = values[arg.name];
+    return value !== undefined && value !== null && String(value).trim() !== "";
+  });
+}
+
+/** The leading-"/" token stripped from a draft once a skill is attached. */
+export function stripSlashToken(draft: string): string {
+  return draft.replace(/^\/\S*\s?/, "");
+}
+
+/**
+ * The autocomplete that opens when a composer draft starts with "/". It floats
+ * above the composer rather than pushing it down, so the textarea does not jump
+ * under the cursor mid-type.
+ */
+function SkillPicker({
+  skills,
+  onPick,
+}: {
+  skills: Skill[];
+  onPick: (skill: Skill) => void;
+}) {
+  return (
+    <ul className="skill-picker" role="listbox" aria-label="Skills">
+      {skills.map((skill) => (
+        <li key={skill.id}>
+          <button type="button" onClick={() => onPick(skill)} role="option" aria-selected={false}>
+            <span className="skill-picker-name">
+              <Sparkles size={13} aria-hidden /> /{skill.name}
+            </span>
+            {skill.description && (
+              <span className="skill-picker-desc">{skill.description}</span>
+            )}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The attached skill, shown as a chip on its own row above the composer tools so
+ * it never crowds the agent/approval/model controls. Any args the skill declares
+ * are prompted inline here — the smallest thing that lets a parameterised skill
+ * be sent — and the whole row disappears the moment the skill is detached or the
+ * send clears it.
+ */
+function SkillBar({
+  skill,
+  values,
+  setArg,
+  detach,
+  disabled,
+}: {
+  skill: Skill;
+  values: Record<string, unknown>;
+  setArg: (name: string, value: unknown) => void;
+  detach: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="skill-bar">
+      <span className="skill-chip">
+        <Sparkles size={13} aria-hidden />
+        /{skill.name}
+        <button
+          type="button"
+          onClick={detach}
+          disabled={disabled}
+          aria-label={`Remove skill ${skill.name}`}
+        >
+          <X size={12} />
+        </button>
+      </span>
+      {skill.args.map((arg) => {
+        const value = values[arg.name];
+        const label = arg.label || arg.name;
+        if (arg.type === "boolean") {
+          return (
+            <label key={arg.name} className="skill-arg-inline skill-arg-bool">
+              <input
+                type="checkbox"
+                checked={Boolean(value)}
+                disabled={disabled}
+                onChange={(event) => setArg(arg.name, event.target.checked)}
+              />
+              {label}
+            </label>
+          );
+        }
+        if (arg.choices.length > 0) {
+          return (
+            <label key={arg.name} className="skill-arg-inline">
+              <span>{label}</span>
+              <select
+                className="composer-select"
+                value={value === undefined || value === null ? "" : String(value)}
+                disabled={disabled}
+                onChange={(event) => setArg(arg.name, event.target.value)}
+                aria-label={label}
+              >
+                <option value="">—</option>
+                {arg.choices.map((choice) => (
+                  <option key={String(choice)} value={String(choice)}>
+                    {String(choice)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        }
+        return (
+          <label key={arg.name} className="skill-arg-inline">
+            <span>{label}</span>
+            <input
+              className="skill-arg-input"
+              type={arg.type === "string" ? "text" : "number"}
+              value={value === undefined || value === null ? "" : String(value)}
+              placeholder={arg.required ? "required" : "optional"}
+              disabled={disabled}
+              onChange={(event) => setArg(arg.name, event.target.value)}
+              aria-label={label}
+            />
+          </label>
+        );
+      })}
+    </div>
   );
 }
 
@@ -266,6 +552,32 @@ function CitationVerdictNote({ report }: { report: CitationCheck }) {
       <div>
         <strong>{verdict.title}</strong>
         <span>{verdict.detail}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The prompt-injection screen's mark on a turn it flagged.
+ *
+ * Not a decoration and not tuned out like the clean citation case: it appears
+ * only when the screen actually caught untrusted content — a retrieved passage,
+ * the open document, or a tool result — trying to steer the assistant. In
+ * enforce mode that turn was already forced to ask before every tool call; this
+ * is what tells the reader an injection was the reason, so a parked write is not
+ * read as the assistant being needlessly cautious. `role="alert"` because a
+ * caught injection is exactly the event a screen reader should hear.
+ */
+function ScreenFlagNote() {
+  return (
+    <div className="screen-flag" role="alert">
+      <ShieldAlert size={14} aria-hidden="true" />
+      <div>
+        <strong>Prompt injection screened</strong>
+        <span>
+          Untrusted content in this turn tried to steer the assistant. Every tool
+          call was held for your approval.
+        </span>
       </div>
     </div>
   );
@@ -441,6 +753,8 @@ export function ChatView({
   activeRun,
   runStatus,
   budgetPark,
+  flaggedRuns,
+  sharedThread,
   submitPrompt,
   cancelActiveRun,
   regenerate,
@@ -452,11 +766,28 @@ export function ChatView({
   endRef,
   selectedAgentId,
   onSelectAgent,
+  turnControls,
+  skills,
 }: ChatViewProps) {
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
   const callsForRun = (runId: string) =>
     agentCalls.filter((call) => call.run_id === runId);
+  // The slash picker: open only when a picker exists, nothing is attached yet,
+  // and the draft leads with "/". The matches drive both the dropdown and the
+  // Enter-to-attach shortcut, so they are computed once here.
+  const skillList = useVisibleSkills(Boolean(skills));
+  const slashQuery =
+    skills && !skills.attached && draft.startsWith("/") ? draft.slice(1) : null;
+  const skillMatches = slashQuery === null ? [] : matchSkills(skillList, slashQuery);
+  const pickerOpen = slashQuery !== null && skillMatches.length > 0;
+  const attachSkill = (skill: Skill) => {
+    skills?.attach(skill);
+    setDraft(stripSlashToken(draft));
+  };
+  // A turn cannot be sent with a required arg left blank; the button says so
+  // rather than letting the server 422 a click the composer could have refused.
+  const skillReady = argsSatisfied(skills?.attached ?? null, skills?.argValues ?? {});
   const bypassed = Boolean(approval && isBypass(approval.mode));
   /**
    * Which card in a turn gets the checklist: the last one that touched a list.
@@ -505,11 +836,16 @@ export function ChatView({
                   })()}
                 <div className="message-author">
                   {message.role === "user" ? (
-                    <div className="tiny-avatar">U</div>
+                    <div className="tiny-avatar">
+                      {senderInitial(message, Boolean(sharedThread))}
+                    </div>
                   ) : (
                     <div className="assistant-mark">A</div>
                   )}
-                  <span>{message.role === "user" ? "You" : "Assistant"}</span>
+                  {/* On a shared thread the sender's name says who spoke — a
+                      teammate's turn is not "You". On a personal thread every
+                      user message is the caller's, so the name would be noise. */}
+                  <span>{senderLabel(message, Boolean(sharedThread))}</span>
                   {message.role === "assistant" && message.content && (
                     <CopyButton value={message.content} label="Copy message" />
                   )}
@@ -528,6 +864,8 @@ export function ChatView({
                     frame — the first time a streamed message crossed the line
                     between naming an app and not. */}
                 <ChatDashboardEmbeds content={message.content} apps={apps} />
+                {message.role === "assistant" &&
+                  flaggedRuns?.includes(message.run_id) && <ScreenFlagNote />}
                 {message.citation_report && (
                   <CitationVerdictNote report={message.citation_report} />
                 )}
@@ -552,6 +890,16 @@ export function ChatView({
                 todos={call.id === checklistCallId(liveCalls) ? todos : undefined}
               />
             ))}
+            {/* The flagged turn's mark while it is still live: a run that parked
+                on the injection escalation has no assistant message yet, so the
+                per-message mark above cannot appear until it settles. Shown only
+                when this run has no message to carry it, to avoid a duplicate. */}
+            {activeRun &&
+              flaggedRuns?.includes(activeRun) &&
+              !messages.some(
+                (message) =>
+                  message.role === "assistant" && message.run_id === activeRun,
+              ) && <ScreenFlagNote />}
             {/* Sits where a tool card would, and is deliberately not one: the
                 run parked before it asked the model anything, so there is no
                 proposed call and an approve/deny pair would decide nothing. */}
@@ -592,13 +940,23 @@ export function ChatView({
             stop={() => approval.setMode("ask_writes")}
           />
         )}
-        <form className="composer" onSubmit={(event) => void submitPrompt(event)}>
+        <div className="composer-shell">
+          {pickerOpen && (
+            <SkillPicker skills={skillMatches} onPick={attachSkill} />
+          )}
+          <form className="composer" onSubmit={(event) => void submitPrompt(event)}>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
+                // With the slash picker open, Enter attaches the top match
+                // rather than sending a message that is only a "/query".
+                if (pickerOpen) {
+                  attachSkill(skillMatches[0]);
+                  return;
+                }
                 void submitPrompt();
               }
             }}
@@ -614,6 +972,15 @@ export function ChatView({
             disabled={Boolean(activeRun)}
             aria-label="Message"
           />
+          {skills?.attached && (
+            <SkillBar
+              skill={skills.attached}
+              values={skills.argValues}
+              setArg={skills.setArg}
+              detach={skills.detach}
+              disabled={Boolean(activeRun)}
+            />
+          )}
           <div className="composer-tools">
             {onAttach && (
               <button
@@ -630,6 +997,9 @@ export function ChatView({
                 selectedAgentId={selectedAgentId ?? ""}
                 onSelectAgent={onSelectAgent}
               />
+            )}
+            {turnControls && (
+              <TurnControls {...turnControls} disabled={Boolean(activeRun)} />
             )}
             {approval && (
               <ApprovalModeControl mode={approval.mode} setMode={approval.setMode} />
@@ -648,14 +1018,15 @@ export function ChatView({
               <button
                 className="send-button"
                 type="submit"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || !skillReady}
                 aria-label="Send message"
               >
                 <ArrowUp size={18} />
               </button>
             )}
           </div>
-        </form>
+          </form>
+        </div>
       </div>
     </section>
   );

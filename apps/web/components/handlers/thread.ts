@@ -5,6 +5,7 @@ import type {
   Citation,
   CitationCheck,
   Message,
+  MessageControls,
   ToolArtifact,
 } from "@workspace/api-client";
 import type { Dispatch, FormEvent, RefObject, SetStateAction } from "react";
@@ -32,6 +33,11 @@ import { describeError } from "../views/shared";
 export type ThreadHandlerDeps = {
   /** The agent to run as, from bootstrap; the server picks one when absent. */
   agentId?: string;
+  /**
+   * Per-turn model / effort / fast overrides for this turn. Optional: the panel
+   * beside a document has no such composer, so it sends the deployment defaults.
+   */
+  controls?: MessageControls;
   messages: Message[];
   draft: string;
   activeConversation: string | null;
@@ -80,6 +86,20 @@ export type ThreadHandlerDeps = {
    * started under a different one. State would be stale by then.
    */
   activeConversationRef: RefObject<string | null>;
+  /**
+   * Fired once a fresh prompt has been accepted by the server. The rail uses it
+   * to clear a per-turn skill attachment the way the draft is cleared — the
+   * skill governed this one turn and must not silently ride the next. Absent on
+   * the document panel, which has no such attachment.
+   */
+  onSent?: () => void;
+  /**
+   * The prompt-injection screen flagged untrusted content in this run — a
+   * `screen.flagged` event. The rail records the run id so the transcript can
+   * mark the turn an injection was caught in; the document panel omits it and so
+   * shows no such mark. Optional for the same reason `onSent` is.
+   */
+  onScreenFlag?: (runId: string) => void;
 };
 
 /**
@@ -98,6 +118,7 @@ export function toolFailure(tool: string, error: string): string {
 
 export function createThreadHandlers({
   agentId,
+  controls,
   messages,
   draft,
   activeConversation,
@@ -114,6 +135,8 @@ export function createThreadHandlers({
   onAgentUnavailable,
   onToolProposed,
   activeConversationRef,
+  onSent,
+  onScreenFlag,
 }: ThreadHandlerDeps) {
   /**
    * Merge a tool event into the card list. Events arrive in stages (proposed →
@@ -215,6 +238,7 @@ export function createThreadHandlers({
         activeConversation,
         lastUser.content,
         agentId,
+        controls,
       );
       setMessages((items) =>
         items.some((item) => item.id === response.message.id)
@@ -289,6 +313,17 @@ export function createThreadHandlers({
             setRunStatus("");
           }
         }
+        /**
+         * The prompt-injection screen caught untrusted content this turn spliced
+         * in — a retrieved passage, the open document, or a tool result — trying
+         * to steer the assistant. In enforce mode the backend has already forced
+         * this turn to park every tool call for a human; here we only record the
+         * run so the transcript can say an injection was caught, and never
+         * swallow it into the ordinary status line.
+         */
+        if (event.event === "screen.flagged") {
+          onScreenFlag?.(runId);
+        }
         if (event.event === "retrieval.completed") {
           const count = Number(event.data.count || 0);
           setRunStatus(count ? `Using ${count} source passages` : "No matching source");
@@ -319,6 +354,10 @@ export function createThreadHandlers({
                 // Not yet checked: the validator runs on the finished answer,
                 // and a verdict on half a sentence would be a lie either way.
                 citation_report: null,
+                // Attribution rides only user messages in the transcript; an
+                // assistant message shows "Assistant", so these stay unset.
+                sender_id: "",
+                sender_name: "",
                 created_at: new Date().toISOString(),
               },
             ];
@@ -368,6 +407,8 @@ export function createThreadHandlers({
             content: String(event.data.content || ""),
             citations: (event.data.citations || []) as Citation[],
             citation_report: citationReport,
+            sender_id: "",
+            sender_name: "",
             created_at: new Date().toISOString(),
           };
           setMessages((items) => {
@@ -407,11 +448,14 @@ export function createThreadHandlers({
     setError("");
     try {
       const conversationId = await ensureConversation();
-      const response = await api.sendMessage(conversationId, content, agentId);
+      const response = await api.sendMessage(conversationId, content, agentId, controls);
       setMessages((items) => {
         const existing = items.some((item) => item.id === response.message.id);
         return existing ? items : [...items, response.message];
       });
+      // The turn was accepted, so a per-turn skill has done its job; clear it
+      // beside the draft so it does not attach itself to the next message.
+      onSent?.();
       void followRun(response.run.id, conversationId);
     } catch (caught) {
       setDraft(content);

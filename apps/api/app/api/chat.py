@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import List, Optional
+from typing import List, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
+from ..config import Settings, get_settings
 from ..database import SessionLocal, get_db
 from ..models import (
     Agent,
@@ -19,19 +20,23 @@ from ..models import (
     Message,
     Run,
     RunEvent,
+    User,
     new_id,
 )
 from ..schemas import (
+    ApprovalMode,
     ApprovalModeRequest,
     CitationCheck,
     ConversationCreate,
     ConversationOut,
+    ConversationShareRequest,
     MessageOut,
     RunOut,
     SendMessageRequest,
     SendMessageResponse,
 )
 from ..services import conversations
+from ..services import skills as skills_service
 from ..services.artifacts import documents
 from ..services.audit import record_audit
 from ..services.events import append_event
@@ -58,7 +63,7 @@ def _citation_report(raw: str) -> Optional[CitationCheck]:
         return None
 
 
-def _message_out(message: Message) -> MessageOut:
+def _message_out(message: Message, sender_name: str = "") -> MessageOut:
     return MessageOut(
         id=message.id,
         run_id=message.run_id,
@@ -66,7 +71,38 @@ def _message_out(message: Message) -> MessageOut:
         content=message.content,
         citations=json.loads(message.citations_json),
         citation_report=_citation_report(message.citation_report_json),
+        sender_id=message.created_by,
+        sender_name=sender_name,
         created_at=message.created_at,
+    )
+
+
+def _can_share(conversation: Conversation, actor: Actor) -> bool:
+    """Who may toggle a thread's visibility: its creator, or the workspace owner.
+
+    Mirrors the skills share gate. There is no "admin" role in this codebase —
+    membership is `member` or `owner` — so an owner is the only non-creator who
+    may share or unshare a thread others may be using.
+    """
+    return conversation.created_by == actor.user_id or actor.role == "owner"
+
+
+def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationOut:
+    """Build the wire view, folding in the two actor-dependent facts.
+
+    `owned` and `can_share` depend on who is asking, not on the row, so the
+    response is built explicitly rather than validated off the ORM object.
+    """
+    return ConversationOut(
+        id=conversation.id,
+        title=conversation.title,
+        document_id=conversation.document_id,
+        approval_mode=cast(ApprovalMode, conversation.approval_mode),
+        shared=bool(conversation.shared),
+        owned=conversation.created_by == actor.user_id,
+        can_share=_can_share(conversation, actor),
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
     )
 
 
@@ -74,21 +110,27 @@ def _message_out(message: Message) -> MessageOut:
 def list_conversations(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
-) -> List[Conversation]:
+) -> List[ConversationOut]:
     # Document-scoped threads are deliberately absent. They belong to the
     # document editor's side panel, are created and deleted with the document,
     # and one entry per document opened would turn the Chat rail into a list of
     # things the user never started.
-    return list(
-        db.scalars(
-            select(Conversation)
-            .where(
-                Conversation.workspace_id == actor.workspace_id,
-                Conversation.document_id == "",
-            )
-            .order_by(Conversation.updated_at.desc())
+    #
+    # The caller sees the workspace's shared threads PLUS their own personal
+    # ones. The `workspace_id` filter is never removed — `shared` only relaxes
+    # the within-workspace creator filter, so this can never return another
+    # workspace's rows, and another member's personal thread stays hidden.
+    conversations_list = db.scalars(
+        select(Conversation)
+        .where(
+            Conversation.workspace_id == actor.workspace_id,  # NEVER removed
+            Conversation.document_id == "",
+            (Conversation.shared.is_(True))
+            | (Conversation.created_by == actor.user_id),
         )
+        .order_by(Conversation.updated_at.desc())
     )
+    return [_conversation_out(conversation, actor) for conversation in conversations_list]
 
 
 @router.post("/conversations", response_model=ConversationOut, status_code=201)
@@ -97,7 +139,7 @@ def create_conversation(
     key: str = Depends(idempotency_key),
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
-) -> Conversation:
+) -> ConversationOut:
     replay = find_replay(
         db,
         workspace_id=actor.workspace_id,
@@ -108,7 +150,7 @@ def create_conversation(
         conversation = db.get(Conversation, replay.resource_id)
         if conversation is None or conversation.workspace_id != actor.workspace_id:
             raise replayed_resource_gone()
-        return conversation
+        return _conversation_out(conversation, actor)
     conversation = Conversation(
         id=new_id(),
         workspace_id=actor.workspace_id,
@@ -134,7 +176,7 @@ def create_conversation(
     )
     db.commit()
     db.refresh(conversation)
-    return conversation
+    return _conversation_out(conversation, actor)
 
 
 @router.post(
@@ -144,7 +186,7 @@ def document_conversation(
     document_id: str,
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
-) -> Conversation:
+) -> ConversationOut:
     """The thread for the chat panel beside a document, made on first open.
 
     A POST because the first call creates, but idempotent by construction rather
@@ -180,7 +222,7 @@ def document_conversation(
         )
     db.commit()
     db.refresh(conversation)
-    return conversation
+    return _conversation_out(conversation, actor)
 
 
 @router.put(
@@ -191,7 +233,7 @@ def set_approval_mode(
     payload: ApprovalModeRequest,
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
-) -> Conversation:
+) -> ConversationOut:
     """Change how much this thread asks before acting.
 
     Audited on every call, including the no-op where the mode is already what
@@ -204,12 +246,15 @@ def set_approval_mode(
     No `Idempotency-Key`: this is a PUT of a value, not the creation of one, so a
     retry lands on the same state by construction. It writes a second audit row,
     which is the correct record of a request that was actually made twice.
+
+    Any member of a shared thread may set its mode — the mode governs the shared
+    thread they are collaborating in — and the audit row records who did it.
     """
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.workspace_id == actor.workspace_id,
-        )
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -226,7 +271,55 @@ def set_approval_mode(
     )
     db.commit()
     db.refresh(conversation)
-    return conversation
+    return _conversation_out(conversation, actor)
+
+
+@router.put("/conversations/{conversation_id}/share", response_model=ConversationOut)
+def set_conversation_shared(
+    conversation_id: str,
+    payload: ConversationShareRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    """Share or unshare a thread with the rest of the workspace.
+
+    Owner-gated, mirroring the skills share gate: only the creator, or the
+    workspace owner, may flip a thread between personal and shared. A plain
+    member seeing a shared thread must not be able to unshare it out from under
+    the people using it, nor share a personal thread they merely happened to
+    reach — which is why `resolve_visible` (a 404 for anything outside the
+    workspace or another member's personal thread) is followed by the
+    creator-or-owner gate (a 403). Sharing changes visibility ONLY within the
+    workspace; the `workspace_id` filter in `resolve_visible` is never removed,
+    so this can never expose a thread cross-workspace.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if not _can_share(conversation, actor):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the creator or an owner may share this thread",
+        )
+    previous = bool(conversation.shared)
+    conversation.shared = payload.shared
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="conversation.shared_set",
+        resource_type="conversation",
+        resource_id=conversation.id,
+        detail={"from": previous, "to": payload.shared},
+    )
+    db.commit()
+    db.refresh(conversation)
+    return _conversation_out(conversation, actor)
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
@@ -246,6 +339,21 @@ def delete_conversation(
         # so a replay is answered with the same 204 whether or not the row is
         # still there to look at.
         return
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    # A member must not nuke a shared thread others are using: deletion is gated
+    # to the creator or the workspace owner, even though every member can read it.
+    if conversation.created_by != actor.user_id and actor.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only the creator or an owner may delete this thread",
+        )
     title = conversations.purge(
         db, workspace_id=actor.workspace_id, conversation_id=conversation_id
     )
@@ -276,23 +384,40 @@ def list_messages(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[MessageOut]:
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.workspace_id == actor.workspace_id,
-        )
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    messages = db.scalars(
-        select(Message)
-        .where(
-            Message.conversation_id == conversation_id,
-            Message.workspace_id == actor.workspace_id,
+    messages = list(
+        db.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.workspace_id == actor.workspace_id,
+            )
+            .order_by(Message.created_at.asc())
         )
-        .order_by(Message.created_at.asc())
     )
-    return [_message_out(message) for message in messages]
+    # One query for the distinct senders, so a shared thread shows who said what
+    # without an N+1. Restricted to this workspace's users — a name is only ever
+    # resolved for a member of the same workspace, never leaked across one.
+    sender_ids = {message.created_by for message in messages if message.created_by}
+    names: dict[str, str] = {}
+    if sender_ids:
+        names = {
+            user_id: name
+            for user_id, name in db.execute(
+                select(User.id, User.name).where(User.id.in_(sender_ids))
+            )
+        }
+    return [
+        _message_out(message, names.get(message.created_by, ""))
+        for message in messages
+    ]
 
 
 @router.post(
@@ -306,13 +431,14 @@ def send_message(
     background_tasks: BackgroundTasks,
     key: str = Depends(idempotency_key),
     actor: Actor = Depends(get_actor),
+    settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> SendMessageResponse:
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.workspace_id == actor.workspace_id,
-        )
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -332,7 +458,7 @@ def send_message(
         if run is None or message is None:
             raise replayed_resource_gone()
         return SendMessageResponse(
-            message=_message_out(message),
+            message=_message_out(message, actor.user_name),
             run=RunOut.model_validate(run),
             replayed=True,
         )
@@ -349,6 +475,34 @@ def send_message(
     agent = db.scalar(agent_query)
     if agent is None:
         raise HTTPException(status_code=400, detail="Agent is not available")
+    # A per-turn model override must be on the deployment allow-list; an arbitrary
+    # string would reach the provider unpriced. (An off-ladder `effort` is already
+    # refused by the `ReasoningEffort` Literal on the request as a 422.)
+    if payload.model and payload.model not in settings.selectable_models:
+        raise HTTPException(status_code=422, detail="Model is not selectable")
+    # `fast` maps to "low", not "none" — the honest lowest-latency effort every
+    # model accepts — and an explicit `effort` always wins over it.
+    requested_effort = payload.effort or ("low" if payload.fast else "")
+    # A skill invoked for this turn must be visible to the caller (own or shared,
+    # same-workspace) and its args must validate now, so the refusal lands at send
+    # time rather than inside the turn. The resolved args are stored on the run and
+    # the body is spliced into the instructions in `resolve_directives`.
+    skill_id = ""
+    skill_args_json = ""
+    skill_version = 0
+    if payload.skill_id:
+        skill = skills_service.resolve_visible(
+            db,
+            workspace_id=actor.workspace_id,
+            user_id=actor.user_id,
+            skill_id=payload.skill_id,
+        )
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Skill not available")
+        skill_id = skill.id
+        skill_args_json = skills_service.validate_args(skill, payload.skill_args or {})
+        # Pin the version so a run parked over a later edit resumes with this body.
+        skill_version = skill.version
     run = Run(
         id=new_id(),
         workspace_id=actor.workspace_id,
@@ -357,6 +511,11 @@ def send_message(
         created_by=actor.user_id,
         status="queued",
         prompt=payload.content,
+        requested_model=payload.model or "",
+        requested_effort=requested_effort,
+        skill_id=skill_id,
+        skill_args_json=skill_args_json,
+        skill_version=skill_version,
     )
     message = Message(
         id=new_id(),
@@ -364,6 +523,9 @@ def send_message(
         conversation_id=conversation.id,
         run_id=run.id,
         role="user",
+        # Attribute the message to the member who sent it, so a shared thread
+        # shows who said what. `Run.created_by` is already `actor.user_id`.
+        created_by=actor.user_id,
         content=payload.content,
     )
     db.add_all([run, message])
@@ -395,7 +557,7 @@ def send_message(
     db.commit()
     background_tasks.add_task(process_run, run.id)
     return SendMessageResponse(
-        message=_message_out(message),
+        message=_message_out(message, actor.user_name),
         run=RunOut.model_validate(run),
     )
 
@@ -411,6 +573,16 @@ def cancel_run(
         select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)
     )
     if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    # A member must not cancel a run on another member's personal thread. The run
+    # resolves by workspace_id, but its conversation is not visible to them.
+    # Automation and shared/own/document threads pass — same gate as the stream.
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
+    ):
         raise HTTPException(status_code=404, detail="Run not found")
     if find_replay(
         db, workspace_id=actor.workspace_id, operation="run.cancel", key=key
@@ -517,6 +689,16 @@ def stream_run_events(
         select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)
     )
     if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    # A member must not stream a run on another member's personal thread. The run
+    # resolves by workspace_id, but its conversation is not visible to them.
+    # Automation and shared/own/document threads pass — same gate as cancel.
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
+    ):
         raise HTTPException(status_code=404, detail="Run not found")
     if last_event_id and last_event_id.isdigit():
         after = max(after, int(last_event_id))

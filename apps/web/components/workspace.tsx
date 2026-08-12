@@ -1,7 +1,7 @@
 "use client";
 
-import type { DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, LogOut, Menu, Plus, Trash2, X } from "lucide-react";
+import type { Conversation, DocumentKind } from "@workspace/api-client";
+import { BarChart3, CircleDot, Columns2, LogOut, Menu, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
@@ -14,6 +14,7 @@ import { AdminView } from "./views/admin";
 import { AgentsView } from "./views/agents";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
+import { ChatSplit } from "./views/chat-split";
 import { DashboardEditor } from "./views/dashboard-editor";
 import { DashboardsView } from "./views/dashboards";
 import { DataView } from "./views/data";
@@ -31,11 +32,20 @@ import {
   type GroupId,
 } from "./views/navigation";
 import { ProjectsView } from "./views/projects";
-import { PAGE_TITLES, formatRelative, type View } from "./views/shared";
+import { SandboxToolsView } from "./views/sandbox-tools";
+import {
+  PAGE_TITLES,
+  formatRelative,
+  groupThreads,
+  shareControl,
+  type View,
+} from "./views/shared";
+import { SkillsView } from "./views/skills";
 import { SourcesView } from "./views/sources";
 import { TodosView } from "./views/todos";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
+import { CronsView } from "./views/crons";
 import { WorkspaceSwitcher } from "./workspace-selection";
 
 export function Workspace() {
@@ -53,6 +63,7 @@ export function Workspace() {
     apps,
     integrations,
     mcpServers,
+    sandboxTools,
     documents,
     folders,
     activeDocument,
@@ -63,13 +74,33 @@ export function Workspace() {
     activeProject,
     view,
     setView,
+    extraPanes,
+    focusedPane,
+    openInNewPane,
+    closePane,
+    focusPane,
+    refreshConversations,
+    patchConversation,
+    shareConversation,
     draft,
     setDraft,
     selectedAgentId,
     setSelectedAgentId,
+    selectedModel,
+    setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
+    fast,
+    setFast,
+    attachedSkill,
+    skillArgs,
+    attachSkill,
+    detachSkill,
+    setSkillArg,
     activeRun,
     runStatus,
     budgetPark,
+    flaggedRuns,
     provenance,
     setProvenance,
     loadingProvenance,
@@ -131,6 +162,9 @@ export function Workspace() {
     setMcpServerEnabled,
     setMcpToolEnabled,
     removeMcpServer,
+    addSandboxTool,
+    setSandboxToolEnabled,
+    removeSandboxTool,
     selectConversation,
     newConversation,
     removeConversation,
@@ -169,6 +203,68 @@ export function Workspace() {
   const activeThread = conversations.find((item) => item.id === activeConversation);
   const activeTitle = activeThread?.title || "New conversation";
 
+  // The rail's two audiences. A thread is shared with the whole workspace or it
+  // is the caller's own — the server never returns another member's personal
+  // thread, so `shared` alone tells the groups apart.
+  const { personal: personalThreads, shared: sharedThreads } = groupThreads(conversations);
+
+  /**
+   * One rail row. The share/unshare toggle rides only the OPEN thread and only
+   * when the caller may change its visibility (its creator or a workspace
+   * owner) — a member seeing it on every row could not act on most of them, and
+   * a control that 403s on click is worse than no control.
+   */
+  const renderThread = (conversation: Conversation) => {
+    const share = shareControl(conversation, activeConversation);
+    return (
+    <div
+      key={conversation.id}
+      className={activeConversation === conversation.id ? "thread active" : "thread"}
+    >
+      <button
+        className="thread-open"
+        onClick={() => selectConversation(conversation.id)}
+      >
+        <span>{conversation.title}</span>
+        <time>{formatRelative(conversation.updated_at)}</time>
+      </button>
+      {share && (
+        <button
+          className={share.shared ? "thread-share shared" : "thread-share"}
+          title={share.title}
+          aria-label={share.ariaLabel}
+          aria-pressed={share.pressed}
+          onClick={(event) => {
+            event.stopPropagation();
+            void shareConversation(conversation.id, !conversation.shared);
+          }}
+        >
+          {share.shared ? <Users size={13} /> : <Share2 size={13} />}
+        </button>
+      )}
+      <button
+        className="thread-split"
+        title="Open in a new pane"
+        aria-label={`Open ${conversation.title} in a new pane`}
+        onClick={(event) => {
+          event.stopPropagation();
+          openInNewPane(conversation.id);
+        }}
+      >
+        <Columns2 size={13} />
+      </button>
+      <button
+        className="thread-delete"
+        title="Delete chat"
+        aria-label={`Delete ${conversation.title}`}
+        onClick={(event) => void removeConversation(conversation, event)}
+      >
+        <Trash2 size={13} />
+      </button>
+    </div>
+    );
+  };
+
   // Per-view badge numbers. A view with no count (Chat, Graph, Activity) is
   // absent: Graph's size is a projection of Sources, so counting it in the
   // Knowledge badge would double-count what the user actually put in.
@@ -186,6 +282,7 @@ export function Workspace() {
     dashboards: dashboardApps.length + dashboards.length,
     data: dbConnections.length,
     mcp: mcpServers.length,
+    "sandbox-tools": sandboxTools.length,
     integrations: integrations.filter((item) => item.account).length,
   };
 
@@ -318,6 +415,12 @@ export function Workspace() {
           </nav>
         )}
 
+        {/* Personal threads (only their creator sees them) and the workspace's
+            shared threads are two different audiences, so they get two labelled
+            groups rather than one flat list that hides which teammates can read
+            what. The server already returns only the caller's own personal
+            threads plus every shared thread in the workspace, so `shared` alone
+            splits them. */}
         <div className="thread-heading">
           <span>Recent threads</span>
         </div>
@@ -325,30 +428,20 @@ export function Workspace() {
           {conversations.length === 0 ? (
             <p className="empty-threads">No conversations.</p>
           ) : (
-            conversations.map((conversation) => (
-              <div
-                key={conversation.id}
-                className={
-                  activeConversation === conversation.id ? "thread active" : "thread"
-                }
-              >
-                <button
-                  className="thread-open"
-                  onClick={() => selectConversation(conversation.id)}
-                >
-                  <span>{conversation.title}</span>
-                  <time>{formatRelative(conversation.updated_at)}</time>
-                </button>
-                <button
-                  className="thread-delete"
-                  title="Delete chat"
-                  aria-label={`Delete ${conversation.title}`}
-                  onClick={(event) => void removeConversation(conversation, event)}
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))
+            <>
+              {personalThreads.length > 0 && (
+                <>
+                  <div className="thread-group">Personal</div>
+                  {personalThreads.map(renderThread)}
+                </>
+              )}
+              {sharedThreads.length > 0 && (
+                <>
+                  <div className="thread-group">Shared</div>
+                  {sharedThreads.map(renderThread)}
+                </>
+              )}
+            </>
           )}
         </div>
 
@@ -415,6 +508,19 @@ export function Workspace() {
               open={openGroup}
             />
             <ThemeToggle />
+            {/* The prompt-injection screen's posture, shown only when it is on:
+                a status indicator, not a control. "enforce" is the mode that
+                actually escalates a flagged turn, so it reads as active; shadow
+                reads as watching. The proxy URL never reaches the client. */}
+            {bootstrap?.screen.enabled && (
+              <div
+                className={`screen-pill ${bootstrap.screen.mode}`}
+                title={`Prompt-injection screen: ${bootstrap.screen.mode} mode, ${bootstrap.screen.backend} backend`}
+              >
+                <ShieldAlert size={13} aria-hidden="true" />
+                Screen: {bootstrap.screen.mode}
+              </div>
+            )}
             <div
               className="agent-pill"
               title={
@@ -460,32 +566,70 @@ export function Workspace() {
         )}
 
         {view === "chat" && (
-          <ChatView
-            messages={messages}
+          // The chat surface is a split: the shell's own ChatView (pane 0,
+          // passed through unchanged so the single-pane user sees zero change)
+          // plus any extra concurrent panes. With no extra panes ChatSplit
+          // renders the primary alone with no wrapper — the no-regression path.
+          <ChatSplit
+            panes={extraPanes}
+            conversations={conversations}
+            bootstrap={bootstrap}
             sources={sources}
-            agentCalls={agentCalls}
             apps={dashboardApps}
-            draft={draft}
-            setDraft={setDraft}
-            activeRun={activeRun}
-            runStatus={runStatus}
-            budgetPark={budgetPark}
-            submitPrompt={submitPrompt}
-            cancelActiveRun={cancelActiveRun}
-            regenerate={regenerate}
-            decideAgentCall={decideAgentCall}
             openCitation={openCitation}
-            onAttach={() => setView("sources")}
-            approval={{
-              mode: activeThread?.approval_mode ?? "ask_writes",
-              setMode: setApprovalMode,
-              conversationId: activeConversation,
-              conversationTitle: activeTitle,
-            }}
-            todos={{ lists: todoLists, ops: todoOps }}
-            endRef={endRef}
-            selectedAgentId={selectedAgentId}
-            onSelectAgent={setSelectedAgentId}
+            closePane={closePane}
+            focusedPane={focusedPane}
+            focusPane={focusPane}
+            onSettled={refreshConversations}
+            onApprovalChanged={patchConversation}
+            primary={
+              <ChatView
+                messages={messages}
+                sources={sources}
+                agentCalls={agentCalls}
+                apps={dashboardApps}
+                draft={draft}
+                setDraft={setDraft}
+                activeRun={activeRun}
+                runStatus={runStatus}
+                budgetPark={budgetPark}
+                flaggedRuns={flaggedRuns}
+                sharedThread={activeThread?.shared}
+                submitPrompt={submitPrompt}
+                cancelActiveRun={cancelActiveRun}
+                regenerate={regenerate}
+                decideAgentCall={decideAgentCall}
+                openCitation={openCitation}
+                onAttach={() => setView("sources")}
+                approval={{
+                  mode: activeThread?.approval_mode ?? "ask_writes",
+                  setMode: setApprovalMode,
+                  conversationId: activeConversation,
+                  conversationTitle: activeTitle,
+                }}
+                todos={{ lists: todoLists, ops: todoOps }}
+                endRef={endRef}
+                selectedAgentId={selectedAgentId}
+                onSelectAgent={setSelectedAgentId}
+                turnControls={{
+                  models: bootstrap?.model_provider.selectable_models ?? [],
+                  efforts: bootstrap?.model_provider.reasoning_efforts ?? [],
+                  model: selectedModel,
+                  setModel: setSelectedModel,
+                  effort: selectedEffort,
+                  setEffort: setSelectedEffort,
+                  fast,
+                  setFast,
+                }}
+                skills={{
+                  attached: attachedSkill,
+                  argValues: skillArgs,
+                  attach: attachSkill,
+                  detach: detachSkill,
+                  setArg: setSkillArg,
+                }}
+              />
+            }
           />
         )}
 
@@ -619,6 +763,10 @@ export function Workspace() {
             somebody opens the editor, not at page load. */}
         {view === "agents" && <AgentsView setError={setError} />}
 
+        {/* Self-contained like AgentsView: the skill list is nobody's business
+            until they open this or type "/" in the composer. */}
+        {view === "skills" && <SkillsView setError={setError} />}
+
         {/* Self-contained: a workflow's run history is nobody's business until
             they open this, so it is fetched here rather than at page load. */}
         {view === "workflows" && (
@@ -630,6 +778,11 @@ export function Workspace() {
           />
         )}
 
+        {/* Self-contained like WorkflowsView: a cron's schedule and last-fired
+            state are nobody's business until they open this, so the list is
+            fetched here rather than at page load. */}
+        {view === "crons" && <CronsView setError={setError} />}
+
         {view === "mcp" && (
           <McpView
             servers={mcpServers}
@@ -638,6 +791,15 @@ export function Workspace() {
             setServerEnabled={setMcpServerEnabled}
             setToolEnabled={setMcpToolEnabled}
             removeServer={removeMcpServer}
+          />
+        )}
+
+        {view === "sandbox-tools" && (
+          <SandboxToolsView
+            tools={sandboxTools}
+            addTool={addSandboxTool}
+            setToolEnabled={setSandboxToolEnabled}
+            removeTool={removeSandboxTool}
           />
         )}
 

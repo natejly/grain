@@ -32,6 +32,17 @@ PUBLIC_UNSAFE_ROUTES = {
     "/api/auth/password/reset/request",
     "/api/auth/password/reset/confirm",
     "/api/auth/verify-email",
+    # The passwordless front door, same public-unsafe class as reset/request and
+    # verify-email: /request answers with a token nobody but the mailbox owner
+    # sees, /consume is redeemed with that single-use token which is itself the
+    # credential. Classified PUBLIC in tests/isolation.py for the same reason.
+    "/api/auth/login-link/request",
+    "/api/auth/login-link/consume",
+    # Anonymous try-it. It *starts* a session (there is none to resolve yet), so
+    # like /login and /dev-login it cannot depend on get_actor. It is fenced by
+    # settings.playground_enabled instead, which is off by default and boot-
+    # guarded outside a secure-cookie deployment.
+    "/api/auth/playground",
     # The schedule ticker. An external cron holds no session, so it authenticates
     # with a shared secret compared inside the route, and it is given the
     # smallest surface a state-changing route can have: no arguments at all — no

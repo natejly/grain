@@ -5,6 +5,7 @@ import {
   Bot,
   Braces,
   Brain,
+  Clock,
   Database,
   FileText,
   KanbanSquare,
@@ -14,6 +15,8 @@ import {
   Network,
   Plug,
   ShieldCheck,
+  Sparkles,
+  Terminal,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -85,11 +88,14 @@ export const NAV_GROUPS: NavGroup[] = [
     /**
      * Agents live beside Chat, not in settings: an agent is who you are
      * talking to, so the place you author one is a tab away from the place
-     * you use one.
+     * you use one. A skill is the same argument in the other dimension — not
+     * who answers but what you ask them to do — so it sits alongside, authored
+     * a tab from the composer that invokes it with "/".
      */
     items: [
       { view: "chat", label: "Chat", icon: MessageSquare },
       { view: "agents", label: "Agents", icon: Bot },
+      { view: "skills", label: "Skills", icon: Sparkles },
     ],
   },
   /**
@@ -142,13 +148,23 @@ export const NAV_GROUPS: NavGroup[] = [
    * and on purpose; an approval that has been waiting since 3am is the opposite
    * of that. So: a place you work, appended rather than inserted, because the
    * three that were already here should not move for a fourth.
+   *
+   * Automations sit beside Workflows rather than in a group of their own: both
+   * are unattended recurring work armed by the same ticker, and a personal cron
+   * that fired a task run parks its writes for a person exactly as a scheduled
+   * workflow does — so the same reason Workflows earns a rail seat (you come
+   * here to *answer* what ran unwatched, not only to make one) is the reason a
+   * cron's approval belongs a tab away rather than buried in Settings.
    */
   {
     id: "workflows",
     label: "Workflows",
     icon: Workflow,
     surface: "rail",
-    items: [{ view: "workflows", label: "Workflows", icon: Workflow }],
+    items: [
+      { view: "workflows", label: "Workflows", icon: Workflow },
+      { view: "crons", label: "Automations", icon: Clock },
+    ],
   },
   {
     id: "connections",
@@ -158,6 +174,10 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { view: "data", label: "Databases", icon: Database },
       { view: "mcp", label: "MCP", icon: Blocks },
+      // Beside MCP because it is the same kind of surface: registering tools the
+      // agent may call. Not on the rail — you configure it rarely and on
+      // purpose, and it is not a machine you operate.
+      { view: "sandbox-tools", label: "Sandbox tools", icon: Terminal },
       { view: "integrations", label: "Integrations", icon: Plug },
     ],
   },

@@ -612,7 +612,10 @@ select:focus-visible {
   width: 100%;
   height: 34px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* Three trailing action columns: share/unshare (open thread only), open in a
+     new pane, and delete. The share column is `auto`, so it collapses to zero
+     width on every row that does not render the toggle. */
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;
@@ -658,7 +661,8 @@ select:focus-visible {
   font-size: 9px;
 }
 
-.thread-delete {
+.thread-delete,
+.thread-split {
   width: 26px;
   height: 26px;
   display: grid;
@@ -673,13 +677,52 @@ select:focus-visible {
 
 .thread:hover .thread-delete,
 .thread.active .thread-delete,
-.thread-delete:focus-visible {
+.thread-delete:focus-visible,
+.thread:hover .thread-split,
+.thread.active .thread-split,
+.thread-split:focus-visible {
   opacity: 1;
 }
 
-.thread-delete:hover {
+.thread-delete:hover,
+.thread-split:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+/* The share toggle rides only the open thread, so it stays visible rather than
+   revealing on hover the way the split/delete actions do — it is that thread's
+   primary affordance, not an incidental one. */
+.thread-share {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.thread-share:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Shared state gets the accent so a glance at the rail tells personal from
+   shared without reading the group heading. */
+.thread-share.shared {
+  color: var(--accent);
+}
+
+/* Sub-heading dividing the personal and shared groups within the rail. */
+.thread-group {
+  margin: 10px 10px 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .empty-threads {
@@ -893,6 +936,30 @@ select:focus-visible {
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 600;
+}
+
+/* The prompt-injection screen's posture pill, mirroring .agent-pill so the two
+   status indicators read as one row. Coloured only in enforce — the mode that
+   actually gates a flagged turn — so a shadow deployment stays quiet chrome. */
+.screen-pill {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.screen-pill.enforce {
+  border-color: var(--red-border);
+  background: var(--red-muted);
+  color: var(--red);
 }
 
 .icon-button {
@@ -1154,6 +1221,40 @@ select:focus-visible {
   color: inherit;
 }
 
+/* The prompt-injection screen's mark on a flagged turn. Shares the citation
+   check's plate geometry so the two verdicts stack cleanly under an answer, and
+   the fabricated-citation red because a caught injection is likewise a defect
+   the reader must not miss. */
+.screen-flag {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  margin-left: 31px;
+  padding: 8px 11px;
+  border: 1px solid var(--red-border);
+  border-radius: 8px;
+  background: var(--red-muted);
+  color: var(--red);
+  font-size: 12px;
+}
+
+.screen-flag > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.screen-flag > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.screen-flag strong {
+  font-weight: 600;
+}
+
 .citations {
   margin-top: 12px;
   padding-left: 31px;
@@ -1293,6 +1394,57 @@ select:focus-visible {
   color: var(--text);
 }
 
+.composer-tools .composer-select {
+  height: 29px;
+  max-width: 150px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.composer-tools .composer-select:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.composer-tools .composer-select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Overrides the fixed-width icon-button rule above: the toggle carries a label,
+   so it must size to its content rather than the 29px icon square. */
+.composer-tools .composer-toggle {
+  width: auto;
+  height: 29px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 11px;
+}
+
+.composer-tools .composer-toggle.on {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+
+.composer-tools .composer-toggle.on:hover {
+  background: var(--accent-hover);
+  color: var(--accent-contrast);
+}
+
+.composer-tools .composer-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .composer-tools .send-button {
   margin-left: auto;
   background: var(--accent);
@@ -1322,6 +1474,207 @@ select:focus-visible {
   background: var(--surface-raised);
   color: var(--text-muted);
   font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+/* The composer's slash-skill picker and the attached-skill chip. The shell is a
+   relative anchor around the composer so the picker can float above it, aligned
+   to the same centred width, without pushing the textarea down as it opens. */
+.composer-shell {
+  position: relative;
+  width: min(760px, 100%);
+  margin: 0 auto;
+}
+
+.composer-shell .composer {
+  width: 100%;
+}
+
+.skill-picker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px var(--tint);
+}
+
+.skill-picker li {
+  margin: 0;
+}
+
+.skill-picker li > button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.skill-picker li > button:hover {
+  background: var(--surface-hover);
+}
+
+.skill-picker-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.skill-picker-desc {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* The attached skill sits on its own row between the textarea and the tools, so
+   it never crowds the agent / approval / model controls. */
+.skill-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 9px 0;
+}
+
+.skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.skill-chip > button {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.skill-chip > button:hover:not(:disabled) {
+  background: var(--tint);
+}
+
+.skill-arg-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.skill-arg-inline .skill-arg-input {
+  width: 120px;
+  height: 27px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.skill-arg-inline .composer-select {
+  height: 27px;
+}
+
+.skill-arg-bool {
+  gap: 4px;
+}
+
+/* The Skills editor's argument rows and versions list. */
+.skill-slug {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.skill-arg-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.skill-arg-row input[type="text"],
+.skill-arg-row > input:not([type]),
+.skill-arg-row select {
+  height: 29px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.skill-arg-row > input:not([type]) {
+  flex: 1;
+  min-width: 90px;
+}
+
+.skill-arg-required {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.skill-shared {
+  margin-top: 4px;
+}
+
+.skill-versions {
+  margin-top: 8px;
+}
+
+.skill-version-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.skill-version-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .content-page {
@@ -4098,6 +4451,106 @@ select:focus-visible {
   font-size: 10px;
 }
 
+/* ---- Multi-pane chat split ----
+   The shell's primary chat and any extra concurrent panes, side by side in a
+   resizable horizontal split. Only rendered once a second pane is open — the
+   single-pane user gets the primary ChatView with none of this around it.
+   Colours are tokens only, so the split reads correctly in both themes. */
+.chat-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* On a phone a horizontal split crushes every pane below a usable width, so
+   stack them vertically and turn the col-resize divider into a plain rule that
+   no longer advertises a drag it cannot usefully perform on this axis. */
+@media (max-width: 640px) {
+  .chat-split {
+    flex-direction: column;
+  }
+
+  .pane-divider {
+    cursor: default;
+  }
+}
+
+.chat-split-pane {
+  /* flex-grow (the resize ratio) is set inline per pane; min-width:0 is what
+     lets a pane shrink under its content rather than forcing the row wider. */
+  flex-shrink: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-divider {
+  flex: 0 0 6px;
+  align-self: stretch;
+  border: 0;
+  padding: 0;
+  background: var(--border);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.pane-divider:hover,
+.pane-divider:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.chat-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+/* The focused pane, so a keyboard user and a mouse user both know which pane a
+   close or resize is about. Inset so it does not shift the layout. */
+.chat-pane.focused {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: -2px;
+}
+
+.chat-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 10px 8px 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.chat-pane-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.chat-pane > .tool-error {
+  flex: none;
+  padding: 8px 14px;
+}
+
+/* Compact density: an extra pane is narrower than the centred primary column,
+   so it pads like the panel beside a document rather than reserving a measure. */
+.chat-pane .message-scroll {
+  padding: 0 14px;
+}
+
+.chat-pane .message-column {
+  width: 100%;
+}
+
 /* ---- Kanban boards ---- */
 
 .board-new {
@@ -5374,6 +5827,107 @@ select:focus-visible {
   color: var(--text-dim);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- Observability ----
+   A sibling of the spend panel: same full-width card, same window <select>, and
+   it reuses the spend panel's bar and row conventions rather than inventing its
+   own. Every colour is a token already redefined under both dark blocks, so
+   light and dark are automatic; the only new accent is the error red, borrowed
+   from .admin-error, for a failure count or rate that is worth the eye. */
+.observability-panel {
+  grid-column: 1 / -1;
+}
+
+.observability-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.observability-metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.observability-metric-head h3 {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.observability-metric-head span {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The percentile rows never scroll — there are exactly four — so it drops the
+   max-height the shared .usage-rows carries for the 25-row breakdowns. */
+.observability-percentiles {
+  max-height: none;
+}
+
+.observability-value {
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Runs per bucket, height encoding count. A row of columns filled from the
+   bottom, drawn in the same soft accent as the spend bars over the same track
+   colour, so the two panels read as one chart vocabulary. */
+.observability-throughput {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 56px;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+}
+
+.observability-col {
+  display: flex;
+  align-items: flex-end;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.observability-col span {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px;
+  background: var(--accent-soft);
+}
+
+.observability-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.observability-health strong.observability-error {
+  color: var(--red);
+}
+
+.observability-error {
+  color: var(--red);
+}
+
+.observability-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
 }
 
 /* ---- Workflows ----
@@ -7778,4 +8332,71 @@ select:focus-visible {
   background: var(--bg);
   color: var(--text);
   font-size: 11px;
+}
+
+/* ---- Automations (personal crons) ----
+   The list and detail reuse the Workflows view's layout classes wholesale; only
+   the create form is the crons view's own, because a workflow is authored from
+   one sentence and a cron from a handful of typed fields. These match the tone
+   of `.create-form` — the same borders, the same surfaces — so the two ways of
+   making unattended work do not look like two different applications. */
+.cron-form {
+  display: grid;
+  gap: 12px;
+  max-width: 640px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.cron-field {
+  display: grid;
+  gap: 5px;
+}
+
+.cron-field > span {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cron-field input,
+.cron-field select {
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.cron-field input:focus,
+.cron-field select:focus,
+.cron-field .workflow-prompt:focus {
+  border-color: var(--accent-border-strong);
+}
+
+/* Schedule and timezone sit side by side: a cron expression is meaningless
+   without the zone it is read in, so the two are one decision. */
+.cron-field-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.cron-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* The Run-now confirmation, in green — it reads like the schedule note that
+   sits above it, so a fired automation and a scheduled one speak the same way. */
+.workflow-approval-note.live {
+  background: var(--green-muted);
+  color: var(--green);
 }

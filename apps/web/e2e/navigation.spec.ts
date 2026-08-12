@@ -87,7 +87,13 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
   await shot(page, "knowledge");
 
   await openSettings(page, "Connections");
-  await expect(tabs(page, "Connections").getByRole("button")).toHaveCount(3);
+  // Sandbox tools joined this group beside MCP: both register capabilities the
+  // agent may call, and neither is a machine you operate from the rail.
+  for (const tab of ["Databases", "MCP", "Sandbox tools", "Integrations"]) {
+    await expect(tabs(page, "Connections").getByRole("button", { name: tab }))
+      .toBeVisible();
+  }
+  await expect(tabs(page, "Connections").getByRole("button")).toHaveCount(4);
   await tabs(page, "Connections").getByRole("button", { name: /MCP/ }).click();
   await expect(page.getByRole("heading", { name: "MCP servers" })).toBeVisible();
 
