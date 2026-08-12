@@ -270,6 +270,69 @@ describe("WorkspaceApi", () => {
     ]);
   });
 
+  /**
+   * The whole promise of the per-turn controls is that an *unchanged* composer
+   * behaves exactly as before: absent, empty, and default-false controls must
+   * leave the wire body byte-identical to the pre-feature request, or every
+   * existing deployment silently starts sending fields the API never validated.
+   */
+  it("keeps the message body free of per-turn keys when nothing is overridden", async () => {
+    const bodies: unknown[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+    const api = new WorkspaceApi("http://example.test");
+
+    // No controls argument at all — the pre-feature call shape.
+    await api.sendMessage("conv-1", "hello", "agent-1");
+    // Controls present but every field at its "use the default" resting value:
+    // "" model, "" effort, fast off. Each must be omitted, not sent empty.
+    await api.sendMessage("conv-1", "hello", "agent-1", {
+      model: "",
+      effort: "",
+      fast: false,
+    });
+
+    for (const body of bodies) {
+      expect(body).toEqual({ content: "hello", agent_id: "agent-1" });
+      expect(body).not.toHaveProperty("model");
+      expect(body).not.toHaveProperty("effort");
+      expect(body).not.toHaveProperty("fast");
+    }
+  });
+
+  /**
+   * When the user does choose, the overrides go on the wire under the exact
+   * field names the API validates — `model`, `effort`, `fast` — and `fast` is
+   * sent as a literal `true`, never echoing whatever truthy value arrived.
+   */
+  it("puts present per-turn overrides on the wire under the agreed field names", async () => {
+    let sent: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+
+    await new WorkspaceApi("http://example.test").sendMessage("conv-1", "hi", "agent-1", {
+      model: "gpt-fast",
+      effort: "high",
+      fast: true,
+    });
+
+    expect(sent).toEqual({
+      content: "hi",
+      agent_id: "agent-1",
+      model: "gpt-fast",
+      effort: "high",
+      fast: true,
+    });
+  });
+
   it("parses ordered resumable SSE events", async () => {
     const body = [
       "id: 3",

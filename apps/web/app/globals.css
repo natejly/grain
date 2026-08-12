@@ -1293,6 +1293,57 @@ select:focus-visible {
   color: var(--text);
 }
 
+.composer-tools .composer-select {
+  height: 29px;
+  max-width: 150px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.composer-tools .composer-select:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.composer-tools .composer-select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Overrides the fixed-width icon-button rule above: the toggle carries a label,
+   so it must size to its content rather than the 29px icon square. */
+.composer-tools .composer-toggle {
+  width: auto;
+  height: 29px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 11px;
+}
+
+.composer-tools .composer-toggle.on {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+
+.composer-tools .composer-toggle.on:hover {
+  background: var(--accent-hover);
+  color: var(--accent-contrast);
+}
+
+.composer-tools .composer-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .composer-tools .send-button {
   margin-left: auto;
   background: var(--accent);

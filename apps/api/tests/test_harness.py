@@ -144,7 +144,18 @@ def test_openai_harness_forwards_the_turn_arguments_to_the_stream(monkeypatch):
 
     captured: dict = {}
 
-    def spy(client, settings, *, user_id, input_items, tools, instructions, operation=""):
+    def spy(
+        client,
+        settings,
+        *,
+        user_id,
+        input_items,
+        tools,
+        instructions,
+        model=None,
+        effort=None,
+        operation="",
+    ):
         captured.update(
             client=client,
             user_id=user_id,

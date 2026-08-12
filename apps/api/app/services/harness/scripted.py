@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from ...config import Settings
 from ..retrieval import Evidence
@@ -24,7 +24,12 @@ class ScriptedHarness:
         prompt: str,
         user_id: str,
         evidence: List[Evidence],
+        model: Optional[str] = None,
+        effort: Optional[str] = None,
     ) -> ModelStep:
+        # The double talks to no provider, so a per-turn model or effort override
+        # has nothing to apply to — it accepts both to satisfy the Protocol and
+        # ignores them.
         from ..scripted_model import scripted_model_step
 
         return scripted_model_step(settings, prompt=prompt, evidence=evidence)

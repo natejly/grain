@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
+from ..config import Settings, get_settings
 from ..database import SessionLocal, get_db
 from ..models import (
     Agent,
@@ -306,6 +307,7 @@ def send_message(
     background_tasks: BackgroundTasks,
     key: str = Depends(idempotency_key),
     actor: Actor = Depends(get_actor),
+    settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> SendMessageResponse:
     conversation = db.scalar(
@@ -349,6 +351,14 @@ def send_message(
     agent = db.scalar(agent_query)
     if agent is None:
         raise HTTPException(status_code=400, detail="Agent is not available")
+    # A per-turn model override must be on the deployment allow-list; an arbitrary
+    # string would reach the provider unpriced. (An off-ladder `effort` is already
+    # refused by the `ReasoningEffort` Literal on the request as a 422.)
+    if payload.model and payload.model not in settings.selectable_models:
+        raise HTTPException(status_code=422, detail="Model is not selectable")
+    # `fast` maps to "low", not "none" — the honest lowest-latency effort every
+    # model accepts — and an explicit `effort` always wins over it.
+    requested_effort = payload.effort or ("low" if payload.fast else "")
     run = Run(
         id=new_id(),
         workspace_id=actor.workspace_id,
@@ -357,6 +367,8 @@ def send_message(
         created_by=actor.user_id,
         status="queued",
         prompt=payload.content,
+        requested_model=payload.model or "",
+        requested_effort=requested_effort,
     )
     message = Message(
         id=new_id(),

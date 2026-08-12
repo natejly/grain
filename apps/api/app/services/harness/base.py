@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, List, Protocol, Tuple, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    runtime_checkable,
+)
 
 from ...config import Settings
 from ..retrieval import Evidence
@@ -40,13 +50,20 @@ class Harness(Protocol):
         prompt: str,
         user_id: str,
         evidence: List[Evidence],
+        model: Optional[str] = None,
+        effort: Optional[str] = None,
     ) -> ModelStep:
         """Return the `ModelStep` for one turn.
 
         Only primitives cross this boundary — never a `Run` — so a harness stays
-        free of DB models and captures exactly the two fields the loop reads off a
-        run (`prompt`, `created_by`). `evidence` is consumed only by the scripted
-        double as its unscripted-answer fallback; a real backend receives the same
-        passages through the prompt and ignores it here.
+        free of DB models and captures exactly the fields the loop reads off a run
+        (`prompt`, `created_by`, and the per-turn overrides). `evidence` is
+        consumed only by the scripted double as its unscripted-answer fallback; a
+        real backend receives the same passages through the prompt and ignores it
+        here.
+
+        `model` and `effort` are the per-turn overrides; each defaults to None,
+        meaning "use the deployment default", so a caller that passes neither gets
+        exactly the pre-override behaviour. A double with no provider ignores both.
         """
         ...

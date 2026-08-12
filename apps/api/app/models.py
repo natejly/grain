@@ -234,6 +234,15 @@ class Run(Base):
     # have needed each of them edited, and would have been wrong wherever one
     # was missed.
     paused_reason: Mapped[str] = mapped_column(String(16), default="")
+    # Per-turn overrides chosen when the message was sent, persisted here because
+    # `process_run` re-opens a fresh session and reads the run off the row — the
+    # HTTP request is long gone. "" means "unset", the same string-for-unset
+    # convention `paused_reason` uses, and resolves to the deployment defaults in
+    # `stream_agent_response`. Persisting them (rather than passing them in
+    # memory) also makes a turn resumed in another process after an approval or a
+    # budget park use the same model and effort the user originally chose.
+    requested_model: Mapped[str] = mapped_column(String(80), default="")
+    requested_effort: Mapped[str] = mapped_column(String(16), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

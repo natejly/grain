@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .config import ReasoningEffort
+
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -29,6 +31,14 @@ class ModelProviderStatus(BaseModel):
     provider: Literal["openai", "scripted"]
     configured: bool
     model: str
+    # The per-turn controls the composer offers. `selectable_models` is the
+    # deployment's allow-list (the scripted double lists only itself); the client
+    # must not send a model outside it. `reasoning_efforts` is the effort ladder
+    # for the dropdown and `default_effort` the one pre-selected — the deployment
+    # default, so an untouched composer reproduces today's behaviour exactly.
+    selectable_models: List[str] = []
+    reasoning_efforts: List[str] = []
+    default_effort: str = ""
 
 
 class BootstrapResponse(ApiModel):
@@ -254,6 +264,19 @@ class MessageOut(ApiModel):
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     agent_id: Optional[str] = None
+    # Per-turn overrides, all optional — absent means the deployment defaults, so
+    # a client that never sends them behaves byte-identically to today.
+    #: Model to run this turn on. Free string here (pydantic cannot see the
+    #: allow-list), validated against `settings.selectable_models` in the endpoint.
+    model: Optional[str] = None
+    #: Reasoning effort for this turn. A `ReasoningEffort` Literal, so a value off
+    #: the ladder is refused as 422 by pydantic with no endpoint code.
+    effort: Optional[ReasoningEffort] = None
+    #: Shortcut for the lowest-latency *honest* effort. It maps to "low", not
+    #: "none": the small models reject "none" outright (see services/model.py), so
+    #: "fast" must not promise a setting some models cannot honour. An explicit
+    #: `effort` always wins over `fast`.
+    fast: bool = False
 
 
 class RunOut(ApiModel):

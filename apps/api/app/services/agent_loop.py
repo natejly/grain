@@ -199,6 +199,10 @@ def _default_model_step(
         prompt=run.prompt,
         user_id=run.created_by,
         evidence=list(evidence),
+        # "" is the unset convention; None lets the harness fall back to the
+        # deployment defaults, so a run with no override is identical to today.
+        model=run.requested_model or None,
+        effort=run.requested_effort or None,
     )
 
 

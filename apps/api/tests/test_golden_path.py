@@ -26,6 +26,12 @@ def test_health_and_bootstrap(client):
         "provider": "scripted",
         "configured": False,
         "model": "scripted-double",
+        # The per-turn composer controls: the double talks to no provider, so its
+        # only selectable "model" is itself; the effort ladder is the full
+        # `ReasoningEffort` and the pre-select is the deployment default.
+        "selectable_models": ["scripted-double"],
+        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "default_effort": "low",
     }
 
     request_id = client.get(
