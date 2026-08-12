@@ -58,6 +58,12 @@ export type ThreadHandlerDeps = {
    */
   onRunSettled: (runId: string, conversationId: string) => Promise<void>;
   /**
+   * The API refused the selected agent — it was deleted out from under this
+   * thread. The caller clears its own selection so the next send falls back to
+   * the default rather than failing identically forever.
+   */
+  onAgentUnavailable?: () => void;
+  /**
    * A write has parked mid-stream, before the run is anywhere near settled.
    *
    * Both surfaces have something waiting on this and they are not the same
@@ -105,6 +111,7 @@ export function createThreadHandlers({
   setDraft,
   ensureConversation,
   onRunSettled,
+  onAgentUnavailable,
   onToolProposed,
   activeConversationRef,
 }: ThreadHandlerDeps) {
@@ -216,6 +223,12 @@ export function createThreadHandlers({
       );
       void followRun(response.run.id, activeConversation);
     } catch (caught) {
+      // An agent deleted out from under a thread leaves the picker on a
+      // dead id, and every later send fails identically. Clear it so the
+      // next attempt falls back to the default instead of repeating.
+      if (caught instanceof Error && caught.message.includes("Agent is not available")) {
+        onAgentUnavailable?.();
+      }
       setError(describeError(caught, "Could not regenerate"));
     }
   }
@@ -402,6 +415,12 @@ export function createThreadHandlers({
       void followRun(response.run.id, conversationId);
     } catch (caught) {
       setDraft(content);
+      // An agent deleted out from under a thread leaves the picker on a
+      // dead id, and every later send fails identically. Clear it so the
+      // next attempt falls back to the default instead of repeating.
+      if (caught instanceof Error && caught.message.includes("Agent is not available")) {
+        onAgentUnavailable?.();
+      }
       setError(describeError(caught, "Could not send message"));
     }
   }

@@ -145,6 +145,7 @@ export function createChatHandlers({
      * projects and connections, the pending edits it may have parked, and the
      * open project and document if the user is looking at one.
      */
+    onAgentUnavailable: () => setSelectedAgentId(""),
     onRunSettled: async () => {
       setConversations(await api.listConversations());
       await refreshSecondary();
