@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,13 +23,9 @@ from ..models import (
 from . import budget, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
+from .harness import ModelStep, resolve_harness
 from .llm_tools import ToolContext, ToolResult, ToolSpec, build_registry
-from .model import (
-    CHAT_INSTRUCTIONS,
-    _openai_client,
-    _openai_input,
-    stream_agent_response,
-)
+from .model import CHAT_INSTRUCTIONS, _openai_input
 from .retrieval import Evidence
 from .usage import usage_scope
 from .web_search import (
@@ -41,12 +37,6 @@ from .web_search import (
 )
 
 MAX_ITERATIONS = 6
-
-# A model step takes (input_items, tools, instructions) and returns an iterable of
-# ("delta", text) events followed by ("completed", response), where response
-# exposes .output (function calls have .type == "function_call", .name, .call_id,
-# .arguments) and .output_text. Injectable so tests can script a model offline.
-ModelStep = Callable[[List[Any], List[Dict[str, Any]], str], Iterable[Tuple[str, Any]]]
 
 DENIAL_OUTPUT = (
     "The user denied this tool call. Do not retry it. Continue using what you "
@@ -199,27 +189,17 @@ def _default_model_step(
     How the turn is *billed* is not an argument, because this function is also
     the seam tests replace: it is carried by the `usage_scope` the caller has
     already opened, and read back inside `stream_agent_response`.
+
+    The provider branch itself lives in the harness registry now; this stays as
+    the thin injectable seam that resolves it, so every `model_step=` override
+    keeps its single point of interception.
     """
-    if settings.active_model_provider == "scripted":
-        from .scripted_model import scripted_model_step
-
-        return scripted_model_step(settings, prompt=run.prompt, evidence=evidence)
-
-    client = _openai_client(settings)
-
-    def step(
-        input_items: List[Any], tools: List[Dict[str, Any]], instructions: str
-    ) -> Iterable[Tuple[str, Any]]:
-        return stream_agent_response(
-            client,
-            settings,
-            user_id=run.created_by,
-            input_items=input_items,
-            tools=tools,
-            instructions=instructions,
-        )
-
-    return step
+    return resolve_harness(settings).build_step(
+        settings,
+        prompt=run.prompt,
+        user_id=run.created_by,
+        evidence=list(evidence),
+    )
 
 
 def _tool_payload(
