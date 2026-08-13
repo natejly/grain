@@ -17,6 +17,7 @@ from ..auth import Actor, get_actor
 from ..database import get_db
 from ..models import Project, ProjectFile
 from ..schemas import ApiModel
+from ..services import conversations, subjects
 from ..services.projects import store
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -57,6 +58,12 @@ class ProjectRequest(BaseModel):
     # entry path is left empty by default so each kind gets its own.
     kind: Literal["web", "latex"] = "web"
     entry_path: str = ""
+
+
+class ProjectEntryRequest(BaseModel):
+    """Which file the preview renders. See `store.set_entry_path`."""
+
+    entry_path: str
 
 
 class ProjectFileRequest(BaseModel):
@@ -170,6 +177,26 @@ def write_project_file(
     return _file_out(file)
 
 
+@router.put("/{project_id}/entry", response_model=ProjectOut)
+def set_project_entry(
+    project_id: str,
+    payload: ProjectEntryRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ProjectOut:
+    """Point the preview at a different root file.
+
+    A PUT of a value rather than the creation of one, so no `Idempotency-Key`: a
+    retry lands on the same state by construction.
+    """
+    project = _load(db, actor, project_id)
+    try:
+        store.set_entry_path(db, project=project, path=payload.entry_path)
+    except store.ProjectError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _project_out(db, project)
+
+
 @router.delete("/{project_id}/files", status_code=204)
 def delete_project_file(
     project_id: str,
@@ -198,4 +225,15 @@ def delete_project(
     db: Session = Depends(get_db),
 ) -> None:
     project = _load(db, actor, project_id)
+    # The side-panel thread goes with it, exactly as a document's does. It was
+    # only ever about this project — every turn was handed its file tree — so
+    # leaving it behind would leave a conversation whose subject no longer
+    # exists, invisible in the Chat rail (which filters scoped threads out) and
+    # reachable by nothing.
+    conversations.purge_for_subject(
+        db,
+        workspace_id=actor.workspace_id,
+        subject_kind=subjects.PROJECT,
+        subject_id=project.id,
+    )
     store.delete_project(db, workspace_id=actor.workspace_id, project_id=project.id)

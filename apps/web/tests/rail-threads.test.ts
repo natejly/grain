@@ -27,7 +27,8 @@ function conversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
     id: "conv-1",
     title: "Thread",
-    document_id: "",
+    subject_kind: "",
+    subject_id: "",
     approval_mode: "ask_writes",
     shared: false,
     owned: true,

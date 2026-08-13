@@ -1,40 +1,54 @@
-# Integrate feat/session-79 into feat/agentic-workspace
+# Agent chat sidebar for projects and dashboards
 
-Goal: land the six session-79 features (backend + frontend) in the main tree so
-the UI actually exposes them. merge-tree reports clean; peer warns git
-under-reports (globals.css, handlers/chat.ts auto-merged into a broken build two
-hours ago) — so verify semantically, not just textually.
+Extend the document-thread pattern to two more subjects, scope each thread's
+tools to its subject, and add a development-only unrestricted mode that cannot
+be switched on outside development.
 
-## Steps
-- [ ] Safety tag `pre-session79-merge` at 696265d (abort = reset --hard to it)
-- [ ] Merge feat/session-79 (29070a1) into feat/agentic-workspace
-- [ ] Verify routers registered in main.py (skills, sandbox_tools, crons)
-- [ ] Alembic: single head, upgrade-from-empty + downgrade-to-base both exit 0
-- [ ] Backend: ruff, mypy, pytest full suite
-- [ ] Frontend: tsc, eslint, `pnpm build` (catches CSS/handler splices), vitest
-- [ ] Inspect globals.css (blocks close) + handlers/chat.ts (one event loop)
-- [ ] e2e full suite (peer raised write timeout to 45s in 696265d)
-- [ ] Report + ping peer to re-verify and fast-forward main
+## 1. Polymorphic subject (backend)
+- [ ] Migration 0038: `conversations.subject_kind` + `subject_id` replace
+      `document_id` (backfill kind='document'); `runs.subject_focus` for the
+      file the project editor has open. Verify chain from an empty DB, both ways.
+- [ ] `services/subjects.py`: one module owning subject resolution, per-subject
+      context injection, and the per-subject tool table.
+- [ ] `services/conversations.py`: `for_subject`/`for_subject_ids`, and the
+      visibility/predicate clauses keyed on `subject_id != ""`.
+- [ ] `ToolContext` gains `project_id` / `dashboard_id` beside `document_id`.
+- [ ] Get-or-create routes for project and dashboard; delete-with-subject on
+      the project and dashboard delete routes.
+
+## 2. Context injection per subject
+- [ ] document: unchanged wording (user's text, never instructions).
+- [ ] project: file tree + the open file (`run.subject_focus`, entry file when
+      unset). Never the whole filesystem.
+- [ ] dashboard: spec + bindings. Never query results.
+- [ ] The screen sees whichever text was injected, not just documents.
+
+## 3. Per-subject tool scoping
+- [ ] One table: shared read families + the subject's own family.
+- [ ] Composed with the agent's provisioned subset via `build_registry(allowed=)`
+      — intersection, before any policy question.
+- [ ] Tests: scoped-out tool absent from the registry, and still absent under
+      `auto_writes`. Mutation-check the ordering.
+
+## 4. Development-only unrestricted mode
+- [ ] `DEV_UNRESTRICTED_AGENT`, guarded by a `@model_validator` that raises
+      outside development/test.
+- [ ] On: subject scoping bypassed, nothing parks. A `deny` row still denies.
+- [ ] Never reaches workflow scope (both existing locks untouched).
+- [ ] Visible in the existing bypass indicator, not a second quieter one.
+- [ ] Mutation-check the production guard.
+
+## 5. Real-time editing
+- [ ] Project chat sidebar; preview rebuilds from *applied* files only.
+- [ ] Dashboard chat sidebar; `update_dashboard` tool (does not exist today).
+
+## 6. HTML entry points
+- [ ] `.html` entry renders through the same locked frame, CSP unchanged.
+
+## Gates
+- [ ] ruff + mypy + pytest (x2) + openapi export
+- [ ] tsc + eslint + vitest + build
+- [ ] playwright (x2)
 
 ## Review
-Merge f95bc3e landed clean (rebase pre-resolved the overlaps the peer hit).
-Semantic verification against the "git under-reports" warning:
-- globals.css braces balanced (1107/1107); handlers/chat.ts coherent; 0 conflict markers
-- Routers registered in main.py: skills (102), sandbox_tools (119), crons (124)
-- Backend: ruff clean, mypy clean (133 files), single head 0037, migrations
-  upgrade-from-empty + downgrade-to-base both exit 0, pytest exit 0
-- Frontend: tsc clean, vitest 491 passed (28 files, +8 from merge), eslint clean,
-  next build exit 0
-- Exposure map (every feature reachable in UI):
-  - skills → nav "Skills" + composer slash-picker; crons → nav "Automations";
-    sandbox-tools → nav under Connections; all routed in workspace.tsx
-  - per-turn model/effort/Fast + skill picker in chat.tsx composer
-  - multiplayer share + open-in-pane in sidebar; multiplane via ChatSplit/panes
-  - observability → ObservabilityPanel in Admin; magic-link → app/auth/login-link
-- e2e: 54/54 passed (exit 0). One fix needed: the chart test's run_python
-  card + "Plotted it." waits were still hardcoded 30s while 696265d moved the
-  rest to AGENT_WRITE_TIMEOUT (45s); run_python is the heaviest turn (real
-  subprocess) so it flaked under load. Fixed in 0e25226.
-
-DONE. Merge f95bc3e + fix 0e25226 on feat/agentic-workspace. All features
-exposed and green. Peer to re-verify + fast-forward main.
+(filled in at the end)

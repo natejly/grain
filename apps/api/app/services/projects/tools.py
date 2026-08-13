@@ -46,11 +46,24 @@ def _seed_files(args: Dict[str, Any]) -> Optional[Dict[str, str]]:
 
 
 def _target(db: Session, context: ToolContext, args: Dict[str, Any]):
+    """Which project a call acts on: what it named, else the one on screen.
+
+    `context.project_id` is the same fallback the document tools take from
+    `context.document_id`, and it exists for the same sentence: a turn started in
+    the panel beside a project means *that* project when it says "this file",
+    and a model that had to guess between forty of them would guess wrong. An
+    explicit id or name still wins — the model asking for something else is the
+    model being specific, not the model being confused.
+    """
+    project_id = _text(args, "project_id")
+    name = _text(args, "project")
+    # Only when the call named neither. `store.resolve` prefers an id over a
+    # name, so folding the context into `project_id` unconditionally would make
+    # every by-name call silently act on the open project instead.
+    if not project_id and not name:
+        project_id = context.project_id
     return store.resolve(
-        db,
-        workspace_id=context.workspace_id,
-        project_id=_text(args, "project_id"),
-        name=_text(args, "project"),
+        db, workspace_id=context.workspace_id, project_id=project_id, name=name
     )
 
 

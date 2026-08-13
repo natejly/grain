@@ -1,14 +1,18 @@
 "use client";
 
 import type {
+  Citation,
   Dashboard,
   DashboardPin,
   DashboardTemplate,
   Dataset,
   GeneratedApp,
+  Source,
 } from "@workspace/api-client";
 import { Plus } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSubjectThread } from "../use-subject-thread";
+import { SubjectChatPanel } from "./subject-chat";
 import { DashboardCatalog, DashboardTemplates } from "./dashboard-catalog";
 import { DashboardGrid, type DashboardResultState } from "./dashboard-grid";
 import type { Tile } from "./dashboard-format";
@@ -54,6 +58,24 @@ export type DashboardsViewProps = {
   /** Which pinned tile to reveal, set by the rail. Cleared once revealed. */
   focused: string | null;
   setFocused: (dashboardId: string | null) => void;
+  /** What the side chat needs to be the same chat as the rail's. */
+  chat?: DashboardChatDeps;
+};
+
+/**
+ * Everything the panel beside a dashboard needs from the shell. Optional as a
+ * bundle rather than field by field, so a caller either wires the panel or does
+ * not have one — there is no half-wired state where the composer sends into
+ * nothing.
+ */
+export type DashboardChatDeps = {
+  agentId?: string;
+  sources: Source[];
+  openCitation: (citation: Citation) => Promise<void>;
+  /** Re-read the dashboards and re-run the revised one after a turn settles. */
+  reloadDashboards: () => Promise<void>;
+  /** `DEV_UNRESTRICTED_AGENT` is on, so the panel wears the warning. */
+  unrestricted?: boolean;
 };
 
 export function DashboardsView({
@@ -75,8 +97,26 @@ export function DashboardsView({
   removeDashboard,
   focused,
   setFocused,
+  chat,
 }: DashboardsViewProps) {
   const revealed = useRef<string | null>(null);
+  // Which dashboard the panel is about. The page shows many at once, so the
+  // subject is a *selection* here rather than "the open one" — a chat that
+  // silently followed the most recently pinned tile would be about something
+  // the reader never chose.
+  const [chatting, setChatting] = useState<string | null>(null);
+  const subject = dashboards.find((item) => item.id === chatting) ?? null;
+
+  const onRunSettled = useCallback(async () => {
+    await chat?.reloadDashboards().catch(() => undefined);
+  }, [chat]);
+
+  const thread = useSubjectThread({
+    kind: "dashboard",
+    subjectId: chat && subject ? subject.id : "",
+    agentId: chat?.agentId,
+    onRunSettled,
+  });
 
   useEffect(() => {
     if (!focused || revealed.current === focused) return;
@@ -94,6 +134,11 @@ export function DashboardsView({
   }, [focused, setFocused]);
 
   return (
+    <div
+      className={
+        subject && chat ? "dashboards-layout with-chat" : "dashboards-layout"
+      }
+    >
     <section className="content-page dashboards-page">
       <div className="page-heading">
         <div>
@@ -126,6 +171,7 @@ export function DashboardsView({
         results={results}
         run={runDashboard}
         unpin={unpinDashboard}
+        chat={chat ? setChatting : undefined}
         saveLayout={saveDashboardLayout}
         focused={focused}
       />
@@ -159,5 +205,20 @@ export function DashboardsView({
         </div>
       </section>
     </section>
+
+    {subject && chat && (
+      <SubjectChatPanel
+        className="dashboard-chat"
+        heading="Chat about this dashboard"
+        label={`Chat about ${subject.name}`}
+        close={() => setChatting(null)}
+        thread={thread}
+        sources={chat.sources}
+        apps={apps}
+        openCitation={chat.openCitation}
+        unrestricted={chat.unrestricted}
+      />
+    )}
+    </div>
   );
 }

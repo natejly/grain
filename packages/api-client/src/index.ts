@@ -87,6 +87,13 @@ export type Bootstrap = {
   };
   /** The prompt-injection screen's posture, for a status indicator. */
   screen: ScreenStatus;
+  /**
+   * The development agent bypass is on: every tool available, nothing parked.
+   * The server refuses to boot with this outside development, so it is false
+   * everywhere else — but where it IS on, the UI has to say so continuously,
+   * because the failure mode is forgetting rather than switching it on.
+   */
+  unrestricted_agent: boolean;
 };
 
 /**
@@ -107,19 +114,28 @@ export type MessageControls = {
    */
   skillId?: string;
   skillArgs?: Record<string, unknown>;
+  /**
+   * Which part of the thread's subject is on screen — the path the project
+   * editor has open. The server stores it on the run, so a turn that parks for
+   * an approval resumes against the file it was asked about.
+   */
+  subjectFocus?: string;
 };
 
 export type Conversation = {
   id: string;
   title: string;
   /**
-   * The document this thread belongs to, or "" for an ordinary chat.
+   * What this thread belongs to: "document" | "project" | "dashboard", or ""
+   * for an ordinary chat.
    *
-   * `listConversations` only ever returns the empty case — a document's thread
-   * is reached through its document, not through the rail — so this is the one
-   * field on a Conversation that says which of the two surfaces it came from.
+   * `listConversations` only ever returns the empty case — a scoped thread is
+   * reached through its subject, not through the rail — so this is the one
+   * field on a Conversation that says which surface it came from.
    */
-  document_id: string;
+  subject_kind: string;
+  /** The subject's id, or "" for an ordinary chat. Only unique WITH the kind. */
+  subject_id: string;
   approval_mode: ApprovalMode;
   /**
    * Personal (false) vs shared (true). A personal thread is visible only to its
@@ -1746,17 +1762,24 @@ export class WorkspaceApi {
   }
 
   /**
-   * The thread for the chat panel beside a document, created on first open.
+   * The thread for the chat panel beside one subject, created on first open.
    *
-   * A POST that carries no `Idempotency-Key` on purpose — the document id *is*
-   * the key. There is one thread per document, so a retry, a second tab and a
+   * A POST that carries no `Idempotency-Key` on purpose — the subject id *is*
+   * the key. There is one thread per subject, so a retry, a second tab and a
    * React remount all land on the same conversation, and nothing here needs the
    * caller to remember a nonce. Passing `false` for `mutation` is what keeps a
    * fresh key from being minted per call for an operation that cannot double.
+   *
+   * One method for all three kinds, because the three routes are one route with
+   * three lookups: a per-kind method would be three places for the no-key rule
+   * to be forgotten in.
    */
-  documentConversation(documentId: string): Promise<Conversation> {
+  subjectConversation(
+    kind: "document" | "project" | "dashboard",
+    subjectId: string,
+  ): Promise<Conversation> {
     return this.request(
-      `/api/documents/${documentId}/conversation`,
+      `/api/${kind}s/${subjectId}/conversation`,
       { method: "POST" },
       false,
     );
@@ -1831,6 +1854,9 @@ export class WorkspaceApi {
           ...(controls?.skillId ? { skill_id: controls.skillId } : {}),
           ...(controls?.skillId && controls?.skillArgs
             ? { skill_args: controls.skillArgs }
+            : {}),
+          ...(controls?.subjectFocus
+            ? { subject_focus: controls.subjectFocus }
             : {}),
         }),
       },
@@ -2243,6 +2269,17 @@ export class WorkspaceApi {
     return this.request(`/api/projects/${projectId}/files`, {
       method: "PUT",
       body: JSON.stringify({ path, content }),
+    });
+  }
+
+  /**
+   * Point the preview at a different root file. A PUT of a value, so no
+   * `Idempotency-Key`: a retry lands on the same state by construction.
+   */
+  setProjectEntry(projectId: string, entryPath: string): Promise<WorkspaceProject> {
+    return this.request(`/api/projects/${projectId}/entry`, {
+      method: "PUT",
+      body: JSON.stringify({ entry_path: entryPath }),
     });
   }
 

@@ -41,6 +41,7 @@ from ..schemas import (
     DashboardTemplateCreate,
     DashboardTemplateOut,
 )
+from ..services import conversations, subjects
 from ..services.analytics import AnalyticsValidationError, execute_dataset_query
 from ..services.audit import record_audit
 from ..services.dashboards import store
@@ -202,6 +203,15 @@ def delete_dashboard(
     db: Session = Depends(get_db),
 ) -> Response:
     dashboard = _dashboard(db, actor, dashboard_id)
+    # The side-panel thread goes with it, exactly as a document's does: it was
+    # only ever about this dashboard's spec, and the Chat rail filters scoped
+    # threads out, so an orphan here is unreachable rather than merely untidy.
+    conversations.purge_for_subject(
+        db,
+        workspace_id=actor.workspace_id,
+        subject_kind=subjects.DASHBOARD,
+        subject_id=dashboard.id,
+    )
     store.delete_dashboard(db, dashboard)
     record_audit(
         db,

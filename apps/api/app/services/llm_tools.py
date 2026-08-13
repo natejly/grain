@@ -28,6 +28,13 @@ class ToolContext:
     #: the document tools fall back to it, so the model does not have to list
     #: documents and guess which one is on the user's screen.
     document_id: str = ""
+    #: The same fact for the other two panels — what "this file" and "this chart"
+    #: refer to. Three named fields rather than one polymorphic pair because the
+    #: tools are not polymorphic: `edit_document` wants a document id and
+    #: `fs_write` wants a project id, and a tool that had to inspect a kind
+    #: before trusting an id would be one `if` away from the wrong table.
+    project_id: str = ""
+    dashboard_id: str = ""
 
 
 @dataclass

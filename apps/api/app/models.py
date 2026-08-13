@@ -151,11 +151,21 @@ class Conversation(Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     title: Mapped[str] = mapped_column(String(200), default="New conversation")
-    #: The document this thread is about, for a conversation opened beside one.
-    #: Empty for an ordinary chat. A scoped thread is deliberately kept out of
-    #: the Chat rail: it belongs to the document, is created and deleted with
-    #: it, and its turns are handed the document's text.
-    document_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    #: What this thread is about, for a conversation opened beside something.
+    #: "" for an ordinary chat; otherwise document | project | dashboard. A
+    #: scoped thread is deliberately kept out of the Chat rail: it belongs to its
+    #: subject, is created and deleted with it, and its turns are handed that
+    #: subject's content — and only that subject's tools.
+    #:
+    #: Polymorphic rather than three nullable foreign keys because everything
+    #: that acts on the association — the rail filter, the visibility rule, the
+    #: cascade, the turn's context and its registry subset — is the *same* code
+    #: for all three. Three columns would be three places for each of those to
+    #: forget one kind.
+    subject_kind: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    subject_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
+    )
     #: How much this thread asks before acting: ask_writes | ask_all |
     #: auto_writes. See `agent_loop.ApprovalMode`.
     #:
@@ -280,6 +290,17 @@ class Run(Base):
     # allow" must not reach it. Not a FK: a run is a historical record and must
     # survive the cron's deletion, exactly as `skill_id` survives a skill's.
     cron_id: Mapped[str] = mapped_column(String(36), default="")
+    #: Which part of the conversation's subject was on screen when this turn was
+    #: sent — today, the file the project editor had open. "" for none.
+    #:
+    #: On the run and not on the conversation because it is a property of *this
+    #: message*: "rename this function" means the file that was open when it was
+    #: typed, and a turn that parks for an approval and resumes an hour later
+    #: must come back to the same file rather than to whatever is open then.
+    #: Same reason `requested_model` lives here.
+    subject_focus: Mapped[str] = mapped_column(
+        String(400), default="", server_default=""
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

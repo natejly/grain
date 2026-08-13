@@ -1,12 +1,16 @@
-"""Conversations, and the two things that own one.
+"""Conversations, and the things that own one.
 
 A thread is normally its own thing: the user makes it, names it, deletes it. A
-thread opened from the chat panel beside a document is not — it exists because
-the document does, it is handed the document's text on every turn, and when the
-document goes it has nothing left to be about. That asymmetry is why the
-get-or-create and the cascade live here rather than inline in a route: both the
-Chat router and the Documents router act on it, and a cascade implemented twice
-is a cascade that will disagree with itself.
+thread opened from the chat panel beside a document, a project or a dashboard is
+not — it exists because its subject does, it is handed that subject's content on
+every turn, and when the subject goes it has nothing left to be about. That
+asymmetry is why the get-or-create and the cascade live here rather than inline
+in a route: four routers act on it, and a cascade implemented four times is a
+cascade that will disagree with itself.
+
+The subject is polymorphic (`subject_kind` + `subject_id`) for the same reason
+this module exists at all: every rule below is the SAME rule for all three
+kinds, and three columns would be three places for each rule to forget one.
 """
 from __future__ import annotations
 
@@ -32,18 +36,18 @@ def resolve_visible(
     """The one within-workspace visibility rule, in one place.
 
     A conversation is visible when, within the caller's workspace, it is the
-    caller's own, OR it is shared, OR it is a document thread (reached through the
-    workspace-scoped document, not the rail). Returns None so a foreign
-    workspace_id or another member's personal thread becomes a 404 at the call
-    site, never a leak.
+    caller's own, OR it is shared, OR it is a subject thread (reached through the
+    workspace-scoped document, project or dashboard, not the rail). Returns None
+    so a foreign workspace_id or another member's personal thread becomes a 404
+    at the call site, never a leak.
 
     The `workspace_id` filter is ALWAYS applied and is never removed: sharing
     only relaxes the *within-workspace* `created_by` filter from "creator only"
     to "creator OR any member". It can never expose a thread cross-workspace.
 
-    The `document_id != ""` clause is load-bearing: a document thread is opened by
-    any member beside a workspace-shared document, so gating it on personal/shared
-    would break the document chat panel. (Existing document rows are also
+    The `subject_id != ""` clause is load-bearing: a subject thread is opened by
+    any member beside a workspace-shared subject, so gating it on personal/shared
+    would break all three side panels. (Existing document rows are also
     backfilled to shared, so this is belt-and-suspenders.)
     """
     conversation = db.scalar(
@@ -57,7 +61,7 @@ def resolve_visible(
     if (
         conversation.created_by == user_id
         or conversation.shared
-        or conversation.document_id != ""
+        or conversation.subject_id != ""
     ):
         return conversation
     return None
@@ -110,7 +114,7 @@ def run_activity_predicate(*, actor_user_id: str):  # type: ignore[no-untyped-de
     `Run.conversation_id`, alongside the `workspace_id` filter that is never
     removed. A row is kept when the run is automation (cron, workflow-backed, or
     has no chat conversation — the LEFT JOIN yields NULL) OR its conversation is
-    visible to the actor (shared, own, or a document thread), mirroring
+    visible to the actor (shared, own, or a subject thread), mirroring
     `run_activity_visible` clause for clause.
     """
     return (
@@ -119,24 +123,32 @@ def run_activity_predicate(*, actor_user_id: str):  # type: ignore[no-untyped-de
         | (Conversation.id.is_(None))
         | (Conversation.shared.is_(True))
         | (Conversation.created_by == actor_user_id)
-        | (Conversation.document_id != "")
+        | (Conversation.subject_id != "")
     )
 
 
-def for_document(
-    db: Session, *, workspace_id: str, document_id: str, user_id: str, title: str
+def for_subject(
+    db: Session,
+    *,
+    workspace_id: str,
+    subject_kind: str,
+    subject_id: str,
+    user_id: str,
+    title: str,
 ) -> Conversation:
-    """The thread for a document, made on first use.
+    """The thread for one subject, made on first use.
 
     Get-or-create rather than create: opening a document twice is one
     conversation, not two, and the panel would otherwise lose its history every
-    time the user navigated away and back.
+    time the user navigated away and back. The subject id *is* the idempotency
+    key, which is why no route that reaches this needs an `Idempotency-Key`.
     """
     existing = db.scalar(
         select(Conversation)
         .where(
             Conversation.workspace_id == workspace_id,
-            Conversation.document_id == document_id,
+            Conversation.subject_kind == subject_kind,
+            Conversation.subject_id == subject_id,
         )
         .order_by(Conversation.created_at.asc())
     )
@@ -146,22 +158,44 @@ def for_document(
         workspace_id=workspace_id,
         created_by=user_id,
         title=title[:200],
-        document_id=document_id,
+        subject_kind=subject_kind,
+        subject_id=subject_id,
     )
     db.add(conversation)
     db.flush()
     return conversation
 
 
-def for_document_ids(db: Session, *, workspace_id: str, document_id: str) -> List[str]:
+def for_subject_ids(
+    db: Session, *, workspace_id: str, subject_kind: str, subject_id: str
+) -> List[str]:
+    """Every thread about this subject — what a deletion has to take with it."""
     return list(
         db.scalars(
             select(Conversation.id).where(
                 Conversation.workspace_id == workspace_id,
-                Conversation.document_id == document_id,
+                Conversation.subject_kind == subject_kind,
+                Conversation.subject_id == subject_id,
             )
         )
     )
+
+
+def purge_for_subject(
+    db: Session, *, workspace_id: str, subject_kind: str, subject_id: str
+) -> None:
+    """Delete every thread about a subject that is going away.
+
+    Does not commit: the caller decides what else belongs in the same
+    transaction — for a project deletion, the project itself does.
+    """
+    for conversation_id in for_subject_ids(
+        db,
+        workspace_id=workspace_id,
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+    ):
+        purge(db, workspace_id=workspace_id, conversation_id=conversation_id)
 
 
 def purge(db: Session, *, workspace_id: str, conversation_id: str) -> Optional[str]:

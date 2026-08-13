@@ -128,6 +128,8 @@ export function Workspace() {
     refreshOffScreenWork,
     refreshPendingEdits,
     reloadOpenDocument,
+    reloadOpenProject,
+    refreshDashboards,
     openDocument,
     createDocument,
     saveDocument,
@@ -156,6 +158,7 @@ export function Workspace() {
     createProject,
     saveProjectFile,
     removeProjectFile,
+    setProjectEntry,
     removeProject,
     addMcpServer,
     refreshMcpServer,
@@ -674,6 +677,19 @@ export function Workspace() {
             removeDashboard={removeDashboard}
             focused={focusedDashboard}
             setFocused={setFocusedDashboard}
+            chat={{
+              agentId: bootstrap?.default_agent_id,
+              sources,
+              openCitation,
+              // A revised spec changes what the tile draws, so the list is
+              // re-read and the open tile re-run — otherwise the panel says it
+              // changed the chart while the chart still shows the old one.
+              reloadDashboards: async () => {
+                await refreshDashboards();
+                if (focusedDashboard) runDashboard(focusedDashboard, true);
+              },
+              unrestricted: bootstrap?.unrestricted_agent,
+            }}
           />
         )}
 
@@ -719,6 +735,7 @@ export function Workspace() {
               // document is not a reason to refetch six collections.
               reloadDocument: reloadOpenDocument,
               refreshPendingEdits,
+              unrestricted: bootstrap?.unrestricted_agent,
             }}
           />
         )}
@@ -755,7 +772,19 @@ export function Workspace() {
             createProject={createProject}
             saveFile={saveProjectFile}
             removeFile={removeProjectFile}
+            setEntry={setProjectEntry}
             removeProject={removeProject}
+            chat={{
+              agentId: bootstrap?.default_agent_id,
+              sources,
+              apps: dashboardApps,
+              openCitation,
+              // The panel's own run finished: re-read the project it was about,
+              // so an approved write reaches the tree, the editor and the
+              // preview. Nothing else in the shell is refreshed from here.
+              reloadProject: reloadOpenProject,
+              unrestricted: bootstrap?.unrestricted_agent,
+            }}
           />
         )}
 

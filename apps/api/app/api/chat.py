@@ -17,6 +17,7 @@ from ..database import SessionLocal, get_db
 from ..models import (
     Agent,
     Conversation,
+    Dashboard,
     Message,
     Run,
     RunEvent,
@@ -35,11 +36,12 @@ from ..schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from ..services import conversations
+from ..services import conversations, subjects
 from ..services import skills as skills_service
 from ..services.artifacts import documents
 from ..services.audit import record_audit
 from ..services.events import append_event
+from ..services.projects import store as project_store
 from ..services.runs import TERMINAL_RUN_STATES, process_run
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
@@ -96,7 +98,8 @@ def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationO
     return ConversationOut(
         id=conversation.id,
         title=conversation.title,
-        document_id=conversation.document_id,
+        subject_kind=conversation.subject_kind,
+        subject_id=conversation.subject_id,
         approval_mode=cast(ApprovalMode, conversation.approval_mode),
         shared=bool(conversation.shared),
         owned=conversation.created_by == actor.user_id,
@@ -111,10 +114,10 @@ def list_conversations(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[ConversationOut]:
-    # Document-scoped threads are deliberately absent. They belong to the
-    # document editor's side panel, are created and deleted with the document,
-    # and one entry per document opened would turn the Chat rail into a list of
-    # things the user never started.
+    # Subject-scoped threads are deliberately absent. They belong to the side
+    # panel of the document, project or dashboard they are about, are created
+    # and deleted with it, and one entry per thing opened would turn the Chat
+    # rail into a list of things the user never started.
     #
     # The caller sees the workspace's shared threads PLUS their own personal
     # ones. The `workspace_id` filter is never removed — `shared` only relaxes
@@ -124,7 +127,7 @@ def list_conversations(
         select(Conversation)
         .where(
             Conversation.workspace_id == actor.workspace_id,  # NEVER removed
-            Conversation.document_id == "",
+            Conversation.subject_id == "",
             (Conversation.shared.is_(True))
             | (Conversation.created_by == actor.user_id),
         )
@@ -179,36 +182,40 @@ def create_conversation(
     return _conversation_out(conversation, actor)
 
 
-@router.post(
-    "/documents/{document_id}/conversation", response_model=ConversationOut
-)
-def document_conversation(
-    document_id: str,
-    actor: Actor = Depends(get_actor),
-    db: Session = Depends(get_db),
+def _subject_conversation(
+    db: Session,
+    actor: Actor,
+    *,
+    subject_kind: str,
+    subject_id: str,
+    title: str,
 ) -> ConversationOut:
-    """The thread for the chat panel beside a document, made on first open.
+    """The thread for the chat panel beside one subject, made on first open.
 
-    A POST because the first call creates, but idempotent by construction rather
-    than by an `Idempotency-Key`: the document id *is* the key. There is one
-    thread per document, so a retry, a second tab and a remount all land on the
-    same conversation, and nothing here needs a client to remember a nonce.
+    Reached by a POST because the first call creates, but idempotent by
+    construction rather than by an `Idempotency-Key`: the subject id *is* the
+    key. There is one thread per subject, so a retry, a second tab and a remount
+    all land on the same conversation, and nothing here needs a client to
+    remember a nonce.
+
+    Shared by all three routes rather than written three times, because the only
+    thing that differs between them is how the subject is looked up and what a
+    404 means — and a get-or-create implemented per kind is a get-or-create that
+    will eventually create two threads for one of them.
     """
-    try:
-        document = documents.get_document(
-            db, workspace_id=actor.workspace_id, document_id=document_id
-        )
-    except documents.DocumentError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    existing = conversations.for_document_ids(
-        db, workspace_id=actor.workspace_id, document_id=document.id
-    )
-    conversation = conversations.for_document(
+    existing = conversations.for_subject_ids(
         db,
         workspace_id=actor.workspace_id,
-        document_id=document.id,
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+    )
+    conversation = conversations.for_subject(
+        db,
+        workspace_id=actor.workspace_id,
+        subject_kind=subject_kind,
+        subject_id=subject_id,
         user_id=actor.user_id,
-        title=document.title,
+        title=title,
     )
     if not existing:
         record_audit(
@@ -218,11 +225,82 @@ def document_conversation(
             action="conversation.created",
             resource_type="conversation",
             resource_id=conversation.id,
-            detail={"title": conversation.title, "document_id": document.id},
+            detail={
+                "title": conversation.title,
+                "subject_kind": subject_kind,
+                "subject_id": subject_id,
+            },
         )
     db.commit()
     db.refresh(conversation)
     return _conversation_out(conversation, actor)
+
+
+@router.post(
+    "/documents/{document_id}/conversation", response_model=ConversationOut
+)
+def document_conversation(
+    document_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    try:
+        document = documents.get_document(
+            db, workspace_id=actor.workspace_id, document_id=document_id
+        )
+    except documents.DocumentError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _subject_conversation(
+        db,
+        actor,
+        subject_kind=subjects.DOCUMENT,
+        subject_id=document.id,
+        title=document.title,
+    )
+
+
+@router.post("/projects/{project_id}/conversation", response_model=ConversationOut)
+def project_conversation(
+    project_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    try:
+        project = project_store.get_project(
+            db, workspace_id=actor.workspace_id, project_id=project_id
+        )
+    except project_store.ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _subject_conversation(
+        db,
+        actor,
+        subject_kind=subjects.PROJECT,
+        subject_id=project.id,
+        title=project.name,
+    )
+
+
+@router.post("/dashboards/{dashboard_id}/conversation", response_model=ConversationOut)
+def dashboard_conversation(
+    dashboard_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    dashboard = db.scalar(
+        select(Dashboard).where(
+            Dashboard.id == dashboard_id,
+            Dashboard.workspace_id == actor.workspace_id,
+        )
+    )
+    if dashboard is None:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    return _subject_conversation(
+        db,
+        actor,
+        subject_kind=subjects.DASHBOARD,
+        subject_id=dashboard.id,
+        title=dashboard.name,
+    )
 
 
 @router.put(
@@ -516,6 +594,12 @@ def send_message(
         skill_id=skill_id,
         skill_args_json=skill_args_json,
         skill_version=skill_version,
+        # What was on screen when this was typed — the file the project editor
+        # had open. Stored, not acted on: `subjects.resolve` reads it back on
+        # every entry into the loop, so a turn that parks for an approval comes
+        # back to the file it was asked about rather than to whatever is open an
+        # hour later.
+        subject_focus=(payload.subject_focus or "")[:400],
     )
     message = Message(
         id=new_id(),

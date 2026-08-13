@@ -4381,13 +4381,69 @@ select:focus-visible {
   color: var(--accent-text);
 }
 
-/* ---- The chat panel beside a document ---- */
+/* ---- The chat panel beside a document, a project or a dashboard ----
+   One set of rules for all three: it is the same panel, and a per-surface
+   copy is three places for the compact density to drift. Each aside carries
+   `subject-chat` plus its own class, which only the grid columns below need
+   to tell apart. */
 
 .documents-layout.with-chat {
   grid-template-columns: 240px minmax(0, 1fr) 340px;
 }
 
-.document-chat {
+/* The preview column gives up the width, not the editor: a project chat is read
+   beside the code being changed, and squeezing the source to keep the preview
+   at full size inverts what the panel is for. */
+.projects-layout.with-chat {
+  grid-template-columns: 190px minmax(0, 1fr) minmax(0, 0.9fr) 320px;
+}
+
+/* Four columns do not fit a laptop: at 1280 the editor's own header slid under
+   the preview pane and its buttons stopped being clickable. So the preview
+   stacks under the editor rather than beside it — everything stays visible,
+   which matters here because "the preview shows only what was approved" is a
+   thing the user is meant to be watching while they chat. */
+@media (max-width: 1500px) {
+  .projects-layout.with-chat {
+    grid-template-columns: 190px minmax(0, 1fr) 320px;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 0.75fr);
+    grid-template-areas:
+      "tree editor chat"
+      "tree preview chat";
+  }
+
+  .projects-layout.with-chat > .projects-sidebar {
+    grid-area: tree;
+  }
+
+  .projects-layout.with-chat > .project-editor {
+    grid-area: editor;
+  }
+
+  .projects-layout.with-chat > .project-preview-pane {
+    grid-area: preview;
+    border-top: 1px solid var(--border);
+  }
+
+  .projects-layout.with-chat > .subject-chat {
+    grid-area: chat;
+  }
+}
+
+/* The dashboards page is a scrolling document rather than a fixed grid, so its
+   wrapper is a single column until a chat is opened beside it. */
+.dashboards-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.dashboards-layout.with-chat {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+
+.subject-chat {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -4396,7 +4452,7 @@ select:focus-visible {
   background: var(--surface);
 }
 
-.document-chat-head {
+.subject-chat-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4407,7 +4463,7 @@ select:focus-visible {
   font-size: 12px;
 }
 
-.document-chat > .tool-error {
+.subject-chat > .tool-error {
   flex: none;
   padding: 8px 14px;
 }
@@ -4416,38 +4472,38 @@ select:focus-visible {
    ChatView is sized for a 760px column in the middle of the screen; the same
    markup in a 340px rail needs the column to be the panel, not a centred
    measure with 200px of nothing on either side of it. */
-.document-chat .message-scroll {
+.subject-chat .message-scroll {
   padding: 0 12px;
 }
 
-.document-chat .message-column {
+.subject-chat .message-column {
   width: 100%;
   padding: 14px 0 10px;
   font-size: 12px;
 }
 
-.document-chat .message {
+.subject-chat .message {
   margin-bottom: 18px;
 }
 
-.document-chat .composer-zone {
+.subject-chat .composer-zone {
   padding: 8px 12px 12px;
   background: var(--surface);
 }
 
-.document-chat .composer {
+.subject-chat .composer {
   width: 100%;
   min-height: 60px;
 }
 
-.document-chat .composer textarea {
+.subject-chat .composer textarea {
   min-height: 34px;
   max-height: 110px;
   padding: 10px 10px 4px;
 }
 
 /* No room for a second column of source text at this width. */
-.document-chat .diff {
+.subject-chat .diff {
   font-size: 10px;
 }
 
@@ -4910,9 +4966,14 @@ select:focus-visible {
   padding: 30px;
 }
 
+/* Wraps, because this column is not always wide. With the chat panel open the
+   editor shares the row with a tree, a preview and the panel, and a header that
+   refused to wrap did not merely look tight — its buttons slid under the
+   preview pane and stopped being clickable at all. */
 .project-editor-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
@@ -4942,6 +5003,7 @@ select:focus-visible {
 .project-editor-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-left: auto;
 }

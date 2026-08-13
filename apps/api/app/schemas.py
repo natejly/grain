@@ -61,6 +61,13 @@ class BootstrapResponse(ApiModel):
     default_agent_id: str
     model_provider: ModelProviderStatus
     screen: ScreenStatus
+    #: `DEV_UNRESTRICTED_AGENT` is on: every tool available and nothing parks.
+    #: A first-class field rather than a `feature_flags` entry because the client
+    #: does not *branch* on it, it *warns* about it — the failure mode is not
+    #: switching it on, it is forgetting it is on. False everywhere but a
+    #: developer's machine; `config._guard_dev_unrestricted` makes that
+    #: structural rather than advisory.
+    unrestricted_agent: bool = False
 
 
 class SignupIn(ApiModel):
@@ -284,10 +291,12 @@ ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes"]
 class ConversationOut(ApiModel):
     id: str
     title: str
-    #: The document this thread belongs to, or empty for an ordinary chat.
-    #: `GET /api/conversations` only ever returns the empty case; the field is
-    #: here because `POST /api/documents/{id}/conversation` returns the other.
-    document_id: str = ""
+    #: What this thread belongs to: document | project | dashboard, or empty for
+    #: an ordinary chat. `GET /api/conversations` only ever returns the empty
+    #: case; the fields are here because the three get-or-create routes return
+    #: the other.
+    subject_kind: str = ""
+    subject_id: str = ""
     #: ask_writes | ask_all | auto_writes, governing this thread and no other.
     approval_mode: ApprovalMode = "ask_writes"
     #: Personal (False) vs shared (True). A shared thread is visible to every
@@ -405,6 +414,11 @@ class SendMessageRequest(BaseModel):
     #: Values for the skill's declared args, keyed by name. Validated against the
     #: skill's `args` at send time, then substituted into the body before injection.
     skill_args: Optional[Dict[str, Any]] = None
+    #: Which part of the thread's subject is on screen — today, the path the
+    #: project editor has open. Persisted on the run rather than used in the
+    #: request, so a turn that parks on an approval resumes against the file it
+    #: was asked about. Ignored for a thread whose subject has no parts.
+    subject_focus: Optional[str] = Field(default=None, max_length=400)
 
 
 class RunOut(ApiModel):

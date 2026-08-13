@@ -1350,6 +1350,19 @@ ROUTE_CASES: List[RouteCase] = [
         "DELETE", "/api/projects/{project_id}", DENY, path_ids={"project_id": "project"}
     ),
     RouteCase(
+        "POST",
+        "/api/projects/{project_id}/conversation",
+        DENY,
+        path_ids={"project_id": "project"},
+    ),
+    RouteCase(
+        "PUT",
+        "/api/projects/{project_id}/entry",
+        DENY,
+        path_ids={"project_id": "project"},
+        body={"entry_path": "index.tsx"},
+    ),
+    RouteCase(
         "PUT",
         "/api/projects/{project_id}/files",
         DENY,
@@ -1426,6 +1439,12 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase(
         "DELETE",
         "/api/dashboards/{dashboard_id}",
+        DENY,
+        path_ids={"dashboard_id": "dashboard"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/dashboards/{dashboard_id}/conversation",
         DENY,
         path_ids={"dashboard_id": "dashboard"},
     ),

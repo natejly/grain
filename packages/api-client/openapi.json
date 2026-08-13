@@ -412,6 +412,142 @@
         "title": "AdminBudgetSpendOut",
         "type": "object"
       },
+      "AdminFailedRunOut": {
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "conversation_id",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AdminFailedRunOut",
+        "type": "object"
+      },
+      "AdminLatencyStatsOut": {
+        "description": "One metric's distribution. Every percentile is None on an empty sample \u2014\nnever 0, which would read as an instant response rather than no data.",
+        "properties": {
+          "max_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Ms"
+          },
+          "p50_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Ms"
+          },
+          "p90_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90 Ms"
+          },
+          "p99_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P99 Ms"
+          },
+          "samples": {
+            "title": "Samples",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "samples",
+          "p50_ms",
+          "p90_ms",
+          "p99_ms",
+          "max_ms"
+        ],
+        "title": "AdminLatencyStatsOut",
+        "type": "object"
+      },
+      "AdminLiveRunOut": {
+        "properties": {
+          "age_seconds": {
+            "title": "Age Seconds",
+            "type": "integer"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "conversation_id",
+          "agent_id",
+          "status",
+          "created_at",
+          "age_seconds"
+        ],
+        "title": "AdminLiveRunOut",
+        "type": "object"
+      },
       "AdminMcpServerOut": {
         "description": "Health of a configured MCP server. Carries no part of its credentials:\n`secrets_encrypted` is never selected and `mcp_oauth_tokens` is never read.",
         "properties": {
@@ -527,6 +663,110 @@
           "is_self"
         ],
         "title": "AdminMemberOut",
+        "type": "object"
+      },
+      "AdminObservabilityOut": {
+        "properties": {
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "error_rate": {
+            "title": "Error Rate",
+            "type": "number"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "live_runs": {
+            "items": {
+              "$ref": "#/components/schemas/AdminLiveRunOut"
+            },
+            "title": "Live Runs",
+            "type": "array"
+          },
+          "recent_failures": {
+            "items": {
+              "$ref": "#/components/schemas/AdminFailedRunOut"
+            },
+            "title": "Recent Failures",
+            "type": "array"
+          },
+          "retention": {
+            "$ref": "#/components/schemas/AdminRetentionOut"
+          },
+          "runs_in_window": {
+            "title": "Runs In Window",
+            "type": "integer"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "throughput": {
+            "items": {
+              "$ref": "#/components/schemas/AdminThroughputBucketOut"
+            },
+            "title": "Throughput",
+            "type": "array"
+          },
+          "total": {
+            "$ref": "#/components/schemas/AdminLatencyStatsOut"
+          },
+          "ttft": {
+            "$ref": "#/components/schemas/AdminLatencyStatsOut"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "since",
+          "ttft",
+          "total",
+          "runs_in_window",
+          "throughput",
+          "completed",
+          "failed",
+          "cancelled",
+          "error_rate",
+          "recent_failures",
+          "live_runs",
+          "retention"
+        ],
+        "title": "AdminObservabilityOut",
+        "type": "object"
+      },
+      "AdminRetentionOut": {
+        "description": "Distinct active members over three windows. Counts only \u2014 a user id here\nwould be a foreign identifier this route has no reason to emit.",
+        "properties": {
+          "dau": {
+            "title": "Dau",
+            "type": "integer"
+          },
+          "mau": {
+            "title": "Mau",
+            "type": "integer"
+          },
+          "wau": {
+            "title": "Wau",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dau",
+          "wau",
+          "mau"
+        ],
+        "title": "AdminRetentionOut",
         "type": "object"
       },
       "AdminRunOut": {
@@ -716,6 +956,25 @@
           "graph_edge_count"
         ],
         "title": "AdminStorageOut",
+        "type": "object"
+      },
+      "AdminThroughputBucketOut": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "count"
+        ],
+        "title": "AdminThroughputBucketOut",
         "type": "object"
       },
       "AdminUsageGroupOut": {
@@ -1726,13 +1985,22 @@
           },
           "model_provider": {
             "$ref": "#/components/schemas/ModelProviderStatus"
+          },
+          "screen": {
+            "$ref": "#/components/schemas/ScreenStatus"
+          },
+          "unrestricted_agent": {
+            "default": false,
+            "title": "Unrestricted Agent",
+            "type": "boolean"
           }
         },
         "required": [
           "identity",
           "feature_flags",
           "default_agent_id",
-          "model_provider"
+          "model_provider",
+          "screen"
         ],
         "title": "BootstrapResponse",
         "type": "object"
@@ -1991,18 +2259,38 @@
             "title": "Approval Mode",
             "type": "string"
           },
+          "can_share": {
+            "default": false,
+            "title": "Can Share",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
           },
-          "document_id": {
-            "default": "",
-            "title": "Document Id",
-            "type": "string"
-          },
           "id": {
             "title": "Id",
+            "type": "string"
+          },
+          "owned": {
+            "default": false,
+            "title": "Owned",
+            "type": "boolean"
+          },
+          "shared": {
+            "default": false,
+            "title": "Shared",
+            "type": "boolean"
+          },
+          "subject_id": {
+            "default": "",
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_kind": {
+            "default": "",
+            "title": "Subject Kind",
             "type": "string"
           },
           "title": {
@@ -2022,6 +2310,255 @@
           "updated_at"
         ],
         "title": "ConversationOut",
+        "type": "object"
+      },
+      "ConversationShareRequest": {
+        "description": "The body of `PUT /api/conversations/{id}/share`.\n\nA single flag: sharing a thread is a one-bit within-workspace visibility\nchange (creator-private -> member-visible), owner-gated at the route.",
+        "properties": {
+          "shared": {
+            "title": "Shared",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shared"
+        ],
+        "title": "ConversationShareRequest",
+        "type": "object"
+      },
+      "CronCreateRequest": {
+        "properties": {
+          "body": {
+            "default": "",
+            "maxLength": 8000,
+            "title": "Body",
+            "type": "string"
+          },
+          "kind": {
+            "default": "task",
+            "enum": [
+              "task",
+              "message"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "prompt": {
+            "default": "",
+            "maxLength": 8000,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "schedule_cron": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "default": "UTC",
+            "maxLength": 64,
+            "title": "Schedule Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "schedule_cron"
+        ],
+        "title": "CronCreateRequest",
+        "type": "object"
+      },
+      "CronOut": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Dispatched At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "schedule_cron": {
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "title": "Schedule Timezone",
+            "type": "string"
+          },
+          "target_conversation_id": {
+            "title": "Target Conversation Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "schedule_cron",
+          "schedule_timezone",
+          "enabled",
+          "prompt",
+          "body",
+          "target_conversation_id",
+          "last_dispatched_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CronOut",
+        "type": "object"
+      },
+      "CronRunNowOut": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "CronRunNowOut",
+        "type": "object"
+      },
+      "CronUpdateRequest": {
+        "description": "Every field optional \u2014 a PATCH sets only what it names.\n\n`enabled` lives here too: an enable/disable is a one-field PATCH, so there is\nno separate route to keep in sync with it.",
+        "properties": {
+          "body": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "task",
+                  "message"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "schedule_cron": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Cron"
+          },
+          "schedule_timezone": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Timezone"
+          }
+        },
+        "title": "CronUpdateRequest",
         "type": "object"
       },
       "DashboardColumnRequirement": {
@@ -4167,6 +4704,16 @@
           "run_id": {
             "title": "Run Id",
             "type": "string"
+          },
+          "sender_id": {
+            "default": "",
+            "title": "Sender Id",
+            "type": "string"
+          },
+          "sender_name": {
+            "default": "",
+            "title": "Sender Name",
+            "type": "string"
           }
         },
         "required": [
@@ -4186,6 +4733,11 @@
             "title": "Configured",
             "type": "boolean"
           },
+          "default_effort": {
+            "default": "",
+            "title": "Default Effort",
+            "type": "string"
+          },
           "model": {
             "title": "Model",
             "type": "string"
@@ -4197,6 +4749,22 @@
             ],
             "title": "Provider",
             "type": "string"
+          },
+          "reasoning_efforts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasoning Efforts",
+            "type": "array"
+          },
+          "selectable_models": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Selectable Models",
+            "type": "array"
           }
         },
         "required": [
@@ -4295,6 +4863,20 @@
           "created_at"
         ],
         "title": "PendingDocumentEditOut",
+        "type": "object"
+      },
+      "PlaygroundOut": {
+        "description": "Whether the anonymous \"try it\" mode is available.\n\nPublic and unauthenticated for the same reason as DevOverrideOut: the login\nscreen has to know whether to render the \"Try the playground\" button before\nany session exists. Not folded into /api/bootstrap, which is auth-gated and\ntherefore unreachable pre-login. Off by default and outside an opted-in\ndeployment.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "PlaygroundOut",
         "type": "object"
       },
       "ProjectFileOut": {
@@ -4798,6 +5380,253 @@
         "title": "SandboxSessionOut",
         "type": "object"
       },
+      "SandboxToolOut": {
+        "properties": {
+          "approval": {
+            "enum": [
+              "inherit",
+              "always"
+            ],
+            "title": "Approval",
+            "type": "string"
+          },
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Argv",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "egress_hosts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Egress Hosts",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "input_schema",
+          "argv",
+          "egress_hosts",
+          "approval",
+          "enabled",
+          "created_at"
+        ],
+        "title": "SandboxToolOut",
+        "type": "object"
+      },
+      "SandboxToolRequest": {
+        "properties": {
+          "approval": {
+            "default": "inherit",
+            "enum": [
+              "inherit",
+              "always"
+            ],
+            "title": "Approval",
+            "type": "string"
+          },
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Argv",
+            "type": "array"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "egress_hosts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Egress Hosts",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SandboxToolRequest",
+        "type": "object"
+      },
+      "SandboxToolUpdate": {
+        "description": "A partial edit: every field optional so a PATCH can flip `enabled` alone\nwithout resending the schema and argv it does not mean to change.",
+        "properties": {
+          "approval": {
+            "anyOf": [
+              {
+                "enum": [
+                  "inherit",
+                  "always"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval"
+          },
+          "argv": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Argv"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "egress_hosts": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Egress Hosts"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "input_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Schema"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 60,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "SandboxToolUpdate",
+        "type": "object"
+      },
+      "ScreenStatus": {
+        "description": "The prompt-injection screen's posture \u2014 a minimal admin indicator.\n\nDeliberately does NOT carry `screen_proxy_url`: the proxy endpoint is a\nserver-side destination, in the same class as WORKFLOW_CRON_SECRET, and\nbootstrap is a client surface. Enabled/mode/backend is all a client needs to\nshow whether untrusted content is being screened and how hard.",
+        "properties": {
+          "backend": {
+            "enum": [
+              "builtin",
+              "proxy"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "mode": {
+            "enum": [
+              "shadow",
+              "enforce"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "mode",
+          "backend"
+        ],
+        "title": "ScreenStatus",
+        "type": "object"
+      },
       "SendMessageRequest": {
         "properties": {
           "agent_id": {
@@ -4816,6 +5645,76 @@
             "minLength": 1,
             "title": "Content",
             "type": "string"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort"
+          },
+          "fast": {
+            "default": false,
+            "title": "Fast",
+            "type": "boolean"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "skill_args": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Args"
+          },
+          "skill_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Id"
+          },
+          "subject_focus": {
+            "anyOf": [
+              {
+                "maxLength": 400,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Focus"
           }
         },
         "required": [
@@ -4887,6 +5786,281 @@
           "password"
         ],
         "title": "SignupIn",
+        "type": "object"
+      },
+      "SkillArg": {
+        "additionalProperties": false,
+        "description": "One skill parameter: the workflow `InputSpec` shape, minus workflow-only bits.\n\nA skill runs inside one chat turn, so it needs no `object`/`array` inputs and\nno reference grammar \u2014 only the scalar kinds a person types into a composer\nfield. `required`/`default`/`choices` carry the same meaning they do for a\nworkflow input: whether a run may omit it, what pre-fills it, and the closed\nset it must belong to.",
+        "properties": {
+          "choices": {
+            "items": {},
+            "title": "Choices",
+            "type": "array"
+          },
+          "default": {
+            "title": "Default"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Description",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 120,
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "type": {
+            "default": "string",
+            "enum": [
+              "string",
+              "number",
+              "integer",
+              "boolean"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SkillArg",
+        "type": "object"
+      },
+      "SkillCreate": {
+        "properties": {
+          "args": {
+            "items": {
+              "$ref": "#/components/schemas/SkillArg"
+            },
+            "maxItems": 20,
+            "title": "Args",
+            "type": "array"
+          },
+          "body": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "title": "Name",
+            "type": "string"
+          },
+          "shared": {
+            "default": false,
+            "title": "Shared",
+            "type": "boolean"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "body"
+        ],
+        "title": "SkillCreate",
+        "type": "object"
+      },
+      "SkillOut": {
+        "properties": {
+          "args": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SkillArg"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "can_edit": {
+            "default": true,
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "can_share": {
+            "default": false,
+            "title": "Can Share",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "shared": {
+            "default": false,
+            "title": "Shared",
+            "type": "boolean"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "title",
+          "body",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SkillOut",
+        "type": "object"
+      },
+      "SkillUpdate": {
+        "description": "A partial edit. None means \"leave alone\" on every field.",
+        "properties": {
+          "args": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SkillArg"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Args"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "SkillUpdate",
+        "type": "object"
+      },
+      "SkillVersionOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "title",
+          "created_at"
+        ],
+        "title": "SkillVersionOut",
         "type": "object"
       },
       "SourceOut": {
@@ -5992,6 +7166,13 @@
       },
       "WorkflowTickOut": {
         "properties": {
+          "crons_dispatched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Crons Dispatched",
+            "type": "array"
+          },
           "dispatched": {
             "items": {
               "type": "string"
@@ -6015,6 +7196,7 @@
         "required": [
           "dispatched",
           "recovered",
+          "crons_dispatched",
           "moment"
         ],
         "title": "WorkflowTickOut",
@@ -6475,6 +7657,68 @@
           }
         },
         "summary": "List Members",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/observability": {
+      "get": {
+        "description": "Latency, throughput, errors, live runs and retention over a window.\n\nOne capped select of the window's runs feeds latency, throughput and the\nerror counts; a single grouped MIN over `run_events` \u2014 restricted to those\nrun ids \u2014 gives TTFT; retention reaches `user_sessions` only through the\nmemberships join, so it stays workspace-scoped over a table that carries no\nworkspace of its own.",
+        "operationId": "get_observability_api_admin_observability_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObservabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Observability",
         "tags": [
           "admin"
         ]
@@ -7807,6 +9051,90 @@
         ]
       }
     },
+    "/api/auth/login-link/consume": {
+      "post": {
+        "description": "Redeem a sign-in link and mint a session, exactly like login.\n\nThe consume half models ``confirm_password_reset`` \u2014 the same single-use\nconditional UPDATE, committed on its own before anything is minted, so a\nburnt link is a one-way door; a spent, expired, or unknown link 400s with the\nsame generic detail, never a distinct code that would leak which. The\nsession-mint half is ``_issue_login`` verbatim (fixation-safe rotation,\ncookie, audit). Like ``_issue_login`` and unlike ``login`` it does not\nrequire ``email_verified_at``: redeeming a link emailed to the address proves\nmailbox control, which is exactly the proof login accepts. A non-active\naccount is rejected with the same generic 400 so status is not an oracle.",
+        "operationId": "consume_login_link_api_auth_login_link_consume_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Consume Login Link",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/login-link/request": {
+      "post": {
+        "description": "Email a passwordless sign-in link, without saying whether the account exists.\n\nA byte-for-byte sibling of ``request_password_reset``: the same\ndeliberately-uninformative acknowledgement, the same 202, and exactly one\nmessage on both branches so response *time* is not the enumeration oracle the\nidentical body hides. The only differences from reset are the token purpose\nand TTL \u2014 the single-use/expiry/hash-at-rest mechanism is reused verbatim.",
+        "operationId": "request_login_link_api_auth_login_link_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetRequestIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Login Link",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/auth/logout": {
       "post": {
         "operationId": "logout_api_auth_logout_post",
@@ -7976,6 +9304,48 @@
           }
         },
         "summary": "Request Password Reset",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/playground": {
+      "get": {
+        "description": "Whether the anonymous \"try it\" mode is available.\n\nPublic and unauthenticated like ``dev_override_status``: the login screen\nneeds to know whether to render the button before any session exists. Kept\noff /api/bootstrap, which is auth-gated and unreachable pre-login.",
+        "operationId": "playground_status_api_auth_playground_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Playground Status",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "description": "Mint an ephemeral, fully-isolated guest session \u2014 only when enabled.\n\nIsolation is structural, not bespoke. ``_create_account`` seeds a throwaway\n``User`` + personal ``Workspace`` + owner ``Membership`` \u2014 the same primitive\nsignup uses \u2014 and ``_issue_login`` mints a normal session over it. Every\nrequest therefore scopes the guest through the exact ``get_actor`` /\n``_resolve_workspace`` membership fence every real tenant passes: the guest\nowns one fresh workspace and ``_resolve_workspace`` only ever returns a\nworkspace it holds a membership in, so a guest can no more read another\ntenant's data than two real tenants can read each other's. ``password_hash``\nis NULL \u2014 ``verify_password`` refuses a null hash, so nothing can ever\npassword-login to a guest account (the same stance as Google and dev-seed\naccounts), and there is no promotion path to a credentialed user.",
+        "operationId": "playground_login_api_auth_playground_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Playground Login",
         "tags": [
           "auth"
         ]
@@ -9328,7 +10698,7 @@
     },
     "/api/conversations/{conversation_id}/approval-mode": {
       "put": {
-        "description": "Change how much this thread asks before acting.\n\nAudited on every call, including the no-op where the mode is already what\nwas asked for. Turning the approval park off is the single most consequential\nswitch in the product \u2014 it is the containment that prompt injection has to\nget past \u2014 so \"when did this thread stop asking, and who stopped it\" must\nhave an answer, and an audit that skips the unchanged case is an audit whose\nsilence means two different things.\n\nNo `Idempotency-Key`: this is a PUT of a value, not the creation of one, so a\nretry lands on the same state by construction. It writes a second audit row,\nwhich is the correct record of a request that was actually made twice.",
+        "description": "Change how much this thread asks before acting.\n\nAudited on every call, including the no-op where the mode is already what\nwas asked for. Turning the approval park off is the single most consequential\nswitch in the product \u2014 it is the containment that prompt injection has to\nget past \u2014 so \"when did this thread stop asking, and who stopped it\" must\nhave an answer, and an audit that skips the unchanged case is an audit whose\nsilence means two different things.\n\nNo `Idempotency-Key`: this is a PUT of a value, not the creation of one, so a\nretry lands on the same state by construction. It writes a second audit row,\nwhich is the correct record of a request that was actually made twice.\n\nAny member of a shared thread may set its mode \u2014 the mode governs the shared\nthread they are collaborating in \u2014 and the audit row records who did it.",
         "operationId": "set_approval_mode_api_conversations__conversation_id__approval_mode_put",
         "parameters": [
           {
@@ -9531,6 +10901,417 @@
         "summary": "Send Message",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/api/conversations/{conversation_id}/share": {
+      "put": {
+        "description": "Share or unshare a thread with the rest of the workspace.\n\nOwner-gated, mirroring the skills share gate: only the creator, or the\nworkspace owner, may flip a thread between personal and shared. A plain\nmember seeing a shared thread must not be able to unshare it out from under\nthe people using it, nor share a personal thread they merely happened to\nreach \u2014 which is why `resolve_visible` (a 404 for anything outside the\nworkspace or another member's personal thread) is followed by the\ncreator-or-owner gate (a 403). Sharing changes visibility ONLY within the\nworkspace; the `workspace_id` filter in `resolve_visible` is never removed,\nso this can never expose a thread cross-workspace.",
+        "operationId": "set_conversation_shared_api_conversations__conversation_id__share_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationShareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Conversation Shared",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/crons": {
+      "get": {
+        "operationId": "list_crons_api_crons_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CronOut"
+                  },
+                  "title": "Response List Crons Api Crons Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Crons",
+        "tags": [
+          "crons"
+        ]
+      },
+      "post": {
+        "operationId": "create_cron_api_crons_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Cron",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/{cron_id}": {
+      "delete": {
+        "operationId": "delete_cron_api_crons__cron_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Cron",
+        "tags": [
+          "crons"
+        ]
+      },
+      "get": {
+        "operationId": "get_cron_api_crons__cron_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Cron",
+        "tags": [
+          "crons"
+        ]
+      },
+      "patch": {
+        "operationId": "update_cron_api_crons__cron_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Cron",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/{cron_id}/run-now": {
+      "post": {
+        "description": "Fire the cron immediately, without touching the atomic claim.\n\nClaim-free on purpose: the claim exists to make the unattended ticker fire\nonce per minute, and a person pressing \"run now\" is asking for exactly one\nmore fire regardless of when the last tick was. A `kind=\"task\"` still runs at\n`workflow` policy scope and parks on a write \u2014 pressing the button is not\nstanding next to the write.",
+        "operationId": "run_cron_now_api_crons__cron_id__run_now_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRunNowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Cron Now",
+        "tags": [
+          "crons"
         ]
       }
     },
@@ -10050,6 +11831,64 @@
         "summary": "Delete Dashboard",
         "tags": [
           "dashboards"
+        ]
+      }
+    },
+    "/api/dashboards/{dashboard_id}/conversation": {
+      "post": {
+        "operationId": "dashboard_conversation_api_dashboards__dashboard_id__conversation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "title": "Dashboard Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dashboard Conversation",
+        "tags": [
+          "chat"
         ]
       }
     },
@@ -11125,7 +12964,6 @@
     },
     "/api/documents/{document_id}/conversation": {
       "post": {
-        "description": "The thread for the chat panel beside a document, made on first open.\n\nA POST because the first call creates, but idempotent by construction rather\nthan by an `Idempotency-Key`: the document id *is* the key. There is one\nthread per document, so a retry, a second tab and a remount all land on the\nsame conversation, and nothing here needs a client to remember a nonce.",
         "operationId": "document_conversation_api_documents__document_id__conversation_post",
         "parameters": [
           {
@@ -13104,6 +14942,64 @@
         ]
       }
     },
+    "/api/projects/{project_id}/conversation": {
+      "post": {
+        "operationId": "project_conversation_api_projects__project_id__conversation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Project Conversation",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/projects/{project_id}/files": {
       "delete": {
         "operationId": "delete_project_file_api_projects__project_id__files_delete",
@@ -13497,6 +15393,233 @@
         ]
       }
     },
+    "/api/sandbox-tools": {
+      "get": {
+        "operationId": "list_tools_api_sandbox_tools_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SandboxToolOut"
+                  },
+                  "title": "Response List Tools Api Sandbox Tools Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Tools",
+        "tags": [
+          "sandbox-tools"
+        ]
+      },
+      "post": {
+        "operationId": "create_tool_api_sandbox_tools_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxToolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxToolOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Tool",
+        "tags": [
+          "sandbox-tools"
+        ]
+      }
+    },
+    "/api/sandbox-tools/{tool_id}": {
+      "delete": {
+        "operationId": "delete_tool_api_sandbox_tools__tool_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Tool",
+        "tags": [
+          "sandbox-tools"
+        ]
+      },
+      "patch": {
+        "operationId": "update_tool_api_sandbox_tools__tool_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxToolUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxToolOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Tool",
+        "tags": [
+          "sandbox-tools"
+        ]
+      }
+    },
     "/api/sandbox/{session_id}": {
       "delete": {
         "description": "Destroy the machine.\n\nAnswers with the killed row rather than 204 so the panel can render the\nterminal state \u2014 and its final exec count \u2014 without refetching the list.",
@@ -13756,6 +15879,429 @@
         "summary": "Run In Sandbox",
         "tags": [
           "sandbox"
+        ]
+      }
+    },
+    "/api/skills": {
+      "get": {
+        "operationId": "list_skills_api_skills_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillOut"
+                  },
+                  "title": "Response List Skills Api Skills Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Skills",
+        "tags": [
+          "skills"
+        ]
+      },
+      "post": {
+        "operationId": "create_skill_api_skills_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/skills/{skill_id}": {
+      "delete": {
+        "operationId": "delete_skill_api_skills__skill_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Skill",
+        "tags": [
+          "skills"
+        ]
+      },
+      "get": {
+        "operationId": "get_skill_api_skills__skill_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Skill",
+        "tags": [
+          "skills"
+        ]
+      },
+      "patch": {
+        "operationId": "update_skill_api_skills__skill_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/skills/{skill_id}/versions": {
+      "get": {
+        "operationId": "list_skill_versions_api_skills__skill_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillVersionOut"
+                  },
+                  "title": "Response List Skill Versions Api Skills  Skill Id  Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Skill Versions",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/skills/{skill_id}/versions/{version_id}/restore": {
+      "post": {
+        "operationId": "restore_skill_version_api_skills__skill_id__versions__version_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Skill Version",
+        "tags": [
+          "skills"
         ]
       }
     },

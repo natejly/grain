@@ -510,3 +510,59 @@ def test_snapshot_carries_everything_the_bundler_needs(db, workspace):
     assert payload["entry_path"] == "index.tsx"
     assert {file["path"] for file in payload["files"]} == {"index.tsx", "App.tsx"}
     assert payload["total_bytes"] > 0
+
+
+def test_the_entry_file_can_be_moved_to_an_html_page(client):
+    """Without this the HTML preview path is unreachable.
+
+    A `.html` file could be written into a web project and nothing could ever
+    ask the frame to render it — an unreachable branch, which is worse than a
+    missing one because it looks finished.
+    """
+    project_id = client.post(
+        "/api/projects", json={"name": "Entry swap", "kind": "web"}
+    ).json()["id"]
+    client.put(
+        f"/api/projects/{project_id}/files",
+        json={"path": "page.html", "content": "<h1>Hand written</h1>"},
+    )
+    moved = client.put(
+        f"/api/projects/{project_id}/entry", json={"entry_path": "page.html"}
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["entry_path"] == "page.html"
+    # And the file the entry moved off is now deletable, which it was not before.
+    assert (
+        client.delete(
+            f"/api/projects/{project_id}/files", params={"path": "index.tsx"}
+        ).status_code
+        == 204
+    )
+    client.delete(f"/api/projects/{project_id}")
+
+
+def test_an_entry_that_names_nothing_is_refused(client):
+    project_id = client.post(
+        "/api/projects", json={"name": "Entry missing", "kind": "web"}
+    ).json()["id"]
+    refused = client.put(
+        f"/api/projects/{project_id}/entry", json={"entry_path": "ghost.tsx"}
+    )
+    assert refused.status_code == 422
+    assert "not in" in refused.json()["detail"]
+    # A LaTeX project's entry still has to be a .tex file, by the same rule that
+    # guards creation rather than a second copy of it.
+    latex_id = client.post(
+        "/api/projects", json={"name": "Entry tex", "kind": "latex"}
+    ).json()["id"]
+    client.put(
+        f"/api/projects/{latex_id}/files",
+        json={"path": "notes.txt", "content": "not tex"},
+    )
+    wrong = client.put(
+        f"/api/projects/{latex_id}/entry", json={"entry_path": "notes.txt"}
+    )
+    assert wrong.status_code == 422
+    assert "must end in" in wrong.json()["detail"]
+    client.delete(f"/api/projects/{project_id}")
+    client.delete(f"/api/projects/{latex_id}")

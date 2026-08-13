@@ -31,12 +31,13 @@ from ..schemas import (
     ToolPolicyRequest,
 )
 from ..services import conversations
-from ..services.agent_loop import open_document, policy_scope_for_run
+from ..services.agent_loop import policy_scope_for_run
 from ..services.artifacts import documents, proposals
 from ..services.audit import record_audit
 from ..services.events import append_event
 from ..services.llm_tools import ToolContext, registry_families
 from ..services.runs import deny_tool_call, execute_tool_call, resume_run
+from ..services.subjects import open_document_id
 from ..services.workflows import executor as workflow_executor
 from ..services.workflows.inputs import InputBindingError
 from .dependencies import idempotency_key
@@ -457,14 +458,13 @@ def _hunk_amendment(
             status_code=422,
             detail=f"“{call.name}” cannot be approved one hunk at a time",
         )
-    open_doc = open_document(db, run)
     args = proposals.arguments_of(call.arguments_json)
     document = proposals.target_document(
         db,
         workspace_id=actor.workspace_id,
         name=call.name,
         args=args,
-        open_document_id=open_doc.id if open_doc else "",
+        open_document_id=open_document_id(db, run),
     )
     segments = proposals.review_segments(document, args)
     try:

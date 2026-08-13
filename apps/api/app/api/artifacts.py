@@ -18,7 +18,7 @@ from ..schemas import (
     DocumentSummaryOut,
     DocumentVersionOut,
 )
-from ..services import conversations
+from ..services import conversations, subjects
 from ..services.artifacts import boards, documents
 
 router = APIRouter(prefix="/api", tags=["artifacts"])
@@ -181,12 +181,12 @@ def delete_document(
     # every turn was handed the document's text — so leaving it behind would
     # leave a conversation whose subject no longer exists, invisible in the Chat
     # rail (which filters scoped threads out) and reachable by nothing.
-    for conversation_id in conversations.for_document_ids(
-        db, workspace_id=actor.workspace_id, document_id=document_id
-    ):
-        conversations.purge(
-            db, workspace_id=actor.workspace_id, conversation_id=conversation_id
-        )
+    conversations.purge_for_subject(
+        db,
+        workspace_id=actor.workspace_id,
+        subject_kind=subjects.DOCUMENT,
+        subject_id=document_id,
+    )
     try:
         documents.delete_document(
             db, workspace_id=actor.workspace_id, document_id=document_id

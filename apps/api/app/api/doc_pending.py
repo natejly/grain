@@ -20,8 +20,8 @@ from ..database import get_db
 from ..models import AgentToolCall, Conversation, Run
 from ..schemas import ApiModel
 from ..services import conversations
-from ..services.agent_loop import open_document
 from ..services.artifacts import proposals
+from ..services.subjects import open_document_id
 
 router = APIRouter(prefix="/api/documents-pending", tags=["documents"])
 
@@ -101,13 +101,12 @@ def list_pending_document_edits(
         run = db.get(Run, call.run_id)
         if run is not None and run.workspace_id != actor.workspace_id:
             run = None
-        open_doc = open_document(db, run) if run is not None else None
         document = proposals.target_document(
             db,
             workspace_id=actor.workspace_id,
             name=call.name,
             args=args,
-            open_document_id=open_doc.id if open_doc else "",
+            open_document_id=open_document_id(db, run) if run is not None else "",
         )
         segments = proposals.review_segments(document, args)
         # No hunks means the proposal changes nothing after all, which the diff

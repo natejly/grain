@@ -104,6 +104,39 @@ def pin_out(pin: DashboardPin, dashboard: Dashboard) -> DashboardPinOut:
 # Dashboards
 
 
+def _run_before_saving(
+    db: Session, *, workspace_id: str, dataset_id: str, spec: DashboardSpec
+) -> None:
+    """Execute the spec's query and check the chart reads columns it returns.
+
+    Shared by create and update, because the guarantee is about the *saved row*
+    and not about how it got there: every dashboard this workspace holds has
+    answered at least once. An update that skipped this would be a slower way of
+    writing the broken dashboard `create_dashboard` refuses.
+    """
+    result = execute_dataset_query(
+        db, workspace_id=workspace_id, dataset_id=dataset_id, query=spec.query
+    )
+    columns = result.columns
+    unknown = {
+        field: where for field, where in result_fields(spec).items() if field not in columns
+    }
+    if unknown:
+        raise DashboardBindError(
+            CompileReport(
+                errors=[
+                    CompileError(
+                        "spec_field_unknown",
+                        f"{where} names “{field}”, which this query does not return; "
+                        "it returns " + ", ".join(columns),
+                        field,
+                    )
+                    for field, where in sorted(unknown.items())
+                ]
+            )
+        )
+
+
 def create_dashboard(
     db: Session,
     *,
@@ -136,26 +169,7 @@ def create_dashboard(
     )
     if existing is not None:
         raise DashboardNameTaken(name)
-    result = execute_dataset_query(
-        db, workspace_id=workspace_id, dataset_id=dataset_id, query=spec.query
-    )
-    columns = result.columns
-    unknown = {
-        field: where for field, where in result_fields(spec).items() if field not in columns
-    }
-    if unknown:
-        report = CompileReport(
-            errors=[
-                CompileError(
-                    "spec_field_unknown",
-                    f"{where} names “{field}”, which this query does not return; "
-                    "it returns " + ", ".join(columns),
-                    field,
-                )
-                for field, where in sorted(unknown.items())
-            ]
-        )
-        raise DashboardBindError(report)
+    _run_before_saving(db, workspace_id=workspace_id, dataset_id=dataset_id, spec=spec)
     dashboard = Dashboard(
         id=new_id(),
         workspace_id=workspace_id,
@@ -170,6 +184,66 @@ def create_dashboard(
     db.add(dashboard)
     db.flush()
     return dashboard
+
+
+def update_dashboard(
+    db: Session,
+    *,
+    dashboard: Dashboard,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    dataset_id: Optional[str] = None,
+    spec: Optional[DashboardSpec] = None,
+) -> Dashboard:
+    """Revise a saved dashboard in place. None means "leave this alone".
+
+    Editing a dashboard used to mean creating a second one with a different
+    name, because the unique `(workspace_id, name)` constraint left no other
+    move — so "make that a bar chart" produced two dashboards and a question
+    about which to pin. This is the missing verb, and it is deliberately a
+    *revision*: the same row, the same id, so anything pinned to a home screen
+    follows the change rather than being orphaned beside its replacement.
+
+    Every guarantee `create_dashboard` makes is re-made here — the query runs
+    before the row is written, the chart must read columns it returns, and a
+    rename onto a taken name is refused.
+
+    A dashboard derived from a template keeps its `template_id` and bindings:
+    editing the copy does not un-derive it, and `rebind_spec` is not re-run
+    because the spec being saved is already written against real columns.
+    """
+    if name is not None:
+        name = name.strip()
+        if name and name != dashboard.name:
+            taken = db.scalar(
+                select(Dashboard).where(
+                    Dashboard.workspace_id == dashboard.workspace_id,
+                    Dashboard.name == name,
+                    Dashboard.id != dashboard.id,
+                )
+            )
+            if taken is not None:
+                raise DashboardNameTaken(name)
+            dashboard.name = name
+    next_dataset = dataset_id or dashboard.dataset_id
+    next_spec = spec if spec is not None else current_spec(dashboard)
+    _run_before_saving(
+        db,
+        workspace_id=dashboard.workspace_id,
+        dataset_id=next_dataset,
+        spec=next_spec,
+    )
+    dashboard.dataset_id = next_dataset
+    dashboard.spec_json = next_spec.model_dump_json()
+    if description is not None:
+        dashboard.description = description.strip()
+    db.flush()
+    return dashboard
+
+
+def current_spec(dashboard: Dashboard) -> DashboardSpec:
+    """The saved spec, parsed."""
+    return DashboardSpec.model_validate(json.loads(dashboard.spec_json))
 
 
 def delete_dashboard(db: Session, dashboard: Dashboard) -> None:

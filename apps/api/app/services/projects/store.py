@@ -235,6 +235,34 @@ def create_project(
     return project
 
 
+def set_entry_path(db: Session, *, project: Project, path: str) -> Project:
+    """Point a project at a different root file.
+
+    Without this the entry is whatever creation chose, forever — which made the
+    HTML preview path unreachable: a `.html` file could be written into a web
+    project and nothing could ever ask the preview to render it. An unreachable
+    branch is worse than a missing one, because it looks finished.
+
+    The file has to exist (an entry pointing at nothing renders an error the
+    user cannot fix from the tree) and a LaTeX project's entry still has to be a
+    .tex file, enforced by the same `validate_entry_path` that guards creation.
+    """
+    from .latex import KIND as LATEX_KIND
+    from .latex import validate_entry_path
+
+    clean = (
+        validate_entry_path(path)
+        if project.kind == LATEX_KIND
+        else normalize_path(path)
+    )
+    if find_file(db, project_id=project.id, path=clean) is None:
+        raise ProjectError(f"“{clean}” is not in {project.name}")
+    project.entry_path = clean
+    project.updated_at = utcnow()
+    db.commit()
+    return project
+
+
 def delete_project(db: Session, *, workspace_id: str, project_id: str) -> str:
     project = get_project(db, workspace_id=workspace_id, project_id=project_id)
     for file in list_files(db, project_id=project.id):

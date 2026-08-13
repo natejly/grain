@@ -81,6 +81,42 @@ export function ApprovalModeControl({ mode, setMode }: ApprovalModeControlProps)
   );
 }
 
+export type UnrestrictedIndicatorProps = {
+  /** What has gone through unreviewed in this thread, oldest first. */
+  approved: AgentToolCall[];
+};
+
+/**
+ * The development bypass, said out loud.
+ *
+ * `DEV_UNRESTRICTED_AGENT` is a stronger `auto_writes`: nothing parks AND the
+ * per-subject tool scoping is off, so a panel about one paragraph of prose can
+ * reach the filesystem tools. The failure mode is the same one the mode banner
+ * exists for — not switching it on, but forgetting it is on — so it wears the
+ * same shape rather than a quieter second treatment.
+ *
+ * Two deliberate differences from `BypassIndicator`. There is no "Turn off"
+ * button, because this is not a per-thread setting a click can change: it is an
+ * environment variable the server refuses to accept outside development, and a
+ * button that could not do what it said would be worse than none. And it says
+ * *every thread*, not this one, because that is what is true.
+ */
+export function UnrestrictedIndicator({ approved }: UnrestrictedIndicatorProps) {
+  return (
+    <div className="bypass-banner" role="status">
+      <Zap size={15} aria-hidden="true" />
+      <div className="bypass-copy">
+        <strong>Development mode: no approvals, every tool</strong>
+        <span>
+          {approved.length === 0
+            ? "Nothing has gone through unreviewed yet. Applies to every thread."
+            : `${approved.length} ${approved.length === 1 ? "call" : "calls"} went through unreviewed · ${summariseAutoApproved(approved)}`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export type BypassIndicatorProps = {
   /** The thread's title, so the warning says which conversation it governs. */
   conversationTitle: string;

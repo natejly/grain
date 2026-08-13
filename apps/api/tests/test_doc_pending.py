@@ -600,12 +600,13 @@ def test_a_documents_thread_is_one_thread_and_stays_out_of_the_chat_rail(
     assert first.status_code == 200, first.text
     second = client.post(f"/api/documents/{document['id']}/conversation")
     assert second.json()["id"] == first.json()["id"]
-    assert first.json()["document_id"] == document["id"]
+    assert first.json()["subject_kind"] == "document"
+    assert first.json()["subject_id"] == document["id"]
     assert first.json()["title"] == document["title"]
 
     listed = client.get("/api/conversations").json()
     assert first.json()["id"] not in [row["id"] for row in listed]
-    assert all(row["document_id"] == "" for row in listed)
+    assert all(row["subject_id"] == "" for row in listed)
 
 
 def test_deleting_a_document_takes_its_thread_with_it(client):

@@ -105,6 +105,16 @@ export function createInfraHandlers({
     }
   }
 
+  async function setProjectEntry(projectId: string, path: string) {
+    setError("");
+    try {
+      setActiveProject(await api.setProjectEntry(projectId, path));
+      setProjects(await api.listProjects());
+    } catch (caught) {
+      setError(describeError(caught, "Could not make that the entry file"));
+    }
+  }
+
   async function removeProjectFile(projectId: string, path: string) {
     try {
       await api.deleteProjectFile(projectId, path);
@@ -133,6 +143,7 @@ export function createInfraHandlers({
     openProject,
     createProject,
     saveProjectFile,
+    setProjectEntry,
     removeProjectFile,
     removeProject,
   };

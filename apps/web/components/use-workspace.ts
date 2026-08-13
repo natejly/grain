@@ -625,6 +625,19 @@ export function useWorkspace() {
     await refreshArtifacts();
   };
 
+  /**
+   * The project panel's twin of `reloadOpenDocument`, and it reads the ref for
+   * the same reason: a turn takes seconds, and the user may have opened another
+   * project by the time it settles. Re-reading whatever `activeProject` said
+   * when the turn started would replace what they are looking at with what they
+   * were looking at.
+   */
+  const reloadOpenProject = async () => {
+    const open = activeProjectRef.current;
+    if (open) setActiveProject(await api.getProject(open).catch(() => null));
+    await refreshInfra().catch(() => undefined);
+  };
+
   const folderHandlers = createFolderHandlers({ setError, setFolders, setDocuments });
 
   const boardHandlers = createBoardHandlers({ setError, setBoards });
@@ -828,6 +841,8 @@ export function useWorkspace() {
     refreshArtifacts,
     refreshPendingEdits,
     reloadOpenDocument,
+    reloadOpenProject,
+    refreshDashboards,
     ...documentHandlers,
     ...folderHandlers,
     ...boardHandlers,

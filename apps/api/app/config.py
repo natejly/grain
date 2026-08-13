@@ -392,6 +392,22 @@ class Settings(BaseSettings):
     # issues a real session without email/password. Refused outside
     # development/test the same way DEV_AUTO_LOGIN is.
     dev_user: str = ""
+    # Development door for the *agent*: every tool the registry holds, and no
+    # approval park. It drops the per-subject tool scoping (a document panel's
+    # thread gets the project tools too) and resolves every chat turn to
+    # `auto_writes` so writes execute without asking.
+    #
+    # Two things it does NOT do, both on purpose. A `tool_policies` row of `deny`
+    # still denies: "no restrictions" means "stop asking me", not "ignore what I
+    # told you", and a prohibition has never been a grant anywhere else in this
+    # codebase either. And it never reaches a workflow or cron run, which parks
+    # on writes in development exactly as it does in deployment — that is the
+    # behaviour being developed against.
+    #
+    # Off by default and, like DEV_AUTO_LOGIN, structurally unreachable outside
+    # development/test: `_guard_dev_unrestricted` raises at Settings
+    # construction. This is the most dangerous flag in the file to get wrong.
+    dev_unrestricted_agent: bool = False
     # Anonymous "try it" mode. OFF by default like sandbox_enabled: the safe
     # state and the off state are the same. Unlike DEV_USER/DEV_AUTO_LOGIN this
     # is *not* forbidden in production — it is a legitimate public demo, not an
@@ -579,6 +595,30 @@ class Settings(BaseSettings):
                 "SCREEN_PROXY_URL host must be on TOOL_HOST_ALLOWLIST — the "
                 "screen proxy is fetched through the same SSRF guard as every "
                 "other tool destination."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_dev_unrestricted(self) -> Settings:
+        """Refuse to boot an agent with the approval gate switched off.
+
+        Same structural gate as `_guard_sandbox` and `_guard_auth`, and for the
+        sharpest version of the same reason. `DEV_UNRESTRICTED_AGENT` removes
+        the containment that prompt injection has to get past: every tool
+        available regardless of what the panel is about, and every write
+        executing without a human seeing it. Merely defaulting it off is not
+        enough — `app_env` itself defaults to "production" precisely because a
+        deployment that forgot to set it once came up with the doors open, and
+        that was demonstrated here rather than theorised.
+
+        So a deployment that sets this variable fails to boot with a legible
+        message instead of coming up quietly unguarded.
+        """
+        if self.dev_unrestricted_agent and not self.is_dev_env:
+            raise ValueError(
+                "DEV_UNRESTRICTED_AGENT requires APP_ENV to be development or "
+                "test — it disables the approval gate and the per-subject tool "
+                "scoping. There is no deployment in which that is correct."
             )
         return self
 

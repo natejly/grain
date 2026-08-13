@@ -37,7 +37,11 @@ import remarkMath from "remark-math";
 import { ChatDashboardEmbeds } from "../chat-dashboard-embed";
 import { ArtifactImages } from "../source-image";
 import { autoApprovedCalls, isBypass } from "./approval-format";
-import { ApprovalModeControl, BypassIndicator } from "./approval-mode";
+import {
+  ApprovalModeControl,
+  BypassIndicator,
+  UnrestrictedIndicator,
+} from "./approval-mode";
 import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
@@ -111,6 +115,18 @@ export type ChatViewProps = {
     conversationId: string | null;
     conversationTitle: string;
   };
+  /**
+   * The deployment is running with `DEV_UNRESTRICTED_AGENT`: nothing parks and
+   * the per-subject tool scoping is off. Carries the thread's conversation id
+   * because the indicator names what the bypass actually let through, and the
+   * call list this view is handed is workspace-wide on the side panels.
+   *
+   * Separate from `approval` on purpose: the panels have no mode *control* —
+   * there is nothing here for a user to change — but they still have to show
+   * the warning, and a surface that could be in this state without saying so is
+   * the exact failure the indicator exists to prevent.
+   */
+  unrestricted?: { conversationId: string | null };
   /**
    * The workspace's todo lists, so a turn that touched one can show it as
    * checkboxes here instead of sending the reader to another page.
@@ -762,6 +778,7 @@ export function ChatView({
   openCitation,
   onAttach,
   approval,
+  unrestricted,
   todos,
   endRef,
   selectedAgentId,
@@ -788,7 +805,10 @@ export function ChatView({
   // A turn cannot be sent with a required arg left blank; the button says so
   // rather than letting the server 422 a click the composer could have refused.
   const skillReady = argsSatisfied(skills?.attached ?? null, skills?.argValues ?? {});
-  const bypassed = Boolean(approval && isBypass(approval.mode));
+  // Either kind of "writes are going through unreviewed". The composer zone
+  // wears the warning treatment for both, because from the reader's side they
+  // are the same fact — and the development one is the wider of the two.
+  const bypassed = Boolean(approval && isBypass(approval.mode)) || Boolean(unrestricted);
   /**
    * Which card in a turn gets the checklist: the last one that touched a list.
    *
@@ -933,12 +953,23 @@ export function ChatView({
             whole design: a transcript scrolls, so a warning placed in one is a
             warning you can leave behind above the fold. This cannot be
             scrolled away from while the bypass is on. */}
-        {approval && bypassed && (
-          <BypassIndicator
-            conversationTitle={approval.conversationTitle}
-            approved={autoApprovedCalls(agentCalls, approval.conversationId)}
-            stop={() => approval.setMode("ask_writes")}
+        {/* The development bypass outranks the per-thread one in the banner:
+            it is wider (every thread, every tool) and it cannot be turned off
+            from here, so showing the thread-level "Turn off" button beside it
+            would offer a fix that does not fix this. */}
+        {unrestricted ? (
+          <UnrestrictedIndicator
+            approved={autoApprovedCalls(agentCalls, unrestricted.conversationId)}
           />
+        ) : (
+          approval &&
+          bypassed && (
+            <BypassIndicator
+              conversationTitle={approval.conversationTitle}
+              approved={autoApprovedCalls(agentCalls, approval.conversationId)}
+              stop={() => approval.setMode("ask_writes")}
+            />
+          )
         )}
         <div className="composer-shell">
           {pickerOpen && (

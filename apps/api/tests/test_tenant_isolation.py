@@ -768,7 +768,15 @@ DB_GET_ALLOWLIST = {
     ("app/services/agent_loop.py", "Agent"): "workspace re-checked on the next line",
     ("app/services/agent_loop.py", "AgentToolCall"): "id is the loop's own row",
     ("app/services/agent_loop.py", "Conversation"): "workspace re-checked on the next line",
-    ("app/services/agent_loop.py", "Document"): "workspace re-checked on the next line",
+    # The subject a scoped thread is about, resolved from the run. Every one of
+    # these fetches by primary key and then compares the row's workspace_id to
+    # the RUN's on the next line, returning None on a mismatch — so a
+    # conversation carrying a foreign subject id resolves to no subject rather
+    # than to another tenant's file tree.
+    ("app/services/subjects.py", "Conversation"): "workspace re-checked on the next line",
+    ("app/services/subjects.py", "Document"): "workspace re-checked on the next line",
+    ("app/services/subjects.py", "Project"): "workspace re-checked on the next line",
+    ("app/services/subjects.py", "Dashboard"): "workspace re-checked on the next line",
     ("app/api/doc_pending.py", "Run"): "workspace re-checked on the next line",
     ("app/services/runs.py", "Run"): "worker; id from an authorized route",
     ("app/services/runs.py", "ToolCall"): "worker; id from an authorized route",

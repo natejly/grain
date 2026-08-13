@@ -125,7 +125,7 @@
       },
       {
         "text": "Tracking two things on the Launch checklist.",
-        "denied_text": "Understood — I added nothing."
+        "denied_text": "Understood \u2014 I added nothing."
       }
     ]
   },
@@ -135,12 +135,15 @@
       {
         "call": {
           "name": "todo_check",
-          "arguments": { "list": "Launch checklist", "item": "Run the migrations" }
+          "arguments": {
+            "list": "Launch checklist",
+            "item": "Run the migrations"
+          }
         }
       },
       {
         "text": "Ticked off Run the migrations.",
-        "denied_text": "Understood — I left the checklist alone."
+        "denied_text": "Understood \u2014 I left the checklist alone."
       }
     ]
   },
@@ -150,12 +153,15 @@
       {
         "call": {
           "name": "add_todo",
-          "arguments": { "list": "Launch checklist", "title": "Smoke-test checkout" }
+          "arguments": {
+            "list": "Launch checklist",
+            "title": "Smoke-test checkout"
+          }
         }
       },
       {
         "text": "Added the smoke test.",
-        "denied_text": "I could not add that — the tool is not allowed here."
+        "denied_text": "I could not add that \u2014 the tool is not allowed here."
       }
     ]
   },
@@ -201,6 +207,41 @@
       {
         "text": "Swept the review notes.",
         "denied_text": "Understood \u2014 I left the notes alone."
+      }
+    ]
+  },
+  {
+    "match": "add a banner to the page",
+    "steps": [
+      {
+        "call": {
+          "name": "fs_write",
+          "arguments": {
+            "path": "Banner.tsx",
+            "content": "import React from \"react\";\n\nexport function Banner() {\n  return <p>Shipped by the agent</p>;\n}\n"
+          }
+        }
+      },
+      {
+        "text": "Added Banner.tsx to the project.",
+        "denied_text": "Understood \u2014 I left the project untouched."
+      }
+    ]
+  },
+  {
+    "match": "make it a line chart",
+    "steps": [
+      {
+        "call": {
+          "name": "update_dashboard",
+          "arguments": {
+            "visualization": "line"
+          }
+        }
+      },
+      {
+        "text": "Switched it to a line chart.",
+        "denied_text": "Understood \u2014 I left the dashboard as it was."
       }
     ]
   }

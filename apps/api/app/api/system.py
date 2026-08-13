@@ -78,6 +78,7 @@ def bootstrap(
             mode=settings.screen_mode,
             backend=settings.screen_backend,
         ),
+        unrestricted_agent=settings.dev_unrestricted_agent,
         feature_flags={
             "cited_memory": True,
             "read_only_tool": True,

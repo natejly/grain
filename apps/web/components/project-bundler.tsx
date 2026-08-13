@@ -238,6 +238,21 @@ function inlineSafe(code: string): string {
 }
 
 /**
+ * The one policy every previewed document runs under (ADR 0004): no network of
+ * any kind, inline script and style only, images and fonts from data: URIs.
+ *
+ * Named once and shared by both document builders below. A hand-written HTML
+ * file is no more trustworthy than a generated bundle — it is the same
+ * workspace, the same agent writing into it, and often the same prompt
+ * injection — so the two must not be able to drift into different policies.
+ */
+export const SANDBOX_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'";
+
+const BASE_STYLE =
+  "html,body{margin:0;background:#fff;color:#111;font:14px/1.5 system-ui,sans-serif}";
+
+/**
  * The document handed to the iframe. Its CSP is `default-src 'none'` — no
  * network of any kind — so React and the compiled bundle are inlined rather
  * than linked, and the frame is sandboxed to scripts only (opaque origin, no
@@ -249,14 +264,102 @@ export function sandboxDocument(bundle: BundleResult, runtime: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
-<style>html,body{margin:0;background:#fff;color:#111;font:14px/1.5 system-ui,sans-serif}</style>
+<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">
+<style>${BASE_STYLE}</style>
 <style>${inlineSafe(bundle.css)}</style>
 </head>
 <body>
 <div id="root"></div>
 <script>${inlineSafe(runtime)}</script>
 <script>${inlineSafe(bundle.js)}</script>
+</body>
+</html>`;
+}
+
+/** True for an entry point that is HTML rather than something to compile. */
+export function isHtmlEntry(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.endsWith(".html") || lower.endsWith(".htm");
+}
+
+function section(source: string, tag: "head" | "body"): string | null {
+  const open = new RegExp(`<${tag}\\b[^>]*>`, "i").exec(source);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const close = new RegExp(`</${tag}\\s*>`, "i").exec(source.slice(start));
+  return close ? source.slice(start, start + close.index) : source.slice(start);
+}
+
+/**
+ * Inline the project's own scripts and stylesheets into the markup.
+ *
+ * The frame has no network — `default-src 'none'` — so a `<script src="app.js">`
+ * would silently do nothing, and "my script did not run" with no error is the
+ * worst possible first experience of a hand-written page. Inlining resolves the
+ * reference through the SAME virtual filesystem the bundler uses, so `./`, `../`
+ * and extensionless paths behave as they do in an import, and a path that walks
+ * above the project root resolves to nothing rather than to a neighbour.
+ *
+ * References that do not resolve inside the project are left exactly as written
+ * and the CSP refuses them. That is deliberate: rewriting a CDN URL into
+ * something that "works" would be inventing a network the sandbox does not have.
+ */
+function inlineLocalAssets(source: string, files: Map<string, string>, entry: string): string {
+  const withScripts = source.replace(
+    /<script\b([^>]*)\bsrc\s*=\s*["']([^"']+)["']([^>]*)>\s*<\/script\s*>/gi,
+    (whole, _before, href: string) => {
+      const resolved = resolveVirtualImport(href, entry, files);
+      if (resolved === null) return whole;
+      return `<script>${inlineSafe(files.get(resolved) ?? "")}</script>`;
+    },
+  );
+  return withScripts.replace(/<link\b[^>]*>/gi, (whole) => {
+    if (!/rel\s*=\s*["']?stylesheet/i.test(whole)) return whole;
+    const href = /href\s*=\s*["']([^"']+)["']/i.exec(whole);
+    if (!href) return whole;
+    const resolved = resolveVirtualImport(href[1], entry, files);
+    if (resolved === null) return whole;
+    return `<style>${inlineSafe(files.get(resolved) ?? "")}</style>`;
+  });
+}
+
+/**
+ * An `.html` entry point, wrapped for the same locked frame the bundler's
+ * output goes into.
+ *
+ * The page is REBUILT around our own `<head>` rather than having a meta tag
+ * spliced into the author's, and that is the security-relevant part: a
+ * `<meta http-equiv="Content-Security-Policy">` only governs what follows it, so
+ * a policy appended after the author's first inline `<script>` would arrive too
+ * late to govern the one thing worth governing. Ours is the first child of the
+ * head, always, whatever the file looked like.
+ *
+ * A file with no `<html>`/`<body>` wrapper is treated as a body fragment, which
+ * is what a browser does with it too.
+ */
+export function htmlDocument(
+  files: ProjectFileInput[],
+  entryPath: string,
+): string {
+  const map = new Map(files.map((file) => [file.path, file.content]));
+  const source = map.get(entryPath);
+  if (source === undefined) {
+    throw new Error(`Entry file "${entryPath}" is not in the project`);
+  }
+  const inlined = inlineLocalAssets(source, map, entryPath);
+  const head = section(inlined, "head");
+  const body = section(inlined, "body");
+  return `<!doctype html>
+<html>
+<head>
+<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>${BASE_STYLE}</style>
+${head ?? ""}
+</head>
+<body>
+${body ?? (head === null ? inlined : "")}
 </body>
 </html>`;
 }
@@ -299,12 +402,22 @@ export function ProjectPreview({
     const timer = window.setTimeout(async () => {
       setBuilding(true);
       try {
-        const [bundle, runtime] = await Promise.all([
-          bundleProject(files, entryPath),
-          loadReactRuntime(),
-        ]);
+        // An HTML entry point has nothing to compile: no esbuild, no React
+        // runtime, no bundle. What it does share is the frame it lands in —
+        // same CSP, same `sandbox="allow-scripts"` — because a hand-written page
+        // is no more trustworthy than a generated one, and that boundary is the
+        // whole of what ADR 0004 bought.
+        const next = isHtmlEntry(entryPath)
+          ? htmlDocument(files, entryPath)
+          : await (async () => {
+              const [bundle, runtime] = await Promise.all([
+                bundleProject(files, entryPath),
+                loadReactRuntime(),
+              ]);
+              return sandboxDocument(bundle, runtime);
+            })();
         if (build.current !== generation) return;
-        setHtml(sandboxDocument(bundle, runtime));
+        setHtml(next);
         setError("");
       } catch (caught) {
         if (build.current !== generation) return;

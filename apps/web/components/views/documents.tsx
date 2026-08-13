@@ -8,7 +8,6 @@ import {
   RotateCcw,
   Save,
   Trash2,
-  X,
 } from "lucide-react";
 import type {
   Citation,
@@ -25,7 +24,6 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { useDocumentThread } from "../use-document-thread";
-import { ChatView } from "./chat";
 import {
   PendingEditList,
   type PendingDecision,
@@ -35,6 +33,7 @@ import { DocumentReview, type HunkDecision } from "./document-review";
 import { FileTree, type FolderOps } from "./file-tree";
 import { folderPath } from "./folder-tree";
 import { DOCUMENT_KIND_LABELS } from "./shared";
+import { SubjectChatPanel } from "./subject-chat";
 
 export type DocumentsViewProps = {
   documents: DocumentSummary[];
@@ -68,6 +67,8 @@ export type DocumentChatDeps = {
   openCitation: (citation: Citation) => Promise<void>;
   reloadDocument: () => Promise<void>;
   refreshPendingEdits: () => Promise<void>;
+  /** `DEV_UNRESTRICTED_AGENT` is on, so the panel wears the warning. */
+  unrestricted?: boolean;
 };
 
 /**
@@ -390,53 +391,20 @@ export function DocumentsView({
       )}
 
       {showChat && chat && active && (
-        <aside className="document-chat" aria-label={`Chat about ${active.title}`}>
-          <div className="document-chat-head">
-            <strong>Chat about this document</strong>
-            <button
-              className="icon-button"
-              onClick={() => setShowChat(false)}
-              aria-label="Close document chat"
-            >
-              <X size={16} />
-            </button>
-          </div>
-          {thread.error && (
-            <div className="tool-error" role="alert">
-              {thread.error}
-            </div>
-          )}
-          {/* The same view the rail renders, at compact density. Reused rather
-              than rebuilt: streaming, tool cards, approvals, the budget hold
-              and the citation verdict are one implementation, so the panel
-              cannot fall behind Chat by a bug fix. */}
-          <ChatView
-            messages={thread.messages}
-            sources={chat.sources}
-            // Only what the editor column is not already holding — the inline
-            // reviewer *and* every all-or-nothing card beside it. Offering
-            // Approve twice for one call, in two places on the same screen,
-            // means one of them is stale the moment the other is pressed, and
-            // the second press comes back "already decided".
-            agentCalls={thread.agentCalls.filter((call) => !decided.has(call.id))}
-            apps={chat.apps}
-            draft={thread.draft}
-            setDraft={thread.setDraft}
-            activeRun={thread.activeRun}
-            runStatus={thread.runStatus}
-            budgetPark={thread.budgetPark}
-            submitPrompt={thread.submitPrompt}
-            cancelActiveRun={thread.cancelActiveRun}
-            regenerate={thread.regenerate}
-            decideAgentCall={thread.decideAgentCall}
-            openCitation={chat.openCitation}
-            // No paperclip. Attaching a source navigates to the Knowledge view,
-            // which would close the document this panel is about — a button
-            // that throws away the thing you were doing is worse than no
-            // button, so ChatView omits it when no handler is given.
-            endRef={thread.endRef}
-          />
-        </aside>
+        <SubjectChatPanel
+          className="document-chat"
+          heading="Chat about this document"
+          label={`Chat about ${active.title}`}
+          close={() => setShowChat(false)}
+          thread={thread}
+          sources={chat.sources}
+          apps={chat.apps}
+          openCitation={chat.openCitation}
+          // Only what the editor column is not already holding — the inline
+          // reviewer *and* every all-or-nothing card beside it.
+          hidden={decided}
+          unrestricted={chat.unrestricted}
+        />
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import type { DashboardPin, DatasetQueryResult } from "@workspace/api-client";
-import { GripVertical, PinOff, RefreshCw } from "lucide-react";
+import { GripVertical, MessageSquare, PinOff, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardChart } from "../dashboard-chart";
 import {
@@ -40,6 +40,8 @@ export type DashboardGridProps = {
   /** Ask for a dashboard's rows. Called once per tile, and again on Refresh. */
   run: (dashboardId: string, force?: boolean) => void;
   unpin: (dashboardId: string) => Promise<void>;
+  /** Open the chat panel about this dashboard. Absent = no panel wired. */
+  chat?: (dashboardId: string) => void;
   saveLayout: (tiles: Tile[]) => Promise<void>;
   /** A dashboard the rail asked to be shown; scrolled to and outlined. */
   focused: string | null;
@@ -59,6 +61,7 @@ export function DashboardGrid({
   results,
   run,
   unpin,
+  chat,
   saveLayout,
   focused,
 }: DashboardGridProps) {
@@ -237,6 +240,16 @@ export function DashboardGrid({
                 <strong>{dashboard.name}</strong>
                 <span>{describeDashboard(dashboard)}</span>
               </div>
+              {chat && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Chat about ${dashboard.name}`}
+                  onClick={() => chat(dashboard.id)}
+                >
+                  <MessageSquare size={13} />
+                </button>
+              )}
               <button
                 type="button"
                 className="icon-button"

@@ -72,6 +72,50 @@ def _spec(args: Mapping[str, Any]) -> DashboardSpec:
     return DashboardSpec.model_validate(raw)
 
 
+def _merged_spec(current: DashboardSpec, args: Mapping[str, Any]) -> DashboardSpec:
+    """The saved spec with only the fields this call named replaced.
+
+    An edit is almost never a whole spec. "Make it a bar chart" sends one key,
+    and building a fresh `DashboardSpec` from it would silently reset the query
+    to the default — the dashboard would still execute, still save, and quietly
+    show something else entirely. Merging is what makes a partial edit partial.
+    """
+    merged = current.model_dump()
+    for key in _SPEC_PROPERTIES:
+        if args.get(key) is not None:
+            merged[key] = args[key]
+    return DashboardSpec.model_validate(merged)
+
+
+def _find_dashboard(
+    db: Session, context: ToolContext, args: Mapping[str, Any]
+) -> Optional[Dashboard]:
+    """By id, by name, or the one whose panel this turn was started in.
+
+    The context fallback is the same one the document tools take: a thread
+    opened beside a dashboard means *that* dashboard when the user says "make it
+    a bar chart", and the model should not have to list dashboards and guess.
+    """
+    dashboard_id = _text(args, "dashboard_id")
+    name = _text(args, "dashboard")
+    if not dashboard_id and not name:
+        dashboard_id = context.dashboard_id
+    if dashboard_id:
+        return db.scalar(
+            select(Dashboard).where(
+                Dashboard.id == dashboard_id,
+                Dashboard.workspace_id == context.workspace_id,
+            )
+        )
+    if not name:
+        return None
+    return db.scalar(
+        select(Dashboard).where(
+            Dashboard.workspace_id == context.workspace_id, Dashboard.name == name
+        )
+    )
+
+
 def _requirements(args: Mapping[str, Any]) -> List[DashboardColumnRequirement]:
     raw = args.get("required_columns")
     if not isinstance(raw, list):
@@ -241,6 +285,64 @@ def _preview_create_dashboard(
     return (
         f"Create dashboard “{_text(args, 'name') or 'Untitled'}” over {dataset}: "
         f"{_describe(spec)}."
+    )
+
+
+def _update_dashboard(
+    db: Session, context: ToolContext, args: Dict[str, Any]
+) -> ToolResult:
+    dashboard = _find_dashboard(db, context, args)
+    if dashboard is None:
+        return ToolResult(content="Error: no such dashboard in this workspace.")
+    try:
+        spec = _merged_spec(store.current_spec(dashboard), args)
+    except ValidationError as exc:
+        return ToolResult(content=f"Error: invalid spec: {exc.errors()[:3]}")
+    try:
+        store.update_dashboard(
+            db,
+            dashboard=dashboard,
+            name=args.get("name") if args.get("name") is not None else None,
+            description=(
+                args.get("description") if args.get("description") is not None else None
+            ),
+            dataset_id=_text(args, "dataset_id") or None,
+            spec=spec,
+        )
+    except store.DashboardNameTaken as exc:
+        return ToolResult(content=f"Error: a dashboard named “{exc}” already exists.")
+    except AnalyticsValidationError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    except DashboardBindError as exc:
+        return ToolResult(content=f"Change rejected:\n{exc.report.render()}")
+    return ToolResult(
+        content=f"Updated dashboard “{dashboard.name}” (id {dashboard.id}); it now "
+        f"shows {_describe(spec)}."
+    )
+
+
+def _preview_update_dashboard(
+    db: Session, context: ToolContext, args: Dict[str, Any]
+) -> str:
+    dashboard = _find_dashboard(db, context, args)
+    if dashboard is None:
+        return "No such dashboard in this workspace."
+    try:
+        current = store.current_spec(dashboard)
+        spec = _merged_spec(current, args)
+    except ValidationError as exc:
+        return f"Invalid dashboard spec: {exc.errors()[:3]}"
+    # Before and after, not just after: what a reviewer needs to decide is what
+    # *changes*, and "shows a bar of revenue by region" reads as harmless
+    # whether it is a small tweak or a different chart wearing the same name.
+    rename = (
+        f" Rename to “{_text(args, 'name')}”."
+        if _text(args, "name") and _text(args, "name") != dashboard.name
+        else ""
+    )
+    return (
+        f"Update dashboard “{dashboard.name}”: it shows {_describe(current)}, "
+        f"and would show {_describe(spec)}.{rename}"
     )
 
 
@@ -417,6 +519,38 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             executor=_create_dashboard,
             read_only=False,
             preview=_preview_create_dashboard,
+        ),
+        "update_dashboard": ToolSpec(
+            name="update_dashboard",
+            description=(
+                "Revise a saved dashboard in place. Send only the fields that "
+                "change — everything else keeps its current value, so switching "
+                "the visualization does not reset the query. The revised spec "
+                "runs before it is saved, so a change that cannot execute is "
+                "refused here. Omit dashboard_id to edit the one the user has "
+                "open."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "dashboard_id": {"type": "string"},
+                    "dashboard": {
+                        "type": "string",
+                        "description": "Dashboard name, if no id.",
+                    },
+                    "name": {"type": "string", "description": "New name, to rename it."},
+                    "description": {"type": "string"},
+                    "dataset_id": {
+                        "type": "string",
+                        "description": "Point it at a different dataset.",
+                    },
+                    **_SPEC_PROPERTIES,
+                },
+                "required": [],
+            },
+            executor=_update_dashboard,
+            read_only=False,
+            preview=_preview_update_dashboard,
         ),
         "list_dashboard_templates": ToolSpec(
             name="list_dashboard_templates",

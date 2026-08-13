@@ -1,15 +1,29 @@
 "use client";
 
-import { Code2, FilePlus, FolderOpen, Plus, Save, Trash2 } from "lucide-react";
+import {
+  Code2,
+  FileCode,
+  FilePlus,
+  FolderOpen,
+  MessageSquare,
+  Plus,
+  Save,
+  Trash2,
+} from "lucide-react";
 import type {
+  Citation,
+  GeneratedApp,
   ProjectFile,
   ProjectKind,
   ProjectSummary,
+  Source,
   WorkspaceProject,
 } from "@workspace/api-client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { LatexPreview } from "../latex-compiler";
 import { ProjectPreview } from "../project-bundler";
+import { useSubjectThread } from "../use-subject-thread";
+import { SubjectChatPanel } from "./subject-chat";
 
 // Re-exported rather than redeclared: a locally-duplicated copy silently drifts
 // the moment the API grows a field, which is exactly how `kind` went missing.
@@ -22,7 +36,28 @@ export type ProjectsViewProps = {
   createProject: (name: string, description: string, kind: ProjectKind) => Promise<void>;
   saveFile: (projectId: string, path: string, content: string) => Promise<void>;
   removeFile: (projectId: string, path: string) => Promise<void>;
+  /** Point the preview at another file — the only way to preview an .html page. */
+  setEntry: (projectId: string, path: string) => Promise<void>;
   removeProject: (project: ProjectSummary) => Promise<void>;
+  /** What the side chat needs to be the same chat as the rail's. */
+  chat?: ProjectChatDeps;
+};
+
+/**
+ * Everything the panel beside the project needs from the shell. Optional as a
+ * bundle rather than field by field, so a caller either wires the panel or does
+ * not have one — there is no half-wired state where the composer sends into
+ * nothing.
+ */
+export type ProjectChatDeps = {
+  agentId?: string;
+  sources: Source[];
+  apps: GeneratedApp[];
+  openCitation: (citation: Citation) => Promise<void>;
+  /** Re-read the open project after an approved write lands. */
+  reloadProject: () => Promise<void>;
+  /** `DEV_UNRESTRICTED_AGENT` is on, so the panel wears the warning. */
+  unrestricted?: boolean;
 };
 
 function directoryOf(path: string): string {
@@ -53,7 +88,9 @@ export function ProjectsView({
   createProject,
   saveFile,
   removeFile,
+  setEntry,
   removeProject,
+  chat,
 }: ProjectsViewProps) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -64,6 +101,7 @@ export function ProjectsView({
   // Unsaved edits, per path. Keeping them here rather than in one textarea
   // buffer lets the preview compile what you are typing across several files.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [showChat, setShowChat] = useState(false);
 
   useEffect(() => {
     setDrafts({});
@@ -82,6 +120,25 @@ export function ProjectsView({
     [files, drafts],
   );
 
+  // The panel's own run finished: re-read the project so an approved write
+  // shows up in the tree, the editor and the preview. Nothing else in the shell
+  // is refreshed from here — a thread scoped to one project is not a reason to
+  // refetch six collections.
+  const onRunSettled = useCallback(async () => {
+    await chat?.reloadProject().catch(() => undefined);
+  }, [chat]);
+
+  const thread = useSubjectThread({
+    kind: "project",
+    subjectId: chat && active ? active.id : "",
+    agentId: chat?.agentId,
+    // Which file "this function" means. Sent per message and stored on the run,
+    // so a write parked for approval resumes against the file it was asked
+    // about rather than whatever is open when the reviewer gets to it.
+    focus: selected,
+    onRunSettled,
+  });
+
   async function save() {
     if (!active || !current || !dirty) return;
     await saveFile(active.id, current.path, drafts[current.path]);
@@ -93,7 +150,7 @@ export function ProjectsView({
   }
 
   return (
-    <div className="projects-layout">
+    <div className={showChat && chat ? "projects-layout with-chat" : "projects-layout"}>
       <aside className="projects-sidebar">
         <div className="projects-sidebar-head">
           <span>Projects</span>
@@ -239,15 +296,35 @@ export function ProjectsView({
                 <Save size={14} /> {dirty ? "Save" : "Saved"}
               </button>
               {current && current.path !== active.entry_path && (
+                <>
+                  {/* The only way to preview a hand-written .html page: without
+                      it a project could hold one and nothing could ever ask the
+                      frame to render it. */}
+                  <button
+                    className="ghost-button"
+                    onClick={() => void setEntry(active.id, current.path)}
+                  >
+                    <FileCode size={14} /> Set as entry
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={async () => {
+                      await removeFile(active.id, current.path);
+                      setSelected(active.entry_path);
+                    }}
+                    aria-label={`Delete ${current.path}`}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </>
+              )}
+              {chat && (
                 <button
-                  className="icon-button"
-                  onClick={async () => {
-                    await removeFile(active.id, current.path);
-                    setSelected(active.entry_path);
-                  }}
-                  aria-label={`Delete ${current.path}`}
+                  className={showChat ? "ghost-button active" : "ghost-button"}
+                  onClick={() => setShowChat((value) => !value)}
+                  aria-pressed={showChat}
                 >
-                  <Trash2 size={15} />
+                  <MessageSquare size={14} /> Chat
                 </button>
               )}
               <button
@@ -318,6 +395,20 @@ export function ProjectsView({
           <div className="project-preview-empty">Nothing to preview yet.</div>
         )}
       </section>
+
+      {showChat && chat && active && (
+        <SubjectChatPanel
+          className="project-chat"
+          heading="Chat about this project"
+          label={`Chat about ${active.name}`}
+          close={() => setShowChat(false)}
+          thread={thread}
+          sources={chat.sources}
+          apps={chat.apps}
+          openCitation={chat.openCitation}
+          unrestricted={chat.unrestricted}
+        />
+      )}
     </div>
   );
 }
