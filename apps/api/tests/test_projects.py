@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import create_identity
 
 from app.database import SessionLocal
 from app.models import Project, ProjectFile
@@ -566,3 +567,40 @@ def test_an_entry_that_names_nothing_is_refused(client):
     assert "must end in" in wrong.json()["detail"]
     client.delete(f"/api/projects/{project_id}")
     client.delete(f"/api/projects/{latex_id}")
+
+
+def test_the_project_tools_cannot_reach_another_tenants_project(db, workspace):
+    """fs_read/fs_write resolve a project id the model supplies, so that id is
+    scoped to the caller's workspace: an injected agent that names another
+    tenant's project_id reads nothing and writes nothing into it. `store.resolve`
+    carries that workspace clause, and once unrestricted dev mode has dropped the
+    per-subject scoping it is the only guard between the two tenants.
+    """
+    victim = create_identity(workspace_name="Elsewhere")
+    secret = store.create_project(
+        db,
+        workspace_id=victim.workspace_id,
+        name="Secret",
+        files={
+            "index.tsx": "export default null;",
+            "src/secret.ts": "export const token = 's3cr3t';",
+        },
+    )
+    db.commit()
+
+    caller = _context(workspace)  # a different tenant than the project's owner
+    specs = registry_tools(db, caller)
+
+    # Naming the foreign id directly does not read it back.
+    read = specs["fs_read"].executor(
+        db, caller, {"project_id": secret.id, "path": "src/secret.ts"}
+    )
+    assert "s3cr3t" not in read.content
+
+    # …and does not let a write land in it either.
+    specs["fs_write"].executor(
+        db, caller, {"project_id": secret.id, "path": "src/pwn.ts", "content": "owned"}
+    )
+    db.expire_all()
+    planted = db.query(ProjectFile).filter(ProjectFile.project_id == secret.id).all()
+    assert {file.path for file in planted} == {"index.tsx", "src/secret.ts"}
