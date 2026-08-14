@@ -638,3 +638,46 @@ def test_sql_execute_preview_warns_and_refuses_read_only_connections(connected):
     finally:
         session.close()
     assert "read-only" in preview
+
+
+def test_the_db_tools_cannot_reach_another_workspaces_connection(connected, solo):
+    """`resolve` lists connections for the caller's workspace only, so a query
+    tool handed another tenant's connection — by id or by name — runs nothing
+    against it. This is the sharpest cross-tenant surface in the tool layer: an
+    unscoped id here is a SELECT against another tenant's live database. Once
+    DEV_UNRESTRICTED_AGENT drops the per-subject scoping, this workspace clause
+    is the only thing between an injected query and that database.
+    """
+    _victim_ws, victim_conn, _writer = connected
+    outsider_ws, _own = solo
+
+    session, context, tools = _tools(outsider_ws)
+    try:
+        # By id: the victim's connection, from a foreign workspace's context.
+        described = tools["describe_schema"].executor(
+            session, context, {"connection_id": victim_conn}
+        )
+        assert "error" in described.content.lower()
+        assert "customers" not in described.content  # no schema leaked
+
+        queried = tools["sql_query"].executor(
+            session,
+            context,
+            {"connection_id": victim_conn, "sql": "SELECT name FROM customers LIMIT 1"},
+        )
+        assert "error" in queried.content.lower()
+        assert "Customer" not in queried.content  # no rows leaked
+
+        # By name is scoped the same way: "analytics" is the other tenant's.
+        by_name = tools["sql_query"].executor(
+            session,
+            context,
+            {"connection": "analytics", "sql": "SELECT name FROM customers LIMIT 1"},
+        )
+        assert "Customer" not in by_name.content
+
+        # And `resolve` itself refuses the foreign id rather than returning it.
+        with pytest.raises(dbengine.DbConnectError):
+            resolve(session, outsider_ws, victim_conn)
+    finally:
+        session.close()

@@ -395,6 +395,39 @@ def test_the_dashboard_tools_cannot_see_another_tenants_rows(client, identity_cl
     _cleanup(client, [dashboard])
 
 
+def test_update_dashboard_cannot_revise_another_tenants_dashboard(client, identity_client):
+    """`update_dashboard` resolves a dashboard_id the model supplies, so it must
+    scope that id to the caller's workspace — an injected agent that names another
+    tenant's dashboard_id has to be refused, not handed the revision. `create` is
+    covered above; this is the *write-by-id* path, guarded only by the workspace
+    clause in `_find_dashboard`, and it is the whole guard once unrestricted dev
+    mode has dropped the per-subject scoping that would otherwise hide the tool.
+    """
+    dataset = make_dataset(client)
+    victim = _dashboard(client, dataset, unique("Victim"))
+    outsider = identity_client(workspace_name="Elsewhere")
+
+    db = SessionLocal()
+    try:
+        context = ToolContext(
+            workspace_id=outsider.identity.workspace_id,
+            user_id=outsider.identity.user_id,
+            conversation_id="",
+        )
+        registry = build_registry(db, context)
+        refused = registry["update_dashboard"].executor(
+            db, context, {"dashboard_id": victim["id"], "name": "hijacked"}
+        )
+        # The None branch of _update_dashboard, reachable only once the foreign
+        # id has been scoped out of the caller's workspace.
+        assert "no such dashboard in this workspace" in refused.content.lower()
+    finally:
+        db.rollback()
+        db.close()
+
+    _cleanup(client, [victim])
+
+
 # --------------------------------------------------------------------------
 
 
