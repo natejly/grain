@@ -43,6 +43,15 @@ PUBLIC_UNSAFE_ROUTES = {
     # settings.playground_enabled instead, which is off by default and boot-
     # guarded outside a secure-cookie deployment.
     "/api/auth/playground",
+    # Reading what an invitation says. A POST because the token belongs in the
+    # body and not in an access log, not because it changes anything — it is the
+    # only route in this set that writes nothing at all. Unauthenticated on
+    # purpose: the invitee may have no account yet, so there is no session to
+    # resolve and nothing to render the "X invited you to Y" page from. The
+    # 256-bit token is the credential, exactly as for verify-email and
+    # login-link/consume above. *Accepting* is a different route and does depend
+    # on get_actor, because that one writes a Membership.
+    "/api/auth/invites/preview",
     # The schedule ticker. An external cron holds no session, so it authenticates
     # with a shared secret compared inside the route, and it is given the
     # smallest surface a state-changing route can have: no arguments at all — no

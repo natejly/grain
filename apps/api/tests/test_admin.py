@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Tuple
 import pytest
 from conftest import TEST_BASE_URL, Identity, authenticate, create_identity, issue_session
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -50,7 +51,9 @@ from app.models import (
     SandboxSession,
     Source,
     User,
+    WorkspaceInvite,
 )
+from app.services.auth import invites as invite_service
 from app.services.sandbox import session as sessions
 
 MISSING = "00000000-0000-4000-8000-0000000000ff"
@@ -337,12 +340,67 @@ def fake_provider():
 # nothing about the owner gate or about isolation — it only proves the request
 # was malformed. Keeping the bodies here rather than accepting 422 means a new
 # write route has to state what a legitimate call to it looks like.
+def _own_membership_id(fixture: Fixture) -> str:
+    db = SessionLocal()
+    try:
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.workspace_id == fixture.workspace_id,
+                Membership.user_id == fixture.user_id,
+            )
+        )
+        assert membership is not None
+        return membership.id
+    finally:
+        db.close()
+
+
+def _planted_invite_id(fixture: Fixture) -> str:
+    """A pending invitation in `fixture`'s workspace, created if there is none.
+
+    The sweeps need a real id to aim `DELETE /api/admin/invites/{id}` at, and a
+    stranger must get a 404 for it rather than the 404 an absent row would give
+    anyway — otherwise the case proves nothing about the workspace filter.
+    """
+    db = SessionLocal()
+    try:
+        existing = db.scalar(
+            select(WorkspaceInvite).where(
+                WorkspaceInvite.workspace_id == fixture.workspace_id
+            )
+        )
+        if existing is not None:
+            return existing.id
+        created, _token = invite_service.issue_invite(
+            db,
+            workspace_id=fixture.workspace_id,
+            email="planted-invitee@example.com",
+            role="member",
+            invited_by=fixture.user_id,
+        )
+        db.commit()
+        return created.id
+    finally:
+        db.close()
+
+
 ADMIN_BODIES: Dict[str, Dict[str, object]] = {
     "PUT /api/admin/budget": {"window_hours": 24},
+    "POST /api/admin/invites": {"email": "sweep-probe@example.com", "role": "member"},
+    # Aimed at the caller's *own* membership, and at the role it already holds,
+    # so the sweep exercises the route without demoting the owner it is acting
+    # as — which would make every later request in the sweep a 403 and turn this
+    # test into a very confusing pass.
+    "PATCH /api/admin/members/{membership_id}": {"role": "owner"},
 }
 
 
-def admin_requests(session_id: str) -> List[Tuple[str, str, Optional[Dict[str, object]]]]:
+def admin_requests(
+    session_id: str,
+    *,
+    membership_id: str = MISSING,
+    invite_id: str = MISSING,
+) -> List[Tuple[str, str, Optional[Dict[str, object]]]]:
     """Every operation the admin router exposes, as (method, url, body).
 
     Read off the app rather than listed by hand: a route added without the owner
@@ -353,18 +411,31 @@ def admin_requests(session_id: str) -> List[Tuple[str, str, Optional[Dict[str, o
     because FastAPI now wraps an included router in an opaque `_IncludedRouter`
     whose paths are not reachable by attribute — the schema is the flattened,
     stable view of the same thing.
+
+    Every path parameter defaults to an id that exists nowhere, which is what
+    the role and authentication sweeps want: those must be refused *before* the
+    route ever looks the id up, so a 403 or 401 there is the gate answering and
+    not a 404 standing in for it.
     """
-    requests: List[Tuple[str, str, Optional[Dict[str, object]]]] = [
-        (
-            method.upper(),
-            path.replace("{session_id}", session_id),
-            ADMIN_BODIES.get(f"{method.upper()} {path}"),
-        )
-        for path, operations in app.openapi()["paths"].items()
-        if path.startswith("/api/admin")
-        for method in operations
-        if method in {"get", "post", "put", "patch", "delete"}
-    ]
+    substitutions = {
+        "{session_id}": session_id,
+        "{membership_id}": membership_id,
+        "{invite_id}": invite_id,
+    }
+    requests: List[Tuple[str, str, Optional[Dict[str, object]]]] = []
+    for path, operations in app.openapi()["paths"].items():
+        if not path.startswith("/api/admin"):
+            continue
+        for method in operations:
+            if method not in {"get", "post", "put", "patch", "delete"}:
+                continue
+            url = path
+            for placeholder, value in substitutions.items():
+                url = url.replace(placeholder, value)
+            assert "{" not in url, f"unfilled path parameter in {path}"
+            requests.append(
+                (method.upper(), url, ADMIN_BODIES.get(f"{method.upper()} {path}"))
+            )
     assert requests, "no admin routes found; did the router move?"
     return requests
 
@@ -620,9 +691,13 @@ def test_admin_panels_show_nothing_from_another_workspace(
         "Admin owner",
         *owner.ids.values(),
     ]
-    for method, url, body in admin_requests(session_id):
+    for method, url, body in admin_requests(
+        session_id,
+        membership_id=_own_membership_id(owner),
+        invite_id=_planted_invite_id(owner),
+    ):
         response = stranger.client.request(method, url, json=body)
-        assert response.status_code in {200, 404}, f"{method} {url}: {response.text}"
+        assert response.status_code in {200, 201, 404}, f"{method} {url}: {response.text}"
         for marker in markers:
             assert marker not in response.text, f"{method} {url} leaked {marker!r}"
 
@@ -686,7 +761,11 @@ def test_no_admin_route_returns_a_secret(owner: Fixture):
         MCP_REFRESH_TOKEN,
         external_id,
     ]
-    for method, url, body in admin_requests(session_id):
+    for method, url, body in admin_requests(
+        session_id,
+        membership_id=_own_membership_id(owner),
+        invite_id=_planted_invite_id(owner),
+    ):
         if method == "DELETE":
             # Skipped deliberately: killing the session here would race the
             # assertions above it. The killed row's shape is checked in
@@ -694,6 +773,6 @@ def test_no_admin_route_returns_a_secret(owner: Fixture):
             # the same model.
             continue
         response = owner.client.request(method, url, json=body)
-        assert response.status_code == 200, f"{method} {url}: {response.text}"
+        assert response.status_code in {200, 201}, f"{method} {url}: {response.text}"
         for secret in secrets:
             assert secret not in response.text, f"{method} {url} leaked a secret"

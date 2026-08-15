@@ -32,6 +32,35 @@ export type AuthAcknowledgement = {
   detail: string;
 };
 
+/** Why an invitation link does or does not work. */
+export type InviteStatus = "pending" | "accepted" | "revoked" | "expired";
+
+/**
+ * What an invitation says, read without a session.
+ *
+ * The invitee may have no account here yet, so this is what the accept page
+ * renders before anyone signs in. `email` is the address the link was mailed
+ * to, and accepting requires being signed in as it — the page uses it to say
+ * which account to use rather than letting the wrong one fail at the end.
+ */
+export type InvitePreview = {
+  workspace_name: string;
+  email: string;
+  role: string;
+  status: InviteStatus;
+  invited_by_name: string;
+  expires_at: string;
+};
+
+export type InviteAcceptance = {
+  workspace_id: string;
+  workspace_name: string;
+  role: string;
+  /** False when the caller was already in this workspace; the link is spent
+   * either way and their existing role was not rewritten. */
+  joined: boolean;
+};
+
 /**
  * One workspace the signed-in user belongs to. The id is safe to put in
  * `X-Workspace-Id`: the API returns memberships, and it re-checks the header
@@ -1123,6 +1152,35 @@ export type AdminMember = {
   is_self: boolean;
 };
 
+/**
+ * One invitation this workspace has issued.
+ *
+ * Carries no token, hashed or otherwise. The raw link exists in exactly one
+ * response — the `accept_url` of `createInvite` — and the API stores only its
+ * SHA-256, so there is no way to read it back afterwards.
+ */
+export type AdminInvite = {
+  id: string;
+  email: string;
+  role: string;
+  status: InviteStatus;
+  invited_by: string;
+  invited_by_name: string;
+  expires_at: string;
+  created_at: string;
+};
+
+export type AdminInviteCreated = {
+  invite: AdminInvite;
+  /**
+   * The only time the raw link is ever available. Show it, let the owner copy
+   * it, and do not persist it: re-inviting the same address mints a new link
+   * and revokes this one, which is also how you rotate a link you have stopped
+   * trusting.
+   */
+  accept_url: string;
+};
+
 export type AdminAuditEntry = {
   id: string;
   action: string;
@@ -1729,6 +1787,41 @@ export class WorkspaceApi {
       method: "POST",
       body: JSON.stringify({ token }),
     });
+  }
+
+  /**
+   * What an invitation says, before anyone has accepted it.
+   *
+   * Deliberately callable with no session: the invitee may have no account
+   * here yet, and the page has to be able to say what they are being asked to
+   * join before sending them to sign up. A 404 means the link is not one we
+   * issued; a 200 with `status !== "pending"` means it was, and is spent,
+   * withdrawn, or expired.
+   *
+   * POST, not GET, because the token belongs in a body rather than in every
+   * access log and Referer header between here and the API.
+   */
+  previewInvite(token: string): Promise<InvitePreview> {
+    return this.request("/api/auth/invites/preview", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  /**
+   * Redeem an invitation for the signed-in caller.
+   *
+   * Requires a session, and requires that session's email to be the address
+   * the invitation was sent to — a forwarded link is not a workspace. Single
+   * use and idempotent: two clicks produce one membership, decided by the
+   * database, so the second answers 400/409 rather than joining twice.
+   */
+  acceptInvite(token: string): Promise<InviteAcceptance> {
+    return this.request(
+      "/api/auth/invites/accept",
+      { method: "POST", body: JSON.stringify({ token }) },
+      true,
+    );
   }
 
   /**
@@ -2736,6 +2829,55 @@ export class WorkspaceApi {
 
   listAdminMembers(limit = 100): Promise<AdminMember[]> {
     return this.request(`/api/admin/members?limit=${limit}`);
+  }
+
+  /**
+   * Promote a member, or demote an owner. Answers with the updated row.
+   *
+   * The API refuses to demote the last owner (409): a workspace with nobody
+   * able to administer it has no way back, because there is no operator above
+   * the workspace to repair it.
+   */
+  setAdminMemberRole(membershipId: string, role: string): Promise<AdminMember> {
+    return this.request(
+      `/api/admin/members/${membershipId}`,
+      { method: "PATCH", body: JSON.stringify({ role }) },
+      true,
+    );
+  }
+
+  /** Take somebody out of this workspace. 409 for the last owner. */
+  removeAdminMember(membershipId: string): Promise<void> {
+    return this.request(
+      `/api/admin/members/${membershipId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /** Every invitation this workspace has issued, newest first. */
+  listAdminInvites(limit = 100): Promise<AdminInvite[]> {
+    return this.request(`/api/admin/invites?limit=${limit}`);
+  }
+
+  /**
+   * Invite an address in. Answers 201 with the row *and* the raw link, which
+   * appears here and nowhere else — see `AdminInviteCreated.accept_url`.
+   *
+   * 409 if the address is already a member: changing what an existing member
+   * can do is `setAdminMemberRole`, not a second invitation.
+   */
+  createInvite(email: string, role: string): Promise<AdminInviteCreated> {
+    return this.request(
+      "/api/admin/invites",
+      { method: "POST", body: JSON.stringify({ email, role }) },
+      true,
+    );
+  }
+
+  /** Stop a link working. 409 if it was already accepted or withdrawn. */
+  revokeInvite(inviteId: string): Promise<AdminInvite> {
+    return this.request(`/api/admin/invites/${inviteId}`, { method: "DELETE" }, true);
   }
 
   listAdminAuditEvents(limit = 50, offset = 0): Promise<AdminAuditPage> {

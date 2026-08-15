@@ -35,7 +35,7 @@ import math
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from pydantic import Field
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
@@ -62,6 +62,7 @@ from ..models import (
     User,
     UserSession,
     WorkspaceBudget,
+    WorkspaceInvite,
 )
 from ..schemas import ApiModel
 from ..services import budget
@@ -71,6 +72,8 @@ from ..services.agent_loop import (
     policy_scope_for_run,
 )
 from ..services.audit import record_audit
+from ..services.auth import email as email_service
+from ..services.auth import invites
 from ..services.runs import TERMINAL_RUN_STATES, resume_run_after_budget
 from ..services.sandbox import session as sessions
 from ..services.sandbox.types import SandboxError
@@ -134,8 +137,12 @@ class AdminMemberOut(ApiModel):
     role: str
     status: str
     joined_at: datetime
-    # True for the caller's own row, so the UI can stop an owner demoting or
-    # removing themselves without matching ids client-side.
+    # True for the caller's own row. Not a permission bit: an owner *may* demote
+    # or remove themselves, and the rule that stops the workspace becoming
+    # unreachable is "the last owner", not "yourself" — `count_owners` decides
+    # that, server-side. This is here so the panel can say "you" and ask a
+    # different question before somebody leaves than before they remove a
+    # colleague, without matching ids client-side.
     is_self: bool
 
 
@@ -171,6 +178,321 @@ def list_members(
         )
         for membership, user in rows
     ]
+
+
+class AdminMemberRoleIn(ApiModel):
+    role: str = Field(max_length=24)
+
+
+@router.patch("/members/{membership_id}", response_model=AdminMemberOut)
+def set_member_role(
+    membership_id: str,
+    payload: AdminMemberRoleIn,
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> AdminMemberOut:
+    """Promote a member, or demote an owner — never the last one.
+
+    The membership is fetched with the workspace filter in the WHERE clause, so
+    a membership id belonging to another workspace is a 404 and not a role
+    change performed on somebody else's tenant.
+    """
+    membership, user = _member_row(db, membership_id, actor.workspace_id)
+    role = _validated_role(payload.role)
+    if membership.role == role:
+        return _member_out(membership, user, actor)
+    if membership.role == invites.ROLE_OWNER and not invites.count_owners(
+        db, actor.workspace_id, excluding=membership.id
+    ):
+        raise HTTPException(status_code=409, detail=LAST_OWNER_DETAIL)
+    previous = membership.role
+    membership.role = role
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="membership.role_changed",
+        resource_type="membership",
+        resource_id=membership.id,
+        detail={"user_id": user.id, "from": previous, "to": role},
+    )
+    db.commit()
+    return _member_out(membership, user, actor)
+
+
+@router.delete("/members/{membership_id}", status_code=204)
+def remove_member(
+    membership_id: str,
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Take somebody out of this workspace.
+
+    Their sessions are deliberately left alone. A session is an identity, not a
+    place: the person may hold memberships in other workspaces, and revoking
+    their login here would sign them out of those too. Losing the membership is
+    already total — `_resolve_workspace` refuses the very next request naming
+    this workspace, whether it names it by header or falls back to it — and what
+    they authored stays, since every row is keyed on the workspace rather than
+    on a membership that has gone.
+    """
+    membership, user = _member_row(db, membership_id, actor.workspace_id)
+    if membership.role == invites.ROLE_OWNER and not invites.count_owners(
+        db, actor.workspace_id, excluding=membership.id
+    ):
+        raise HTTPException(status_code=409, detail=LAST_OWNER_DETAIL)
+    db.delete(membership)
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="membership.removed",
+        resource_type="membership",
+        resource_id=membership.id,
+        detail={"user_id": user.id, "role": membership.role},
+    )
+    db.commit()
+    return Response(status_code=204)
+
+
+# --------------------------------------------------------------------------
+# Invitations
+#
+# The write half of membership. Everything here is owner-only for one reason
+# beyond privacy: these are the routes that hand out roles, so a member who
+# could reach them could make themselves an owner, and `require_owner` would
+# then guard nothing. `tests/test_workspace_invites.py` pins a member's 403 on
+# every one of them.
+
+
+class AdminInviteOut(ApiModel):
+    id: str
+    email: str
+    role: str
+    #: pending | accepted | revoked | expired — see `services.auth.invites`.
+    status: str
+    invited_by: str
+    invited_by_name: str
+    expires_at: datetime
+    created_at: datetime
+
+
+class AdminInviteCreatedOut(ApiModel):
+    """The 201 body, and the only place the raw link ever appears.
+
+    Returned to the owner who just minted it, so they can deliver it themselves
+    — which is also what makes the flow usable in development, where
+    `EMAIL_SENDER=console` is the default and `_guard_auth` refuses that setting
+    anywhere else. That needs no dev-only branch and grants nothing: the owner
+    is already the person the mail is sent on behalf of, and can re-invite (and
+    so rotate the link) at will.
+
+    It is *only* here. `GET /api/admin/invites` never returns it, the database
+    holds a SHA-256 of it, and nothing logs it.
+    """
+
+    invite: AdminInviteOut
+    accept_url: str
+
+
+class AdminInviteCreate(ApiModel):
+    email: str = Field(min_length=3, max_length=320)
+    role: str = Field(default=invites.ROLE_MEMBER, max_length=24)
+
+
+LAST_OWNER_DETAIL = (
+    "This is the workspace's last owner. Promote somebody else first — a "
+    "workspace with no owner cannot be administered by anyone."
+)
+
+
+def _validated_role(raw: str) -> str:
+    role = raw.strip().lower()
+    if role not in invites.ROLES:
+        # `Membership.role` is free text, so this is the only thing stopping an
+        # "admin" role that no check in the codebase honours: a role the panel
+        # displays but nothing enforces reads as a restriction that is not there.
+        raise HTTPException(
+            status_code=422, detail=f"Role must be one of: {', '.join(invites.ROLES)}"
+        )
+    return role
+
+
+def _member_row(
+    db: Session, membership_id: str, workspace_id: str
+) -> Tuple[Membership, User]:
+    row = db.execute(
+        select(Membership, User)
+        .join(User, User.id == Membership.user_id)
+        .where(Membership.id == membership_id, Membership.workspace_id == workspace_id)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+    membership, user = row
+    return membership, user
+
+
+def _member_out(membership: Membership, user: User, actor: Actor) -> AdminMemberOut:
+    return AdminMemberOut(
+        user_id=user.id,
+        membership_id=membership.id,
+        name=user.name,
+        email=user.email,
+        role=membership.role,
+        status=user.status,
+        joined_at=membership.created_at,
+        is_self=user.id == actor.user_id,
+    )
+
+
+def _invite_out(invite: WorkspaceInvite, inviter_names: Dict[str, str]) -> AdminInviteOut:
+    return AdminInviteOut(
+        id=invite.id,
+        email=invite.email,
+        role=invite.role,
+        status=invites.invite_status(invite),
+        invited_by=invite.invited_by,
+        invited_by_name=inviter_names.get(invite.invited_by, ""),
+        expires_at=invite.expires_at,
+        created_at=invite.created_at,
+    )
+
+
+def _inviter_names(db: Session, rows: Sequence[WorkspaceInvite]) -> Dict[str, str]:
+    ids = {invite.invited_by for invite in rows if invite.invited_by}
+    if not ids:
+        return {}
+    return {
+        user.id: user.name
+        for user in db.scalars(select(User).where(User.id.in_(ids))).all()
+    }
+
+
+@router.get("/invites", response_model=List[AdminInviteOut])
+def list_invites(
+    limit: int = Query(default=100, ge=1, le=500),
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> List[AdminInviteOut]:
+    """Every invitation this workspace has issued, newest first.
+
+    Spent and withdrawn ones are included rather than filtered: "we invited that
+    address and it was never used" is the question this list is usually opened
+    to answer. No token, hashed or otherwise, appears in the response.
+    """
+    rows = list(
+        db.scalars(
+            select(WorkspaceInvite)
+            .where(WorkspaceInvite.workspace_id == actor.workspace_id)
+            .order_by(WorkspaceInvite.created_at.desc(), WorkspaceInvite.id)
+            .limit(limit)
+        ).all()
+    )
+    names = _inviter_names(db, rows)
+    return [_invite_out(invite, names) for invite in rows]
+
+
+@router.post("/invites", response_model=AdminInviteCreatedOut, status_code=201)
+def create_invite(
+    payload: AdminInviteCreate,
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AdminInviteCreatedOut:
+    """Invite an address into this workspace.
+
+    Refuses an address that is already in: "invited" and "member" are different
+    states and an owner who cannot tell them apart will keep sending links to
+    somebody sitting next to them. Changing what an existing member can do is
+    `PATCH /api/admin/members/{id}`, which says so in the audit log.
+    """
+    email = email_service.normalize_email(payload.email)
+    if not email_service.looks_like_email(email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address")
+    role = _validated_role(payload.role)
+
+    already = db.scalar(
+        select(Membership)
+        .join(User, User.id == Membership.user_id)
+        .where(Membership.workspace_id == actor.workspace_id, User.email == email)
+    )
+    if already is not None:
+        raise HTTPException(
+            status_code=409, detail="That address is already a member of this workspace"
+        )
+
+    invite, raw_token = invites.issue_invite(
+        db,
+        workspace_id=actor.workspace_id,
+        email=email,
+        role=role,
+        invited_by=actor.user_id,
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="invite.created",
+        resource_type="workspace_invite",
+        resource_id=invite.id,
+        # The address and the role, never the token — an audit trail is read by
+        # more people, and kept for longer, than any other table here.
+        detail={"email": email, "role": role},
+    )
+    db.commit()
+    # After the commit, and best-effort: an invitation that exists but whose
+    # mail bounced is recoverable (the link is in the response body). One that
+    # was mailed and then rolled back is a live credential for a row that is not
+    # there.
+    email_service.send_quietly(
+        email_service.get_email_sender(settings),
+        invites.invite_email(
+            settings,
+            to=email,
+            workspace_name=actor.workspace_name,
+            inviter_name=actor.user_name,
+            raw_token=raw_token,
+        ),
+    )
+    return AdminInviteCreatedOut(
+        invite=_invite_out(invite, {actor.user_id: actor.user_name}),
+        accept_url=invites.invite_url(settings, raw_token),
+    )
+
+
+@router.delete("/invites/{invite_id}", response_model=AdminInviteOut)
+def revoke_invite(
+    invite_id: str,
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> AdminInviteOut:
+    """Stop a link working. Answers with the row so the panel can restate it."""
+    invite = db.scalar(
+        select(WorkspaceInvite).where(
+            WorkspaceInvite.id == invite_id,
+            WorkspaceInvite.workspace_id == actor.workspace_id,
+        )
+    )
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    if not invites.revoke_invite(db, invite):
+        # Already spent or already withdrawn. Neither is an error worth an owner
+        # reading a stack of red text over, but it is not a revocation either.
+        raise HTTPException(
+            status_code=409, detail="That invitation is no longer pending"
+        )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="invite.revoked",
+        resource_type="workspace_invite",
+        resource_id=invite.id,
+        detail={"email": invite.email, "role": invite.role},
+    )
+    db.commit()
+    db.refresh(invite)
+    return _invite_out(invite, _inviter_names(db, [invite]))
 
 
 # --------------------------------------------------------------------------

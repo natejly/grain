@@ -4,6 +4,7 @@ import type {
   AdminActivity,
   AdminAuditPage,
   AdminBudget,
+  AdminInvite,
   AdminMcpServer,
   AdminMember,
   AdminObservability,
@@ -19,6 +20,7 @@ import { useWorkspaceSelection } from "../workspace-selection";
 import { ObservabilityPanel } from "./admin-observability";
 import { UsagePanel } from "./admin-usage";
 import { BudgetPanel } from "./budget";
+import { InvitesPanel, MembersPanel } from "./members";
 import { describeError, formatBytes, formatRelative } from "./shared";
 
 /**
@@ -45,6 +47,7 @@ const DEFAULT_OBS_HOURS = 24;
 
 type AdminData = {
   members: AdminMember[];
+  invites: AdminInvite[];
   activity: AdminActivity;
   sandboxes: AdminSandboxSession[];
   mcpServers: AdminMcpServer[];
@@ -109,9 +112,20 @@ export function AdminView({ setError }: AdminViewProps) {
   // screen while it re-fetches, because `setData` only fires on success.
   const load = useCallback(async () => {
     try {
-      const [members, activity, sandboxes, mcpServers, storage, usage, budget, observability] =
+      const [
+        members,
+        invites,
+        activity,
+        sandboxes,
+        mcpServers,
+        storage,
+        usage,
+        budget,
+        observability,
+      ] =
         await Promise.all([
           api.listAdminMembers(),
+          api.listAdminInvites(),
           api.getAdminActivity(),
           api.listAdminSandboxSessions(),
           api.listAdminMcpServers(),
@@ -122,6 +136,7 @@ export function AdminView({ setError }: AdminViewProps) {
         ]);
       setData({
         members,
+        invites,
         activity,
         sandboxes,
         mcpServers,
@@ -223,8 +238,17 @@ export function AdminView({ setError }: AdminViewProps) {
     );
   }
 
-  const { members, activity, sandboxes, mcpServers, storage, usage, budget, observability } =
-    data;
+  const {
+    members,
+    invites,
+    activity,
+    sandboxes,
+    mcpServers,
+    storage,
+    usage,
+    budget,
+    observability,
+  } = data;
   const live = sandboxes.filter((row) => ["running", "paused"].includes(row.status));
 
   return (
@@ -268,32 +292,25 @@ export function AdminView({ setError }: AdminViewProps) {
           onHoursChange={setObsHours}
         />
 
-        <Panel title="Members and roles" count={members.length}>
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th scope="col">Member</th>
-                <th scope="col">Role</th>
-                <th scope="col">Joined</th>
-              </tr>
-            </thead>
-            <tbody>
-              {members.map((member) => (
-                <tr key={member.membership_id}>
-                  <td>
-                    <strong>{member.name || member.email}</strong>
-                    <span>{member.email}</span>
-                  </td>
-                  <td>
-                    <span className="admin-tag">{member.role}</span>
-                    {member.is_self && <span className="admin-tag">you</span>}
-                  </td>
-                  <td>{formatRelative(member.joined_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
+        {/* The roster and the queue feeding it, side by side: an owner opens
+            this view to answer "who is here and who is arriving", and reading
+            the two on separate screens is how somebody ends up re-inviting a
+            person who accepted an hour ago. */}
+        <MembersPanel
+          members={members}
+          onChange={(next) =>
+            setData((current) => (current ? { ...current, members: next } : current))
+          }
+          setError={setError}
+        />
+
+        <InvitesPanel
+          invites={invites}
+          onChange={(next) =>
+            setData((current) => (current ? { ...current, invites: next } : current))
+          }
+          setError={setError}
+        />
 
         {/* The memberships the switcher already loaded — the API deliberately
             has no second endpoint over the same rows. */}

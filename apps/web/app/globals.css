@@ -7522,6 +7522,93 @@ select:focus-visible {
   justify-content: flex-end;
 }
 
+/* ---- The invitation link, shown exactly once ----
+   The API stores only the SHA-256 of a link, so this block is the only place
+   it will ever be readable. It is deliberately selectable text rather than a
+   copy button alone: the Clipboard API is unavailable on insecure origins, and
+   in local development this link is the whole flow, because EMAIL_SENDER
+   defaults to `console` and there is no mailbox to open. */
+/* A roster row carries an action button, which gives the table a minimum width
+   the panel's grid track is allowed to go below — `.admin-grid` is
+   `minmax(320px, 1fr)`. Measured at 26px of overflow on a full-width window,
+   and the table pushed out through the panel's right border rather than being
+   clipped by it. Wide content scrolls inside its own box; it never widens the
+   page. */
+.admin-table-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+/* And the reason it does not normally have to scroll. The addressed column is
+   the only elastic one — its `strong` already ellipsises — so capping it is
+   free, where letting it take its natural 193px pushed the action button off
+   the edge. The scroll box above is the fallback for a genuinely narrow column,
+   not the everyday behaviour: an action nobody can see is an action nobody
+   takes. */
+.admin-table-scroll td:first-child {
+  max-width: 150px;
+}
+
+.invite-link {
+  /* A flex item's `min-width: auto` is its min-content width, and the URL below
+     is one unbreakable line — without this the whole block pushes out through
+     the right edge of the panel instead of scrolling inside it. Every ancestor
+     between the grid track and the URL needs the same escape, which is why it is
+     repeated on the row. */
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--accent-muted);
+}
+
+.invite-link .field-hint {
+  margin-top: 0;
+}
+
+/* The one hint that sits loose in an auth card rather than inside a form. The
+   card's other blocks are centred, and a left-aligned paragraph between two
+   centred ones reads as a mistake. */
+.invite-note {
+  text-align: center;
+  text-wrap: balance;
+}
+
+.invite-link-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.invite-link-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 10.5px;
+  /* One line that scrolls, never a wrapped one: a link broken across lines is
+     a link somebody pastes half of. */
+  white-space: nowrap;
+}
+
+.invite-link-row .ghost-button {
+  flex: none;
+}
+
+/* The role control sits inline with the "you" tag in the roster, so it cannot
+   take the full-width sizing `.usage-window` has in a panel header. */
+.admin-table .usage-window {
+  height: 24px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
 /* ---- The ceiling on the Admin screen ----
    Full width beside Model spend, because the two are the same question asked
    twice and a ceiling read apart from its spend gets raised by the wrong

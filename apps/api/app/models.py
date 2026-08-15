@@ -118,7 +118,22 @@ class EmailToken(Base):
 
 
 class WorkspaceInvite(Base):
-    """An invitation to join an existing workspace."""
+    """An invitation to join an existing workspace.
+
+    The same shape as :class:`EmailToken` and for the same reasons: only the
+    SHA-256 of the link is stored, `accepted_at` makes redemption a one-way
+    door, and `expires_at` bounds how long a leaked link is worth anything. It
+    is a *separate* table rather than a fourth `EmailToken.purpose` because an
+    invite is addressed to an email that may have no user row yet, while every
+    EmailToken hangs off `user_id` — there is nothing to hang this on until the
+    invitee accepts.
+
+    `revoked_at` rather than a DELETE: withdrawing an invitation and never
+    having sent one are different facts, and the first is one an owner may need
+    to see again. `accepted_at` and `revoked_at` are both terminal, and both are
+    checked by the conditional UPDATE in `services.auth.invites.accept_invite`,
+    so the database decides which of two racing clicks redeems the link.
+    """
 
     __tablename__ = "workspace_invites"
 
@@ -130,10 +145,20 @@ class WorkspaceInvite(Base):
     invited_by: Mapped[str] = mapped_column(String(36), default="")
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Membership(Base):
+    """One person's place in one workspace.
+
+    The unique constraint is not bookkeeping — it is the concurrency control for
+    invite acceptance. Two clicks on the same link race, and the constraint is
+    what makes "one membership" true regardless of who wins; see
+    `services.auth.invites.accept_invite`, which leans on it instead of on a
+    read-then-write.
+    """
+
     __tablename__ = "memberships"
     __table_args__ = (UniqueConstraint("workspace_id", "user_id"),)
 

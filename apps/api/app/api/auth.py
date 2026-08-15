@@ -31,6 +31,9 @@ from ..schemas import (
     AuthAcknowledgement,
     AuthSessionOut,
     DevOverrideOut,
+    InviteAcceptOut,
+    InvitePreviewOut,
+    InviteTokenIn,
     LoginIn,
     PasswordResetConfirmIn,
     PasswordResetRequestIn,
@@ -41,7 +44,7 @@ from ..schemas import (
 )
 from ..services.audit import record_audit
 from ..services.auth import email as email_service
-from ..services.auth import oauth
+from ..services.auth import invites, oauth
 from ..services.auth.passwords import (
     PasswordPolicyError,
     hash_password,
@@ -97,33 +100,13 @@ def _rate_limit(request: Request, bucket: str, settings: Settings) -> None:
         )
 
 
-def _send_quietly(sender: email_service.EmailSender, message: email_service.OutboundEmail) -> None:
-    """Deliver, and never let a mail failure change the HTTP answer.
-
-    A raised SMTP error would 500 — but only on the branch that actually sends,
-    which would reintroduce exactly the observable difference between a known
-    and an unknown address that these endpoints exist to hide. It also means a
-    flaky mail host cannot make a successful signup look like a failed one.
-    """
-    try:
-        sender.send(message)
-    except Exception:  # noqa: BLE001 - delivery is best effort by design
-        logger.exception("failed to deliver %s to %s", message.subject, message.to)
-
-
-def _normalize_email(raw: str) -> str:
-    """Lowercase and trim. Storage is case-insensitive by normalization, so
-    Bob@example.com cannot become a second account beside bob@example.com."""
-    return raw.strip().lower()
-
-
-def _looks_like_email(value: str) -> bool:
-    # Intentionally shallow. Deliverability is proven by the verification mail,
-    # not by a regex, and a stricter pattern only rejects valid addresses.
-    if value.count("@") != 1:
-        return False
-    local, _, domain = value.partition("@")
-    return bool(local) and "." in domain and not domain.startswith(".")
+# Address handling lives in the mail service, not here, because the invite flow
+# has to reach exactly the same answers: an invitation is matched against a
+# `users.email` this module normalised on the way in, and two normalisers would
+# eventually disagree about whether an address is the address it was sent to.
+_send_quietly = email_service.send_quietly
+_normalize_email = email_service.normalize_email
+_looks_like_email = email_service.looks_like_email
 
 
 def _create_account(
@@ -576,6 +559,127 @@ def list_workspaces(
         )
         for workspace, membership in rows
     ]
+
+
+# --------------------------------------------------------------------------
+# Invitations, from the invitee's side. The owner's half lives in api/admin.py.
+#
+# Both routes take the token in the *body*. A GET with the token in the path
+# would put a credential into every access log, proxy trace and Referer header
+# between the browser and here — the same reason `verify-email` and
+# `login-link/consume` are POSTs over a body rather than the links themselves.
+
+#: Why a link did not work, in words the person holding it can act on. Being
+#: specific is safe here in a way it is not on login: there is no address to
+#: enumerate, and reaching any of these already required the token.
+INVITE_STATUS_DETAIL = {
+    invites.STATUS_ACCEPTED: "That invitation has already been accepted.",
+    invites.STATUS_REVOKED: "That invitation was withdrawn.",
+    invites.STATUS_EXPIRED: "That invitation has expired. Ask for a new one.",
+}
+INVITE_UNKNOWN = "That invitation link is not valid."
+
+
+@router.post("/invites/preview", response_model=InvitePreviewOut)
+def preview_invite(
+    payload: InviteTokenIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> InvitePreviewOut:
+    """What this link is for. Deliberately unauthenticated.
+
+    An invitee who has never been here has no session and cannot sensibly get
+    one without knowing what they are signing up for, so the page has to render
+    "X invited you to Y, as a member" before any account exists. Rate limited
+    like every other unauthenticated token endpoint in this file: the token
+    space is 256 bits and unguessable, and the limiter is what keeps that from
+    being merely a probability argument.
+    """
+    _rate_limit(request, "invite-preview", settings)
+    invite = invites.load_invite(db, payload.token)
+    if invite is None:
+        raise HTTPException(status_code=404, detail=INVITE_UNKNOWN)
+    inviter = db.get(User, invite.invited_by) if invite.invited_by else None
+    return InvitePreviewOut(
+        workspace_name=invites.workspace_name(db, invite.workspace_id),
+        email=invite.email,
+        role=invite.role,
+        status=invites.invite_status(invite),
+        invited_by_name=inviter.name if inviter is not None else "",
+        expires_at=invite.expires_at,
+    )
+
+
+@router.post("/invites/accept", response_model=InviteAcceptOut)
+def accept_invite(
+    payload: InviteTokenIn,
+    request: Request,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> InviteAcceptOut:
+    """Redeem an invitation for the signed-in caller.
+
+    A session is required — this writes a `Membership`, which names a user, and
+    the only trustworthy source of "which user" is the session cookie. It is
+    also what supplies the CSRF check, so a cross-site page cannot walk somebody
+    into a workspace they never chose to join.
+
+    The invited *address* must be the caller's own. The token alone would be an
+    argument for admission — it went to one mailbox — but requiring both means a
+    link forwarded, quoted in a ticket, or read off a screenshot is not a
+    workspace: whoever holds it must also hold the account it names. The cost is
+    one clear refusal for somebody signed in as the wrong account, which the
+    page can tell them how to fix.
+
+    Everything a race can change is checked inside `invites.accept_invite`,
+    where the database rather than a Python `if` decides who won.
+    """
+    _rate_limit(request, "invite-accept", settings)
+    invite = invites.load_invite(db, payload.token)
+    if invite is None:
+        raise HTTPException(status_code=404, detail=INVITE_UNKNOWN)
+    state = invites.invite_status(invite)
+    if state != invites.STATUS_PENDING:
+        raise HTTPException(status_code=400, detail=INVITE_STATUS_DETAIL[state])
+
+    user = db.get(User, actor.user_id)
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if invite.email != _normalize_email(user.email):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"That invitation was sent to {invite.email}. Sign in with that "
+                "address to accept it."
+            ),
+        )
+
+    accepted = invites.accept_invite(db, invite=invite, user=user)
+    if accepted is None:
+        # Between the status check above and the claim, somebody else spent or
+        # withdrew it. The conditional UPDATE is what noticed; this is the only
+        # place that can report it.
+        raise HTTPException(
+            status_code=409, detail="That invitation was just used or withdrawn."
+        )
+    record_audit(
+        db,
+        workspace_id=invite.workspace_id,
+        actor_id=user.id,
+        action="invite.accepted",
+        resource_type="workspace_invite",
+        resource_id=invite.id,
+        detail={"role": accepted.membership.role, "joined": accepted.joined},
+    )
+    db.commit()
+    return InviteAcceptOut(
+        workspace_id=invite.workspace_id,
+        workspace_name=invites.workspace_name(db, invite.workspace_id),
+        role=accepted.membership.role,
+        joined=accepted.joined,
+    )
 
 
 @router.post(

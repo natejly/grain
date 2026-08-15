@@ -36,11 +36,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from conftest import TEST_BASE_URL, Identity, authenticate, create_identity
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from app.clock import utcnow
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import (
@@ -68,6 +71,7 @@ from app.models import (
     IntegrationAccount,
     McpServer,
     McpTool,
+    Membership,
     MemoryItem,
     Message,
     ModelUsage,
@@ -90,9 +94,11 @@ from app.models import (
     Workflow,
     WorkflowNodeRun,
     WorkflowRun,
+    WorkspaceInvite,
     new_id,
 )
 from app.services.analytics import create_dataset_version
+from app.services.auth.invites import hash_token as invite_hash
 from app.services.crypto import encrypt_secret
 from app.services.ingestion import object_path
 
@@ -812,6 +818,38 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["skill_version"] = skill_version.id
 
+        # The two rows that decide who is *in* this workspace. Neither existed
+        # in this fixture before invitations did, because until then a workspace
+        # could not gain a second member and there was nothing to point another
+        # tenant's request at.
+        #
+        # The invite's raw token is kept beside its id: the token is the whole
+        # credential for `POST /api/auth/invites/accept`, which names no
+        # workspace at all, so the only way to aim that route at another tenant
+        # is to hand it their token. It is stored under an id kind so the leak
+        # scan also proves no response ever echoes it back.
+        invite_token = f"{label.lower()}-isolation-invite-token"
+        invite = WorkspaceInvite(
+            workspace_id=workspace_id,
+            email=f"{label.lower()}-invitee@example.com",
+            role="member",
+            token_hash=invite_hash(invite_token),
+            invited_by=user_id,
+            expires_at=utcnow() + timedelta(days=7),
+        )
+        db.add(invite)
+        db.flush()
+        ids["workspace_invite"] = invite.id
+        ids["workspace_invite_token"] = invite_token
+
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.workspace_id == workspace_id, Membership.user_id == user_id
+            )
+        )
+        assert membership is not None, "create_identity writes an owner membership"
+        ids["membership"] = membership.id
+
         db.commit()
     finally:
         db.close()
@@ -990,6 +1028,26 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase("POST", "/api/auth/login-link/consume", PUBLIC),
     RouteCase("GET", "/api/auth/playground", PUBLIC),
     RouteCase("POST", "/api/auth/playground", PUBLIC),
+    # Reading an invitation is deliberately unauthenticated — the invitee may
+    # have no account yet — so the token is the whole credential and PUBLIC is
+    # the honest verdict, exactly as for the other token endpoints above.
+    RouteCase("POST", "/api/auth/invites/preview", PUBLIC),
+    # Accepting is the one route in the app that can put the caller inside
+    # another workspace, and it names that workspace nowhere: the invitation
+    # does. So the cross-tenant attack is not a foreign id in the path, it is
+    # tenant B's token in the body — the case below is A holding B's link.
+    #
+    # 403, not 404: the token is real and A is allowed to know it failed for a
+    # reason they can act on. What must not happen is a membership, and the
+    # tamper digest over `memberships` is what proves none appeared.
+    RouteCase(
+        "POST",
+        "/api/auth/invites/accept",
+        DENY,
+        expect=403,
+        body={"token": "placeholder"},
+        body_ids={"token": "workspace_invite_token"},
+    ),
     # -- chat --------------------------------------------------------------
     RouteCase("GET", "/api/conversations", SCOPED),
     RouteCase("POST", "/api/conversations", SCOPED, body={"title": "mine"}),
@@ -1883,6 +1941,45 @@ ROUTE_CASES: List[RouteCase] = [
     # than the role gate — the 403 for a plain member is pinned in
     # tests/test_admin.py, which is also where the no-secrets assertions live.
     RouteCase("GET", "/api/admin/members", SCOPED),
+    # Membership and invitations: the routes that decide who is in a workspace
+    # and what they may do, which makes a missing filter here worse than
+    # anywhere else in the file — it is not a read of another tenant's data, it
+    # is a *write* to their access control. All three name an id, so all three
+    # are DENY 404: a member id or an invite id from another workspace must be
+    # indistinguishable from one that does not exist. `test_sweep_did_not_touch
+    # _the_victim` digests `memberships` and `workspace_invites` along with
+    # every other workspace-scoped table, so a route that refused in its
+    # response but demoted somebody on the way there is caught as well.
+    RouteCase(
+        "PATCH",
+        "/api/admin/members/{membership_id}",
+        DENY,
+        path_ids={"membership_id": "membership"},
+        body={"role": "member"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/admin/members/{membership_id}",
+        DENY,
+        path_ids={"membership_id": "membership"},
+    ),
+    RouteCase("GET", "/api/admin/invites", SCOPED),
+    # Creating one takes no foreign id — the workspace is `actor.workspace_id`
+    # and nothing else — so the only way it could cross tenants is by writing
+    # the invitation somewhere it was not asked to, which the tamper digest
+    # catches. The address is a literal so the case does not depend on B.
+    RouteCase(
+        "POST",
+        "/api/admin/invites",
+        SCOPED,
+        body={"email": "isolation-probe@example.com", "role": "member"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/admin/invites/{invite_id}",
+        DENY,
+        path_ids={"invite_id": "workspace_invite"},
+    ),
     RouteCase("GET", "/api/admin/audit-events", SCOPED),
     RouteCase("GET", "/api/admin/activity", SCOPED),
     RouteCase("GET", "/api/admin/storage", SCOPED),

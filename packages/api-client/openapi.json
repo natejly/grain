@@ -447,6 +447,95 @@
         "title": "AdminFailedRunOut",
         "type": "object"
       },
+      "AdminInviteCreate": {
+        "properties": {
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "default": "member",
+            "maxLength": 24,
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "AdminInviteCreate",
+        "type": "object"
+      },
+      "AdminInviteCreatedOut": {
+        "description": "The 201 body, and the only place the raw link ever appears.\n\nReturned to the owner who just minted it, so they can deliver it themselves\n\u2014 which is also what makes the flow usable in development, where\n`EMAIL_SENDER=console` is the default and `_guard_auth` refuses that setting\nanywhere else. That needs no dev-only branch and grants nothing: the owner\nis already the person the mail is sent on behalf of, and can re-invite (and\nso rotate the link) at will.\n\nIt is *only* here. `GET /api/admin/invites` never returns it, the database\nholds a SHA-256 of it, and nothing logs it.",
+        "properties": {
+          "accept_url": {
+            "title": "Accept Url",
+            "type": "string"
+          },
+          "invite": {
+            "$ref": "#/components/schemas/AdminInviteOut"
+          }
+        },
+        "required": [
+          "invite",
+          "accept_url"
+        ],
+        "title": "AdminInviteCreatedOut",
+        "type": "object"
+      },
+      "AdminInviteOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "invited_by": {
+            "title": "Invited By",
+            "type": "string"
+          },
+          "invited_by_name": {
+            "title": "Invited By Name",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "status",
+          "invited_by",
+          "invited_by_name",
+          "expires_at",
+          "created_at"
+        ],
+        "title": "AdminInviteOut",
+        "type": "object"
+      },
       "AdminLatencyStatsOut": {
         "description": "One metric's distribution. Every percentile is None on an empty sample \u2014\nnever 0, which would read as an instant response rather than no data.",
         "properties": {
@@ -663,6 +752,20 @@
           "is_self"
         ],
         "title": "AdminMemberOut",
+        "type": "object"
+      },
+      "AdminMemberRoleIn": {
+        "properties": {
+          "role": {
+            "maxLength": 24,
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "AdminMemberRoleIn",
         "type": "object"
       },
       "AdminObservabilityOut": {
@@ -2235,6 +2338,74 @@
         "title": "ColumnRequest",
         "type": "object"
       },
+      "CompileRequest": {
+        "properties": {
+          "engine": {
+            "default": "pdftex",
+            "enum": [
+              "pdftex",
+              "xetex"
+            ],
+            "title": "Engine",
+            "type": "string"
+          },
+          "entry_path": {
+            "title": "Entry Path",
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/FileInput"
+            },
+            "title": "Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entry_path",
+          "files"
+        ],
+        "title": "CompileRequest",
+        "type": "object"
+      },
+      "CompileResponse": {
+        "properties": {
+          "log": {
+            "title": "Log",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "pdf_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Base64"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "log"
+        ],
+        "title": "CompileResponse",
+        "type": "object"
+      },
       "ConversationCreate": {
         "properties": {
           "title": {
@@ -3777,6 +3948,24 @@
         "title": "DuplicateOut",
         "type": "object"
       },
+      "FileInput": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "title": "FileInput",
+        "type": "object"
+      },
       "FolderOut": {
         "properties": {
           "id": {
@@ -4362,6 +4551,90 @@
         "title": "IntegrationProviderOut",
         "type": "object"
       },
+      "InviteAcceptOut": {
+        "properties": {
+          "joined": {
+            "title": "Joined",
+            "type": "boolean"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          },
+          "workspace_name": {
+            "title": "Workspace Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "workspace_name",
+          "role",
+          "joined"
+        ],
+        "title": "InviteAcceptOut",
+        "type": "object"
+      },
+      "InvitePreviewOut": {
+        "description": "What an invitation says, before anyone has accepted it.\n\nUnauthenticated, because the invitee may not have an account yet and the\npage has to be able to tell them what they are being asked to join before\nsending them to sign up. Nothing is disclosed by that: reaching this\nresponse at all requires the 256-bit token, which was mailed to exactly one\naddress.",
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "invited_by_name": {
+            "title": "Invited By Name",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "workspace_name": {
+            "title": "Workspace Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_name",
+          "email",
+          "role",
+          "status",
+          "invited_by_name",
+          "expires_at"
+        ],
+        "title": "InvitePreviewOut",
+        "type": "object"
+      },
+      "InviteTokenIn": {
+        "description": "A raw invitation link, in the body and never in the path.\n\nSame shape and same reason as `VerifyEmailIn`: a token in a URL is a token\nin the access log, the referrer header and the browser history of every hop\nit passes through, and this one buys a place inside somebody's workspace.",
+        "properties": {
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "InviteTokenIn",
+        "type": "object"
+      },
       "LoginIn": {
         "properties": {
           "email": {
@@ -4877,6 +5150,20 @@
           "enabled"
         ],
         "title": "PlaygroundOut",
+        "type": "object"
+      },
+      "ProjectEntryRequest": {
+        "description": "Which file the preview renders. See `store.set_entry_path`.",
+        "properties": {
+          "entry_path": {
+            "title": "Entry Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry_path"
+        ],
+        "title": "ProjectEntryRequest",
         "type": "object"
       },
       "ProjectFileOut": {
@@ -7530,6 +7817,189 @@
         ]
       }
     },
+    "/api/admin/invites": {
+      "get": {
+        "description": "Every invitation this workspace has issued, newest first.\n\nSpent and withdrawn ones are included rather than filtered: \"we invited that\naddress and it was never used\" is the question this list is usually opened\nto answer. No token, hashed or otherwise, appears in the response.",
+        "operationId": "list_invites_api_admin_invites_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminInviteOut"
+                  },
+                  "title": "Response List Invites Api Admin Invites Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Invites",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Invite an address into this workspace.\n\nRefuses an address that is already in: \"invited\" and \"member\" are different\nstates and an owner who cannot tell them apart will keep sending links to\nsomebody sitting next to them. Changing what an existing member can do is\n`PATCH /api/admin/members/{id}`, which says so in the audit log.",
+        "operationId": "create_invite_api_admin_invites_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminInviteCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInviteCreatedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Invite",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/invites/{invite_id}": {
+      "delete": {
+        "description": "Stop a link working. Answers with the row so the panel can restate it.",
+        "operationId": "revoke_invite_api_admin_invites__invite_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invite_id",
+            "required": true,
+            "schema": {
+              "title": "Invite Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInviteOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Invite",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/admin/mcp-servers": {
       "get": {
         "description": "Configured servers and whether they are actually connecting.\n\nTool counts come from one grouped query rather than a per-server COUNT, so\nthe route stays two statements regardless of how many servers exist.",
@@ -7657,6 +8127,125 @@
           }
         },
         "summary": "List Members",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/members/{membership_id}": {
+      "delete": {
+        "description": "Take somebody out of this workspace.\n\nTheir sessions are deliberately left alone. A session is an identity, not a\nplace: the person may hold memberships in other workspaces, and revoking\ntheir login here would sign them out of those too. Losing the membership is\nalready total \u2014 `_resolve_workspace` refuses the very next request naming\nthis workspace, whether it names it by header or falls back to it \u2014 and what\nthey authored stays, since every row is keyed on the workspace rather than\non a membership that has gone.",
+        "operationId": "remove_member_api_admin_members__membership_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "membership_id",
+            "required": true,
+            "schema": {
+              "title": "Membership Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Member",
+        "tags": [
+          "admin"
+        ]
+      },
+      "patch": {
+        "description": "Promote a member, or demote an owner \u2014 never the last one.\n\nThe membership is fetched with the workspace filter in the WHERE clause, so\na membership id belonging to another workspace is a 404 and not a role\nchange performed on somebody else's tenant.",
+        "operationId": "set_member_role_api_admin_members__membership_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "membership_id",
+            "required": true,
+            "schema": {
+              "title": "Membership Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminMemberRoleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMemberOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Member Role",
         "tags": [
           "admin"
         ]
@@ -9005,6 +9594,108 @@
           }
         },
         "summary": "Google Start",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/invites/accept": {
+      "post": {
+        "description": "Redeem an invitation for the signed-in caller.\n\nA session is required \u2014 this writes a `Membership`, which names a user, and\nthe only trustworthy source of \"which user\" is the session cookie. It is\nalso what supplies the CSRF check, so a cross-site page cannot walk somebody\ninto a workspace they never chose to join.\n\nThe invited *address* must be the caller's own. The token alone would be an\nargument for admission \u2014 it went to one mailbox \u2014 but requiring both means a\nlink forwarded, quoted in a ticket, or read off a screenshot is not a\nworkspace: whoever holds it must also hold the account it names. The cost is\none clear refusal for somebody signed in as the wrong account, which the\npage can tell them how to fix.\n\nEverything a race can change is checked inside `invites.accept_invite`,\nwhere the database rather than a Python `if` decides who won.",
+        "operationId": "accept_invite_api_auth_invites_accept_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteTokenIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteAcceptOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Invite",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/invites/preview": {
+      "post": {
+        "description": "What this link is for. Deliberately unauthenticated.\n\nAn invitee who has never been here has no session and cannot sensibly get\none without knowing what they are signing up for, so the page has to render\n\"X invited you to Y, as a member\" before any account exists. Rate limited\nlike every other unauthenticated token endpoint in this file: the token\nspace is 256 bits and unguessable, and the limiter is what keeps that from\nbeing merely a probability argument.",
+        "operationId": "preview_invite_api_auth_invites_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteTokenIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Invite",
         "tags": [
           "auth"
         ]
@@ -14020,6 +14711,65 @@
         ]
       }
     },
+    "/api/latex/compile": {
+      "post": {
+        "operationId": "compile_endpoint_api_latex_compile_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compile Endpoint",
+        "tags": [
+          "latex"
+        ]
+      }
+    },
     "/api/mcp/oauth/callback": {
       "get": {
         "description": "Unauthenticated by design: the state row is the credential.\n\nThe browser arrives here as a top-level navigation from the authorization\nserver, so there is no session cookie to rely on. What proves the callback\nis ours is the single-use state row, which also carries the user it belongs\nto \u2014 reading the identity from anything the query string says would let an\nattacker attach their account to somebody else's server.",
@@ -14997,6 +15747,75 @@
         "summary": "Project Conversation",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/entry": {
+      "put": {
+        "description": "Point the preview at a different root file.\n\nA PUT of a value rather than the creation of one, so no `Idempotency-Key`: a\nretry lands on the same state by construction.",
+        "operationId": "set_project_entry_api_projects__project_id__entry_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectEntryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Project Entry",
+        "tags": [
+          "projects"
         ]
       }
     },

@@ -137,6 +137,47 @@ class WorkspaceMembershipOut(ApiModel):
     is_current: bool
 
 
+class InviteTokenIn(ApiModel):
+    """A raw invitation link, in the body and never in the path.
+
+    Same shape and same reason as `VerifyEmailIn`: a token in a URL is a token
+    in the access log, the referrer header and the browser history of every hop
+    it passes through, and this one buys a place inside somebody's workspace.
+    """
+
+    token: str = Field(min_length=1, max_length=512)
+
+
+class InvitePreviewOut(ApiModel):
+    """What an invitation says, before anyone has accepted it.
+
+    Unauthenticated, because the invitee may not have an account yet and the
+    page has to be able to tell them what they are being asked to join before
+    sending them to sign up. Nothing is disclosed by that: reaching this
+    response at all requires the 256-bit token, which was mailed to exactly one
+    address.
+    """
+
+    workspace_name: str
+    #: The address it was sent to — so the page can say which account to sign
+    #: in as, rather than letting someone sign in as the wrong one and fail.
+    email: str
+    role: str
+    #: pending | accepted | revoked | expired
+    status: str
+    invited_by_name: str
+    expires_at: datetime
+
+
+class InviteAcceptOut(ApiModel):
+    workspace_id: str
+    workspace_name: str
+    role: str
+    #: False when the caller was already in this workspace. The link is spent
+    #: either way; their existing role was not rewritten.
+    joined: bool
+
+
 class DevOverrideOut(ApiModel):
     """Whether the local one-click sign-in override is available.
 

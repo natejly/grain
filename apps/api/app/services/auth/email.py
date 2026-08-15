@@ -104,6 +104,43 @@ def get_email_sender(settings: Settings) -> EmailSender:
     return ConsoleEmailSender(settings)
 
 
+def send_quietly(sender: EmailSender, message: OutboundEmail) -> None:
+    """Deliver, and never let a mail failure change the HTTP answer.
+
+    A raised SMTP error would 500 — but only on the branch that actually sends,
+    which would reintroduce exactly the observable difference between a known
+    and an unknown address that the auth endpoints exist to hide. It also means
+    a flaky mail host cannot make a successful signup, or a successful
+    invitation, look like a failed one.
+    """
+    try:
+        sender.send(message)
+    except Exception:  # noqa: BLE001 - delivery is best effort by design
+        logger.exception("failed to deliver %s to %s", message.subject, message.to)
+
+
+def normalize_email(raw: str) -> str:
+    """Lowercase and trim.
+
+    Storage is case-insensitive by normalization, so Bob@example.com cannot
+    become a second account beside bob@example.com — and an invitation to one
+    spelling is answerable by the account holding the other. Every path that
+    compares an address to a `users.email` must come through here, or two of
+    them will disagree about whether the same person is the same person.
+    """
+    return raw.strip().lower()
+
+
+def looks_like_email(value: str) -> bool:
+    """Intentionally shallow. Deliverability is proven by the mail we send to
+    the address, not by a regex, and a stricter pattern only rejects valid
+    addresses."""
+    if value.count("@") != 1:
+        return False
+    local, _, domain = value.partition("@")
+    return bool(local) and "." in domain and not domain.startswith(".")
+
+
 def hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 

@@ -759,6 +759,12 @@ DB_GET_ALLOWLIST = {
     ("app/api/auth.py", "User"): "id comes from the caller's session or token row",
     ("app/api/auth.py", "Workspace"): "id comes from the caller's membership row",
     ("app/api/auth.py", "UserSession"): "id comes from the caller's own actor",
+    # Reads only `workspaces.name`, and the id it reads it by comes off the
+    # invitation the caller's token resolved to — so the name it returns is the
+    # name of the workspace that invitation is *for*, which is the one fact the
+    # holder of that token is entitled to. There is no workspace filter that
+    # would apply: this is the row that would do the filtering.
+    ("app/services/auth/invites.py", "Workspace"): "id comes from the invite row",
     ("app/api/chat.py", "Conversation"): "workspace re-checked on the next line",
     ("app/api/generated_apps.py", "AppRelease"): "workspace re-checked on the next line",
     ("app/api/integrations.py", "IntegrationAccount"): "id from a scoped replay row",
