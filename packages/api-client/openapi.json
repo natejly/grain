@@ -5053,6 +5053,256 @@
         "title": "ModelProviderStatus",
         "type": "object"
       },
+      "OrgConfigIn": {
+        "properties": {
+          "allowed_harnesses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Harnesses"
+          },
+          "allowed_models": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Models"
+          },
+          "clear_harness_bound": {
+            "default": false,
+            "title": "Clear Harness Bound",
+            "type": "boolean"
+          },
+          "clear_model_bound": {
+            "default": false,
+            "title": "Clear Model Bound",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "OrgConfigIn",
+        "type": "object"
+      },
+      "OrgMemberOut": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "is_self": {
+            "title": "Is Self",
+            "type": "boolean"
+          },
+          "joined_at": {
+            "format": "date-time",
+            "title": "Joined At",
+            "type": "string"
+          },
+          "membership_id": {
+            "title": "Membership Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "membership_id",
+          "user_id",
+          "name",
+          "email",
+          "role",
+          "is_self",
+          "joined_at"
+        ],
+        "title": "OrgMemberOut",
+        "type": "object"
+      },
+      "OrgMemberRoleIn": {
+        "properties": {
+          "role": {
+            "maxLength": 24,
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "maxLength": 36,
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "title": "OrgMemberRoleIn",
+        "type": "object"
+      },
+      "OrgOut": {
+        "properties": {
+          "allowed_harnesses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Harnesses"
+          },
+          "allowed_models": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Models"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "effective_harnesses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Effective Harnesses",
+            "type": "array"
+          },
+          "effective_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Effective Models",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "your_role": {
+            "title": "Your Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "allowed_harnesses",
+          "allowed_models",
+          "effective_harnesses",
+          "effective_models",
+          "your_role",
+          "created_at"
+        ],
+        "title": "OrgOut",
+        "type": "object"
+      },
+      "OrgPolicyIn": {
+        "properties": {
+          "policy": {
+            "maxLength": 16,
+            "title": "Policy",
+            "type": "string"
+          },
+          "scope": {
+            "default": "chat",
+            "maxLength": 16,
+            "title": "Scope",
+            "type": "string"
+          },
+          "tool_name": {
+            "maxLength": 120,
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "policy"
+        ],
+        "title": "OrgPolicyIn",
+        "type": "object"
+      },
+      "OrgPolicyOut": {
+        "properties": {
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "policy",
+          "scope",
+          "updated_at"
+        ],
+        "title": "OrgPolicyOut",
+        "type": "object"
+      },
       "PasswordResetConfirmIn": {
         "properties": {
           "password": {
@@ -15488,6 +15738,399 @@
         "summary": "Forget Memory",
         "tags": [
           "memory"
+        ]
+      }
+    },
+    "/api/org": {
+      "get": {
+        "description": "The organization governing this workspace, and what it permits.\n\nReadable by any member, not just an admin. A person whose tool call was\ndenied is entitled to see the rule that denied it \u2014 an invisible policy is\nindistinguishable from a bug, and the resulting support ticket is worse for\neveryone than the disclosure, which is a list of model names and the caller's\nown role.",
+        "operationId": "get_org_api_org_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Org",
+        "tags": [
+          "org"
+        ]
+      },
+      "patch": {
+        "description": "Set the org's name and its harness/model bounds.\n\nNothing here validates a name against the registry or the price list. An org\nmay name a harness this deployment has not registered or a model it does not\nprice, and that is deliberate: the bound is an intersection, so naming\nsomething absent permits nothing extra, and refusing it would mean an admin\ncannot prepare a posture for a model the deployment is about to add.",
+        "operationId": "update_org_api_org_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgConfigIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Org",
+        "tags": [
+          "org"
+        ]
+      }
+    },
+    "/api/org/members": {
+      "get": {
+        "description": "Who holds standing in this org. Admin-only, like `/api/admin/members`.",
+        "operationId": "list_org_members_api_org_members_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrgMemberOut"
+                  },
+                  "title": "Response List Org Members Api Org Members Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Org Members",
+        "tags": [
+          "org"
+        ]
+      },
+      "put": {
+        "description": "Grant or change someone's standing in this org. Admin-only, by design.\n\nThis is the endpoint that would break the tier if it were reachable from\n`require_owner`, so it is worth naming what stops that: it is not the check\nbelow, it is that this route exists only here. `api/admin.py` writes\n`Membership.role` and nothing else, so a workspace owner with no org standing\nhas no path to this handler at all.\n\nThe candidate must already be in one of the org's workspaces. An org admin\ncan promote a colleague, not conjure standing for an arbitrary user id \u2014 and\na `user_id` naming somebody outside the org's workspaces is a 404, which is\nalso what makes this route useless as a directory of everyone on the\ndeployment.",
+        "operationId": "set_org_member_role_api_org_members_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgMemberRoleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgMemberOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Org Member Role",
+        "tags": [
+          "org"
+        ]
+      }
+    },
+    "/api/org/policies": {
+      "get": {
+        "description": "Every ceiling this org has set. Readable by anyone it governs.",
+        "operationId": "list_org_policies_api_org_policies_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrgPolicyOut"
+                  },
+                  "title": "Response List Org Policies Api Org Policies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Org Policies",
+        "tags": [
+          "org"
+        ]
+      },
+      "put": {
+        "description": "Set the org's ceiling for one tool in one scope.\n\nAn upsert keyed on (org, tool, scope) \u2014 the same key the unique constraint\ncarries \u2014 so setting a ceiling twice is not two rows fighting over a slot.",
+        "operationId": "set_org_policy_api_org_policies_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgPolicyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgPolicyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Org Policy",
+        "tags": [
+          "org"
+        ]
+      }
+    },
+    "/api/org/policies/{scope}/{tool_name}": {
+      "delete": {
+        "description": "Remove a ceiling. Absent a row the org constrains nothing for that tool.",
+        "operationId": "clear_org_policy_api_org_policies__scope___tool_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool_name",
+            "required": true,
+            "schema": {
+              "title": "Tool Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Org Policy",
+        "tags": [
+          "org"
         ]
       }
     },

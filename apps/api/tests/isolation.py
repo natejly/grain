@@ -83,6 +83,8 @@ from app.models import (
     Message,
     ModelUsage,
     OAuthState,
+    OrgMembership,
+    OrgToolPolicy,
     Project,
     ProjectFile,
     Run,
@@ -102,6 +104,7 @@ from app.models import (
     Workflow,
     WorkflowNodeRun,
     WorkflowRun,
+    Workspace,
     WorkspaceInvite,
     new_id,
 )
@@ -878,6 +881,40 @@ def build_tenant(label: str) -> Tenant:
         )
         assert membership is not None, "create_identity writes an owner membership"
         ids["membership"] = membership.id
+
+        # The organization tier. `create_identity` provisions one per tenant with
+        # the tenant as its admin, exactly as signup does, so the two tenants are
+        # in two different organizations — which is what makes every case below a
+        # real cross-org probe rather than two admins of the same org.
+        organization_id = db.scalar(
+            select(Workspace.organization_id).where(Workspace.id == workspace_id)
+        )
+        assert organization_id, "every workspace belongs to an organization"
+        ids["organization"] = organization_id
+        # The tenant's own user id, as an id kind, so a RouteCase can aim one
+        # tenant's user at the other's organization. `PUT /api/org/members` names
+        # a user in its body and nowhere else, so this is the only way to point
+        # it across the boundary.
+        ids["user"] = user_id
+
+        org_policy = OrgToolPolicy(
+            organization_id=organization_id,
+            tool_name=f"{label.lower()}_org_tool",
+            policy="deny",
+            scope="chat",
+        )
+        db.add(org_policy)
+        db.flush()
+        ids["org_tool_policy"] = org_policy.id
+
+        org_membership = db.scalar(
+            select(OrgMembership).where(
+                OrgMembership.organization_id == organization_id,
+                OrgMembership.user_id == user_id,
+            )
+        )
+        assert org_membership is not None, "create_identity writes an org admin"
+        ids["org_membership"] = org_membership.id
 
         db.commit()
     finally:
@@ -2124,6 +2161,56 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/admin/sandbox-sessions/{session_id}",
         DENY,
         path_ids={"session_id": "sandbox_session"},
+    ),
+    # -- org ---------------------------------------------------------------
+    # The tier above the workspace, and the reason these cases matter more than
+    # their SCOPED verdicts suggest: an org row governs *other people's*
+    # workspaces, so a missing filter here is not one tenant reading another's
+    # data, it is one tenant setting the security posture the other runs under.
+    #
+    # No route in this group accepts an organization id. The org is always
+    # `actor.organization_id`, derived from the workspace the caller's own
+    # membership already proved, so there is no foreign id to plant in a path —
+    # which is why these are SCOPED rather than DENY. What the sweep proves is
+    # that the derivation never lands on B's org: `assert_no_leak` scans every
+    # response for B's ids, `ids["organization"]` and `ids["org_tool_policy"]`
+    # are among them, and `test_sweep_did_not_touch_the_victim` digests B's
+    # organization rows alongside their workspace ones.
+    RouteCase("GET", "/api/org", SCOPED),
+    RouteCase(
+        "PATCH",
+        "/api/org",
+        SCOPED,
+        body={"allowed_models": ["scripted-double"]},
+    ),
+    RouteCase("GET", "/api/org/policies", SCOPED),
+    RouteCase(
+        "PUT",
+        "/api/org/policies",
+        SCOPED,
+        body={"tool_name": "isolation_probe", "policy": "deny", "scope": "chat"},
+    ),
+    # The tool name is a literal rather than B's, because B's policy is keyed on
+    # B's *organization* — naming their tool here would delete nothing even
+    # without isolation, so the honest probe is that A's delete lands in A's org.
+    RouteCase(
+        "DELETE",
+        "/api/org/policies/{scope}/{tool_name}",
+        SCOPED,
+        path_literals={"scope": "chat", "tool_name": "isolation_probe"},
+    ),
+    RouteCase("GET", "/api/org/members", SCOPED),
+    # The one org route that takes an id from the client, and the sharpest case
+    # in this group: A, an admin of A's org, sends B's user id. A 2xx here would
+    # mean one organization can enroll another organization's people — the
+    # inverse of the tier and worse than a read. 404, indistinguishable from a
+    # user that does not exist, because the refusal must not confirm the id.
+    RouteCase(
+        "PUT",
+        "/api/org/members",
+        DENY,
+        body={"user_id": "", "role": "admin"},
+        body_ids={"user_id": "user"},
     ),
 ]
 

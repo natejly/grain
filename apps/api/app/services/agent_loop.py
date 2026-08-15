@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,12 +16,13 @@ from ..models import (
     Agent,
     AgentToolCall,
     Conversation,
+    OrgToolPolicy,
     Run,
     RunEvent,
     ToolPolicy,
     WorkflowRun,
 )
-from . import budget, screen, skills, subjects, usage
+from . import budget, orgs, screen, skills, subjects, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .harness import ModelStep, resolve_harness
@@ -149,6 +150,16 @@ class LoopState:
         )
 
 
+class OrgBoundExceeded(RuntimeError):
+    """The organization does not permit the harness or model this turn would use.
+
+    A distinct type so the worker can report it as configuration rather than as a
+    provider failure: nothing is wrong with the model, the org has simply not
+    allowed it, and telling a user "the request failed" when the honest answer is
+    "your organization does not allow this" sends them debugging the wrong thing.
+    """
+
+
 def _default_model_step(
     settings: Settings, run: Run, evidence: List[Evidence]
 ) -> ModelStep:
@@ -165,6 +176,12 @@ def _default_model_step(
     The provider branch itself lives in the harness registry now; this stays as
     the thin injectable seam that resolves it, so every `model_step=` override
     keeps its single point of interception.
+
+    The organization's harness and model bounds are deliberately *not* checked
+    here, even though this is where the harness is resolved: this function is the
+    seam tests and the workflow executor replace wholesale, so a bound enforced
+    inside it would be a bound an injected `model_step` skips.
+    `_enforce_org_bounds` runs above, on the path every turn takes.
     """
     return resolve_harness(settings).build_step(
         settings,
@@ -176,6 +193,40 @@ def _default_model_step(
         model=run.requested_model or None,
         effort=run.requested_effort or None,
     )
+
+
+def _enforce_org_bounds(db: Session, run: Run, settings: Settings) -> None:
+    """Refuse the turn if the org does not permit this harness or this model.
+
+    Placed on the path *before* the model step is resolved, and above the
+    `model_step or _default_model_step(...)` seam rather than inside it. That
+    placement is the whole guarantee: the executor and every test inject their own
+    step, so a check living in the default builder would be a check that only runs
+    when nobody overrode it — which is exactly backwards for a control.
+
+    It covers the two things a request-time check structurally cannot see. The
+    *deployment default* model is used by any turn that names no override, and the
+    harness is process-wide, so neither is ever selected by a workspace and neither
+    would otherwise be inside any org bound at all.
+    """
+    if not orgs.harness_permitted(db, workspace_id=run.workspace_id, settings=settings):
+        raise OrgBoundExceeded(
+            f"Your organization does not allow the “{settings.active_model_provider}” "
+            f"harness."
+        )
+    effective_model = run.requested_model or settings.openai_model
+    # Only enforced against models the deployment itself offers. An org list that
+    # does not mention a model outside `selectable_models` is not a prohibition on
+    # it — `_bounded` intersects, and a model the deployment never vouched for is
+    # already refused a layer down.
+    if effective_model not in settings.selectable_models:
+        return
+    if effective_model not in orgs.allowed_models(
+        db, workspace_id=run.workspace_id, settings=settings
+    ):
+        raise OrgBoundExceeded(
+            f"Your organization does not allow the model “{effective_model}”."
+        )
 
 
 def _tool_payload(
@@ -255,6 +306,62 @@ def mode_decider(mode: str) -> str:
     actually happened — the mode is the decider, and it is spelled as one.
     """
     return f"{MODE_DECIDER_PREFIX}{mode}" if mode else ""
+
+
+#: The three verdicts, ordered by how much they restrain the agent. Every rule in
+#: `evaluate_policy` that is described as "tightening" is a move up this ladder,
+#: and the organization clamp is literally a `max` over it.
+_STRICTNESS = {"allow": 0, "ask": 1, "deny": 2}
+
+
+def _stricter(left: str, right: str) -> str:
+    """Whichever of two verdicts restrains the agent more.
+
+    Unknown strings sort as the strictest thing there is, so a policy value this
+    module does not recognise can never be the reason something ran.
+    """
+    return left if _STRICTNESS.get(left, 2) >= _STRICTNESS.get(right, 2) else right
+
+
+def _in_scope_or_carried_deny(
+    scope: PolicyScope, at: Callable[[PolicyScope], Optional[str]]
+) -> Optional[str]:
+    """One tier's verdict for one scope, or None if that tier is silent.
+
+    The rule, in one sentence, applied at both the workspace tier and the org
+    tier: **a row in this scope decides; absent one, a `chat` deny still carries;
+    absent that, the tier says nothing.**
+
+    Factored out rather than written twice because the two tiers agreeing is not
+    a coincidence to be maintained by hand — it is the reason a reader who
+    understands "always allow does not authorise a 3am run" already understands
+    what an org-level `chat` row does to a workflow.
+    """
+    here = at(scope)
+    if here is not None:
+        return here
+    return "deny" if at(CHAT_SCOPE) == "deny" else None
+
+
+def _org_ceiling(db: Session, *, workspace_id: str, tool_name: str, scope: PolicyScope) -> str:
+    """The strictest verdict the organization will permit for this tool.
+
+    `allow` when the org has no opinion, which is the identity element of
+    `_stricter` — an org that has configured nothing changes no answer.
+    """
+    org_id = orgs.org_id_for_workspace(db, workspace_id)
+    if not org_id:
+        return "allow"
+    rows = list(
+        db.scalars(
+            select(OrgToolPolicy).where(
+                OrgToolPolicy.organization_id == org_id,
+                OrgToolPolicy.tool_name == tool_name,
+            )
+        )
+    )
+    by_scope = {row.scope: row.policy for row in rows if row.policy in _STRICTNESS}
+    return _in_scope_or_carried_deny(scope, by_scope.get) or "allow"
 
 
 @dataclass(frozen=True)
@@ -342,6 +449,32 @@ def evaluate_policy(
       refusal. An `ask` row is different in kind — it is a request to be asked,
       and the mode is the conversation answering that request in advance — so
       `auto_writes` does clear one, while nothing clears a deny.
+
+    Above all of that sits the **organization**, and its rule is the one-way one:
+    *scopes may only tighten organization-wide policies*. It is enforced as a
+    single `_stricter` at the very end of this function, and being last is the
+    whole of the argument. Everything that can loosen — a workspace `allow`, a
+    personal `allow`, `auto_writes`, `DEV_UNRESTRICTED_AGENT` (which is a mode, so
+    it arrives here already collapsed into `auto_writes`) — has finished running
+    by then, and none of them can produce a value stricter than what they were
+    given, so none of them can move the answer back down. In ladder terms:
+
+    - org `deny` is 2, and no verdict is above 2, so it is final;
+    - org `ask` is 1, so a 0 from below is raised to 1 while a 2 stands —
+      tightening below an `ask` stays available, relaxing does not;
+    - org `allow` is 0, the identity element, so an org with no opinion is
+      indistinguishable from no org at all.
+
+    The org is looked up from `workspace_id` **inside this function** rather than
+    accepted as a parameter, and that is deliberate: a fourth argument is a
+    fourth thing a call site can pass wrongly, and "the caller forgot the org" is
+    exactly the shape of bug that would make the ceiling optional. Derived, it is
+    unbypassable by construction — there is no argument to omit.
+
+    One consequence to state plainly: with `spec is None` no rows are read at
+    all, org included, so an org cannot deny a tool that does not exist. The
+    unknown-tool `allow` returns to the model as a "no such tool" error rather
+    than running anything, so there is nothing there for a ceiling to restrain.
     """
     if spec is None:
         base = "allow"
@@ -372,13 +505,8 @@ def evaluate_policy(
                 return "deny"
             return mine if mine is not None else ours
 
-        requested = _tier(scope)
-        if requested is not None:
-            base = requested
-        elif _tier(CHAT_SCOPE) == "deny":
-            base = "deny"
-        else:
-            base = "allow" if spec.read_only else "ask"
+        resolved = _in_scope_or_carried_deny(scope, _tier)
+        base = resolved if resolved is not None else ("allow" if spec.read_only else "ask")
 
     if scope != CHAT_SCOPE or mode == ASK_WRITES or base == "deny":
         result = Verdict(policy=base)
@@ -397,8 +525,24 @@ def evaluate_policy(
     # becomes an `ask`. A `deny` is never reached here (it returned above), so a
     # prohibition still prohibits, mirroring how a deny survives every mode.
     if spec is not None and spec.force_ask and result.policy == "allow":
-        return Verdict(policy="ask")
-    return result
+        result = Verdict(policy="ask")
+
+    if spec is None:
+        return result
+    # The organization ceiling, and it is last on purpose — see the docstring.
+    # Removing this clamp is the mutation that makes `test_org_scope.py` fail.
+    clamped = _stricter(
+        result.policy,
+        _org_ceiling(db, workspace_id=workspace_id, tool_name=spec.name, scope=scope),
+    )
+    if clamped == result.policy:
+        return result
+    # The org moved the answer, so a `by_mode` attribution would now be a lie: the
+    # bypass did not let this call through, it was overruled. Property 3 of the
+    # approval modes is that `decided_by` says what actually happened, and a row
+    # claiming a mode approved a call that never ran is exactly the record a later
+    # auditor cannot tell apart from a real one.
+    return Verdict(policy=clamped)
 
 
 def resolve_policy(
@@ -1321,6 +1465,7 @@ def run_agent_turn(
                 settings=settings,
             )
             _screen(db, run, kind="memory", text=memory_context, settings=settings)
+        _enforce_org_bounds(db, run, settings)
         outcome = _advance(
             db,
             run,
@@ -1478,6 +1623,10 @@ def _continue(
         user_id=run.created_by,
         operation=_billing_operation(scope),
     ):
+        # Re-checked on resume, not just at turn start: a parked run comes back
+        # minutes or hours later, and an org that tightened its bounds in between
+        # meant it to apply to work already in flight.
+        _enforce_org_bounds(db, run, settings)
         outcome = _advance(
             db,
             run,

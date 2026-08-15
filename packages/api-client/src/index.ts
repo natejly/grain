@@ -1147,6 +1147,62 @@ export type SandboxRun = {
   session: SandboxSession;
 };
 
+/* --- Organization ----------------------------------------------------------
+ *
+ * The tier above the workspace. Mirrors apps/api/app/api/org.py, where reads are
+ * open to anyone the organization governs and every write requires an *org
+ * admin* — which a workspace owner is not, unless somebody made them one.
+ */
+
+export type Org = {
+  id: string;
+  name: string;
+  /**
+   * `null` is *unbounded* and `[]` permits nothing. Two very different
+   * statements, kept apart all the way to the wire: collapsing them would make
+   * an admin clearing the field read as "no restriction" rather than "total".
+   */
+  allowed_harnesses: string[] | null;
+  allowed_models: string[] | null;
+  /** The bounds intersected with what this deployment actually offers. */
+  effective_harnesses: string[];
+  effective_models: string[];
+  /** "admin", "member", or "" for someone governed without belonging. */
+  your_role: string;
+  created_at: string;
+};
+
+/**
+ * Omit a field to leave it alone; set the matching `clear_*` flag to remove the
+ * bound entirely. The flag exists because `null` on the wire is indistinguishable
+ * from "absent" once JSON has been through a partial update, and "unbounded" is
+ * a thing an admin must be able to say on purpose.
+ */
+export type OrgConfigInput = {
+  name?: string;
+  allowed_harnesses?: string[];
+  allowed_models?: string[];
+  clear_harness_bound?: boolean;
+  clear_model_bound?: boolean;
+};
+
+export type OrgPolicy = {
+  tool_name: string;
+  policy: string;
+  scope: string;
+  updated_at: string;
+};
+
+export type OrgMember = {
+  membership_id: string;
+  user_id: string;
+  name: string;
+  email: string;
+  role: string;
+  is_self: boolean;
+  joined_at: string;
+};
+
 /* --- Workspace administration ---------------------------------------------
  *
  * Every shape below mirrors a response model in apps/api/app/api/admin.py, and
@@ -2868,6 +2924,71 @@ export class WorkspaceApi {
       { method: "POST" },
       true,
     );
+  }
+
+  // --- Organization ----------------------------------------------------------
+  // Reads are open to anyone the org governs; writes need an org admin and 403
+  // otherwise. That asymmetry is deliberate at the API and is why a surface can
+  // show somebody the posture denying them a tool without offering them the
+  // controls to change it.
+
+  /** The organization governing the current workspace, and what it permits. */
+  getOrg(): Promise<Org> {
+    return this.request("/api/org");
+  }
+
+  /** Set the name and the two allow-lists. Org admin only (403 otherwise). */
+  setOrgConfig(input: OrgConfigInput): Promise<Org> {
+    return this.request("/api/org", {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** Every ceiling the org has set. Readable by anyone it governs. */
+  listOrgPolicies(): Promise<OrgPolicy[]> {
+    return this.request("/api/org/policies");
+  }
+
+  /**
+   * Set the org's ceiling for one tool in one scope.
+   *
+   * A ceiling, not a setting: `allow` here does not make anything run, it lets
+   * the workspace and the person below decide. Only `ask` and `deny` restrain.
+   */
+  setOrgPolicy(toolName: string, policy: string, scope: string): Promise<OrgPolicy> {
+    // No idempotency key: the route upserts on (org, tool, scope), so replaying
+    // the same body is the same state — the same reason `setAdminBudget` omits it.
+    return this.request("/api/org/policies", {
+      method: "PUT",
+      body: JSON.stringify({ tool_name: toolName, policy, scope }),
+    });
+  }
+
+  /** Remove a ceiling. Absent a row the org constrains nothing for that tool. */
+  clearOrgPolicy(scope: string, toolName: string): Promise<void> {
+    return this.request(`/api/org/policies/${scope}/${encodeURIComponent(toolName)}`, {
+      method: "DELETE",
+    });
+  }
+
+  /** Who holds standing in this org. Org admin only. */
+  listOrgMembers(): Promise<OrgMember[]> {
+    return this.request("/api/org/members");
+  }
+
+  /**
+   * Grant or change somebody's standing in the org.
+   *
+   * 404 for a user outside the org's workspaces — an admin may promote a
+   * colleague, not conjure standing for an arbitrary id — and 409 for demoting
+   * the last admin, which would freeze the posture with nothing above it to thaw.
+   */
+  setOrgMemberRole(userId: string, role: string): Promise<OrgMember> {
+    return this.request("/api/org/members", {
+      method: "PUT",
+      body: JSON.stringify({ user_id: userId, role }),
+    });
   }
 
   // --- Workspace administration ---------------------------------------------

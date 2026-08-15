@@ -28,6 +28,7 @@ from .api import (
     latex,
     mcp,
     memory,
+    org,
     projects,
     sandbox,
     sandbox_tools,
@@ -125,3 +126,4 @@ app.include_router(generated_apps.router)
 app.include_router(workflows.router)
 app.include_router(crons.router)
 app.include_router(admin.router)
+app.include_router(org.router)

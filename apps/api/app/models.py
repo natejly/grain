@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import (
     DDL,
@@ -19,7 +19,7 @@ from sqlalchemy import (
     event,
     false,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 # utcnow is re-exported so existing `from .models import utcnow` imports keep working.
 from .clock import utcnow
@@ -42,12 +42,126 @@ def new_id() -> str:
 #: what releases a slot. Here it is the bug.
 SHARED_OWNER = ""
 
+#: Org roles. `admin` is the only one that may write org configuration, and it is
+#: deliberately *not* spelled "owner": a workspace owner and an org admin are
+#: different authorities, and sharing a word would invite the one bug this whole
+#: tier exists to prevent — a `require_owner` gate accidentally satisfying an org
+#: check, or vice versa. Nothing anywhere compares `Membership.role` to
+#: `OrgMembership.role`, and the distinct vocabulary is what keeps that true by
+#: reading rather than by discipline.
+ORG_ADMIN = "admin"
+ORG_MEMBER = "member"
+ORG_ROLES = (ORG_ADMIN, ORG_MEMBER)
+
+
+class Organization(Base):
+    """The tier above a workspace, and the only authority a workspace owner lacks.
+
+    Every governance control in this codebase used to stop at the workspace,
+    which made the workspace owner the highest authority that exists: there was
+    no way to express "the organization forbids this even though the workspace
+    owner wants it". An org is that sentence.
+
+    It holds two kinds of configuration:
+
+    - a **security posture**, as `OrgToolPolicy` rows that scopes below may only
+      tighten (`services.agent_loop.evaluate_policy`);
+    - **which harnesses and models are available**, as the two allow-lists
+      below, which bound — never widen — what the deployment offers.
+
+    Both allow-lists use "" for *unbounded* rather than an empty JSON array, so
+    an org created before anyone thought about model governance constrains
+    nothing, and "the org has opinions" is distinguishable from "the org allows
+    nothing". The alternative — empty list means everything — makes the
+    dangerous state (an admin clearing the list) look like the permissive one.
+    """
+
+    __tablename__ = "organizations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(160))
+    #: JSON array of harness/provider names, or "" for no bound at all.
+    allowed_harnesses_json: Mapped[str] = mapped_column(
+        Text, default="", server_default=""
+    )
+    #: JSON array of model names, or "" for no bound at all.
+    allowed_models_json: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+
+class OrgMembership(Base):
+    """One person's standing in one organization.
+
+    Separate from `Membership` rather than a role value on it, because the two
+    answer different questions and a person can hold one without the other. An
+    invited contractor is a member of a workspace and of no org — governed by the
+    org's policy, with no voice in it — which is exactly the asymmetry the tier
+    is for. Conversely an org admin need not be in any of the org's workspaces to
+    set the posture they run under.
+    """
+
+    __tablename__ = "org_memberships"
+    __table_args__ = (UniqueConstraint("organization_id", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    #: admin | member. Only `admin` may write org configuration.
+    role: Mapped[str] = mapped_column(String(24), default=ORG_MEMBER)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OrgToolPolicy(Base):
+    """The organization's verdict for one tool in one scope. A ceiling, not a floor.
+
+    Shaped like `ToolPolicy` minus the `owner_id` axis, and that omission is the
+    point: a personal row exists so a grant means what its clicker thought it
+    meant, and an org row exists so it *cannot*. There is nobody below the org
+    whose preference the org is expressing.
+
+    `scope` is kept, and resolved by the same sentence the workspace tier uses —
+    a row in this scope decides, else a `chat` deny carries across, else the org
+    constrains nothing. An org that wants `send_email` denied at 3am but merely
+    reviewed while someone is typing can say so, and it says it the same way a
+    workspace does.
+    """
+
+    __tablename__ = "org_tool_policies"
+    __table_args__ = (UniqueConstraint("organization_id", "tool_name", "scope"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), index=True
+    )
+    tool_name: Mapped[str] = mapped_column(String(120))
+    policy: Mapped[str] = mapped_column(String(16), default="ask")
+    # chat | workflow, exactly as on `ToolPolicy`.
+    scope: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
 
 class Workspace(Base):
     __tablename__ = "workspaces"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(120))
+    #: Which organization governs this workspace. NOT NULL and no default: a
+    #: workspace with no org is a row nothing can govern, and the whole tier is
+    #: worth nothing if it is reachable around. `_attach_orphan_workspaces` below
+    #: is what makes the constraint satisfiable without threading an org through
+    #: all thirty-odd construction sites.
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -1805,3 +1919,46 @@ for _decidable in _DECIDABLE_TABLES:
             dialect="postgresql"
         ),
     )
+
+
+@event.listens_for(Session, "before_flush")
+def _attach_orphan_workspaces(session: Session, _context: Any, _instances: Any) -> None:
+    """Give every workspace being inserted an organization, if it arrived without one.
+
+    `Workspace.organization_id` is NOT NULL because a workspace nothing governs
+    is precisely the hole this tier closes, and a nullable column would let one
+    back in every time somebody adds a `Workspace(name=...)` — of which there are
+    already thirty in this repo, mostly in tests and eval scripts that have no
+    opinion about organizations and should not have to acquire one.
+
+    Enforcing the invariant here rather than at each of those sites is what makes
+    it an invariant. There is no code path, present or future, that can insert an
+    orphan: the constraint is satisfied where rows are born.
+
+    The org this creates has **no members**, and that is the safe default rather
+    than an oversight. An org with no admin cannot have its posture changed by
+    anybody, so an accidentally-provisioned org grants no one power; the failure
+    mode of the alternative — quietly enrolling whoever happens to be flushing —
+    is somebody gaining authority they were never given. The real front door,
+    `services.orgs.provision_org`, names a founder explicitly and is what signup
+    and the backfill use.
+
+    SQLAlchemy sorts inserts by inter-table foreign keys, so the organization row
+    lands before the workspace that points at it, without a `relationship()`
+    being declared.
+
+    The id is passed explicitly rather than left to `Organization.id`'s column
+    default, because a column default is evaluated *during* the INSERT — reading
+    `org.id` here would yield None, and the workspace would be written pointing
+    at nothing. That is a quiet failure on Postgres (a NULL that the NOT NULL
+    catches) and it is the reason this is worth a sentence.
+    """
+    orphans = [
+        obj
+        for obj in session.new
+        if isinstance(obj, Workspace) and not obj.organization_id
+    ]
+    for workspace in orphans:
+        org_id = new_id()
+        session.add(Organization(id=org_id, name=workspace.name))
+        workspace.organization_id = org_id

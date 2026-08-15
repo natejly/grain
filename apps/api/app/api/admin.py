@@ -1,11 +1,16 @@
 """Workspace administration: who is in it, what it is doing, what it holds.
 
-This is deliberately *workspace* admin and not an organisation console. There is
-no Organization entity in this codebase — no billing account, no cross-workspace
-role, no tenant above the workspace — so every panel here answers a question that
-`Actor.workspace_id` is already sufficient to scope. Inventing an org-shaped API
-over data that has no org would produce endpoints that could only ever return the
-caller's own workspace while implying they might one day return more.
+This is deliberately *workspace* admin and not an organisation console. Every
+panel here answers a question `Actor.workspace_id` is sufficient to scope, and it
+stays that way now that an Organization does exist: the org console is
+`api/org.py`, gated by `require_org_admin`, and the two files do not overlap.
+
+That separation is load-bearing rather than tidy. **No route in this file writes
+an `OrgMembership` row**, which is what makes "a workspace owner cannot grant
+themselves org powers" true by construction instead of by a check somebody could
+relax. An owner is the top of the workspace; the org is above them; and the only
+endpoints that move someone between those tiers are in the file gated on already
+being there.
 
 Two rules shape every route below.
 

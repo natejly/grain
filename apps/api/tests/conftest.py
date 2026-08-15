@@ -58,6 +58,7 @@ from app.config import get_settings  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import Agent, Membership, User, Workspace  # noqa: E402
+from app.services import orgs  # noqa: E402
 from app.services.auth.ratelimit import auth_rate_limiter  # noqa: E402
 from app.services.auth.sessions import create_session  # noqa: E402
 from app.services.embeddings import query_embedding_cache  # noqa: E402
@@ -158,13 +159,24 @@ def authenticate(test_client: TestClient, identity: Identity) -> TestClient:
 def create_identity(
     *, name: str = "Test user", email: Optional[str] = None, workspace_name: str = "Test workspace"
 ) -> Identity:
-    """A brand new user, workspace, owner membership, agent and session."""
+    """A brand new user, org, workspace, owner membership, agent and session.
+
+    Mirrors `api.auth._create_account` — including the personal organization the
+    user administers — because a fixture that skipped it would produce accounts
+    that cannot exist in production, and every org-gated route would then be
+    tested against a shape signup never creates. `models._attach_orphan_workspaces`
+    would have supplied *an* org either way, but one with no admin, and "the whole
+    suite runs as a nobody in its own org" is a subtly different world.
+    """
     db = SessionLocal()
     try:
         user = User(email=email or f"{os.urandom(6).hex()}@example.com", name=name)
         db.add(user)
         db.flush()
-        workspace = Workspace(name=workspace_name)
+        org = orgs.provision_org(
+            db, name=f"{workspace_name} organization", founder_id=user.id
+        )
+        workspace = Workspace(organization_id=org.id, name=workspace_name)
         db.add(workspace)
         db.flush()
         db.add(Membership(workspace_id=workspace.id, user_id=user.id, role="owner"))

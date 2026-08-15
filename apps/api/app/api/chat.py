@@ -36,7 +36,7 @@ from ..schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from ..services import conversations, subjects
+from ..services import conversations, orgs, subjects
 from ..services import skills as skills_service
 from ..services.artifacts import documents
 from ..services.audit import record_audit
@@ -553,10 +553,15 @@ def send_message(
     agent = db.scalar(agent_query)
     if agent is None:
         raise HTTPException(status_code=400, detail="Agent is not available")
-    # A per-turn model override must be on the deployment allow-list; an arbitrary
-    # string would reach the provider unpriced. (An off-ladder `effort` is already
-    # refused by the `ReasoningEffort` Literal on the request as a 422.)
-    if payload.model and payload.model not in settings.selectable_models:
+    # A per-turn model override must be on the deployment allow-list *as narrowed
+    # by the organization*; an arbitrary string would reach the provider unpriced,
+    # and one the org has excluded would reach it against policy. `allowed_models`
+    # intersects the two, so this refusal and the list `/api/bootstrap` offers the
+    # composer are the same list — a dropdown cannot show a choice this 422s.
+    # (An off-ladder `effort` is already refused by the `ReasoningEffort` Literal.)
+    if payload.model and payload.model not in orgs.allowed_models(
+        db, workspace_id=actor.workspace_id, settings=settings
+    ):
         raise HTTPException(status_code=422, detail="Model is not selectable")
     # `fast` maps to "low", not "none" — the honest lowest-latency effort every
     # model accepts — and an explicit `effort` always wins over it.

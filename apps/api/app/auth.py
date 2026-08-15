@@ -42,7 +42,8 @@ from sqlalchemy.orm import Session
 
 from .config import Settings, get_settings
 from .database import get_db
-from .models import Agent, Membership, Tool, ToolGrant, User, Workspace
+from .models import ORG_ADMIN, Agent, Membership, Tool, ToolGrant, User, Workspace
+from .services import orgs
 from .services.auth.sessions import csrf_token_matches, resolve_session
 
 # Fixed ids for the rows `seed_dev_workspace` creates. They are a development
@@ -66,6 +67,16 @@ class Actor:
     workspace_id: str
     workspace_name: str
     role: str
+    #: The org governing `workspace_id`, and this caller's standing in it. "" for
+    #: `org_role` means "not a member of this org", which is a real and expected
+    #: state — a contractor invited into one workspace is governed by its org
+    #: without belonging to it — and is exactly what `require_org_admin` refuses.
+    #:
+    #: Deliberately *not* derived from `role`: a workspace owner has no org
+    #: standing by virtue of being an owner, and if these two ever fed each other
+    #: the tier would collapse back into the one it sits above.
+    organization_id: str = ""
+    org_role: str = ""
     # None only for the DEV_AUTO_LOGIN fallback, which has no session row.
     session_id: Optional[str] = None
     user_email: str = ""
@@ -89,9 +100,6 @@ def seed_dev_workspace(db: Session, settings: Optional[Settings] = None) -> None
         raise RuntimeError(
             "seed_dev_workspace requires APP_ENV to be development or test"
         )
-    workspace = db.get(Workspace, DEV_SEED_WORKSPACE_ID)
-    if workspace is None:
-        db.add(Workspace(id=DEV_SEED_WORKSPACE_ID, name="Acme Knowledge Lab"))
     user = db.get(User, DEV_SEED_USER_ID)
     if user is None:
         db.add(
@@ -101,6 +109,24 @@ def seed_dev_workspace(db: Session, settings: Optional[Settings] = None) -> None
                 name="Nate",
                 # No password, deliberately: the seed is data, not a credential.
                 password_hash=None,
+            )
+        )
+        db.flush()
+    workspace = db.get(Workspace, DEV_SEED_WORKSPACE_ID)
+    if workspace is None:
+        # The seed models a real account, so it gets a real org with a real admin
+        # rather than leaning on the orphan-adoption floor in `models`. A dev
+        # poking at org configuration should be able to, exactly as a signed-up
+        # user can; a dev workspace whose org nobody administers would make the
+        # whole tier untestable by hand.
+        org = orgs.provision_org(
+            db, name="Acme Knowledge Lab", founder_id=DEV_SEED_USER_ID
+        )
+        db.add(
+            Workspace(
+                id=DEV_SEED_WORKSPACE_ID,
+                organization_id=org.id,
+                name="Acme Knowledge Lab",
             )
         )
     membership = db.scalar(
@@ -186,6 +212,40 @@ def _resolve_workspace(
     return workspace, membership
 
 
+def _actor_for(
+    db: Session,
+    user: User,
+    workspace: Workspace,
+    membership: Membership,
+    *,
+    session_id: Optional[str],
+) -> Actor:
+    """One Actor, built the same way on both doors.
+
+    Both call sites had to grow the two organization fields, and two hand-written
+    constructors that must stay identical is how one of them ends up with an empty
+    `org_role` and an org gate that silently passes on the dev door. One
+    constructor, two callers, and the only thing they differ in is the session.
+    """
+    return Actor(
+        user_id=user.id,
+        user_name=user.name,
+        workspace_id=workspace.id,
+        workspace_name=workspace.name,
+        role=membership.role,
+        # The org that governs the workspace this request is about — not "the
+        # user's org", which is not a thing: a person in two workspaces may be
+        # under two different postures, and which one applies is decided by what
+        # they are touching, exactly as `role` already is.
+        organization_id=workspace.organization_id,
+        org_role=orgs.role_in_org(
+            db, organization_id=workspace.organization_id, user_id=user.id
+        ),
+        session_id=session_id,
+        user_email=user.email,
+    )
+
+
 def _dev_fallback_actor(db: Session, settings: Settings) -> Actor:
     """The DEV_AUTO_LOGIN door. Unreachable unless APP_ENV is development/test.
 
@@ -203,15 +263,7 @@ def _dev_fallback_actor(db: Session, settings: Settings) -> Actor:
     if user is None:
         raise _unauthenticated()
     workspace, membership = _resolve_workspace(db, user, DEV_SEED_WORKSPACE_ID)
-    return Actor(
-        user_id=user.id,
-        user_name=user.name,
-        workspace_id=workspace.id,
-        workspace_name=workspace.name,
-        role=membership.role,
-        session_id=None,
-        user_email=user.email,
-    )
+    return _actor_for(db, user, workspace, membership, session_id=None)
 
 
 def get_actor(
@@ -238,18 +290,32 @@ def get_actor(
         raise _unauthenticated()
 
     workspace, membership = _resolve_workspace(db, user, x_workspace_id)
-    return Actor(
-        user_id=user.id,
-        user_name=user.name,
-        workspace_id=workspace.id,
-        workspace_name=workspace.name,
-        role=membership.role,
-        session_id=session.id,
-        user_email=user.email,
-    )
+    return _actor_for(db, user, workspace, membership, session_id=session.id)
 
 
 def require_owner(actor: Actor = Depends(get_actor)) -> Actor:
     if actor.role != "owner":
         raise HTTPException(status_code=403, detail="Owner role required")
+    return actor
+
+
+def require_org_admin(actor: Actor = Depends(get_actor)) -> Actor:
+    """The gate above `require_owner`, and the reason the tier is worth having.
+
+    It reads `org_role` and nothing else. In particular it does **not** fall back
+    to `actor.role`, and does not treat a workspace owner as an org admin for the
+    org their workspace happens to sit in. That fallback is the obvious
+    convenience and it is precisely the inversion this exists to prevent: if
+    being an owner implied org powers, then the organization could never forbid
+    anything the workspace owner wanted, and "scopes can only tighten
+    organization-wide policies" would be a comment.
+
+    The two gates therefore compose in one direction only. Every route under
+    `/api/org` that writes takes this one; nothing under `/api/admin` writes an
+    org role at all, so there is no path from owner to admin — a workspace owner
+    cannot promote themselves, because no endpoint they can reach writes the row
+    that would do it.
+    """
+    if actor.org_role != ORG_ADMIN:
+        raise HTTPException(status_code=403, detail="Organization admin role required")
     return actor

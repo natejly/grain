@@ -474,3 +474,16 @@
   that parks or fails never reaches. Grep both ends of any field a comment claims
   arrives on an event: `grep -rn "<field>" apps/api apps/web` should hit a writer
   as well as a reader.
+- A SQLAlchemy column `default=` is evaluated *during* the INSERT, not at
+  construction. `Organization(name=...)` leaves `.id` as `None` in Python, so a
+  `before_flush` listener that wrote `workspace.organization_id = org.id` wrote a
+  NULL and every `Workspace()` in the suite failed the NOT NULL. Anything that
+  needs an id before the flush — a listener wiring two new rows together, a
+  return value, a log line — must pass `id=new_id()` explicitly.
+- Changing the signature of a function tests inject around breaks the tests, and
+  that is a design signal rather than a chore. Adding `db` to `_default_model_step`
+  to enforce the org's harness bound failed four suites whose `model_step=` lambdas
+  take three arguments — and the same fact meant the bound would have been skipped
+  by every injected step, including the workflow executor's. The check belonged
+  *above* the seam, on the path every turn takes. If a guard has to go inside a
+  replaceable seam, ask who replaces it.

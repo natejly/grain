@@ -17,6 +17,7 @@ from ..schemas import (
     ModelProviderStatus,
     ScreenStatus,
 )
+from ..services import orgs
 
 router = APIRouter(tags=["system"])
 
@@ -65,8 +66,16 @@ def bootstrap(
             # The scripted double talks to no provider, so its only selectable
             # "model" is itself — the composer must not offer a real allow-list a
             # test deployment cannot honour.
+            #
+            # Under a real provider the list is the deployment's, narrowed by the
+            # organization. Read from the same `orgs.allowed_models` the send
+            # route refuses against, so the dropdown and the 422 cannot disagree:
+            # an org that excludes a model makes it disappear from the composer
+            # rather than making it a choice that fails on click.
             selectable_models=(
-                settings.selectable_models
+                orgs.allowed_models(
+                    db, workspace_id=actor.workspace_id, settings=settings
+                )
                 if settings.active_model_provider == "openai"
                 else ["scripted-double"]
             ),

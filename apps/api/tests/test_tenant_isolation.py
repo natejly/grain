@@ -11,7 +11,8 @@ The three shapes of assertion:
   not echo any of B's ids;
 * a route that names nothing must answer only from A's rows;
 * nothing in the whole sweep may change a single byte of B's data — proved by
-  digesting every workspace-scoped row B owns before and after.
+  digesting every row B owns before and after, both the workspace-scoped ones
+  and the organization-scoped ones that govern them.
 
 The route table lives in `isolation.py` and is compared against `app.openapi()`,
 so a new endpoint cannot join the app without an isolation verdict.
@@ -49,6 +50,7 @@ from app.models import (
     MemoryItem,
     Project,
     Run,
+    Workspace,
 )
 from app.services.llm_tools import ToolContext, build_registry
 
@@ -102,22 +104,35 @@ def victim_digest(tenant_b: Tenant) -> str:
 
 
 def workspace_digest(workspace_id: str) -> str:
-    """A stable hash of every workspace-scoped row a workspace owns.
+    """A stable hash of every row a workspace owns, plus its organization's.
 
     Table-driven off the metadata rather than a hand-written list, so a new
     model joins the tamper check for free.
+
+    Two scoping columns, not one. `workspace_id` was sufficient while the
+    workspace was the top of the ladder; an organization sits above it and its
+    rows carry `organization_id` instead, so a digest that only knew the first
+    column would have declared "nothing was touched" while another tenant
+    rewrote the security posture this workspace runs under. That is the single
+    most valuable thing in the database to tamper with, and it would have been
+    the only thing not covered.
     """
     digest = hashlib.sha256()
     db = SessionLocal()
     try:
+        organization_id = db.scalar(
+            select(Workspace.organization_id).where(Workspace.id == workspace_id)
+        )
         for name in sorted(Base.metadata.tables):
             table = Base.metadata.tables[name]
-            if "workspace_id" not in table.c:
+            if "workspace_id" in table.c:
+                scope = table.c.workspace_id == workspace_id
+            elif "organization_id" in table.c and organization_id:
+                scope = table.c.organization_id == organization_id
+            else:
                 continue
             rows = db.execute(
-                table.select()
-                .where(table.c.workspace_id == workspace_id)
-                .order_by(table.c.id)
+                table.select().where(scope).order_by(table.c.id)
             ).all()
             digest.update(name.encode())
             for row in rows:
@@ -825,6 +840,22 @@ DB_GET_ALLOWLIST = {
     ("app/services/workflows/executor.py", "AgentToolCall"): (
         "id is the row the executor just wrote"
     ),
+    # The organization tier. There is no workspace filter that *could* apply to
+    # any of these — an org sits above workspaces, so scoping it by one is a
+    # category error — and the id in every case is derived, never supplied.
+    ("app/services/orgs.py", "Workspace"): (
+        "id is the workspace the caller's membership already proved"
+    ),
+    ("app/services/orgs.py", "Organization"): "id read off that workspace's row",
+    ("app/api/org.py", "Organization"): (
+        "id is actor.organization_id, read off the caller's own workspace; no "
+        "route here accepts an organization id from the client"
+    ),
+    # The only client-supplied id in the org router, and it is checked rather
+    # than trusted: `set_org_member_role` 404s unless the user holds a
+    # membership in one of this org's workspaces, so it can neither promote a
+    # stranger nor be used to probe which user ids exist.
+    ("app/api/org.py", "User"): "membership in one of the org's workspaces is re-checked",
 }
 
 

@@ -42,6 +42,7 @@ from ..schemas import (
     VerifyEmailIn,
     WorkspaceMembershipOut,
 )
+from ..services import orgs
 from ..services.audit import record_audit
 from ..services.auth import email as email_service
 from ..services.auth import invites, oauth
@@ -117,11 +118,32 @@ def _create_account(
     password_hash: Optional[str],
     email_verified: bool,
 ) -> Tuple[User, Workspace]:
-    """User + personal workspace + owner membership + starter agent, atomically.
+    """User + org + personal workspace + owner membership + starter agent, atomically.
 
     One flush, one transaction: a user with no workspace cannot log in anywhere,
     and a workspace with no owner is unreachable, so a partial commit here is a
     broken account either way. The caller commits.
+
+    **What signup does about the organization**, since the tier is new and the
+    choice is load-bearing: it mints a personal org and makes the signer its
+    admin. Three alternatives were available and each is worse.
+
+    - *No org until someone asks for one* reintroduces the ungoverned workspace
+      the tier exists to eliminate, and does it on the single most-travelled path
+      in the app.
+    - *One shared global org* would put every self-serve account under a posture
+      set by whoever administers it, which is either nobody (dead configuration)
+      or an operator who now silently governs strangers.
+    - *An org the signer is only a member of* means nobody can administer it, so
+      self-serve signup produces an account that can never configure itself.
+
+    Minting a personal org grants the signer no authority they did not already
+    have — before this commit they were the workspace owner, which was the top of
+    the ladder — while making "every workspace is governed" true with no
+    exceptions. The tier's teeth show up the moment the two roles come apart: a
+    person invited into someone else's workspace gets a `Membership` and no
+    `OrgMembership`, so they are governed by a posture they cannot touch, and an
+    org admin can bind a workspace owner who outranks them nowhere else.
     """
     now = utcnow()
     user = User(
@@ -133,7 +155,10 @@ def _create_account(
     )
     db.add(user)
     db.flush()
-    workspace = Workspace(name=f"{user.name}'s workspace")
+    org = orgs.provision_org(
+        db, name=f"{user.name}'s organization", founder_id=user.id
+    )
+    workspace = Workspace(organization_id=org.id, name=f"{user.name}'s workspace")
     db.add(workspace)
     db.flush()
     db.add(Membership(workspace_id=workspace.id, user_id=user.id, role="owner"))
