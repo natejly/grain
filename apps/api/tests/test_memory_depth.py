@@ -670,11 +670,15 @@ def test_remember_is_recallable_in_the_same_conversation(workspace):
         assert "Stored" in result.content
 
         # No commit in between: the same turn that stored it must see it.
+        # `viewer_id` because `_conversation` makes a personal thread, so the
+        # memory is this person's — recall with no viewer is the workspace's
+        # shared memories only, and would correctly not find it. ADR 0010.
         found = recall(
             db,
             workspace_id=workspace,
             conversation_id=conversation_id,
             query="How should I answer Nate?",
+            viewer_id=DEV_SEED_USER_ID,
         )
         assert any("terse answers" in item.content for item in found.items)
 
@@ -1574,3 +1578,51 @@ def test_active_is_the_only_liveness_filter_recall_relies_on():
     writes = inspect.getsource(memory_service._upsert_item)
     filters = re.findall(r"MemoryItem\.status\s*[=!]=", writes)
     assert len(filters) == 1, f"expected one status filter, found {len(filters)}"
+
+
+def test_active_is_also_the_only_ownership_filter_reads_rely_on():
+    """ADR 0010 routed scope through the same chokepoint, and that must hold.
+
+    Ownership has the property liveness has: it is decided identically by every
+    read, and a reader that spells it out for itself is a reader a later change
+    to the rule will not reach. It also has one liveness does not — getting it
+    wrong hands one member another member's private memory rather than a stale
+    fact — so a second, open-coded owner predicate is worth failing the build
+    for. `_active` collapsing to shared-only with no viewer is what lets the
+    graph projection use the same door rather than needing its own.
+    """
+    import inspect
+    import re
+
+    readers = (
+        memory_service.recall,
+        memory_service._pinned_summary,
+        memory_service._lexical_candidates,
+        memory_service._vector_candidates,
+        memory_service.resolve_forget_targets,
+    )
+    for reader in readers:
+        source = inspect.getsource(reader)
+        assert not re.search(r"MemoryItem\.owner_id\s*[=!]=", source), (
+            f"{reader.__name__} decides ownership for itself instead of via _active()"
+        )
+    assert "MemoryItem.owner_id.in_" in inspect.getsource(memory_service._active)
+
+    # The graph projection reads memory too, and must ask for no viewer at all:
+    # there is one projection per workspace and every member reads it.
+    from app.services import graph as graph_service
+
+    rebuild = inspect.getsource(graph_service.rebuild_graph)
+    assert not re.search(r"MemoryItem\.owner_id", rebuild), (
+        "the graph projection filters ownership itself instead of via _active()"
+    )
+
+    # The write path matches an owner *exactly*, which is a different rule and
+    # deliberately not `_active`'s: a writer chooses what it owns, not what it
+    # may look at. Every lookup in it must carry that filter, or one person's
+    # correction retires another person's row.
+    for writer in (memory_service._upsert_item, memory_service.remember_memory):
+        source = inspect.getsource(writer)
+        assert "MemoryItem.owner_id == owner_id" in source, (
+            f"{writer.__name__} looks a memory up without pinning its owner"
+        )

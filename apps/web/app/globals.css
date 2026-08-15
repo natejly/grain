@@ -3317,6 +3317,32 @@ select:focus-visible {
   color: var(--amber);
 }
 
+/* Sibling of .memory-kind, same badge geometry so a row reads as one strip of
+   metadata. Accent means shared, which is the semantic the thread rail already
+   set with `.thread-share.shared`; personal is the quiet default. */
+.memory-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 5px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.memory-scope.shared {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
 .integration-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));

@@ -172,6 +172,27 @@ def assert_no_leak(response, victim: Tenant, label: str) -> None:
         assert secret not in text, f"{label} leaked {victim.label}'s content"
 
 
+def assert_no_roommate_leak(response, caller: Tenant, label: str) -> None:
+    """The cross-*person* half: no route may hand the caller their colleague's
+    personal rows.
+
+    Aimed at the caller's own tenant rather than the other one, which is the
+    whole difference. `assert_no_leak` above is satisfied by a correct
+    `workspace_id` filter and therefore cannot see this class of bug at all —
+    the roommate's memory is in the caller's workspace, so every cross-tenant
+    check in this module passes while it leaks.
+    """
+    text = response.text or ""
+    for value in caller.roommate_ids.values():
+        assert value not in text, (
+            f"{label} leaked a personal row belonging to another member of the "
+            f"caller's own workspace ({value})"
+        )
+    assert f"{caller.label.lower()} roommate private" not in text, (
+        f"{label} leaked another member's personal content"
+    )
+
+
 # --------------------------------------------------------------------------
 # The route table must cover the app
 
@@ -217,8 +238,10 @@ def test_route_isolation(case: RouteCase, tenant_a: Tenant, tenant_b: Tenant):
             f"is still an oracle. Body: {response.text[:400]}"
         )
         assert_no_leak(response, tenant_b, label)
+        assert_no_roommate_leak(response, tenant_a, label)
     elif case.verdict == SCOPED:
         assert_no_leak(response, tenant_b, label)
+        assert_no_roommate_leak(response, tenant_a, label)
 
 
 def test_sweep_did_not_touch_the_victim(

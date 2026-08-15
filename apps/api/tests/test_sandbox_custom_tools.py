@@ -395,6 +395,7 @@ def test_force_ask_tightens_an_allow_to_an_ask_where_the_policy_would_allow(
         evaluate_policy(
             db,
             workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
             spec=spec,
             scope=CHAT_SCOPE,
             mode=ASK_WRITES,
@@ -406,6 +407,7 @@ def test_force_ask_tightens_an_allow_to_an_ask_where_the_policy_would_allow(
         evaluate_policy(
             db,
             workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
             spec=spec,
             scope=CHAT_SCOPE,
             mode=AUTO_WRITES,
@@ -417,6 +419,7 @@ def test_force_ask_tightens_an_allow_to_an_ask_where_the_policy_would_allow(
         evaluate_policy(
             db,
             workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
             spec=spec,
             scope=WORKFLOW_SCOPE,
         ).policy
@@ -443,6 +446,7 @@ def test_force_ask_never_loosens_a_deny(db, context, identity, settings):
             evaluate_policy(
                 db,
                 workspace_id=identity.workspace_id,
+                user_id=identity.user_id,
                 spec=spec,
                 scope=CHAT_SCOPE,
                 mode=mode,
@@ -469,6 +473,7 @@ def test_an_inherit_tool_still_honours_a_workspace_allow(db, context, identity, 
         evaluate_policy(
             db,
             workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
             spec=spec,
             scope=CHAT_SCOPE,
         ).policy

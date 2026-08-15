@@ -30,6 +30,19 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+#: The `owner_id` of a row the whole workspace holds, as opposed to one person.
+#: ADR 0010: one shape for personal scope across every table that grows one,
+#: rather than a different spelling of "unowned" per table.
+#:
+#: An empty string and never NULL, and that is a correctness requirement rather
+#: than taste — `owner_id` joins a unique key, and both SQLite and Postgres treat
+#: NULLs inside a unique index as distinct, so a nullable column would quietly
+#: stop constraining the shared rows at all. ADR 0005 picked NULL for
+#: `sandbox_sessions.slot_index` for exactly that property, because there it is
+#: what releases a slot. Here it is the bug.
+SHARED_OWNER = ""
+
+
 class Workspace(Base):
     __tablename__ = "workspaces"
 
@@ -950,17 +963,33 @@ class ToolPolicy(Base):
     Every row written before this column existed is `chat`, which is exactly
     what those grants meant when they were made. `resolve_policy` reads them
     (agent_loop.py) and is the single place the two scopes are compared.
+
+    `owner_id` is the second axis, added by ADR 0010 once a workspace could hold
+    two people. `scope` says *when* a grant applies; `owner_id` says *to whom*.
+    They are orthogonal — a personal workflow grant is a coherent thing to want —
+    so it joins the key beside `scope` rather than becoming a third scope value.
     """
 
     __tablename__ = "tool_policies"
     # Scope joins the key rather than replacing `tool_name`: one tool can carry
-    # a different verdict in each situation, which is the entire point.
-    __table_args__ = (UniqueConstraint("workspace_id", "tool_name", "scope"),)
+    # a different verdict in each situation, which is the entire point. Owner
+    # joins it for the same reason one axis further out.
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "owner_id", "tool_name", "scope"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     tool_name: Mapped[str] = mapped_column(String(120))
     policy: Mapped[str] = mapped_column(String(16), default="ask")
+    #: Whose grant this is. "" is the workspace's, and only an owner may write
+    #: one; anything else is a user id. "Always allow" on an approval card writes
+    #: a personal row, so accepting the consequence of a standing grant no longer
+    #: accepts it on every colleague's behalf. Same sentinel-not-NULL argument as
+    #: `MemoryItem.owner_id`.
+    owner_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
+    )
     # chat | workflow. Defaults to chat so a caller that does not know about
     # scopes keeps writing the grant it always wrote.
     scope: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat")
@@ -1049,7 +1078,11 @@ class AuditEvent(Base):
 class MemoryItem(Base):
     __tablename__ = "memory_items"
     __table_args__ = (
-        UniqueConstraint("workspace_id", "kind", "normalized_key"),
+        # `owner_id` joins the key rather than replacing anything: my personal
+        # value for a claim and the workspace's shared value are two rows on one
+        # claim key, which is what makes supersession stay inside a scope. See
+        # ADR 0010 — without it, `_retire` retires your fact when I correct mine.
+        UniqueConstraint("workspace_id", "owner_id", "kind", "normalized_key"),
         Index("ix_memory_items_workspace_status", "workspace_id", "status"),
         # Serves recall()'s capped vector scan: workspace + status + ORDER BY
         # updated_at DESC LIMIT n. Declared here as well as in migration
@@ -1069,6 +1102,20 @@ class MemoryItem(Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     conversation_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("conversations.id"), nullable=True, index=True
+    )
+    #: Whose memory this is. "" means the workspace's — shared with every member
+    #: — and any other value is a user id. Stamped from the visibility of the
+    #: conversation it was learned in (`Conversation.shared`), so a memory is
+    #: exactly as visible as the thread it came from and no more.
+    #:
+    #: A sentinel rather than a nullable foreign key, and that is load-bearing:
+    #: both SQLite and Postgres treat NULLs as distinct inside a unique index, so
+    #: a nullable column would silently stop constraining the shared rows and let
+    #: two live rows sit on one claim key. ADR 0005 chose NULL for
+    #: `sandbox_sessions.slot_index` for exactly that property; here it is the
+    #: bug. "" collides with "" on both engines.
+    owner_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
     )
     run_id: Mapped[str] = mapped_column(String(36), default="")
     kind: Mapped[str] = mapped_column(String(24), default="fact")

@@ -682,6 +682,11 @@ def _execute_tool_node(
     policy = resolve_policy(
         db,
         workspace_id=workflow_run.workspace_id,
+        # The automation acts for whoever set it running, so its grants are that
+        # person's plus the workspace's. Recorded in ADR 0010 as surprising but
+        # correct: revoking a departing member's grants changes what their crons
+        # may do, which is the same thing as saying the authority was theirs.
+        user_id=workflow_run.created_by,
         spec=spec,
         # The whole point of the scope split. A standing `allow` granted in a
         # conversation is not an answer to "may this run unattended at 3am".

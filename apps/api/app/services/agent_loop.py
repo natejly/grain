@@ -12,6 +12,7 @@ from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..models import (
     MODE_DECIDER_PREFIX,
+    SHARED_OWNER,
     Agent,
     AgentToolCall,
     Conversation,
@@ -274,6 +275,7 @@ def evaluate_policy(
     db: Session,
     *,
     workspace_id: str,
+    user_id: str,
     spec: Optional[ToolSpec],
     scope: PolicyScope,
     mode: ApprovalMode = ASK_WRITES,
@@ -305,6 +307,25 @@ def evaluate_policy(
     granting it at `workflow` scope, where the question being answered is the
     question actually being asked.
 
+    `user_id` is the second axis, added by ADR 0010 once a workspace could hold
+    two people: it stopped being true that the person clicking "always allow" was
+    the only person the grant could reach. Rows come in two tiers — the
+    workspace's (`owner_id == ""`, writable only by an owner) and the caller's
+    own — and within the requested scope:
+
+    - **A `deny` decides, whichever tier it is in.** A shared deny beating my
+      personal allow is the load-bearing half: without it, exempting myself from
+      a workspace prohibition is one PUT away and the escalation this closes
+      reopens sideways. A personal deny beating a shared allow is free, because
+      tightening always is. This is the existing rule — *a prohibition is not a
+      grant* — extended one axis further out.
+    - **Otherwise mine decides, then the workspace's.** Personal precedence is
+      what makes a grant mean what its clicker thought it meant.
+
+    The cross-scope `chat` deny below is read across both tiers for the same
+    reason it is read across scopes: a prohibition should be hard to lose track
+    of, wherever it was written.
+
     `mode` is the conversation's own answer to "how much do you want to be
     asked", and it is applied last, on top of everything above, under two rules
     that are the whole safety argument for having a bypass at all:
@@ -330,15 +351,31 @@ def evaluate_policy(
                 select(ToolPolicy).where(
                     ToolPolicy.workspace_id == workspace_id,
                     ToolPolicy.tool_name == spec.name,
+                    # Shared plus the caller's own. Another member's grant is not
+                    # merely outranked here, it is never fetched — the query is
+                    # where cross-person authority has to stop, because anything
+                    # that reaches the ranking below can be reasoned about wrong.
+                    ToolPolicy.owner_id.in_({SHARED_OWNER, user_id}),
                 )
             )
         )
-        valid = {
-            row.scope: row.policy for row in rows if row.policy in {"ask", "allow", "deny"}
+        valid = [row for row in rows if row.policy in {"ask", "allow", "deny"}]
+        by_owner = {
+            (row.owner_id == SHARED_OWNER, row.scope): row.policy for row in valid
         }
-        if scope in valid:
-            base = valid[scope]
-        elif valid.get(CHAT_SCOPE) == "deny":
+
+        def _tier(at_scope: PolicyScope) -> Optional[str]:
+            """This scope's verdict: any deny, else mine, else the workspace's."""
+            mine = by_owner.get((False, at_scope))
+            ours = by_owner.get((True, at_scope))
+            if "deny" in (mine, ours):
+                return "deny"
+            return mine if mine is not None else ours
+
+        requested = _tier(scope)
+        if requested is not None:
+            base = requested
+        elif _tier(CHAT_SCOPE) == "deny":
             base = "deny"
         else:
             base = "allow" if spec.read_only else "ask"
@@ -368,6 +405,7 @@ def resolve_policy(
     db: Session,
     *,
     workspace_id: str,
+    user_id: str,
     spec: Optional[ToolSpec],
     scope: PolicyScope,
     mode: ApprovalMode = ASK_WRITES,
@@ -381,7 +419,12 @@ def resolve_policy(
     it is the only caller that also has to record *who* decided.
     """
     return evaluate_policy(
-        db, workspace_id=workspace_id, spec=spec, scope=scope, mode=mode
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        spec=spec,
+        scope=scope,
+        mode=mode,
     ).policy
 
 
@@ -899,6 +942,10 @@ def _drain_pending(
             verdict = evaluate_policy(
                 db,
                 workspace_id=run.workspace_id,
+                # Whose grants apply: the member whose turn this is. A standing
+                # allow another member clicked is not an answer they gave on this
+                # person's behalf.
+                user_id=run.created_by,
                 spec=spec,
                 scope=scope,
                 mode=approval_mode_for_run(db, run, scope=scope, settings=settings),

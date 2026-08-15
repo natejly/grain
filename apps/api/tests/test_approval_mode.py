@@ -309,10 +309,19 @@ def test_ask_all_overrides_a_standing_allow(owner: TestClient, db: Any) -> None:
     spec = Probe(READ, read_only=True).spec()
 
     assert resolve_policy(
-        db, workspace_id=identity.workspace_id, spec=spec, scope=CHAT_SCOPE
+        db,
+        workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
+        spec=spec,
+        scope=CHAT_SCOPE,
     ) == "allow"
     assert resolve_policy(
-        db, workspace_id=identity.workspace_id, spec=spec, scope=CHAT_SCOPE, mode=ASK_ALL
+        db,
+        workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
+        spec=spec,
+        scope=CHAT_SCOPE,
+        mode=ASK_ALL,
     ) == "ask"
 
 
@@ -422,6 +431,7 @@ def test_no_mode_can_clear_a_deny(owner: TestClient, db: Any) -> None:
             resolve_policy(
                 db,
                 workspace_id=identity.workspace_id,
+                user_id=identity.user_id,
                 spec=spec,
                 scope=CHAT_SCOPE,
                 mode=mode,
@@ -443,6 +453,7 @@ def test_the_mode_is_ignored_at_workflow_scope(owner: TestClient, db: Any) -> No
         resolve_policy(
             db,
             workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
             spec=spec,
             scope=WORKFLOW_SCOPE,
             mode=AUTO_WRITES,
@@ -454,6 +465,7 @@ def test_the_mode_is_ignored_at_workflow_scope(owner: TestClient, db: Any) -> No
         resolve_policy(
             db,
             workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
             spec=read_spec,
             scope=WORKFLOW_SCOPE,
             mode=ASK_ALL,
@@ -733,6 +745,7 @@ def test_the_verdict_records_which_mode_decided(owner: TestClient, db: Any) -> N
     bypassed = evaluate_policy(
         db,
         workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
         spec=write_spec,
         scope=CHAT_SCOPE,
         mode=AUTO_WRITES,
@@ -743,6 +756,7 @@ def test_the_verdict_records_which_mode_decided(owner: TestClient, db: Any) -> N
     untouched = evaluate_policy(
         db,
         workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
         spec=read_spec,
         scope=CHAT_SCOPE,
         mode=AUTO_WRITES,
@@ -753,6 +767,7 @@ def test_the_verdict_records_which_mode_decided(owner: TestClient, db: Any) -> N
     parked = evaluate_policy(
         db,
         workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
         spec=read_spec,
         scope=CHAT_SCOPE,
         mode=ASK_ALL,

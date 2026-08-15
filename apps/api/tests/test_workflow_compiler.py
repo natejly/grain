@@ -802,6 +802,7 @@ def test_compiling_grants_no_authority(client):
                 resolve_policy(
                     db,
                     workspace_id=workspace_id,
+                    user_id=identity["user_id"],
                     spec=REGISTRY["post_message"],
                     scope=scope,
                 )

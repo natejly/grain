@@ -132,6 +132,16 @@ def test_graph_rebuild_includes_memory_entities(client):
         headers={"Idempotency-Key": "memory-conversation-5"},
         json={"title": "Graph memory"},
     ).json()
+    # Shared, because there is one `GraphProjection` per workspace and every
+    # member reads the same nodes out of it, so it may only be built from shared
+    # memory — see ADR 0010 and the sibling test below. A thread is personal
+    # until somebody shares it, which is exactly the decision being made here.
+    assert (
+        client.put(
+            f"/api/conversations/{conversation['id']}/share", json={"shared": True}
+        ).status_code
+        == 200
+    )
     _send_and_wait(
         client,
         conversation["id"],
@@ -159,3 +169,47 @@ def test_graph_rebuild_includes_memory_entities(client):
     )
     assert nimbus is not None
     assert nimbus["memory_ids"], "memory-derived entity should carry memory provenance"
+
+
+def test_a_personal_threads_memory_stays_out_of_the_shared_graph(client):
+    """The cost of ADR 0010, asserted rather than assumed.
+
+    The graph is one projection per workspace and every member reads it, so a
+    personal memory folded into it would surface another member's private thread
+    as an entity name — the leak, one indirection along. Threads are personal by
+    default, so this is the *ordinary* case and not a corner: memory stops
+    feeding the graph until a thread is shared, which is a real capability lost
+    and the reason a per-scope projection is the next change worth making.
+    """
+    conversation = client.post(
+        "/api/conversations",
+        headers={"Idempotency-Key": "memory-conversation-personal"},
+        json={"title": "Personal graph memory"},
+    ).json()
+    _send_and_wait(
+        client,
+        conversation["id"],
+        "Zephyr Ledger reconciles with Marlow Clearing every Friday.",
+        "memory-message-personal",
+    )
+    assert (
+        client.post(
+            "/api/graph/rebuild",
+            headers={"Idempotency-Key": "memory-graph-rebuild-personal"},
+        ).status_code
+        == 202
+    )
+    for _ in range(300):
+        graph = client.get("/api/graph").json()
+        if graph["status"] == "ready":
+            break
+        time.sleep(0.1)
+    graph = client.get("/api/graph").json()
+    assert graph["status"] == "ready"
+    names = {entity["name"] for entity in graph["entities"]}
+    assert "Zephyr Ledger" not in names
+    # The memory itself is untouched — it is recallable by its owner, it is only
+    # the shared projection it stays out of.
+    assert any(
+        "Zephyr Ledger" in item["content"] for item in client.get("/api/memory").json()
+    )

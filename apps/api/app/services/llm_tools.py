@@ -213,6 +213,7 @@ def _recall_memory(db: Session, context: ToolContext, args: Dict[str, Any]) -> T
         workspace_id=context.workspace_id,
         conversation_id=context.conversation_id,
         query=query,
+        viewer_id=context.user_id,
     )
     if context_result.empty:
         return ToolResult(content="No stored memories match that query.")

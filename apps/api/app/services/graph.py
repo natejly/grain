@@ -478,6 +478,14 @@ def rebuild_graph(workspace_id: str, actor_id: str) -> None:
 
         memory_items = list(
             db.scalars(
+                # No viewer, which `_active` reads as shared-only. There is one
+                # `GraphProjection` per workspace and every member reads the same
+                # nodes and edges out of it, so a personal memory folded in here
+                # would reach everyone through `_graph_digest` — the leak, one
+                # indirection further along. ADR 0002 keeps this a single
+                # rebuildable projection; a projection per member would multiply
+                # its cost by the member count. The cost, stated in ADR 0010:
+                # entities named only in personal memories never enter the graph.
                 _active(select(MemoryItem), workspace_id)
                 # Unordered rows would make `version` a hash of physical row order
                 # and hand the LLM budget to a different subset on every rebuild.

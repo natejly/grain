@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, Trash2 } from "lucide-react";
+import { Search, Trash2, User, Users } from "lucide-react";
 import type { MemoryItem } from "@workspace/api-client";
 import { useState } from "react";
 import { formatRelative } from "./shared";
@@ -10,9 +10,19 @@ export type MemoryViewProps = {
   forgetMemory: (item: MemoryItem) => Promise<void>;
 };
 
-/** Everything a memory can be matched on, lowercased once per row per query. */
+/**
+ * Everything a memory can be matched on, lowercased once per row per query.
+ * Scope joins it so "personal" and "shared" are searchable words — the list
+ * holds both kinds now, and filtering to one of them is the obvious thing to
+ * want once you notice they differ.
+ */
 function haystack(item: MemoryItem): string {
-  return [item.content, item.kind.replaceAll("_", " "), ...item.entity_names]
+  return [
+    item.content,
+    item.kind.replaceAll("_", " "),
+    item.shared ? "shared workspace" : "personal mine",
+    ...item.entity_names,
+  ]
     .join(" ")
     .toLowerCase();
 }
@@ -71,6 +81,20 @@ export function MemoryView({ memories, forgetMemory }: MemoryViewProps) {
                   <div>
                     <span className={`memory-kind ${item.kind}`}>
                       {item.kind.replaceAll("_", " ")}
+                    </span>
+                    {/* Which of these two a memory is decides who it can reach,
+                        so it belongs on the row rather than in a filter: a
+                        shared fact is one every colleague is answered from. */}
+                    <span
+                      className={`memory-scope ${item.shared ? "shared" : "personal"}`}
+                      title={
+                        item.shared
+                          ? "Every member of this workspace is answered from this"
+                          : "Only you are answered from this"
+                      }
+                    >
+                      {item.shared ? <Users size={10} /> : <User size={10} />}
+                      {item.shared ? "shared" : "personal"}
                     </span>
                     <p>{item.content}</p>
                     <small>

@@ -50,5 +50,15 @@
         "entities": ["Nimbus Platform", "Quasar Engine"]
       }
     ]
+  },
+  {
+    "match": "zephyr ledger reconciles with marlow clearing",
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "Zephyr Ledger reconciles with Marlow Clearing every Friday.",
+        "entities": ["Zephyr Ledger", "Marlow Clearing"]
+      }
+    ]
   }
 ]

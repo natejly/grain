@@ -294,6 +294,7 @@ def test_on_a_workflow_run_still_parks_on_writes(monkeypatch, scoped_thread) -> 
         verdict = agent_loop.evaluate_policy(
             db,
             workspace_id=run.workspace_id,
+            user_id=run.created_by,
             spec=_probe(),
             scope=scope,
             # Even handed the bypass explicitly, which is the second lock.

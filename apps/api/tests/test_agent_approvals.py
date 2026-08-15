@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.database import SessionLocal
-from app.models import AgentToolCall, Run, ToolPolicy
+from app.models import SHARED_OWNER, AgentToolCall, Run, ToolPolicy
 from app.services.agent_loop import resolve_policy, run_agent_turn
 from app.services.llm_tools import ToolSpec
 
@@ -114,12 +114,18 @@ def test_approve_resumes_the_run_and_remembers_the_policy(client, _no_resume):
 
     db = SessionLocal()
     try:
-        policy = (
-            db.query(ToolPolicy)
-            .filter(ToolPolicy.tool_name == "list_datasets")
-            .one()
-        )
-        assert policy.policy == "allow"
+        identity = client.get("/api/bootstrap").json()["identity"]
+        rows = {
+            row.owner_id: row.policy
+            for row in db.query(ToolPolicy).filter(
+                ToolPolicy.tool_name == "list_datasets"
+            )
+        }
+        # The grant lands on the person who clicked, and the workspace's own row
+        # — the `ask` `_park_run` wrote, which is what parked the call in the
+        # first place — is left exactly as it was. ADR 0010: accepting the
+        # consequence of a standing allow must not accept it for colleagues.
+        assert rows == {identity["user_id"]: "allow", SHARED_OWNER: "ask"}
     finally:
         db.close()
 
@@ -250,13 +256,20 @@ def test_revoking_a_grant_makes_the_next_turn_ask_again(client):
     call rather than the next deploy."""
     db = SessionLocal()
     try:
-        workspace_id = client.get("/api/bootstrap").json()["identity"]["workspace_id"]
+        identity = client.get("/api/bootstrap").json()["identity"]
+        workspace_id = identity["workspace_id"]
         spec = _write_tool("send_it")
         client.put(
             "/api/tool-policies", json={"tool_name": "send_it", "policy": "allow"}
         )
         assert (
-            resolve_policy(db, workspace_id=workspace_id, spec=spec, scope="chat")
+            resolve_policy(
+                db,
+                workspace_id=workspace_id,
+                user_id=identity["user_id"],
+                spec=spec,
+                scope="chat",
+            )
             == "allow"
         )
 
@@ -265,7 +278,13 @@ def test_revoking_a_grant_makes_the_next_turn_ask_again(client):
 
         db.expire_all()
         assert (
-            resolve_policy(db, workspace_id=workspace_id, spec=spec, scope="chat")
+            resolve_policy(
+                db,
+                workspace_id=workspace_id,
+                user_id=identity["user_id"],
+                spec=spec,
+                scope="chat",
+            )
             == "ask"
         )
         assert not [
@@ -294,10 +313,17 @@ def test_revoking_one_scope_leaves_the_other_standing(client):
 
     db = SessionLocal()
     try:
-        workspace_id = client.get("/api/bootstrap").json()["identity"]["workspace_id"]
+        identity = client.get("/api/bootstrap").json()["identity"]
+        workspace_id = identity["workspace_id"]
         spec = _write_tool("send_it")
         assert (
-            resolve_policy(db, workspace_id=workspace_id, spec=spec, scope="workflow")
+            resolve_policy(
+                db,
+                workspace_id=workspace_id,
+                user_id=identity["user_id"],
+                spec=spec,
+                scope="workflow",
+            )
             == "allow"
         )
     finally:

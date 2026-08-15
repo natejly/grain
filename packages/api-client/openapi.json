@@ -4917,6 +4917,10 @@
             "title": "Message Ids",
             "type": "array"
           },
+          "shared": {
+            "title": "Shared",
+            "type": "boolean"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -4931,6 +4935,7 @@
           "entity_names",
           "message_ids",
           "importance",
+          "shared",
           "created_at",
           "updated_at"
         ],
@@ -6795,6 +6800,10 @@
             "title": "Scope",
             "type": "string"
           },
+          "shared": {
+            "title": "Shared",
+            "type": "boolean"
+          },
           "tool_name": {
             "title": "Tool Name",
             "type": "string"
@@ -6809,6 +6818,7 @@
           "tool_name",
           "policy",
           "scope",
+          "shared",
           "created_at",
           "updated_at"
         ],
@@ -6834,6 +6844,11 @@
             ],
             "title": "Scope",
             "type": "string"
+          },
+          "shared": {
+            "default": false,
+            "title": "Shared",
+            "type": "boolean"
           },
           "tool_name": {
             "maxLength": 120,
@@ -15362,6 +15377,7 @@
     },
     "/api/memory": {
       "get": {
+        "description": "The workspace's memories and the caller's own \u2014 never another member's.\n\nWhich means nobody, owner included, has a complete view of what the workspace\nknows. ADR 0010 records that as a real cost rather than an oversight: it is\nthe same trade `Conversation.shared` already made, and the audit trail still\nrecords every write.",
         "operationId": "list_memory_api_memory_get",
         "parameters": [
           {
@@ -17796,7 +17812,7 @@
     },
     "/api/tool-policies": {
       "get": {
-        "description": "Every standing verdict this workspace has recorded, in both scopes.\n\nThis is the only way a grant becomes visible again. \"Always allow\" is one\nclick on an approval card and it removes the approval park permanently, so a\nsurface that lists what has been granted \u2014 and the DELETE below that takes it\nback \u2014 is what keeps that click reversible.",
+        "description": "Every standing verdict that applies to the caller, in both scopes.\n\nThe workspace's own, plus this member's \u2014 which is exactly the set\n`evaluate_policy` consults for them, so what a person can review here is what\ncan actually act on their behalf. Another member's grants are absent for the\nsame reason they are ignored: they are not authority anyone holds over you.\n\nThis is the only way a grant becomes visible again. \"Always allow\" is one\nclick on an approval card and it removes the approval park permanently, so a\nsurface that lists what has been granted \u2014 and the DELETE below that takes it\nback \u2014 is what keeps that click reversible.",
         "operationId": "list_tool_policies_api_tool_policies_get",
         "parameters": [
           {
@@ -17848,6 +17864,7 @@
         ]
       },
       "put": {
+        "description": "Record a standing verdict, for the caller or for the whole workspace.\n\n`shared` defaults to False, so the ordinary grant is personal. Writing one on\neverybody's behalf is standing write authority over people who were not asked,\nwhich is an owner's decision \u2014 the same gate spend limits and member\nmanagement already sit behind. A member asking for it is refused rather than\nquietly downgraded to a personal grant: they would be told the workspace was\ncovered when it was not, which is worse than a 403.",
         "operationId": "set_tool_policy_api_tool_policies_put",
         "parameters": [
           {
@@ -17907,7 +17924,7 @@
     },
     "/api/tool-policies/{tool_name}": {
       "delete": {
-        "description": "Delete one standing verdict, restoring the tool's own default.\n\nDeleting is not the same as PUT-ing `ask`, which is why this exists rather\nthan leaving revocation to the setter. A row saying `ask` is still an\noverride \u2014 it pins a read-only tool to asking forever, and it keeps\noccupying the (workspace, tool, scope) key that `resolve_policy` consults\nfirst. Removing the row is what actually returns the tool to\n`ToolSpec.read_only`, and it is the only operation that makes the list above\nshrink, which is how a person confirms a grant is gone.\n\n`scope` is required for the same reason `resolve_policy` refuses to default\nit: the only value a default could take is one of the two, and revoking the\ngrant the caller did not mean would leave the other standing while the UI\nreports success. Missing means \"say which\", not \"guess\".",
+        "description": "Delete one standing verdict, restoring the tool's own default.\n\nDeleting is not the same as PUT-ing `ask`, which is why this exists rather\nthan leaving revocation to the setter. A row saying `ask` is still an\noverride \u2014 it pins a read-only tool to asking forever, and it keeps\noccupying the (workspace, tool, scope) key that `resolve_policy` consults\nfirst. Removing the row is what actually returns the tool to\n`ToolSpec.read_only`, and it is the only operation that makes the list above\nshrink, which is how a person confirms a grant is gone.\n\n`scope` is required for the same reason `resolve_policy` refuses to default\nit: the only value a default could take is one of the two, and revoking the\ngrant the caller did not mean would leave the other standing while the UI\nreports success. Missing means \"say which\", not \"guess\".\n\n`shared` is a query flag rather than a second route, and it defaults to False\nfor the same reason the setter's does: you take back your own grant unless\nyou say otherwise, and taking back the workspace's is an owner's act.",
         "operationId": "revoke_tool_policy_api_tool_policies__tool_name__delete",
         "parameters": [
           {
@@ -17930,6 +17947,16 @@
               ],
               "title": "Scope",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "shared",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Shared",
+              "type": "boolean"
             }
           },
           {

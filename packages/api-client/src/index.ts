@@ -344,9 +344,18 @@ export type AgentToolCall = {
   created_at: string;
 };
 
+/** Where a standing grant applies: a person typing, or an unattended DAG. */
+export type PolicyScope = "chat" | "workflow";
+
 export type ToolPolicy = {
   tool_name: string;
   policy: "ask" | "allow" | "deny";
+  /** Two rows can name one tool; a client that drops this cannot tell them apart. */
+  scope: PolicyScope;
+  /** Whether this covers every member (owner-only to write) or just the caller. */
+  shared: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 // --- Agents (authored system prompts + provisioned tools) ---
@@ -814,6 +823,13 @@ export type MemoryItem = {
   entity_names: string[];
   message_ids: string[];
   importance: number;
+  /**
+   * True when every member of the workspace holds this memory, false when it is
+   * the caller's own. The server never returns another member's personal rows,
+   * so those are the only two cases and no owner id crosses the wire — the same
+   * shape `Conversation.shared` uses for the identical question.
+   */
+  shared: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -2143,18 +2159,51 @@ export class WorkspaceApi {
     return this.request("/api/tools");
   }
 
+  /** The workspace's standing grants plus the caller's own, never anyone else's. */
   listToolPolicies(): Promise<ToolPolicy[]> {
     return this.request("/api/tool-policies");
   }
 
+  /**
+   * Record a standing verdict. `shared` writes it for every member and is
+   * refused to anyone but a workspace owner — both it and `scope` default the
+   * narrow way, so a caller that omits them cannot widen authority by accident.
+   */
   setToolPolicy(
     toolName: string,
     policy: "ask" | "allow" | "deny",
+    options: { scope?: PolicyScope; shared?: boolean } = {},
   ): Promise<ToolPolicy> {
     return this.request("/api/tool-policies", {
       method: "PUT",
-      body: JSON.stringify({ tool_name: toolName, policy }),
+      body: JSON.stringify({
+        tool_name: toolName,
+        policy,
+        scope: options.scope ?? "chat",
+        shared: options.shared ?? false,
+      }),
     });
+  }
+
+  /**
+   * Take a standing grant back. Deleting is not the same as setting `ask`: a row
+   * saying `ask` still overrides the tool's own default, so only removing it
+   * restores it. `scope` is required because revoking the grant the caller did
+   * not mean would leave the other standing while the UI reports success.
+   */
+  deleteToolPolicy(
+    toolName: string,
+    scope: PolicyScope,
+    options: { shared?: boolean } = {},
+  ): Promise<void> {
+    const query = new URLSearchParams({
+      scope,
+      shared: String(options.shared ?? false),
+    });
+    return this.request(
+      `/api/tool-policies/${encodeURIComponent(toolName)}?${query}`,
+      { method: "DELETE" },
+    );
   }
 
   listFolders(): Promise<Folder[]> {

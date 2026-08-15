@@ -486,6 +486,10 @@ def process_run(run_id: str) -> None:
                 workspace_id=run.workspace_id,
                 conversation_id=run.conversation_id,
                 query=run.prompt,
+                # Whose turn this is. The member sees the workspace's memories
+                # and their own; another member's personal memories are not
+                # candidates for this prompt. ADR 0010.
+                viewer_id=run.created_by,
                 settings=settings,
             )
             memory_context = render_memory_context(context)

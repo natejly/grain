@@ -22,7 +22,9 @@ from ..models import MemoryItem
 from .llm_tools import ToolContext, ToolResult, ToolSpec
 from .memory import (
     REMEMBER_KINDS,
+    SHARED_OWNER,
     forget_memories,
+    memory_owner,
     normalize_memory_content,
     recall,
     remember_memory,
@@ -90,7 +92,19 @@ def _preview_remember(db: Session, context: ToolContext, args: Dict[str, Any]) -
     entities = _entities(args)
     if entities:
         lines.append(f"  entities: {', '.join(entities[:16])}")
-    lines.append("It will be recallable in every future conversation in this workspace.")
+    # The card has to say who will be able to recall this, because after ADR 0010
+    # that is no longer the same answer in every thread — and "the whole
+    # workspace" is the half of it a person would want to catch before approving.
+    if memory_owner(db, context.conversation_id, context.user_id) == SHARED_OWNER:
+        lines.append(
+            "It will be recallable by every member, in every future conversation "
+            "in this workspace."
+        )
+    else:
+        lines.append(
+            "This thread is personal, so the memory is yours: it will be "
+            "recallable in your future conversations and no other member's."
+        )
     return "\n".join(lines)
 
 
@@ -102,6 +116,8 @@ def _forget_targets(
         workspace_id=context.workspace_id,
         memory_id=_text(args, "memory_id") or None,
         content=_text(args, "content") or None,
+        # You can forget what you can recall: the workspace's, and your own.
+        viewer_id=context.user_id,
     )
 
 
@@ -153,6 +169,7 @@ def _search_memory(db: Session, context: ToolContext, args: Dict[str, Any]) -> T
         workspace_id=context.workspace_id,
         conversation_id=context.conversation_id,
         query=query,
+        viewer_id=context.user_id,
         # model_copy keeps the cached Settings singleton unmutated; only the
         # recall depth differs from what the turn was injected with.
         settings=settings.model_copy(update={"memory_recall_limit": limit}),

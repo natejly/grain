@@ -616,6 +616,10 @@ class ToolPolicyOut(ApiModel):
     #: Which situation this verdict answers for. Two rows can name the same tool,
     #: so a client that drops this field cannot tell them apart.
     scope: str
+    #: Whether this grant covers every member or only the caller. The list holds
+    #: no one else's rows, so those are the only two cases — and a caller needs
+    #: this to know whether revoking it needs to be an owner who does it.
+    shared: bool
     #: When the grant was first made, and when its verdict last changed. A
     #: standing "always allow" is unattended write authority; reviewing one means
     #: knowing how old it is, not just that it exists.
@@ -630,6 +634,11 @@ class ToolPolicyRequest(BaseModel):
     # the grant it always set. Authorising unattended execution has to be asked
     # for by name — that is the entire point of the split.
     scope: Literal["chat", "workflow"] = "chat"
+    # False writes the caller's own grant. True writes the workspace's, and is
+    # refused to anyone but an owner. Defaulted the narrow way for the same
+    # reason `scope` is: a client that does not know about the distinction must
+    # not be able to authorise colleagues by omission.
+    shared: bool = False
 
 
 class FolderOut(ApiModel):
@@ -931,6 +940,10 @@ class MemoryItemOut(ApiModel):
     entity_names: List[str]
     message_ids: List[str]
     importance: int
+    #: True when every member holds this memory, False when it is the caller's
+    #: own. The list never contains anyone else's, so those are the only two
+    #: cases and no owner id needs to go over the wire.
+    shared: bool
     created_at: datetime
     updated_at: datetime
 

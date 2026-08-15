@@ -35,11 +35,18 @@ The verdicts a case can carry:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
-from conftest import TEST_BASE_URL, Identity, authenticate, create_identity
+from conftest import (
+    TEST_BASE_URL,
+    Identity,
+    authenticate,
+    create_identity,
+    issue_session,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -91,6 +98,7 @@ from app.models import (
     ToolCall,
     ToolGrant,
     ToolPolicy,
+    User,
     Workflow,
     WorkflowNodeRun,
     WorkflowRun,
@@ -120,12 +128,24 @@ def dataset_csv(label: str) -> bytes:
 
 @dataclass
 class Tenant:
-    """One fully populated workspace and a client logged in as its owner."""
+    """One fully populated workspace, a client logged in as its owner, and a
+    second member of that same workspace who owns some personal state.
+
+    The roommate is the *cross-person* axis, which only started existing when a
+    workspace could hold two people. Every isolation question this module asks
+    has two versions now — "can A see workspace B's rows" and "can A see their
+    own colleague's personal rows" — and the second is not implied by the first:
+    a query filtered correctly on `workspace_id` passes every cross-tenant check
+    ever written here and still hands one member another member's memory.
+    """
 
     label: str
     identity: Identity
     client: TestClient
     ids: Dict[str, str] = field(default_factory=dict)
+    #: The second member, and the rows only they should be able to see.
+    roommate: Optional[Identity] = None
+    roommate_ids: Dict[str, str] = field(default_factory=dict)
 
     @property
     def workspace_id(self) -> str:
@@ -138,9 +158,18 @@ class Tenant:
     def id(self, kind: str) -> str:
         return self.ids[kind]
 
+    def roommate_id(self, kind: str) -> str:
+        return self.roommate_ids[kind]
+
     def all_ids(self) -> List[str]:
         """Every id this tenant owns, for "did any of B leak into A's body"."""
         return [self.workspace_id, self.user_id, *self.ids.values()]
+
+    def roommate_client(self) -> TestClient:
+        """A client authenticated as the second member of this same workspace."""
+        assert self.roommate is not None
+        client = TestClient(app=_app(), base_url=TEST_BASE_URL)
+        return authenticate(client, self.roommate)
 
 
 def build_tenant(label: str) -> Tenant:
@@ -853,7 +882,87 @@ def build_tenant(label: str) -> Tenant:
         db.commit()
     finally:
         db.close()
-    return Tenant(label=label, identity=identity, client=client, ids=ids)
+    roommate, roommate_ids = _plant_roommate(label=label, workspace_id=workspace_id)
+    return Tenant(
+        label=label,
+        identity=identity,
+        client=client,
+        ids=ids,
+        roommate=roommate,
+        roommate_ids=roommate_ids,
+    )
+
+
+def _plant_roommate(*, label: str, workspace_id: str) -> tuple[Identity, Dict[str, str]]:
+    """A second member of this workspace, holding state only they may see.
+
+    Everything here is personal (`owner_id` is the roommate's user id), which is
+    the point: these rows sit in the *caller's own workspace*, so no
+    `workspace_id` filter anywhere can exclude them. Only an owner filter can,
+    and that is exactly what the sweep is then able to prove is present.
+
+    The contents carry a distinct marker rather than the tenant label, because
+    the cross-tenant leak check greps for `"{label} secret"` and would otherwise
+    report a cross-person leak as a cross-tenant one.
+    """
+    marker = f"{label.lower()} roommate private"
+    db = SessionLocal()
+    try:
+        user = User(email=f"{os.urandom(6).hex()}@example.com", name=f"{label} roommate")
+        db.add(user)
+        db.flush()
+        db.add(
+            Membership(workspace_id=workspace_id, user_id=user.id, role="member")
+        )
+        # A personal thread of their own, so the memory below has somewhere to
+        # have been learned that the owner genuinely cannot read.
+        conversation = Conversation(
+            workspace_id=workspace_id,
+            created_by=user.id,
+            title=f"{marker} thread",
+            shared=False,
+        )
+        db.add(conversation)
+        db.flush()
+        memory = MemoryItem(
+            workspace_id=workspace_id,
+            owner_id=user.id,
+            conversation_id=conversation.id,
+            run_id="",
+            kind="fact",
+            content=f"{marker} memory",
+            normalized_key=f"{marker}-key",
+            status="active",
+        )
+        db.add(memory)
+        # A standing grant of their own. `search_sources` is deliberately the
+        # same tool the workspace-wide row above names, so a policy lookup that
+        # dropped its owner filter would find two rows for one tool and one
+        # person — which is precisely what the widened unique key permits and
+        # what `evaluate_policy` has to rank rather than trip over.
+        policy = ToolPolicy(
+            workspace_id=workspace_id,
+            owner_id=user.id,
+            tool_name="search_sources",
+            policy="deny",
+            scope="chat",
+            created_by=user.id,
+        )
+        db.add(policy)
+        db.flush()
+        ids = {"memory": memory.id, "tool_policy": policy.id, "conversation": conversation.id}
+        user_id = user.id
+        db.commit()
+    finally:
+        db.close()
+    token, csrf_token = issue_session(user_id)
+    identity = Identity(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        token=token,
+        csrf_token=csrf_token,
+    )
+    return identity, ids
 
 
 def _plant_graph(db, *, label: str, workspace_id: str, ids: Dict[str, str]) -> None:

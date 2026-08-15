@@ -26,7 +26,16 @@ from sqlalchemy.orm import Session, defer
 from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import SessionLocal
-from ..models import GraphEdge, GraphEntity, MemoryItem, Message, Run, new_id
+from ..models import (
+    SHARED_OWNER,
+    Conversation,
+    GraphEdge,
+    GraphEntity,
+    MemoryItem,
+    Message,
+    Run,
+    new_id,
+)
 from .audit import record_audit
 from .embeddings import (
     embed_texts,
@@ -131,6 +140,10 @@ def tombstone_key(db: Session, item: MemoryItem) -> str:
     taken = db.scalar(
         select(MemoryItem.id).where(
             MemoryItem.workspace_id == item.workspace_id,
+            # The owner is part of the unique key, so only a row with the same
+            # owner can be holding this hash against us. Matching more widely
+            # would re-key this tombstone because of somebody else's row.
+            MemoryItem.owner_id == item.owner_id,
             MemoryItem.kind == item.kind,
             MemoryItem.normalized_key == key,
             MemoryItem.id != item.id,
@@ -235,6 +248,7 @@ def _upsert_item(
     message_ids: List[str],
     supersede: bool,
     claim_keyed: bool = False,
+    owner_id: str = SHARED_OWNER,
 ) -> MemoryItem:
     """Store one claim, retiring the older value of that claim when there is one.
 
@@ -242,6 +256,13 @@ def _upsert_item(
     have a value that can be corrected: the rolling conversation summary reuses
     one key on purpose and grows in place, so retiring it on every refresh would
     be pure row churn with no correction to record.
+
+    Every lookup below matches `owner_id` **exactly**, and that is what keeps
+    supersession inside a scope: correcting my value for a claim must find my row
+    and only mine, or `_retire` marks your value superseded and rewrites its key
+    so it can never be recalled again. This is deliberately not the `_active()`
+    predicate, which is the *reader's* rule (shared plus my own) — a writer is
+    not choosing what to look at, it is choosing what it owns.
     """
     item_id = new_id()
 
@@ -251,6 +272,7 @@ def _upsert_item(
     forgotten = db.scalar(
         select(MemoryItem).where(
             MemoryItem.workspace_id == workspace_id,
+            MemoryItem.owner_id == owner_id,
             MemoryItem.kind == kind,
             MemoryItem.normalized_key == _content_key(content),
             MemoryItem.status == "deleted",
@@ -264,6 +286,7 @@ def _upsert_item(
 
     scope = [
         MemoryItem.workspace_id == workspace_id,
+        MemoryItem.owner_id == owner_id,
         MemoryItem.normalized_key == normalized_key,
     ]
     if not claim_keyed:
@@ -325,6 +348,7 @@ def _upsert_item(
         # at its replacement without a second round trip.
         id=item_id,
         workspace_id=workspace_id,
+        owner_id=owner_id,
         conversation_id=conversation_id,
         run_id=run_id,
         kind=kind,
@@ -401,6 +425,12 @@ def _refresh_summary(
         entity_names=[],
         message_ids=[message.id for message in messages[-4:]],
         supersede=False,
+        # Shared, and the one memory that is regardless of its thread. The
+        # summary is keyed on the conversation id and `_pinned_summary` only ever
+        # matches the conversation a turn is running in, so it is already scoped
+        # by something stronger than an owner; adding one would give the row two
+        # visibility rules that could disagree.
+        owner_id=SHARED_OWNER,
     )
 
 
@@ -413,6 +443,7 @@ def apply_extracted_memories(
     extracted: Sequence[Dict[str, object]],
     message_ids: Sequence[str],
     settings: Settings,
+    owner_id: str = SHARED_OWNER,
 ) -> List[MemoryItem]:
     """Store one extraction's worth of memories; return the rows it touched.
 
@@ -420,6 +451,13 @@ def apply_extracted_memories(
     seed a workspace through the write path itself rather than a transcription
     of it. A harness that reimplements the code it grades measures the
     transcription — the mistake evaluate_retrieval.py was rebuilt to undo.
+
+    `owner_id` is passed in rather than derived here on purpose. Deciding whose a
+    memory is means reading the conversation's `shared` flag, which is a
+    visibility *policy* and belongs with the caller that has the run; this
+    function is storage. It also keeps the eval measuring scoring rather than
+    policy — it seeds shared memories and recalls them with no viewer, which is
+    the same arrangement it has always measured.
     """
     # The ablation switch. Off, this is exactly the write path that predates
     # claim keys: every memory is keyed on a hash of its content, so two
@@ -456,9 +494,36 @@ def apply_extracted_memories(
                 message_ids=list(message_ids),
                 supersede=supersede,
                 claim_keyed=claim_keyed,
+                owner_id=owner_id,
             )
         )
     return touched
+
+
+def memory_owner(db: Session, conversation_id: Optional[str], author_id: str) -> str:
+    """Whose a memory learned in this conversation is.
+
+    ADR 0010's rule, in one place: a memory is exactly as visible as the thread
+    it came from. `Conversation.shared` is already the workspace's answer to who
+    may read this thread — the API refuses to let a member so much as decide a
+    tool call parked on someone else's personal one — so a memory extracted from
+    it inherits that answer rather than inventing a second one.
+
+    Nothing else was usable. `kind` was the tempting alternative (preference is
+    personal, fact is shared) and `_upsert_item` already documents why it is not:
+    it is per-turn model output with nothing pinning it per claim, so one claim
+    would land personal on Tuesday and shared on Wednesday.
+
+    A run with no conversation is automation, which belongs to the workspace.
+    """
+    if not conversation_id:
+        return SHARED_OWNER
+    shared = db.scalar(
+        select(Conversation.shared).where(Conversation.id == conversation_id)
+    )
+    # A conversation that has gone missing is treated as personal: the narrow
+    # answer is the safe one, and an unreadable memory beats a leaked one.
+    return SHARED_OWNER if shared else author_id
 
 
 def write_conversation_memory(run_id: str) -> None:
@@ -502,6 +567,10 @@ def write_conversation_memory(run_id: str) -> None:
             extracted=extracted,
             message_ids=message_ids,
             settings=settings,
+            # The leak this closes: a personal thread is visible only to its
+            # creator, and until now everything the extractor learned from one
+            # was written workspace-wide and recalled into every member's turn.
+            owner_id=memory_owner(db, run.conversation_id, run.created_by),
         )
         _refresh_summary(db, run, settings)
         db.flush()
@@ -602,8 +671,8 @@ def _graph_digest(db: Session, workspace_id: str, query: str) -> List[str]:
     return digest
 
 
-def _active(stmt: _SelectT, workspace_id: str) -> _SelectT:
-    """Workspace + liveness scoping, applied through one chokepoint.
+def _active(stmt: _SelectT, workspace_id: str, viewer_id: str = SHARED_OWNER) -> _SelectT:
+    """Workspace + liveness + ownership scoping, applied through one chokepoint.
 
     recall() issues three independent candidate queries; forgetting the scope on
     any one of them leaks another workspace's memories into an answer, so none of
@@ -614,10 +683,24 @@ def _active(stmt: _SelectT, workspace_id: str) -> _SelectT:
     pinned summary, because all three go through here. That is why representing
     supersession needed no scoring change — see test_memory_depth.py, which
     asserts this function is the only status filter in the module.
+
+    Ownership (ADR 0010) is routed through the same door for the same reason, and
+    now there are two axes to forget rather than one: the queries that leak
+    another *workspace* are exactly the queries that would leak another *person*.
+
+    `viewer_id` is who is asking. They see the workspace's shared memories plus
+    their own and nobody else's. The predicate has one property worth naming,
+    because it removed the need for a second mode: with the default `SHARED_OWNER` it
+    collapses to `owner_id = ''`, which is precisely "shared only". So the graph
+    projection — one row set per workspace, read by every member, and therefore
+    only ever buildable from shared memory — calls this with no viewer and cannot
+    be handed one by accident. A call site that forgets to say who is asking gets
+    less, never more.
     """
     return stmt.where(
         MemoryItem.workspace_id == workspace_id,
         MemoryItem.status == "active",
+        MemoryItem.owner_id.in_({SHARED_OWNER, viewer_id}),
     )
 
 
@@ -632,11 +715,11 @@ def _like_pattern(term: str) -> str:
 
 
 def _pinned_summary(
-    db: Session, *, workspace_id: str, conversation_id: str
+    db: Session, *, workspace_id: str, conversation_id: str, viewer_id: str = SHARED_OWNER
 ) -> Optional[MemoryItem]:
     """The rolling summary of the current conversation, which is always relevant."""
     return db.scalar(
-        _active(select(MemoryItem), workspace_id).where(
+        _active(select(MemoryItem), workspace_id, viewer_id).where(
             MemoryItem.conversation_id == conversation_id,
             MemoryItem.kind == "summary",
         )
@@ -650,6 +733,7 @@ def _lexical_candidates(
     terms: Sequence[str],
     exclude_id: Optional[str],
     limit: int,
+    viewer_id: str = SHARED_OWNER,
 ) -> List[str]:
     """Ids of memories containing at least one query term.
 
@@ -676,7 +760,7 @@ def _lexical_candidates(
     # one. Ranking the truncation by the score's own dominant term keeps the rows
     # that actually win the rescoring pass.
     overlap = reduce(operator.add, (case((hit, 1), else_=0) for hit in hits))
-    stmt = _active(select(MemoryItem.id), workspace_id).where(or_(*hits))
+    stmt = _active(select(MemoryItem.id), workspace_id, viewer_id).where(or_(*hits))
     if exclude_id is not None:
         stmt = stmt.where(MemoryItem.id != exclude_id)
     stmt = stmt.order_by(
@@ -712,10 +796,11 @@ def _vector_candidates(
     query_blob: bytes,
     exclude_id: Optional[str],
     settings: Settings,
+    viewer_id: str = SHARED_OWNER,
 ) -> Tuple[Dict[str, float], List[str]]:
-    stmt = _active(select(MemoryItem.id, MemoryItem.embedding), workspace_id).where(
-        MemoryItem.embedding.is_not(None)
-    )
+    stmt = _active(
+        select(MemoryItem.id, MemoryItem.embedding), workspace_id, viewer_id
+    ).where(MemoryItem.embedding.is_not(None))
     if exclude_id is not None:
         stmt = stmt.where(MemoryItem.id != exclude_id)
     cap = settings.memory_recall_candidate_cap
@@ -777,15 +862,47 @@ def _embed_query(query: str, settings: Settings) -> Optional[bytes]:
     return vectors[0]
 
 
+def _personal_shadows_shared(items: Sequence[MemoryItem]) -> List[MemoryItem]:
+    """Drop the workspace's value for any claim the viewer holds their own value of.
+
+    ADR 0010's "mine wins", and deliberately not a scoring bonus. A bonus ranks
+    my value above the workspace's while still handing the model both — a claim
+    and a contradicting claim, in one unlabelled list, with nothing to tell them
+    apart. That is exactly the failure evaluate_memory.py measures and names
+    STALE-SERVED, and it does not become acceptable because the two rows disagree
+    across people rather than across time.
+
+    `normalized_key` is the right identity to shadow on because it already *is*
+    the identity of a claim slot — the same key supersession retires on — so
+    "my version of this claim" needs no new concept to express.
+    """
+    mine = {item.normalized_key for item in items if item.owner_id != SHARED_OWNER}
+    if not mine:
+        return list(items)
+    return [
+        item
+        for item in items
+        if item.owner_id != SHARED_OWNER or item.normalized_key not in mine
+    ]
+
+
 def recall(
     db: Session,
     *,
     workspace_id: str,
     conversation_id: str,
     query: str,
+    viewer_id: str = SHARED_OWNER,
     settings: Optional[Settings] = None,
 ) -> MemoryContext:
     """Select the memories worth injecting into this turn's prompt.
+
+    `viewer_id` is whose turn this is. They get the workspace's shared memories
+    plus their own, with their own winning any claim both hold — see ADR 0010.
+    It defaults to shared-only rather than being required, because unlike
+    `resolve_policy`'s `scope` there is a genuinely correct narrow answer here:
+    "the workspace's own memories" is a real, safe answer to give a caller that
+    does not know who is asking, and it can only ever return less.
 
     Scoring itself matches the original full-scan implementation, but the
     candidate set is bounded and that is a real trade, not a free one: lexical
@@ -801,11 +918,14 @@ def recall(
         return MemoryContext()
     # Cheap existence probe so an empty workspace never pays for an embedding
     # round-trip, which is what the previous full scan bought by accident.
-    if db.scalar(_active(select(MemoryItem.id), workspace_id).limit(1)) is None:
+    if db.scalar(_active(select(MemoryItem.id), workspace_id, viewer_id).limit(1)) is None:
         return MemoryContext(graph_digest=_graph_digest(db, workspace_id, query))
 
     summary = _pinned_summary(
-        db, workspace_id=workspace_id, conversation_id=conversation_id
+        db,
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+        viewer_id=viewer_id,
     )
     summary_id = summary.id if summary is not None else None
 
@@ -819,6 +939,7 @@ def recall(
             terms=terms,
             exclude_id=summary_id,
             limit=settings.memory_lexical_candidate_limit,
+            viewer_id=viewer_id,
         )
     )
 
@@ -841,6 +962,7 @@ def recall(
             query_blob=query_blob,
             exclude_id=summary_id,
             settings=settings,
+            viewer_id=viewer_id,
         )
         candidate_ids |= set(shortlist)
 
@@ -848,7 +970,7 @@ def recall(
     if candidate_ids:
         items = list(
             db.scalars(
-                _active(select(MemoryItem), workspace_id)
+                _active(select(MemoryItem), workspace_id, viewer_id)
                 # The embedding blob is 6KB a row and already consumed above.
                 .options(defer(MemoryItem.embedding))
                 .where(MemoryItem.id.in_(candidate_ids))
@@ -866,7 +988,9 @@ def recall(
     # Ties broke on database scan order before, which differs between backends;
     # the id keeps the injected context reproducible for the same corpus.
     scored.sort(key=lambda pair: (-pair[0], pair[1].id))
-    selected = [item for _score, item in scored]
+    # Shadowed after scoring rather than before: a shared row the viewer overrides
+    # should not be able to consume one of `memory_recall_limit` slots either.
+    selected = _personal_shadows_shared([item for _score, item in scored])
     if summary is not None:
         selected.insert(0, summary)
     return MemoryContext(
@@ -923,14 +1047,21 @@ def remember_memory(
     Flushes before returning so the memory is recallable in the same conversation
     turn that stored it — the agent loop commits after each tool call, and a
     later `recall()` in the same session must see this row.
+
+    Whose it is comes from the conversation, exactly as the post-run extractor's
+    does: "remember this" said in a personal thread is a personal memory. There
+    is deliberately no argument for the model to set — an owner the model chooses
+    is an owner prompt-injected content can choose.
     """
     settings = settings or get_settings()
     content = normalize_memory_content(content)
     names = [str(name).strip() for name in (entities or []) if str(name).strip()][:16]
     normalized_key = _content_key(content)
+    owner_id = memory_owner(db, conversation_id, user_id)
     existing = db.scalar(
         select(MemoryItem).where(
             MemoryItem.workspace_id == workspace_id,
+            MemoryItem.owner_id == owner_id,
             MemoryItem.kind == kind,
             MemoryItem.normalized_key == normalized_key,
         )
@@ -956,6 +1087,7 @@ def remember_memory(
     else:
         item = MemoryItem(
             workspace_id=workspace_id,
+            owner_id=owner_id,
             conversation_id=conversation_id,
             run_id="",
             kind=kind,
@@ -988,15 +1120,24 @@ def resolve_forget_targets(
     workspace_id: str,
     memory_id: Optional[str] = None,
     content: Optional[str] = None,
+    viewer_id: str = SHARED_OWNER,
 ) -> Tuple[List[MemoryItem], str]:
     """Find what a `forget` would tombstone. Returns (matches, error message).
 
     Shared by the preview and the executor so the approval card cannot describe a
     different set of memories from the one that actually gets forgotten.
+
+    Scoped to what the viewer can see, which makes "forget everything about X"
+    reach the workspace's memories and my own and stop there. Forgetting is a
+    write, but it is a write to a set chosen by *reading*, so it takes the
+    reader's predicate: you cannot tombstone a memory you were never able to
+    recall.
     """
     if memory_id:
         item = db.scalar(
-            _active(select(MemoryItem), workspace_id).where(MemoryItem.id == memory_id)
+            _active(select(MemoryItem), workspace_id, viewer_id).where(
+                MemoryItem.id == memory_id
+            )
         )
         if item is None:
             return [], f"No active memory with id {memory_id} in this workspace."
@@ -1006,7 +1147,7 @@ def resolve_forget_targets(
         return [], "Provide either memory_id or content to match."
     matches: List[MemoryItem] = list(
         db.scalars(
-            _active(select(MemoryItem), workspace_id)
+            _active(select(MemoryItem), workspace_id, viewer_id)
             .where(
                 func.lower(MemoryItem.content).like(
                     _like_pattern(needle.lower()), escape="\\"

@@ -12,6 +12,7 @@ from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..database import get_db
 from ..models import (
+    SHARED_OWNER,
     AgentToolCall,
     Conversation,
     Run,
@@ -278,16 +279,21 @@ def _upsert_policy(
     tool_name: str,
     policy: str,
     scope: str = "chat",
+    owner_id: str = SHARED_OWNER,
 ) -> ToolPolicy:
-    """Set one workspace's verdict for one tool *in one scope*.
+    """Set one verdict for one tool, in one scope, for one owner.
 
-    The scope filter is not optional now that (workspace_id, tool_name, scope) is
-    the unique key: without it this would happily find a workflow grant and
-    overwrite it with the answer to a question about chat.
+    Neither filter is optional now that (workspace_id, owner_id, tool_name,
+    scope) is the unique key. Without the scope this would find a workflow grant
+    and overwrite it with the answer to a question about chat; without the owner
+    it would find the *workspace's* grant and overwrite it with one person's
+    answer — silently widening a personal decision into everybody's, which is the
+    exact bug ADR 0010 exists to remove.
     """
     row = db.scalar(
         select(ToolPolicy).where(
             ToolPolicy.workspace_id == workspace_id,
+            ToolPolicy.owner_id == owner_id,
             ToolPolicy.tool_name == tool_name,
             ToolPolicy.scope == scope,
         )
@@ -295,6 +301,7 @@ def _upsert_policy(
     if row is None:
         row = ToolPolicy(
             workspace_id=workspace_id,
+            owner_id=owner_id,
             tool_name=tool_name,
             scope=scope,
             created_by=actor_id,
@@ -336,27 +343,49 @@ def list_registry_tools(
     return out
 
 
+def _policy_out(row: ToolPolicy) -> ToolPolicyOut:
+    return ToolPolicyOut(
+        tool_name=row.tool_name,
+        policy=row.policy,
+        scope=row.scope,
+        shared=row.owner_id == SHARED_OWNER,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
 @router.get("/tool-policies", response_model=List[ToolPolicyOut])
 def list_tool_policies(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
-) -> List[ToolPolicy]:
-    """Every standing verdict this workspace has recorded, in both scopes.
+) -> List[ToolPolicyOut]:
+    """Every standing verdict that applies to the caller, in both scopes.
+
+    The workspace's own, plus this member's — which is exactly the set
+    `evaluate_policy` consults for them, so what a person can review here is what
+    can actually act on their behalf. Another member's grants are absent for the
+    same reason they are ignored: they are not authority anyone holds over you.
 
     This is the only way a grant becomes visible again. "Always allow" is one
     click on an approval card and it removes the approval park permanently, so a
     surface that lists what has been granted — and the DELETE below that takes it
     back — is what keeps that click reversible.
     """
-    return list(
-        db.scalars(
-            select(ToolPolicy)
-            .where(ToolPolicy.workspace_id == actor.workspace_id)
-            # Scope breaks the tie: two rows can name the same tool, and a list
-            # whose order changes between reads is a list a UI cannot diff.
-            .order_by(ToolPolicy.tool_name.asc(), ToolPolicy.scope.asc())
+    rows = db.scalars(
+        select(ToolPolicy)
+        .where(
+            ToolPolicy.workspace_id == actor.workspace_id,
+            ToolPolicy.owner_id.in_({SHARED_OWNER, actor.user_id}),
+        )
+        # Scope and tier break the tie: three rows can now name one tool, and a
+        # list whose order changes between reads is a list a UI cannot diff.
+        .order_by(
+            ToolPolicy.tool_name.asc(),
+            ToolPolicy.scope.asc(),
+            ToolPolicy.owner_id.asc(),
         )
     )
+    return [_policy_out(row) for row in rows]
 
 
 @router.put("/tool-policies", response_model=ToolPolicyOut)
@@ -364,7 +393,22 @@ def set_tool_policy(
     payload: ToolPolicyRequest,
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
-) -> ToolPolicy:
+) -> ToolPolicyOut:
+    """Record a standing verdict, for the caller or for the whole workspace.
+
+    `shared` defaults to False, so the ordinary grant is personal. Writing one on
+    everybody's behalf is standing write authority over people who were not asked,
+    which is an owner's decision — the same gate spend limits and member
+    management already sit behind. A member asking for it is refused rather than
+    quietly downgraded to a personal grant: they would be told the workspace was
+    covered when it was not, which is worse than a 403.
+    """
+    if payload.shared and actor.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only a workspace owner can set a policy for every member",
+        )
+    owner_id = SHARED_OWNER if payload.shared else actor.user_id
     row = _upsert_policy(
         db,
         workspace_id=actor.workspace_id,
@@ -372,6 +416,7 @@ def set_tool_policy(
         tool_name=payload.tool_name,
         policy=payload.policy,
         scope=payload.scope,
+        owner_id=owner_id,
     )
     record_audit(
         db,
@@ -380,16 +425,21 @@ def set_tool_policy(
         action="tool_policy.set",
         resource_type="tool_policy",
         resource_id=payload.tool_name,
-        detail={"policy": payload.policy, "scope": payload.scope},
+        detail={
+            "policy": payload.policy,
+            "scope": payload.scope,
+            "shared": payload.shared,
+        },
     )
     db.commit()
-    return row
+    return _policy_out(row)
 
 
 @router.delete("/tool-policies/{tool_name}", status_code=204)
 def revoke_tool_policy(
     tool_name: str,
     scope: Literal["chat", "workflow"] = Query(...),
+    shared: bool = Query(False),
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> None:
@@ -407,10 +457,21 @@ def revoke_tool_policy(
     it: the only value a default could take is one of the two, and revoking the
     grant the caller did not mean would leave the other standing while the UI
     reports success. Missing means "say which", not "guess".
+
+    `shared` is a query flag rather than a second route, and it defaults to False
+    for the same reason the setter's does: you take back your own grant unless
+    you say otherwise, and taking back the workspace's is an owner's act.
     """
+    if shared and actor.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only a workspace owner can revoke a policy for every member",
+        )
+    owner_id = SHARED_OWNER if shared else actor.user_id
     row = db.scalar(
         select(ToolPolicy).where(
             ToolPolicy.workspace_id == actor.workspace_id,
+            ToolPolicy.owner_id == owner_id,
             ToolPolicy.tool_name == tool_name,
             ToolPolicy.scope == scope,
         )
@@ -426,7 +487,7 @@ def revoke_tool_policy(
         action="tool_policy.revoked",
         resource_type="tool_policy",
         resource_id=tool_name,
-        detail={"policy": previous, "scope": scope},
+        detail={"policy": previous, "scope": scope, "shared": shared},
     )
     db.commit()
 
@@ -579,6 +640,14 @@ def decide_agent_tool_call(
         # scope. Recording both against one workspace-wide row is the standing
         # grant ADR 0007 named as its sharpest residual risk.
         #
+        # And it is granted to the person who clicked, never to the workspace.
+        # This is the change ADR 0010 exists for: one member accepting the
+        # consequence of a standing `send_email` allow used to accept it on
+        # everyone's behalf and remove their approval park too — which is the one
+        # containment prompt injection has to get past. Granting for every member
+        # is still possible and is now a deliberate owner action at
+        # `PUT /api/tool-policies` with `shared: true`.
+        #
         # A manual node never consults resolve_policy — it always pauses — so a
         # standing grant on the `__manual__` sentinel would gate nothing and only
         # litter the workspace policy list with a tool that does not exist.
@@ -589,6 +658,7 @@ def decide_agent_tool_call(
             tool_name=call.name,
             policy="allow" if payload.decision == "approved" else "deny",
             scope=policy_scope_for_run(db, run),
+            owner_id=actor.user_id,
         )
     record_key(
         db,

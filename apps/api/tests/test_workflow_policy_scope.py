@@ -82,7 +82,11 @@ def db() -> Any:
 
 def verdict(db: Any, identity: Identity, spec: ToolSpec, scope: str) -> str:
     return resolve_policy(
-        db, workspace_id=identity.workspace_id, spec=spec, scope=scope
+        db,
+        workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
+        spec=spec,
+        scope=scope,
     )
 
 
@@ -170,7 +174,10 @@ def test_the_scope_cannot_be_omitted(db: Any, identity: Identity) -> None:
     """
     with pytest.raises(TypeError):
         resolve_policy(  # type: ignore[call-arg]
-            db, workspace_id=identity.workspace_id, spec=WRITE_TOOL
+            db,
+            workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
+            spec=WRITE_TOOL,
         )
 
 
