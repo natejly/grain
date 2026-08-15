@@ -1376,6 +1376,22 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"project_id": "project"},
         query={"path": "index.tsx"},
     ),
+    # -- latex compile -----------------------------------------------------
+    RouteCase(
+        "POST",
+        "/api/latex/compile",
+        SCOPED,
+        body={
+            "engine": "pdftex",
+            "entry_path": "main.tex",
+            "files": [
+                {
+                    "path": "main.tex",
+                    "content": "\\documentclass{article}\\begin{document}Hello\\end{document}",
+                }
+            ],
+        },
+    ),
     # -- bibliography ------------------------------------------------------
     RouteCase(
         "GET",

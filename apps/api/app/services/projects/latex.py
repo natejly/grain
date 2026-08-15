@@ -6,11 +6,9 @@ limits — only the preview differs, and only two facts about the *content* diff
 Both live here: what a new one is seeded with, and the rule that its entry point
 is a file the TeX engine can actually be pointed at.
 
-The engine is a WebAssembly TeX Live that runs in the browser with the network
-closed, carrying a fixed "core" package tier. That closed world is why
-`UNAVAILABLE_PACKAGES` exists: a document that loads tikz cannot compile here and
-no amount of retrying will change that, so the agent is told while it is writing
-rather than the user discovering it in a 900-line transcript.
+Compilation runs server-side against a full TeX Live image (``make latex-image``),
+so nearly every CTAN package works. ``UNAVAILABLE_PACKAGES`` is now limited to
+packages that require ``-shell-escape``, which is disabled for security.
 """
 from __future__ import annotations
 
@@ -30,28 +28,13 @@ BIBLIOGRAPHY_PATH = "refs.bib"
 TEX_SUFFIX = ".tex"
 BIB_SUFFIX = ".bib"
 
-# Packages we know are outside the vendored core tier. This is a shortlist of the
-# ones people actually reach for first, not the complement of the tier: a package
-# missing from here may still be missing from the bundle, in which case the
-# compile fails with TeX's own "File `x.sty' not found". Being wrong in that
-# direction is safe — being wrong the other way would refuse a document that
-# compiles fine.
+# Packages that need -shell-escape, which is disabled for security. Everything
+# else in TeX Live full is available. This is an advisory blocklist: the agent
+# is told up front so it does not generate a document that will fail.
 UNAVAILABLE_PACKAGES = frozenset(
     {
-        "algorithm2e",
-        "beamer",
-        "biblatex",
-        "biber",
-        "fontspec",
         "minted",
-        "pgf",
-        "pgfplots",
-        "siunitx",
-        "booktabs",
-        "tcolorbox",
-        "tikz",
-        "tikz-cd",
-        "unicode-math",
+        "pythontex",
     }
 )
 
@@ -151,8 +134,8 @@ def seed_warnings(entry_path: str, files: Dict[str, str]) -> List[str]:
     missing = sorted({name for content in files.values() for name in unavailable_packages(content)})
     if missing:
         warnings.append(
-            f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} not in the "
-            "offline TeX bundle; the compile will fail with a missing-file error"
+            f"{', '.join(missing)} {'requires' if len(missing) == 1 else 'require'} "
+            "-shell-escape, which is disabled for security; the compile will fail"
         )
     return warnings
 
@@ -183,19 +166,16 @@ def _tex_escape(text: str) -> str:
     return _TEX_ESCAPE_PATTERN.sub(lambda match: _TEX_ESCAPES[match.group()], text)
 
 
-# Every package loaded here is in the offline core tier, and this exact shape —
-# article + amsmath + natbib/bibtex + \label/\ref — is the one proven to compile
-# in the browser engine. Changing the preamble risks reaching outside the tier,
-# so keep new packages to ones the bundle is known to carry.
-#
 # The @TOKEN@ placeholders are substituted rather than %-formatted: % starts a
 # comment in TeX, so a percent-format template would have to double every one of
 # them and would break the moment someone added a comment to this document.
 _STARTER_TEX = r"""\documentclass[11pt]{article}
 
-% The TeX engine runs in your browser with no network, carrying a fixed set of
-% packages. These six are in it. tikz, beamer, biblatex, siunitx and booktabs
-% are not, and loading them fails the compile.
+% Compiled server-side with a full TeX Live installation. Most CTAN packages
+% work — tikz, beamer, biblatex, booktabs, siunitx, etc. Shell-escape is
+% disabled, so minted and pythontex are the main exceptions.
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath}
 \usepackage{amssymb}
@@ -219,7 +199,8 @@ Replace this with a sentence about what the document argues.
 
 Edit \texttt{@ENTRY@} and the preview recompiles. Text can be
 \emph{emphasised}, math can be inline like $e^{i\pi} + 1 = 0$, and sources are
-cited with \citep{knuth1984}.
+cited with \citep{knuth1984}. Accents and symbols typeset too --- caf\'e,
+na\"ive, r\'esum\'e, 20\textdegree C --- because of the two font lines above.
 
 \section{Results}
 \label{sec:results}

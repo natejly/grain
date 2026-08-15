@@ -3,6 +3,7 @@
 import type { PendingDocumentEdit } from "@workspace/api-client";
 import { Check, GitPullRequestArrow, X } from "lucide-react";
 import { useState } from "react";
+import { ProposalDiff } from "./proposal-diff";
 
 /**
  * One agent write parked on approval, from GET /api/documents-pending.
@@ -18,35 +19,6 @@ export type PendingDecision = (
   edit: PendingDocumentEdit,
   decision: "approved" | "denied",
 ) => Promise<void>;
-
-/**
- * Render a unified diff with per-line colouring. Anything that isn't a diff
- * falls through as plain text. This is the same markup the chat approval card
- * uses, so a proposal reads identically wherever the user meets it.
- */
-export function ProposalDiff({ preview }: { preview: string }) {
-  const lines = preview.split("\n");
-  const isDiff = lines.some((line) => line.startsWith("@@"));
-  if (!isDiff) {
-    return <div className="proposal-note">{preview}</div>;
-  }
-  return (
-    <div className="diff">
-      {lines.map((line, index) => {
-        let kind = "ctx";
-        if (line.startsWith("+++") || line.startsWith("---")) kind = "file";
-        else if (line.startsWith("@@")) kind = "hunk";
-        else if (line.startsWith("+")) kind = "add";
-        else if (line.startsWith("-")) kind = "del";
-        return (
-          <div key={index} className={`diff-line ${kind}`}>
-            {line || " "}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 /**
  * A parked edit, shown where the document is rather than only in chat.

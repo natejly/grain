@@ -62,9 +62,30 @@ def test_starter_is_non_empty_and_self_contained():
     assert "knuth1984" in files[BIBLIOGRAPHY_PATH]
 
 
-def test_starter_loads_nothing_outside_the_offline_bundle():
+def test_starter_loads_no_shell_escape_packages():
     files = starter_files("Paper")
     assert unavailable_packages(files[DEFAULT_ENTRY_PATH]) == []
+
+
+def test_starter_pairs_t1_with_lmodern():
+    """T1 without lmodern is the one preamble that cannot compile in this engine.
+
+    The bundled font tier advertises cm-super for T1/TS1 Computer Modern and
+    does not ship it, so `\\usepackage[T1]{fontenc}` alone stops the compile on
+    "cannot open encoding file cm-super-t1.enc" — as does a bare `\\textdegree`,
+    which the kernel resolves through TS1. Latin Modern covers both encodings and
+    is in the tier. Dropping either line silently breaks accented text, so both
+    are pinned here rather than left to whoever next tidies the preamble.
+    """
+    tex = starter_files("Paper")[DEFAULT_ENTRY_PATH]
+    assert r"\usepackage[T1]{fontenc}" in tex
+    assert r"\usepackage{lmodern}" in tex
+    # fontenc first: lmodern picks up the encodings that are already declared.
+    assert tex.index(r"\usepackage[T1]{fontenc}") < tex.index(r"\usepackage{lmodern}")
+    # And the body exercises what those two lines buy, so the seeded project's
+    # own first compile is the proof.
+    assert r"\textdegree" in tex
+    assert r"caf\'e" in tex
 
 
 def test_starter_escapes_a_name_that_is_tex_syntax():
@@ -184,12 +205,14 @@ def test_packages_used_reads_options_lists_and_groups():
     ]
 
 
-def test_unavailable_packages_names_what_the_bundle_lacks():
-    assert unavailable_packages(r"\usepackage{tikz}") == ["tikz"]
-    assert unavailable_packages(r"\documentclass{beamer}") == ["beamer"]
+def test_unavailable_packages_names_shell_escape_packages():
+    assert unavailable_packages(r"\usepackage{minted}") == ["minted"]
+    assert unavailable_packages(r"\usepackage{pythontex}") == ["pythontex"]
+    # tikz and beamer are now available with full TeX Live
+    assert unavailable_packages(r"\usepackage{tikz}") == []
+    assert unavailable_packages(r"\documentclass{beamer}") == []
     assert unavailable_packages(r"\usepackage{amsmath}") == []
-    # A commented-out package is not loaded, so it is not a problem.
-    assert unavailable_packages("% \\usepackage{tikz}") == []
+    assert unavailable_packages("% \\usepackage{minted}") == []
 
 
 def test_has_documentclass():
@@ -206,10 +229,10 @@ def test_seed_warnings_are_advisory_and_specific():
     assert r"\documentclass" in warnings[0]
 
     warnings = seed_warnings(
-        "main.tex", {"main.tex": "\\documentclass{article}\n\\usepackage{tikz}"}
+        "main.tex", {"main.tex": "\\documentclass{article}\n\\usepackage{minted}"}
     )
     assert len(warnings) == 1
-    assert "tikz" in warnings[0]
+    assert "minted" in warnings[0]
 
 
 # ---------------------------------------------------------------------------

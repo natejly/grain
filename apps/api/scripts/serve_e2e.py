@@ -51,6 +51,12 @@ os.environ["WEB_ORIGIN"] = "http://127.0.0.1:3010"
 # something. Leaving this on would have handed every cookie-less request the
 # seeded identity and quietly hidden the whole login flow from the suite.
 os.environ["DEV_AUTO_LOGIN"] = "false"
+# Off for the same reason, and pinned rather than assumed: Settings read the
+# repo-root `.env`, and a developer who has `DEV_UNRESTRICTED_AGENT=1` there for
+# their own dev server switches off approval parking for this harness too. Six
+# specs then fail on their machine and pass in CI, every one of them reporting a
+# missing approval card rather than the setting that removed it.
+os.environ["DEV_UNRESTRICTED_AGENT"] = "false"
 
 sys.path.insert(0, str(API_DIR))
 

@@ -45,6 +45,7 @@ import {
 import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
+import { ProposalDiff } from "./proposal-diff";
 import { senderInitial, senderLabel } from "./shared";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
@@ -515,34 +516,6 @@ function extractText(node: React.ReactNode): string {
 }
 
 /**
- * Render a unified diff with per-line colouring. Anything that isn't a diff
- * (a board move reads "Move X from Todo to Done") falls through as plain text.
- */
-function ProposalPreview({ preview }: { preview: string }) {
-  const lines = preview.split("\n");
-  const isDiff = lines.some((line) => line.startsWith("@@"));
-  if (!isDiff) {
-    return <div className="proposal-note">{preview}</div>;
-  }
-  return (
-    <div className="diff">
-      {lines.map((line, index) => {
-        let kind = "ctx";
-        if (line.startsWith("+++") || line.startsWith("---")) kind = "file";
-        else if (line.startsWith("@@")) kind = "hunk";
-        else if (line.startsWith("+")) kind = "add";
-        else if (line.startsWith("-")) kind = "del";
-        return (
-          <div key={index} className={`diff-line ${kind}`}>
-            {line || " "}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
  * The citation validator's verdict on an answer, where the answer is.
  *
  * Not a decoration. `services/citations.py` is what backs the product's claim
@@ -691,7 +664,7 @@ function ToolCallCard({
         <span className="tool-name">{call.name}</span>
         <ToolStatus call={call} />
       </button>
-      {preview && <ProposalPreview preview={preview} />}
+      {preview && <ProposalDiff preview={preview} />}
       {touchedList && todos && (
         <TodoChecklist
           list={touchedList}

@@ -20,6 +20,7 @@ import type {
   WorkspaceProject,
 } from "@workspace/api-client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
 import { LatexPreview } from "../latex-compiler";
 import { ProjectPreview } from "../project-bundler";
 import { useSubjectThread } from "../use-subject-thread";
@@ -93,6 +94,7 @@ export function ProjectsView({
   chat,
 }: ProjectsViewProps) {
   const [creating, setCreating] = useState(false);
+  const [treeCollapsed, toggleTree] = useCollapsiblePane("projects-sidebar");
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState<ProjectKind>("web");
   const [newPath, setNewPath] = useState("");
@@ -150,9 +152,28 @@ export function ProjectsView({
   }
 
   return (
-    <div className={showChat && chat ? "projects-layout with-chat" : "projects-layout"}>
-      <aside className="projects-sidebar">
+    <div
+      className={[
+        "projects-layout",
+        showChat && chat ? "with-chat" : "",
+        treeCollapsed ? "list-collapsed" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <aside
+        id="projects-file-tree"
+        className={treeCollapsed ? "projects-sidebar collapsed" : "projects-sidebar"}
+      >
+        {/* Same arrangement as the documents list: the toggle is the one thing
+            the collapsed strip keeps, so it can never hide itself. */}
         <div className="projects-sidebar-head">
+          <PaneToggle
+            subject="project list"
+            collapsed={treeCollapsed}
+            toggle={toggleTree}
+            controls="projects-file-tree"
+          />
           <span>Projects</span>
           <button
             className="icon-button"

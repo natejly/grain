@@ -32,7 +32,7 @@ import {
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api } from "../api";
 import { BudgetHold } from "./budget";
-import { ProposalDiff } from "./document-pending";
+import { ProposalDiff } from "./proposal-diff";
 import { describeError, formatRelative } from "./shared";
 import {
   attributeProblems,

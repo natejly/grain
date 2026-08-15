@@ -59,6 +59,9 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+  "latex: requires jasmine-latex Docker image (make latex-image)",
+]
 
 [tool.ruff]
 target-version = "py310"

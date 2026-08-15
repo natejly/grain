@@ -4,7 +4,7 @@ import { Activity, Check, X } from "lucide-react";
 import { useState } from "react";
 import type { AgentToolCall, AuditEvent } from "@workspace/api-client";
 import type { ToolDecision } from "./chat";
-import { ProposalDiff } from "./document-pending";
+import { ProposalDiff } from "./proposal-diff";
 import { formatRelative } from "./shared";
 
 /**

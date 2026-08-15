@@ -23,6 +23,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
 import { useDocumentThread } from "../use-document-thread";
 import {
   PendingEditList,
@@ -127,6 +128,7 @@ export function DocumentsView({
   const [showHistory, setShowHistory] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [listCollapsed, toggleList] = useCollapsiblePane("documents-list");
   const [newTitle, setNewTitle] = useState("");
   const [newKind, setNewKind] = useState<DocumentKind>("markdown");
   // Which folder a new file lands in. Set by "New file here" in the tree, so
@@ -195,9 +197,30 @@ export function DocumentsView({
     ) : null;
 
   return (
-    <div className={showChat && chat ? "documents-layout with-chat" : "documents-layout"}>
-      <aside className="documents-list">
+    <div
+      className={[
+        "documents-layout",
+        showChat && chat ? "with-chat" : "",
+        listCollapsed ? "list-collapsed" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <aside
+        id="documents-file-list"
+        className={listCollapsed ? "documents-list collapsed" : "documents-list"}
+      >
+        {/* Inside the pane, first, and the one thing left showing when it is
+            collapsed — the pane shrinks to a strip around this button rather
+            than vanishing, because there is no header out here that survives
+            the empty state to put it in. */}
         <div className="documents-list-head">
+          <PaneToggle
+            subject="file list"
+            collapsed={listCollapsed}
+            toggle={toggleList}
+            controls="documents-file-list"
+          />
           <span>Files</span>
           <button
             className="icon-button"

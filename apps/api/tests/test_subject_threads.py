@@ -535,6 +535,21 @@ def test_update_dashboard_previews_the_change_and_refuses_a_broken_one(client, d
         # Before and after: "shows a line of …" alone reads as harmless whether
         # it is a tweak or a different chart wearing the same name.
         assert "it shows a bar" in preview and "would show a line" in preview
+        # And the spec itself, as the same unified diff a document edit or a
+        # project file write previews as — the sentence is a summary, and a
+        # summary of a chart is lossy exactly where approving one is a decision
+        # ("a bar of revenue by region" says nothing about the filter under it).
+        # The client renders the sentence as a note and everything from the ---
+        # down in red and green, so the split has to survive here.
+        head, _, diff = preview.partition("\n\n")
+        assert "\n" not in head
+        assert diff.startswith("--- ")
+        assert "+++ " in diff and "@@" in diff
+        assert '-  "visualization": "bar"' in diff
+        assert '+  "visualization": "line"' in diff
+        # The query is context, not a change: a merged edit must not read as a
+        # rewrite of the whole spec.
+        assert '   "group_by": "territory"' in diff
         assert spec.read_only is False
         broken = spec.executor(db, context, {"x_field": "no_such_column"})
         assert "rejected" in broken.content.lower()

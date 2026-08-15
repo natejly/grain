@@ -4430,6 +4430,124 @@ select:focus-visible {
   }
 }
 
+/* ---- Collapsing the panes on the left ----
+   Three panes collapse — the workspace rail, the documents file list, the
+   projects file tree — so the thing being worked on can have the window. The
+   state is remembered per pane in localStorage (`components/collapsible-pane`),
+   which is why none of this may hide the control that undoes it.
+
+   The rail goes to nothing, because its toggle sits in the topbar and survives.
+   The two list panes keep a strip: they have no chrome outside themselves that
+   is present in every state (the documents editor header does not exist until a
+   document is open), so the toggle stays inside the pane and the pane shrinks
+   around it. */
+
+.pane-toggle {
+  flex: none;
+}
+
+/* Desktop only. Below the breakpoint the rail is already an off-canvas drawer
+   with its own open and close buttons, and `display: none` on a fixed-position
+   drawer would take those with it — so the whole idea stays above 900px, and
+   the topbar toggle is hidden below it rather than left pointing at nothing.
+
+   One track, and not a zero-width one in front of the real one: `display: none`
+   takes the rail out of the grid entirely rather than shrinking it, so under a
+   two-track template <main> is the only item left to place and auto-placement
+   puts it in the *first* track — the 0 — leaving the 1fr track empty. The whole
+   app then measures zero wide and the window renders blank. */
+@media (min-width: 901px) {
+  .workspace-shell.rail-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-shell.rail-collapsed > .sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .topbar .pane-toggle {
+    display: none;
+  }
+}
+
+/* The collapsed strip: the head keeps only the toggle, and everything below the
+   head goes. `overflow: hidden` matters — the tree inside is wider than 44px and
+   would otherwise scroll into the editor. */
+.documents-list.collapsed,
+.projects-sidebar.collapsed {
+  overflow: hidden;
+  padding: 14px 4px;
+}
+
+.documents-list.collapsed > :not(.documents-list-head),
+.projects-sidebar.collapsed > :not(.projects-sidebar-head) {
+  display: none;
+}
+
+.documents-list.collapsed .documents-list-head > :not(.pane-toggle),
+.projects-sidebar.collapsed .projects-sidebar-head > :not(.pane-toggle) {
+  display: none;
+}
+
+.documents-list.collapsed .documents-list-head,
+.projects-sidebar.collapsed .projects-sidebar-head {
+  justify-content: center;
+  padding: 0;
+}
+
+.documents-layout.list-collapsed {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.documents-layout.with-chat.list-collapsed {
+  grid-template-columns: 44px minmax(0, 1fr) 340px;
+}
+
+.projects-layout.list-collapsed {
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.projects-layout.with-chat.list-collapsed {
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 0.9fr) 320px;
+}
+
+/* Its own media block rather than a line in the one above: a plain rule here
+   would out-order that block's tracks and put four columns back on a laptop. */
+@media (max-width: 1500px) {
+  .projects-layout.with-chat.list-collapsed {
+    grid-template-columns: 44px minmax(0, 1fr) 320px;
+  }
+}
+
+/* Below the breakpoint these grids stack — the pane is a row above the editor,
+   not a column beside it — so a 44px *width* means nothing there. The stacking
+   rules live further down the sheet but are a class less specific than these,
+   so without this they lose and the collapsed pane becomes a 44px stub with the
+   editor jammed alongside it. Restated at matching specificity, and after the
+   1500px block so it also wins on a narrow window.
+
+   The tracks turn sideways with the layout: the strip is a row only as tall as
+   the toggle it still shows, and everything below it shares the height that
+   frees up. Without the rows the pane keeps the 190/220px band it has when it
+   is open and collapsing gives back nothing at this width, which is a toggle
+   that appears to do nothing.
+
+   Only the two-class selectors: with a chat open these layouts stay columns at
+   this width (`.documents-layout.with-chat` and the 1500px projects grid are
+   more specific than the stacking rules), and their `44px` collapsed tracks are
+   right for that. Being one class less specific, this leaves them alone. */
+@media (max-width: 900px) {
+  .documents-layout.list-collapsed,
+  .projects-layout.list-collapsed {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-auto-rows: minmax(0, 1fr);
+  }
+}
+
+
 /* The dashboards page is a scrolling document rather than a fixed grid, so its
    wrapper is a single column until a chat is opened beside it. */
 .dashboards-layout {

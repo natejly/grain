@@ -3,7 +3,7 @@ PNPM := npx --yes pnpm@9.15.9
 # has a different name: make install PYTHON=python3.11
 PYTHON ?= python3.12
 
-.PHONY: install dev dev-api dev-web test test-e2e lint build eval migrate seed verify sandbox-image
+.PHONY: install dev dev-api dev-web test test-e2e lint build eval migrate seed verify sandbox-image latex-image
 
 dev:
 	./scripts/dev.sh
@@ -41,6 +41,9 @@ eval:
 
 sandbox-image:
 	docker build -t $${SANDBOX_CONTAINER_IMAGE:-jasmine-sandbox:latest} infra/sandbox
+
+latex-image:
+	docker build -t $${LATEX_COMPILE_IMAGE:-jasmine-latex:latest} infra/latex
 
 migrate:
 	cd apps/api && ../../.venv/bin/alembic upgrade head

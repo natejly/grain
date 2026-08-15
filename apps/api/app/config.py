@@ -242,6 +242,14 @@ class Settings(BaseSettings):
     sandbox_host_allowlist: str = "pypi.org,files.pythonhosted.org,registry.npmjs.org"
     sandbox_max_output_bytes: int = 64 * 1024
 
+    # --- LaTeX compile (server-side TeX Live) --------------------------------
+    latex_compile_enabled: bool = True
+    latex_compile_image: str = "jasmine-latex:latest"
+    latex_compile_timeout_seconds: int = 60
+    latex_compile_memory_mb: int = 2048
+    latex_compile_cpus: float = 2.0
+    latex_compile_pids_limit: int = 256
+
     # --- Retrieval ---------------------------------------------------------
     # Three independently switchable stages, so each can be ablated and measured
     # on its own (RESEARCH.md §4). Every one of them degrades to the stage below

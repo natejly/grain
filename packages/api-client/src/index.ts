@@ -593,6 +593,21 @@ export type ProjectFile = { path: string; content: string; bytes: number };
 
 export type ProjectKind = "web" | "latex";
 
+export type LatexEngine = "pdftex" | "xetex";
+
+export type LatexCompileRequest = {
+  engine?: LatexEngine;
+  entry_path: string;
+  files: { path: string; content: string }[];
+};
+
+export type LatexCompileResponse = {
+  status: "ok" | "failed";
+  message: string;
+  log: string;
+  pdf_base64?: string | null;
+};
+
 export type ProjectSummary = {
   id: string;
   name: string;
@@ -2293,6 +2308,19 @@ export class WorkspaceApi {
 
   deleteProject(projectId: string): Promise<void> {
     return this.request(`/api/projects/${projectId}`, { method: "DELETE" }, true);
+  }
+
+  compileLatex(
+    entryPath: string,
+    files: { path: string; content: string }[],
+    engine: LatexEngine = "pdftex",
+    signal?: AbortSignal,
+  ): Promise<LatexCompileResponse> {
+    return this.request("/api/latex/compile", {
+      method: "POST",
+      body: JSON.stringify({ engine, entry_path: entryPath, files }),
+      signal,
+    });
   }
 
   addBoardColumn(boardId: string, name: string, index?: number): Promise<Board> {

@@ -25,6 +25,7 @@ from .api import (
     generated_apps,
     graph,
     integrations,
+    latex,
     mcp,
     memory,
     projects,
@@ -114,6 +115,7 @@ app.include_router(todos.router)
 app.include_router(doc_pending.router)
 app.include_router(folders.router)
 app.include_router(projects.router)
+app.include_router(latex.router)
 app.include_router(bibliography.router)
 app.include_router(sandbox.router)
 app.include_router(sandbox_tools.router)

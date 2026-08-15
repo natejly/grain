@@ -40,6 +40,14 @@ os.environ["DEV_AUTO_LOGIN"] = "false"
 # Same for DEV_USER: the override is covered by explicit monkeypatch tests, and
 # leaving it on would make every anonymous client already signed in as Lyn.
 os.environ["DEV_USER"] = ""
+# And the third of the same family, pinned for the same reason the other two are
+# — but this one was missing, and it is the expensive one to leave loose. A
+# developer's own repo-root `.env` with `DEV_UNRESTRICTED_AGENT=1` is read by
+# Settings, and it switches off both the approval parking and the per-subject
+# tool narrowing. Forty-two tests then fail on this machine and pass in CI, all
+# of them saying something plausible about scoping or the agent loop, and none
+# of them about the one line that actually did it.
+os.environ["DEV_UNRESTRICTED_AGENT"] = "false"
 
 from app.auth import (  # noqa: E402
     DEV_SEED_USER_ID,

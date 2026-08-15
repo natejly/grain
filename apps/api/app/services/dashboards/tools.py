@@ -12,7 +12,9 @@ could rearrange it would be answering a question you did not ask.
 
 All the write tools are `read_only=False`, so they inherit the standing approval
 gate rather than carrying an opinion about it, and all of them preview: what the
-user approves is a sentence describing the chart, not a JSON blob.
+user approves leads with a sentence describing the chart. An *edit* carries the
+spec diff under that sentence as well, because a summary of a chart is lossy in
+the direction that matters when you are deciding whether to let a change land.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ from sqlalchemy.orm import Session
 from ...models import Dashboard, DashboardTemplate
 from ...schemas import DashboardColumnRequirement, DashboardSpec
 from ..analytics import AnalyticsValidationError
+from ..artifacts.documents import render_diff
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
 from . import store
 from .binding import DashboardBindError, bind_report, effective_bindings, rebind_spec
@@ -145,6 +148,28 @@ def _describe(spec: DashboardSpec) -> str:
         f"{item.field} {item.operator} {item.value}" for item in spec.query.filters
     )
     return f"a {spec.visualization} of {body}" + (f", where {filters}" if filters else "")
+
+
+def _spec_json(spec: DashboardSpec) -> str:
+    """A spec as stable, readable JSON — the text a spec diff is taken over.
+
+    Field order comes from the model rather than `sort_keys`, so both sides of a
+    diff are ordered identically and the only lines that move are the ones that
+    actually changed.
+    """
+    return json.dumps(spec.model_dump(mode="json"), indent=2, ensure_ascii=False)
+
+
+def _render_spec_diff(name: str, current: DashboardSpec, proposed: DashboardSpec) -> str:
+    """The unified diff between two specs, or "" when they are the same.
+
+    Same renderer as a document edit and a project file write, so a proposal is
+    drawn in the same red and green wherever the user meets it — the chat rail,
+    the dashboard's own sidebar, the activity feed, a parked workflow step.
+    """
+    if current == proposed:
+        return ""
+    return render_diff(_spec_json(current), _spec_json(proposed), title=name)
 
 
 def _find_dataset_name(db: Session, *, workspace_id: str, dataset_id: str) -> str:
@@ -340,10 +365,18 @@ def _preview_update_dashboard(
         if _text(args, "name") and _text(args, "name") != dashboard.name
         else ""
     )
-    return (
+    summary = (
         f"Update dashboard “{dashboard.name}”: it shows {_describe(current)}, "
         f"and would show {_describe(spec)}.{rename}"
     )
+    # And the spec itself as a diff under the sentence. The sentence is a
+    # summary, and a summary of a chart is lossy in the direction that matters
+    # for approving one: "a bar of revenue by region" is the same sentence
+    # whether the filter underneath it is `region = EMEA` or `region != EMEA`.
+    # `_render_spec_diff` returns "" when only the name moved, so a pure rename
+    # is still one line rather than a diff of nothing.
+    diff = _render_spec_diff(dashboard.name, current, spec)
+    return f"{summary}\n\n{diff}" if diff else summary
 
 
 def _create_template(

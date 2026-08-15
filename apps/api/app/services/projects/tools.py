@@ -389,7 +389,10 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "that previews immediately. The project is bundled in the browser: "
                 "TypeScript/TSX is supported, but the only importable packages are "
                 "'react' and 'react-dom' — everything else must be a relative import "
-                "of a file in the project."
+                "of a file in the project. A 'latex' project compiles server-side "
+                "with full TeX Live, so packages like tikz, beamer, biblatex, "
+                "booktabs, and siunitx all work. Shell-escape is disabled, so "
+                "minted is not available."
             ),
             parameters={
                 "type": "object",

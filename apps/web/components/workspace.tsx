@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
+import { PaneToggle, useCollapsiblePane } from "./collapsible-pane";
 import { CreateMenu } from "./create-menu";
 import { SettingsMenu } from "./settings-menu";
 import { useWorkspace } from "./use-workspace";
@@ -296,6 +297,13 @@ export function Workspace() {
   // Where each group reopens. Tracking `view` rather than the click means an
   // action that navigates on its own — an upload landing on Sources, the OAuth
   // return landing on Integrations — is remembered too.
+  /**
+   * The rail, hidden on request. Separate from `sidebarOpen`, which is the
+   * mobile off-canvas drawer and is deliberately not remembered: a drawer that
+   * reopened itself on every load would cover the page you asked for.
+   */
+  const [railCollapsed, toggleRail] = useCollapsiblePane("rail");
+
   const [groupHome, setGroupHome] = useState<Record<GroupId, View>>(DEFAULT_GROUP_VIEW);
   useEffect(() => {
     const group = groupForView(view).id;
@@ -349,8 +357,8 @@ export function Workspace() {
   }
 
   return (
-    <div className="workspace-shell">
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+    <div className={railCollapsed ? "workspace-shell rail-collapsed" : "workspace-shell"}>
+      <aside id="workspace-rail" className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-top">
           <button
             className="icon-button mobile-close"
@@ -498,6 +506,17 @@ export function Workspace() {
           >
             <Menu size={19} />
           </button>
+          {/* The rail's toggle lives out here rather than in the rail, because
+              the rail collapses to nothing: a control inside it would go with
+              it, and the only way back would be to clear localStorage. Hidden
+              below the breakpoint where the rail is a drawer with its own
+              open/close pair. */}
+          <PaneToggle
+            subject="sidebar"
+            collapsed={railCollapsed}
+            toggle={toggleRail}
+            controls="workspace-rail"
+          />
           <div className="page-context">
             {hasTabs && <span>{activeGroup.label}</span>}
             <strong>{view === "chat" ? activeTitle : PAGE_TITLES[view]}</strong>
