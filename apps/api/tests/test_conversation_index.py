@@ -446,3 +446,37 @@ def test_the_tool_returns_attributed_quotes(workspace):
         assert "No past conversation" in empty.content
     finally:
         db.close()
+
+
+def test_the_palette_search_endpoint_reads_the_same_index(client):
+    """GET /api/conversations/search: the palette's deep search is the agent
+    tool's index and visibility verbatim, over HTTP. What it adds is only a
+    snippet clip and a minimum query length — one character is a scan of
+    everything ever said, refused at the contract rather than served slowly."""
+    identity = client.get("/api/bootstrap").json()["identity"]
+    db = SessionLocal()
+    try:
+        conversation = _conversation(
+            db,
+            identity["workspace_id"],
+            created_by=identity["user_id"],
+            title="Falcon notes",
+        )
+        _messages(db, conversation, ["The gyrfalcon migration starts in March.", "Noted."])
+        ci.index_conversation(db, conversation)
+        db.commit()
+        conversation_id = conversation.id
+    finally:
+        db.close()
+
+    response = client.get(
+        "/api/conversations/search", params={"q": "gyrfalcon migration"}
+    )
+    assert response.status_code == 200
+    hits = response.json()
+    match = next((hit for hit in hits if hit["conversation_id"] == conversation_id), None)
+    assert match is not None
+    assert match["title"] == "Falcon notes"
+    assert "gyrfalcon" in match["snippet"].lower()
+
+    assert client.get("/api/conversations/search", params={"q": "x"}).status_code == 422

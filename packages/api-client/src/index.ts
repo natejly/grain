@@ -829,6 +829,16 @@ export type AuditEvent = {
   created_at: string;
 };
 
+/** One transcript passage matching a search, with where and when. */
+export type ConversationSearchHit = {
+  conversation_id: string;
+  title: string;
+  /** "quote" for a transcript window, "summary" for a thread's rolling summary. */
+  kind: string;
+  snippet: string;
+  spoken_at: string;
+};
+
 /** One proposed tool call whose run is parked on the decision. */
 export type InboxApproval = {
   id: string;
@@ -2091,6 +2101,14 @@ export class WorkspaceApi {
       method: "PUT",
       body: JSON.stringify({ title }),
     });
+  }
+
+  /**
+   * Search past conversations by what was said — the same hybrid index and
+   * visibility the agent's own quoting tool reads. [] when the index is off.
+   */
+  searchConversations(q: string): Promise<ConversationSearchHit[]> {
+    return this.request(`/api/conversations/search?q=${encodeURIComponent(q)}`);
   }
 
   deleteConversation(conversationId: string): Promise<void> {

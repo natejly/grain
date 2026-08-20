@@ -1262,6 +1262,10 @@ ROUTE_CASES: List[RouteCase] = [
     # the request, so the sweep's job is proving tenant A's feed never carries
     # a row of tenant B's.
     RouteCase("GET", "/api/inbox", SCOPED),
+    # Transcript search: a workspace-scoped list whose visibility chokepoint is
+    # the same one the agent tool reads; the sweep proves tenant A's query
+    # never quotes tenant B's words.
+    RouteCase("GET", "/api/conversations/search", SCOPED, query={"q": "secret"}),
     # -- spaces ------------------------------------------------------------
     RouteCase("GET", "/api/spaces", SCOPED),
     RouteCase("POST", "/api/spaces", SCOPED, body={"name": "mine"}),

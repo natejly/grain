@@ -80,6 +80,20 @@ test("a renamed thread is findable by its new name", async ({ page }) => {
     "Northstar ownership",
   );
 
+  // Deep search: found by what was SAID, with words the title does not
+  // contain — the transcript index behind the agent's own quoting tool,
+  // arriving as late rows under the instant title matches.
+  await openView(page, "Library");
+  await page.keyboard.press("ControlOrMeta+k");
+  await palette(page).getByRole("textbox").fill("who owns project");
+  const deepHit = palette(page).getByRole("option", { name: /Northstar ownership/ });
+  await expect(deepHit).toBeVisible({ timeout: 15_000 });
+  await deepHit.click();
+  await expect(page.locator(".chat-layout")).toBeVisible();
+  await expect(page.locator(".thread.active .thread-open")).toContainText(
+    "Northstar ownership",
+  );
+
   // Put the shared workspace back.
   page.once("dialog", (dialog) => dialog.accept());
   await page

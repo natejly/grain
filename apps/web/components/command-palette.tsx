@@ -1,6 +1,10 @@
 "use client";
 
-import type { Conversation, DocumentKind } from "@workspace/api-client";
+import type {
+  Conversation,
+  ConversationSearchHit,
+  DocumentKind,
+} from "@workspace/api-client";
 import { CornerDownLeft, MessageSquare, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CreateAction } from "./views/navigation";
@@ -27,6 +31,12 @@ export type CommandPaletteProps = {
   openView: (view: View) => void;
   openThread: (conversationId: string) => void;
   create: (action: CreateAction, name: string, kind: DocumentKind) => Promise<void>;
+  /**
+   * Deep search: what was SAID, not only what things are named. Optional so
+   * the palette stands without the index; when present it is queried after a
+   * pause, and its hits render under the instant title matches.
+   */
+  searchTranscripts?: (q: string) => Promise<ConversationSearchHit[]>;
 };
 
 export function CommandPalette({
@@ -36,6 +46,7 @@ export function CommandPalette({
   openView,
   openThread,
   create,
+  searchTranscripts,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
@@ -44,7 +55,52 @@ export function CommandPalette({
   const listRef = useRef<HTMLUListElement | null>(null);
 
   const rows = useMemo(() => buildPaletteRows(conversations), [conversations]);
-  const matches = useMemo(() => matchPalette(rows, query), [rows, query]);
+  const instant = useMemo(() => matchPalette(rows, query), [rows, query]);
+
+  // Deep hits arrive late and never reorder the instant rows above them: a
+  // list that reshuffles under a moving selection is how ⌘K users open the
+  // wrong thing. Debounced, three characters minimum, stale replies dropped.
+  const [deepHits, setDeepHits] = useState<ConversationSearchHit[]>([]);
+  useEffect(() => {
+    if (!open || naming || !searchTranscripts || query.trim().length < 3) {
+      setDeepHits([]);
+      return;
+    }
+    let stale = false;
+    const timer = window.setTimeout(() => {
+      searchTranscripts(query.trim())
+        .then((hits) => {
+          if (!stale) setDeepHits(hits);
+        })
+        .catch(() => undefined); // no index, no row — not an error state
+    }, 200);
+    return () => {
+      stale = true;
+      window.clearTimeout(timer);
+    };
+  }, [open, naming, query, searchTranscripts]);
+
+  const matches: PaletteRow[] = useMemo(() => {
+    const titled = new Set(
+      instant
+        .filter((row) => row.kind === "thread")
+        .map((row) => (row as Extract<PaletteRow, { kind: "thread" }>).conversationId),
+    );
+    const seen = new Set<string>();
+    const deep: PaletteRow[] = [];
+    for (const hit of deepHits) {
+      if (titled.has(hit.conversation_id) || seen.has(hit.conversation_id)) continue;
+      seen.add(hit.conversation_id);
+      deep.push({
+        kind: "thread",
+        conversationId: hit.conversation_id,
+        label: hit.title,
+        hint: `“${hit.snippet.slice(0, 80)}…”`,
+      });
+      if (deep.length >= 5) break;
+    }
+    return [...instant, ...deep];
+  }, [instant, deepHits]);
 
   // A fresh open is a fresh question.
   useEffect(() => {

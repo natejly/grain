@@ -476,6 +476,7 @@ export function Workspace() {
         }}
         openThread={(id) => void selectConversation(id)}
         create={create}
+        searchTranscripts={(q) => api.searchConversations(q)}
       />
 
       {/* Band 1: the icon rail — four doors, always visible on desktop. The

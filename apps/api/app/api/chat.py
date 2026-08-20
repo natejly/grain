@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import List, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
@@ -25,6 +26,7 @@ from ..models import (
     new_id,
 )
 from ..schemas import (
+    ApiModel,
     ApprovalMode,
     ApprovalModeRequest,
     CitationCheck,
@@ -37,7 +39,7 @@ from ..schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from ..services import conversations, orgs, subjects
+from ..services import conversation_index, conversations, orgs, subjects
 from ..services import skills as skills_service
 from ..services import spaces as spaces_service
 from ..services.artifacts import documents
@@ -144,6 +146,56 @@ def list_conversations(
         stmt = stmt.where(Conversation.space_id == space_id)
     conversations_list = db.scalars(stmt)
     return [_conversation_out(conversation, actor) for conversation in conversations_list]
+
+
+class ConversationSearchHitOut(ApiModel):
+    """One transcript passage matching a search, with where and when."""
+
+    conversation_id: str
+    title: str
+    #: "quote" for a transcript window, "summary" for a thread's rolling summary.
+    kind: str
+    snippet: str
+    spoken_at: datetime
+
+
+#: Enough to recognise the conversation in a palette row; the full passage is
+#: one click away in the thread itself.
+SEARCH_SNIPPET_CHARS = 240
+
+
+@router.get("/conversations/search", response_model=List[ConversationSearchHitOut])
+def search_conversations_http(
+    q: str = Query(min_length=2, max_length=200),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> List[ConversationSearchHitOut]:
+    """Search past conversations by what was said, not only what they are named.
+
+    The same hybrid index (and, critically, the same visibility chokepoint)
+    the agent's `search_conversations` tool reads — a member searching by HTTP
+    must see exactly what the agent quoting on their behalf would see, and a
+    personal thread stays its creator's in both. Declared before FastAPI could
+    ever confuse it with a by-id path, and returning [] rather than erroring
+    when the index is disabled: to a palette, "no hits" and "no index" call
+    for the same quiet row.
+    """
+    hits = conversation_index.search_conversation_chunks(
+        db,
+        workspace_id=actor.workspace_id,
+        viewer_id=actor.user_id,
+        query=q,
+    )
+    return [
+        ConversationSearchHitOut(
+            conversation_id=hit.conversation_id,
+            title=hit.title,
+            kind=hit.kind,
+            snippet=hit.content[:SEARCH_SNIPPET_CHARS],
+            spoken_at=hit.spoken_at,
+        )
+        for hit in hits
+    ]
 
 
 @router.post("/conversations", response_model=ConversationOut, status_code=201)
