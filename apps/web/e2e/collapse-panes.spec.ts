@@ -21,13 +21,14 @@ async function widthOf(locator: Locator): Promise<number> {
 /** A toggle addressed the way a screen reader meets it: by what it will do. */
 const toggle = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 
-test("the rail collapses, hands its width to the view, and stays collapsed", async ({
+test("the sidebar collapses, hands its width to the view, and stays collapsed", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(rail(page).getByRole("button")).toHaveCount(5);
+  await expect(rail(page).getByRole("button")).toHaveCount(4);
 
   const main = page.locator(".main-panel");
+  const sidebar = page.locator("#workspace-rail");
   const wide = await widthOf(main);
 
   // Reached and operated from the keyboard, not the mouse: focus it and press
@@ -39,10 +40,13 @@ test("the rail collapses, hands its width to the view, and stays collapsed", asy
   await expect(collapse).toBeFocused();
   await page.keyboard.press("Enter");
 
-  // The rail is gone and the view has the room. 200px is a floor, not a
-  // measurement: the rail's track is 252px, and anything that merely hid it
-  // without releasing the column would move this by zero.
-  await expect(rail(page)).toBeHidden();
+  // The CONTEXT sidebar is gone and the view has the room; the icon rail
+  // stays, because the four doors are what keep a collapsed shell navigable.
+  // 200px is a floor, not a measurement: the sidebar's track is 252px, and
+  // anything that merely hid it without releasing the column would move this
+  // by zero.
+  await expect(sidebar).toBeHidden();
+  await expect(rail(page)).toBeVisible();
   const collapsedWidth = await widthOf(main);
   expect(collapsedWidth - wide).toBeGreaterThan(200);
 
@@ -54,13 +58,14 @@ test("the rail collapses, hands its width to the view, and stays collapsed", asy
   // Across a reload, which is the whole reason it is in localStorage.
   await page.reload();
   await expect(toggle(page, "Show the sidebar")).toBeVisible();
-  await expect(rail(page)).toBeHidden();
+  await expect(sidebar).toBeHidden();
+  await expect(rail(page)).toBeVisible();
   expect(await widthOf(main)).toBeGreaterThan(wide + 200);
 
   // And back, so the rest of this file — and any spec that shares the storage
   // state — meets the shell it expects.
   await toggle(page, "Show the sidebar").click();
-  await expect(rail(page).getByRole("button")).toHaveCount(5);
+  await expect(sidebar).toBeVisible();
   expect(await widthOf(main)).toBeCloseTo(wide, 0);
 });
 

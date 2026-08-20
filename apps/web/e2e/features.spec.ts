@@ -121,7 +121,9 @@ test("projects: a web project seeds files and bundles a live preview", async ({ 
 test("databases: add a sqlite connection and browse its schema", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openSettings(page, "Connections", /Databases/);
+  // Databases moved from the Settings menu to Library → Data, beside the
+  // datasets they feed.
+  await openView(page, "Library", /^Databases/);
 
   await page.getByRole("button", { name: /Add connection|Add database|Add/ }).first().click();
   await page.locator(".content-page").screenshot({

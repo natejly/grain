@@ -101,6 +101,6 @@ test("a space carries instructions, knowledge and threads, and dies whole", asyn
     list(page).getByRole("button", { name: new RegExp(`^${SPACE}`) }),
   ).toHaveCount(0);
   await expect(page.locator(".thread-space-chip")).toHaveCount(0);
-  await openView(page, "Knowledge", /^Sources/);
+  await openView(page, "Library", /^Sources/);
   await expect(page.getByText("e2e-space-note.md")).toHaveCount(0);
 });

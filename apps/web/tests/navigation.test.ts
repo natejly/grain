@@ -25,19 +25,25 @@ describe("navigation model", () => {
     expect(new Set(placements).size).toBe(placements.length);
   });
 
-  it("puts the places you work on the rail", () => {
-    // Inbox is second from the top: approvals are the product's primary work
-    // object, and a queue that waits on a human must not live behind a gear.
-    // Library and Automations are the honest names — "Files" held boards and
-    // dashboards that are not files, and "Workflows"/"Automations" gave one
-    // idea two names a click apart.
+  it("puts the four doors on the rail, and only those", () => {
+    // The foyer: talk (Chat), what needs me (Inbox), where's my stuff
+    // (Library), what runs without me (Automations). Knowledge is a Library
+    // section rather than a fifth door — the rail seat existed to keep it out
+    // of a Settings menu, and that menu is gone.
     expect(RAIL_GROUPS.map((group) => group.label)).toEqual([
       "Chat",
       "Inbox",
       "Library",
-      "Knowledge",
       "Automations",
     ]);
+  });
+
+  it("keeps every section item inside its group's flat list, in order", () => {
+    // `items` is derived from `sections`; a hand-edited drift between the two
+    // would make the sidebar and everything keyed off `items` disagree.
+    for (const group of NAV_GROUPS) {
+      expect(group.items).toEqual(group.sections.flatMap((section) => section.items));
+    }
   });
 
   it("has no sandbox destination, because a sandbox is not a place", () => {
@@ -85,33 +91,37 @@ describe("navigation model", () => {
     expect(SETTINGS_GROUPS.some((group) => rail.has(group.id))).toBe(false);
   });
 
-  it("names the Library for what it holds, with no doubled breadcrumb", () => {
+  it("shelves the Library under honest headings, with no doubled breadcrumb", () => {
     // "Files / Files" is what the topbar used to read: the group and its first
-    // tab shared a name. The group is Library; the tab is Documents; and Apps
-    // split from Dashboards so neither word means two kinds of thing.
+    // tab shared a name. The group is Library; the sections are the shelves a
+    // flat seven-tab strip could not be.
     const library = NAV_GROUPS.find((group) => group.id === "files");
     expect(library?.label).toBe("Library");
-    expect(library?.items.map((item) => item.view)).toEqual([
-      "documents",
-      "projects",
-      "boards",
-      // Beside Boards, not inside them: a list is a board with one column, and
-      // that is an implementation detail nobody should have to know to find
-      // their checklist.
-      "todos",
-      // Data before the things drawn from it: a dataset used to have no page
-      // at all — created as an upload side effect, visible only inside the
-      // app editor's binding chips.
-      "datasets",
-      "dashboards",
-      "apps",
+    expect(
+      library?.sections.map((section) => [
+        section.label,
+        section.items.map((item) => item.view),
+      ]),
+    ).toEqual([
+      ["", ["documents", "projects"]],
+      // One heading for both: a list is a board with one column, and that is
+      // an implementation detail nobody should have to know to find their
+      // checklist.
+      ["Boards & todos", ["boards", "todos"]],
+      // Data beside the things drawn from it — Databases moved here from the
+      // Settings menu, ending the connect-data → chart-it trek.
+      ["Data", ["datasets", "data"]],
+      ["Dashboards", ["dashboards", "apps"]],
+      // Inside Library, one always-visible click from anywhere in it — nearer
+      // than the old rail seat, which existed only to outrun a Settings menu.
+      ["Knowledge", ["sources", "memory", "graph"]],
     ]);
     expect(library?.items[0].label).toBe("Documents");
     expect(PAGE_TITLES.documents).toBe("Documents");
-    // No Library tab repeats the group's name: the topbar prints
+    // No Library entry repeats the group's name: the topbar prints
     // "{group} / {PAGE_TITLES[view]}", which is where "Files / Files" came
     // from. (Chat is exempt by construction — its breadcrumb shows the open
-    // thread's title, never the tab label.)
+    // thread's title, never the entry label.)
     for (const item of library?.items ?? []) {
       expect(PAGE_TITLES[item.view]).not.toBe(library?.label);
     }
@@ -131,10 +141,12 @@ describe("navigation model", () => {
     }
   });
 
-  it("gives memory a home under Knowledge, on the rail", () => {
-    // The reason Knowledge did not follow Connections into settings: a user who
-    // could not find their memories is not helped by burying them deeper.
-    expect(groupForView("memory").id).toBe("knowledge");
+  it("keeps memory on a working surface, never behind settings", () => {
+    // Knowledge folded into Library, but the old rule holds its ground: a user
+    // who could not find their memories is not helped by burying them behind a
+    // gear. The Library sidebar shows the Knowledge heading the whole time you
+    // are there, which is *more* visible than the old rail seat, not less.
+    expect(groupForView("memory").id).toBe("files");
     expect(groupForView("memory").surface).toBe("rail");
   });
 });

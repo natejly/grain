@@ -308,8 +308,8 @@ export function Workspace() {
   };
 
   const activeGroup = groupForView(view);
-  // A one-view group gets no strip: a tab bar with a single tab is noise.
-  const hasTabs = activeGroup.items.length > 1;
+  // A one-view group gets no section nav: a list with a single row is noise.
+  const showSections = activeGroup.items.length > 1;
 
   // Where each group reopens. Tracking `view` rather than the click means an
   // action that navigates on its own — an upload landing on Sources, the OAuth
@@ -363,8 +363,54 @@ export function Workspace() {
     return setEditing("new");
   }
 
+  // The shell's ONE numeric badge: requests parked waiting on a human, on the
+  // destination that answers them. Counted from the unbounded feed, not from
+  // the fifty-row call window — the window is how this number used to read
+  // zero over a real backlog. Until the feed's first read lands, the window
+  // count stands in rather than showing a zero not yet known to be true.
+  const inboxBadge = inbox
+    ? inbox.approvals.length + inbox.budget_holds.length
+    : pendingApprovals.length;
+
+  /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
+  const renderGroupButton = (group: (typeof RAIL_GROUPS)[number], wide: boolean) => {
+    const Icon = group.icon;
+    const badge = group.id === "inbox" ? inboxBadge : 0;
+    return (
+      <button
+        key={group.id}
+        className={activeGroup.id === group.id ? "nav-item active" : "nav-item"}
+        aria-current={activeGroup.id === group.id ? "page" : undefined}
+        // The badge joins the accessible name (an icon-only button's aria-label
+        // REPLACES its content for assistive tech, so a bare label would read
+        // "Inbox" over three waiting requests).
+        aria-label={
+          wide ? undefined : badge > 0 ? `${group.label} ${badge}` : group.label
+        }
+        title={wide ? undefined : group.label}
+        onClick={() => openGroup(group.id)}
+      >
+        <Icon size={wide ? 17 : 19} />
+        {wide && group.label}
+        {badge > 0 && <span className="approval-count">{badge}</span>}
+      </button>
+    );
+  };
+
   return (
     <div className={railCollapsed ? "workspace-shell rail-collapsed" : "workspace-shell"}>
+      {/* Band 1: the icon rail — four doors, always visible on desktop. The
+          places you work and nothing else; creating and configuring live in
+          the top-right, and everything deeper is summoned per destination in
+          the contextual sidebar beside this. */}
+      <nav className="icon-rail" aria-label="Workspace">
+        {RAIL_GROUPS.map((group) => renderGroupButton(group, false))}
+      </nav>
+
+      {/* Band 2: the contextual sidebar — what the chosen door opens onto.
+          Collapsible to nothing (the icon rail keeps you oriented); on mobile
+          it is the drawer, and carries the destinations itself because the
+          icon rail is hidden there. */}
       <aside id="workspace-rail" className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-top">
           <button
@@ -379,49 +425,57 @@ export function Workspace() {
         {/* Above everything else because everything else is scoped to it. */}
         <WorkspaceSwitcher />
 
-        <button
-          className="chrome-button new-thread-button"
-          // Wrapped: newConversation takes an optional space id now, and a
-          // MouseEvent must not arrive in that slot.
-          onClick={() => void newConversation()}
-        >
-          <Plus size={16} />
-          New thread
-        </button>
-
-        {/* The rail is the places you work. Creating is not one of them, and
-            neither is administering — both moved to the top right. */}
-        <nav className="primary-nav" aria-label="Workspace">
-          {RAIL_GROUPS.map((group) => {
-            const Icon = group.icon;
-            // The shell's ONE numeric badge: requests parked waiting on a
-            // human, on the destination that answers them. Counted from the
-            // unbounded feed, not from the fifty-row call window — the window
-            // is how this number used to read zero over a real backlog. Until
-            // the feed's first read lands, the window count stands in rather
-            // than showing a zero that is not yet known to be true.
-            const approvalBadge =
-              group.id !== "inbox"
-                ? 0
-                : inbox
-                  ? inbox.approvals.length + inbox.budget_holds.length
-                  : pendingApprovals.length;
-            return (
-              <button
-                key={group.id}
-                className={activeGroup.id === group.id ? "nav-item active" : "nav-item"}
-                aria-current={activeGroup.id === group.id ? "page" : undefined}
-                onClick={() => openGroup(group.id)}
-              >
-                <Icon size={17} />
-                {group.label}
-                {approvalBadge > 0 && (
-                  <span className="approval-count">{approvalBadge}</span>
-                )}
-              </button>
-            );
-          })}
+        {/* The icon rail is hidden under the drawer breakpoint, so the drawer
+            carries the destinations itself — labelled, because a drawer has
+            the width the rail deliberately does not. */}
+        <nav className="primary-nav mobile-group-nav" aria-label="Destinations">
+          {RAIL_GROUPS.map((group) => renderGroupButton(group, true))}
         </nav>
+
+        {activeGroup.id === "chat" && (
+          <button
+            className="chrome-button new-thread-button"
+            // Wrapped: newConversation takes an optional space id now, and a
+            // MouseEvent must not arrive in that slot.
+            onClick={() => void newConversation()}
+          >
+            <Plus size={16} />
+            New thread
+          </button>
+        )}
+
+        {/* This destination's own map: its views, under section headings that
+            say what each shelf holds. What the seven-tab strip grew into. */}
+        {showSections && (
+          <nav className="section-nav" aria-label={`${activeGroup.label} views`}>
+            {activeGroup.sections.map((section, index) => (
+              <div className="section-block" key={section.label || index}>
+                {section.label && (
+                  <span className="section-heading">{section.label}</span>
+                )}
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+                  const count = viewCounts[item.view];
+                  return (
+                    <button
+                      key={item.view}
+                      className={view === item.view ? "nav-item active" : "nav-item"}
+                      aria-current={view === item.view ? "page" : undefined}
+                      onClick={() => {
+                        setView(item.view);
+                        setSidebarOpen(false);
+                      }}
+                    >
+                      <Icon size={15} />
+                      {item.label}
+                      {count !== undefined && <span className="nav-count">{count}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+        )}
 
         {/* Waiting-on-you: the top of the Inbox, rendered where the eye lands
             first. A run that parked overnight greets the user before they open
@@ -482,10 +536,10 @@ export function Workspace() {
           </div>
         )}
 
-        {/* Beneath the destinations, and deliberately not among them: a pin is
-            not a place the product has, it is a chart *this user* wanted where
-            they could see it. Its own nav so a screen reader is told which is
-            which, and so the rail's own list cannot grow by six on a Tuesday. */}
+        {/* In every destination's sidebar, deliberately: a pin is not a place
+            the product has, it is a chart *this user* wanted where they could
+            see it — and "where they could see it" means wherever they are.
+            Its own nav so a screen reader is told which is which. */}
         {dashboardPins.length > 0 && (
           <nav className="pinned-nav" aria-label="Pinned dashboards">
             <span className="pinned-heading">Pinned</span>
@@ -516,29 +570,37 @@ export function Workspace() {
             what. The server already returns only the caller's own personal
             threads plus every shared thread in the workspace, so `shared` alone
             splits them. */}
-        <div className="thread-heading">
-          <span>Recent threads</span>
-        </div>
-        <div className="thread-list">
-          {conversations.length === 0 ? (
-            <p className="empty-threads">No conversations.</p>
-          ) : (
-            <>
-              {personalThreads.length > 0 && (
+        {activeGroup.id === "chat" && (
+          <>
+            <div className="thread-heading">
+              <span>Recent threads</span>
+            </div>
+            <div className="thread-list">
+              {conversations.length === 0 ? (
+                <p className="empty-threads">No conversations.</p>
+              ) : (
                 <>
-                  <div className="thread-group">Personal</div>
-                  {personalThreads.map(renderThread)}
+                  {personalThreads.length > 0 && (
+                    <>
+                      <div className="thread-group">Personal</div>
+                      {personalThreads.map(renderThread)}
+                    </>
+                  )}
+                  {sharedThreads.length > 0 && (
+                    <>
+                      <div className="thread-group">Shared</div>
+                      {sharedThreads.map(renderThread)}
+                    </>
+                  )}
                 </>
               )}
-              {sharedThreads.length > 0 && (
-                <>
-                  <div className="thread-group">Shared</div>
-                  {sharedThreads.map(renderThread)}
-                </>
-              )}
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
+
+        {/* Chat's thread list is the flexing element; every other destination
+            needs this spacer so the identity block still sits at the bottom. */}
+        {activeGroup.id !== "chat" && <div className="sidebar-spacer" />}
 
         <div className="workspace-identity">
           <div className="avatar">
@@ -580,7 +642,7 @@ export function Workspace() {
         />
       )}
 
-      <main className={hasTabs ? "main-panel has-tabs" : "main-panel"}>
+      <main className="main-panel">
         <ApiHealthBanner api={api} onRecovered={loadWorkspace} />
         <header className="topbar">
           <button
@@ -602,7 +664,7 @@ export function Workspace() {
             controls="workspace-rail"
           />
           <div className="page-context">
-            {hasTabs && <span>{activeGroup.label}</span>}
+            {showSections && <span>{activeGroup.label}</span>}
             <strong>{view === "chat" ? activeTitle : PAGE_TITLES[view]}</strong>
           </div>
           <div className="topbar-actions">
@@ -635,26 +697,9 @@ export function Workspace() {
           </div>
         </header>
 
-        {hasTabs && (
-          <nav className="view-tabs" aria-label={`${activeGroup.label} views`}>
-            {activeGroup.items.map((item) => {
-              const Icon = item.icon;
-              const count = viewCounts[item.view];
-              return (
-                <button
-                  key={item.view}
-                  className={view === item.view ? "view-tab active" : "view-tab"}
-                  aria-current={view === item.view ? "page" : undefined}
-                  onClick={() => setView(item.view)}
-                >
-                  <Icon size={14} />
-                  {item.label}
-                  {count !== undefined && <span className="tab-count">{count}</span>}
-                </button>
-              );
-            })}
-          </nav>
-        )}
+        {/* The tab strip is gone: a destination's siblings live in its
+            contextual sidebar, under section headings, where seven of them
+            read as a shelf rather than a lineup. */}
 
         {error && (
           <div className="error-toast" role="alert">

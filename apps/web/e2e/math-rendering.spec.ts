@@ -11,7 +11,7 @@ test("chat renders LaTeX maths, not TeX source", async ({ page }) => {
   await page.goto("/");
 
   // The composer stays disabled until the workspace has a source, so seed one.
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "math-e2e.md",
     mimeType: "text/markdown",
@@ -40,7 +40,7 @@ test("chat renders LaTeX maths, not TeX source", async ({ page }) => {
   // a strict-mode violation — which is a failure in *that* spec, reported
   // against code it does not own. Scoped to this row by filename rather than
   // .first(), so it stays correct whatever else the workspace holds.
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   // Deletion is confirm()-gated, so the handler has to be armed before the
   // click or the click never resolves.
   page.once("dialog", (dialog) => dialog.accept());

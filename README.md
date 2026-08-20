@@ -49,12 +49,16 @@ never exposed through `NEXT_PUBLIC_*`, the bootstrap response, or browser storag
   call, with the workspace's last enabled agent protected from deletion
 - An agent loop with tool approval behind every chat turn, backed by OpenAI
 - Responsive Next.js workspace on a cream-and-mint light theme, with a dark theme
-  that follows the OS or an explicit toggle. The rail holds the places you work
-  — chat, files (files, projects, boards, lists, dashboards), knowledge
-  (sources, memory, graph) and workflows — and a top-right menu holds the places you
-  configure and audit: connections (databases, MCP, integrations), activity and
-  admin. Creating is an action in the corner rather than a destination, and the
-  sandbox is a capability the agent uses, not a page you visit
+  that follows the OS or an explicit toggle. The shell is a foyer: an icon rail
+  of four doors — Chat (threads, spaces, agents, skills), Inbox (everything
+  waiting on a person, from every origin, unbounded), Library (documents,
+  projects, boards & todos, datasets & databases, dashboards & apps, and the
+  knowledge shelf: sources, memory, graph) and Automations (workflows,
+  schedules) — each opening a contextual sidebar with section headings. A
+  top-right gear holds what really is configuration (MCP, sandbox tools,
+  integrations, admin). Creating is an action in the corner rather than a
+  destination, and the sandbox is a capability the agent uses, not a page you
+  visit
 
 ## Quick start
 

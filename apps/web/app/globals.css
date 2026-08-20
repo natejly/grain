@@ -244,8 +244,93 @@ select:focus-visible {
 .workspace-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-columns: 56px 252px minmax(0, 1fr);
   background: var(--bg);
+}
+
+/* Band 1: the icon rail — four doors, always on screen. Icon-only because a
+   door needs recognising, not reading; the label is the tooltip and the
+   accessible name. */
+.icon-rail {
+  position: relative;
+  z-index: 21;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 0 12px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.icon-rail .nav-item {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.icon-rail .nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.icon-rail .nav-item.active {
+  background: var(--surface-raised);
+  color: var(--accent);
+}
+
+/* The shell's one badge, riding the Inbox door. Absolute so a two-digit count
+   cannot widen the rail. */
+.icon-rail .approval-count {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  margin: 0;
+}
+
+/* The drawer's labelled destination list: only where the icon rail is not.
+   Doubled selector on purpose — .primary-nav sets display:flex later in the
+   sheet, and at equal specificity the later rule would win and surface a
+   duplicate destination list on desktop. */
+.primary-nav.mobile-group-nav {
+  display: none;
+}
+
+/* Band 2's section nav: the destination's own map. */
+.section-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  overflow-y: auto;
+}
+
+.section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.section-heading {
+  margin: 0 10px 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sidebar-spacer {
+  flex: 1;
 }
 
 .sidebar {
@@ -839,72 +924,6 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
-/* ---- Sub-navigation inside a group ---- */
-
-.view-tabs {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 9px 22px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.view-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.view-tab {
-  height: 28px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 11px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.view-tab:hover {
-  background: var(--surface);
-  color: var(--text);
-}
-
-.view-tab.active {
-  border-color: var(--accent-border);
-  background: var(--accent-muted);
-  color: var(--accent-text);
-}
-
-.view-tab.active svg {
-  color: var(--accent);
-}
-
-.tab-count {
-  min-width: 18px;
-  height: 16px;
-  display: grid;
-  place-items: center;
-  padding: 0 5px;
-  border-radius: 8px;
-  background: var(--surface-raised);
-  color: var(--text-dim);
-  font-size: 9px;
-}
-
-.view-tab.active .tab-count {
-  color: var(--accent-text);
-}
-
 .topbar-actions {
   margin-left: auto;
   display: flex;
@@ -1003,12 +1022,6 @@ select:focus-visible {
   background: var(--red-muted);
   color: var(--red);
   font-size: 11px;
-}
-
-/* The toast is anchored under the topbar; a group with a tab strip pushes it
-   down so an error never sits on top of the navigation it interrupts. */
-.main-panel.has-tabs .error-toast {
-  top: 115px;
 }
 
 .error-toast span {
@@ -3515,6 +3528,21 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  /* The rail cedes to the drawer on mobile; the drawer carries the labelled
+     destination list instead, because it has the width the rail refuses. */
+  .icon-rail {
+    display: none;
+  }
+
+  .primary-nav.mobile-group-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
@@ -3595,10 +3623,6 @@ select:focus-visible {
 
   .content-page {
     padding: 30px 14px 50px;
-  }
-
-  .view-tabs {
-    padding: 8px 14px;
   }
 
   .page-heading {
@@ -5019,8 +5043,10 @@ select:focus-visible {
    puts it in the *first* track — the 0 — leaving the 1fr track empty. The whole
    app then measures zero wide and the window renders blank. */
 @media (min-width: 901px) {
+  /* Collapsing hides band 2 — the contextual sidebar — never the icon rail:
+     the four doors are what keep a collapsed shell navigable at all. */
   .workspace-shell.rail-collapsed {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 56px minmax(0, 1fr);
   }
 
   .workspace-shell.rail-collapsed > .sidebar {

@@ -77,7 +77,7 @@ test.describe("dashboards", () => {
 
     // A dataset only exists downstream of a source, so upload one and let the
     // indexer finish before anything asks for its columns.
-    await openView(page, "Knowledge", /Sources/);
+    await openView(page, "Library", /Sources/);
     await page.locator('input[type="file"]').setInputFiles({
       name: SOURCE,
       mimeType: "text/csv",

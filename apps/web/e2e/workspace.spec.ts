@@ -24,7 +24,7 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
   page,
 }) => {
   await page.goto("/");
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "northstar-e2e.md",
     mimeType: "text/markdown",
@@ -48,7 +48,7 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
   );
   await page.getByRole("button", { name: "Close provenance" }).click();
 
-  await openView(page, "Knowledge", /Graph/);
+  await openView(page, "Library", /Graph/);
   await expect(page.getByText("Project Northstar", { exact: true }).first()).toBeVisible();
 
   // The `/tool github-zen` approval that used to sit here is gone with the
@@ -57,7 +57,7 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
   // the dev seed, not the product. The real queue is asserted further down,
   // against an approval the agent loop actually parks.
 
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
   // Named, not "the delete button": the title is identical on every row, so the
   // bare locator only works while this spec's upload is the workspace's only
@@ -68,7 +68,7 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
 
 test("build a dashboard from chat, then publish it", async ({ page }) => {
   await page.goto("/");
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "revenue-e2e.csv",
     mimeType: "text/csv",
@@ -308,7 +308,7 @@ test("a fabricated citation is flagged under the answer that made it", async ({
   page,
 }) => {
   await page.goto("/");
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "rollout-e2e.md",
     mimeType: "text/markdown",
@@ -355,7 +355,7 @@ test("a fabricated citation is flagged under the answer that made it", async ({
   await openThread(page, "Check the rollout date for me.");
   await expect(page.locator(".citation-check.fabricated")).toContainText("[42]");
 
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete rollout-e2e.md" }).click();
   await expect(page.getByText("rollout-e2e.md")).toHaveCount(0);
@@ -400,7 +400,7 @@ test("a chart the agent draws is visible in the conversation", async ({ page }) 
   await expect.poll(() => decoded(reloaded), { timeout: 15_000 }).toBe(true);
 
   // The figure is also a workspace source, and can be opened from there.
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   const row = page.locator(".source-row", { hasText: "sandbox-png-1.png" });
   await expect(row).toBeVisible();
   await expect(row).toContainText("Saved");

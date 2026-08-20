@@ -32,6 +32,9 @@ export const rail = (page: Page) => page.getByRole("navigation", { name: "Worksp
  * for one more of them is what actually observes the switch.
  */
 export async function newThread(page: Page) {
+  // "New thread" lives in Chat's contextual sidebar now — a spec standing on
+  // Lists or Sources has to walk through the Chat door first, same as a user.
+  await openView(page, "Chat");
   await page.getByRole("button", { name: "New thread" }).click();
   // No counting: every count-based signal tried here raced the rail's first
   // load, because the "No conversations." placeholder also shows while the
