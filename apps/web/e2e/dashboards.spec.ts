@@ -206,7 +206,7 @@ test.describe("dashboards", () => {
 
   test("pin from the catalog, and the rail lists what you pinned", async ({ page }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
 
     // Requirement 2: one dropdown holding every dashboard in the workspace.
     const catalog = page.getByRole("button", { name: /^All dashboards/ });
@@ -236,7 +236,7 @@ test.describe("dashboards", () => {
 
   test("a pinned tile draws the numbers its query returned", async ({ page }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
 
     const tile = page.locator(".dashboard-pin-tile", { hasText: DASHBOARDS[0] });
     await expect(tile).toBeVisible();
@@ -265,7 +265,7 @@ test.describe("dashboards", () => {
 
   test("arranging the grid survives a reload", async ({ page }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
     await expect(page.locator(".dashboard-pin-tile")).toHaveCount(2);
 
     const before = placementOf(await pinPlacements(page), DASHBOARDS[0]);
@@ -290,7 +290,7 @@ test.describe("dashboards", () => {
     expect(moved.w).toBe(before.w + 1);
 
     await page.reload();
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
     const tile = page.locator(".dashboard-pin-tile", { hasText: DASHBOARDS[0] });
     // The saved placement is what the browser actually lays the tile out with,
     // not merely what the API stored.
@@ -302,7 +302,7 @@ test.describe("dashboards", () => {
     page,
   }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
     await expect(page.locator(".dashboard-pin-tile")).toHaveCount(2);
 
     const grip = page.getByRole("button", { name: new RegExp(`^Move ${DASHBOARDS[1]}`) });
@@ -326,7 +326,7 @@ test.describe("dashboards", () => {
     page,
   }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
 
     const card = page.locator(".dashboard-template-card", { hasText: TEMPLATE });
     await expect(card).toBeVisible();
@@ -369,7 +369,7 @@ test.describe("dashboards", () => {
     page,
   }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
 
     await page
       .getByRole("button", { name: new RegExp(`^Unpin ${DASHBOARDS[1]}`) })

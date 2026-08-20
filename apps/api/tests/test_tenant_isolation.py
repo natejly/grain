@@ -804,11 +804,16 @@ DB_GET_ALLOWLIST = {
     # would apply: this is the row that would do the filtering.
     ("app/services/auth/invites.py", "Workspace"): "id comes from the invite row",
     ("app/api/chat.py", "Conversation"): "workspace re-checked on the next line",
+    ("app/api/spaces.py", "Space"): "id from a scoped replay row; workspace re-checked",
     ("app/api/generated_apps.py", "AppRelease"): "workspace re-checked on the next line",
     ("app/api/integrations.py", "IntegrationAccount"): "id from a scoped replay row",
     ("app/api/integrations.py", "SyncJob"): "id from a scoped replay row",
     ("app/services/ingestion.py", "Source"): "worker; id from an authorized route",
     ("app/services/memory.py", "Run"): "worker; id from an authorized route",
+    ("app/services/conversation_index.py", "Run"): "worker; id from an authorized route",
+    ("app/services/conversation_index.py", "Conversation"): (
+        "workspace re-checked against the run's on the next line"
+    ),
     ("app/services/agent_loop.py", "Agent"): "workspace re-checked on the next line",
     ("app/services/agent_loop.py", "AgentToolCall"): "id is the loop's own row",
     ("app/services/agent_loop.py", "Conversation"): "workspace re-checked on the next line",

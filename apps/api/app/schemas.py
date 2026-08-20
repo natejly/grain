@@ -320,13 +320,17 @@ class ToolInfoOut(ApiModel):
 
 class ConversationCreate(BaseModel):
     title: str = Field(default="New conversation", max_length=200)
+    #: The space to start the thread in; "" for an ordinary rail thread. The id
+    #: is proved against the caller's workspace at the route, so a foreign or
+    #: deleted space is a 404, never a silent unscoped thread.
+    space_id: str = ""
 
 
 #: How much a conversation asks before acting. Spelled out here rather than
 #: imported from `services.agent_loop`, matching `ToolPolicyRequest.scope`: the
 #: wire contract and the policy engine are allowed to be described twice, and
 #: schemas do not reach into services.
-ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes"]
+ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes", "plan"]
 
 
 class ConversationOut(ApiModel):
@@ -338,7 +342,8 @@ class ConversationOut(ApiModel):
     #: the other.
     subject_kind: str = ""
     subject_id: str = ""
-    #: ask_writes | ask_all | auto_writes, governing this thread and no other.
+    #: ask_writes | ask_all | auto_writes | plan, governing this thread and no
+    #: other.
     approval_mode: ApprovalMode = "ask_writes"
     #: Personal (False) vs shared (True). A shared thread is visible to every
     #: member of the same workspace; a personal thread only to its creator.
@@ -348,6 +353,9 @@ class ConversationOut(ApiModel):
     #: True when the caller may toggle `shared` (creator or workspace owner) —
     #: lets the rail disable the control rather than surprise a member with a 403.
     can_share: bool = False
+    #: The space this thread lives in; "" for none. Space threads stay in the
+    #: rail with ordinary personal/shared semantics — see `models.Conversation`.
+    space_id: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -460,6 +468,11 @@ class SendMessageRequest(BaseModel):
     #: request, so a turn that parks on an approval resumes against the file it
     #: was asked about. Ignored for a thread whose subject has no parts.
     subject_focus: Optional[str] = Field(default=None, max_length=400)
+    #: An aside ("/btw"): record the message in the transcript without starting
+    #: an agent turn. It is read as context by whichever turn comes next. When
+    #: set, every per-turn field above is ignored and the response carries no
+    #: run.
+    aside: bool = False
 
 
 class RunOut(ApiModel):
@@ -477,7 +490,9 @@ class RunOut(ApiModel):
 
 class SendMessageResponse(BaseModel):
     message: MessageOut
-    run: RunOut
+    #: None exactly when the message was an aside — nothing queued, nothing to
+    #: follow.
+    run: Optional[RunOut]
     replayed: bool = False
 
 
@@ -489,6 +504,8 @@ class SourceOut(ApiModel):
     status: str
     error: str
     chunk_count: int
+    #: The space whose threads this source informs; "" is the workspace library.
+    space_id: str = ""
     created_at: datetime
 
 
@@ -666,6 +683,35 @@ class FolderUpdateRequest(BaseModel):
 class DocumentFolderRequest(BaseModel):
     #: Always supplied. Empty files the document at the top level.
     folder_id: str = ""
+
+
+class SpaceOut(ApiModel):
+    id: str
+    name: str
+    #: Appended to the system prompt of every turn in this space's threads.
+    #: "" means no injection.
+    instructions: str
+    #: How much the space holds, for the list view — threads in the rail and
+    #: live knowledge files. Computed per request, not stored.
+    thread_count: int = 0
+    source_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class SpaceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    instructions: str = ""
+
+
+class SpaceUpdateRequest(BaseModel):
+    """Rename, rewrite the instructions, or both. Omitted means "leave it";
+    `instructions: ""` clears them, which is why neither field has a usable
+    default.
+    """
+
+    name: Optional[str] = Field(default=None, max_length=120)
+    instructions: Optional[str] = None
 
 
 class DocumentSummaryOut(ApiModel):
@@ -944,6 +990,10 @@ class MemoryItemOut(ApiModel):
     #: own. The list never contains anyone else's, so those are the only two
     #: cases and no owner id needs to go over the wire.
     shared: bool
+    #: The space this was learned in; "" for the workspace-global shelf. An id
+    #: rather than a boolean because, unlike the owner, the space is a
+    #: workspace-visible object the client can name and group by.
+    space_id: str = ""
     created_at: datetime
     updated_at: datetime
 

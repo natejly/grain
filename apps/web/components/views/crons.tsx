@@ -342,7 +342,7 @@ export function CronsView({ setError }: CronsViewProps) {
     <div className="workflow-layout">
       <aside className="workflow-sidebar">
         <div className="workflow-sidebar-head">
-          <span>Automations</span>
+          <span>Schedules</span>
           <button
             className="icon-button"
             aria-label="New automation"

@@ -24,6 +24,7 @@ from .api import (
     folders,
     generated_apps,
     graph,
+    inbox,
     integrations,
     latex,
     mcp,
@@ -34,6 +35,7 @@ from .api import (
     sandbox_tools,
     skills,
     sources,
+    spaces,
     system,
     todos,
     tools,
@@ -103,6 +105,7 @@ app.include_router(chat.router)
 app.include_router(agents.router)
 app.include_router(skills.router)
 app.include_router(sources.router)
+app.include_router(spaces.router)
 app.include_router(tools.router)
 app.include_router(audit.router)
 app.include_router(graph.router)
@@ -114,6 +117,7 @@ app.include_router(artifacts.router)
 app.include_router(board_ops.router)
 app.include_router(todos.router)
 app.include_router(doc_pending.router)
+app.include_router(inbox.router)
 app.include_router(folders.router)
 app.include_router(projects.router)
 app.include_router(latex.router)

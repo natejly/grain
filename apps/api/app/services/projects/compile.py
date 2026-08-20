@@ -127,7 +127,7 @@ def compile_latex(
     entry_path: str,
     *,
     engine: LatexEngine = "pdftex",
-    image: str = "jasmine-latex:latest",
+    image: str = "grain-latex:latest",
     timeout_seconds: int = 60,
     memory_mb: int = 2048,
     cpus: float = 2.0,
@@ -209,12 +209,12 @@ def _compile_container(
 ) -> CompileResult:
     """Run latexmk inside a Docker container with full isolation."""
     docker = _docker_binary()
-    tmpdir = Path(tempfile.mkdtemp(prefix="jasmine-latex-"))
+    tmpdir = Path(tempfile.mkdtemp(prefix="grain-latex-"))
     try:
         os.chmod(tmpdir, 0o777)
         _write_files(tmpdir, file_map)
 
-        name = f"jasmine-latex-{uuid.uuid4().hex[:12]}"
+        name = f"grain-latex-{uuid.uuid4().hex[:12]}"
         inner_argv = _latexmk_argv(entry_path, engine)
 
         argv: List[str] = [
@@ -295,7 +295,7 @@ def _compile_subprocess(
             message="latexmk is not installed on this host.",
             log="",
         )
-    tmpdir = Path(tempfile.mkdtemp(prefix="jasmine-latex-"))
+    tmpdir = Path(tempfile.mkdtemp(prefix="grain-latex-"))
     try:
         _write_files(tmpdir, file_map)
         argv = _latexmk_argv(entry_path, engine)

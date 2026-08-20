@@ -72,6 +72,9 @@ export function AgentsView({ setError }: AgentsViewProps) {
   };
 
   const remove = async (agent: AgentInfo) => {
+    // Same guard the other destructive rows have: nothing here can be undone,
+    // and the button sits one slip below "Edit".
+    if (!window.confirm(`Delete “${agent.name}”?`)) return;
     try {
       await api.deleteAgent(agent.id);
       await reload();

@@ -164,7 +164,10 @@ export function resolvePausedReason(
   return signals.heldByBudget ? PAUSED_FOR_BUDGET : "";
 }
 
-const BUDGET_RUN_LABEL = "Held by the spend limit";
+// Exported because the Inbox and the workflow strip say this too — one
+// vocabulary for the ceiling, or a user hunts for "ceiling" copy under a
+// "limit" heading.
+export const BUDGET_RUN_LABEL = "Held by the spend limit";
 const BUDGET_NODE_LABEL = "Held by the spend limit";
 
 export function nodeStatusLabel(status: string, pausedReason = ""): string {

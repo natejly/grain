@@ -17,7 +17,7 @@ terraform {
   # file is a credential. Configure this backend before the first apply:
   #
   #   terraform init \
-  #     -backend-config=bucket=fieldnote-tfstate \
+  #     -backend-config=bucket=grain-tfstate \
   #     -backend-config=key=prod/terraform.tfstate \
   #     -backend-config=region=us-east-1 \
   #     -backend-config=kms_key_id=<cmk-arn> \
@@ -37,7 +37,7 @@ provider "aws" {
     tags = {
       Project   = var.project
       ManagedBy = "terraform"
-      Component = "fieldnote"
+      Component = "grain"
     }
   }
 }

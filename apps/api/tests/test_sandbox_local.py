@@ -38,7 +38,7 @@ def local(workdir: Path) -> SubprocessProvider:
 
     return SubprocessProvider(
         workdir=workdir,
-        env={"JASMINE_SANDBOX": "1", "PYTHONUNBUFFERED": "1"},
+        env={"GRAIN_SANDBOX": "1", "PYTHONUNBUFFERED": "1"},
         python_binary=sys.executable,
     )
 
@@ -217,7 +217,7 @@ def test_kill_removes_the_session_and_is_idempotent(
 @pytest.fixture
 def container(workdir: Path) -> ContainerProvider:
     return ContainerProvider(
-        workdir=workdir, env={"JASMINE_SANDBOX": "1"}, image="jasmine-sandbox:test"
+        workdir=workdir, env={"GRAIN_SANDBOX": "1"}, image="grain-sandbox:test"
     )
 
 
@@ -257,10 +257,10 @@ def test_the_sandbox_environment_reaches_the_container_and_the_host_env_does_not
     workdir: Path,
 ) -> None:
     provider = ContainerProvider(
-        workdir=workdir, env={"JASMINE_SANDBOX": "1"}, image="img"
+        workdir=workdir, env={"GRAIN_SANDBOX": "1"}, image="img"
     )
     argv = provider._docker_argv(workdir / "box-1", ["python3"], "box-1-run")
-    assert "JASMINE_SANDBOX=1" in argv
+    assert "GRAIN_SANDBOX=1" in argv
 
 
 def test_an_allowlist_policy_is_refused_rather_than_quietly_widened(

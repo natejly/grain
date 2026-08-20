@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openView } from "./shell";
+import { newThread, openView } from "./shell";
 
 /**
  * Todo lists, and the approval mode that governs a thread.
@@ -43,7 +43,7 @@ const item = (page: Page, title: string) =>
   page.locator(".todo-item", { hasText: title }).first();
 
 async function createList(page: Page, name: string) {
-  await openView(page, "Files", /^Lists/);
+  await openView(page, "Library", /^Lists/);
   await page.getByRole("textbox", { name: "List name" }).fill(name);
   await page.locator(".todo-new").getByRole("button", { name: /Create/ }).click();
   await expect(page.getByRole("heading", { name })).toBeVisible();
@@ -55,7 +55,7 @@ async function createList(page: Page, name: string) {
  * swallows the next spec's dialog instead.
  */
 async function deleteList(page: Page, name: string) {
-  await openView(page, "Files", /^Lists/);
+  await openView(page, "Library", /^Lists/);
   await listNamed(page, name).getByRole("button", { name: `Delete ${name}` }).click();
   await expect(page.getByRole("heading", { name })).toHaveCount(0);
 }
@@ -134,12 +134,12 @@ test("a todo list is checkable, and the tick survives a reload", async ({ page }
 
   // The tick is on the server, not in this tab.
   await page.reload();
-  await openView(page, "Files", /^Lists/);
+  await openView(page, "Library", /^Lists/);
   await expect(item(page, "Ship the docs").getByRole("checkbox")).toBeChecked();
 
   // A one-column board is a list and therefore *not* a board: the two tabs
   // partition what exists rather than showing the same thing twice.
-  await openView(page, "Files", /^Boards/);
+  await openView(page, "Library", /^Boards/);
   await expect(page.getByRole("heading", { name: "Docs checklist" })).toHaveCount(0);
 
   await deleteList(page, "Docs checklist");
@@ -153,7 +153,7 @@ test("a write parks under ask_writes, runs under the bypass, and a deny survives
   await page.goto("/");
   await createList(page, LIST);
 
-  await page.getByRole("button", { name: "New thread" }).click();
+  await newThread(page);
 
   // A fresh thread asks before it writes, and says so.
   const modeTrigger = page.getByRole("button", { name: /^Approval mode:/ });
@@ -228,7 +228,7 @@ test("a write parks under ask_writes, runs under the bypass, and a deny survives
   await page.screenshot({ path: "test-results/approval-bypass.png", fullPage: true });
 
   // Per conversation, and visibly so: a second thread is not bypassed.
-  await page.getByRole("button", { name: "New thread" }).click();
+  await newThread(page);
   await expect(page.locator(".bypass-banner")).toHaveCount(0);
   await expect(modeTrigger).toHaveAccessibleName("Approval mode: Ask before writes");
 
@@ -267,7 +267,7 @@ test("a write parks under ask_writes, runs under the bypass, and a deny survives
 
   // The refusal was real: nothing was added, and the agent's tick is on the
   // server rather than only in the transcript that showed it.
-  await openView(page, "Files", /^Lists/);
+  await openView(page, "Library", /^Lists/);
   const list = listNamed(page, LIST);
   await expect(list).toContainText("1 of 2 done");
   await expect(list.getByText("Smoke-test checkout")).toHaveCount(0);

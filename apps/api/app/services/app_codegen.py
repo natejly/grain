@@ -21,36 +21,49 @@ SAMPLE_ROWS = 5
 
 # Injected into every generated app; the only channel in or out is postMessage.
 #
-# Naming: the runtime object is `window.jasmine` and the wire messages are
-# `jasmine:*`. `window.fieldnote` is kept as an alias to the *same object*, not
-# a copy — the model was told the old name for every app generated so far, and
-# a body that still says `window.fieldnote.onData = ...` has to keep working.
-# The host speaks both message namespaces for the same reason: a published
+# Naming: the runtime object is `window.grain` and the wire messages are
+# `grain:*`. `window.jasmine` and `window.fieldnote` are kept as aliases to the
+# *same object*, not copies — the model was told the older names for every app
+# generated before each rename, and a body that still says
+# `window.jasmine.onData = ...` (or `window.fieldnote....`) has to keep
+# working. The same goes for the `--jasmine-*` CSS variables, which older
+# bodies reference and which now resolve through the `--grain-*` tokens. The
+# host speaks all three message namespaces for the same reason: a published
 # release stores its own frozen copy of this runtime, so every snapshot cut
-# before today posts `fieldnote:ready` and listens for `fieldnote:init`
-# forever. See SandboxFrame for the host half of that compatibility.
-JASMINE_RUNTIME = """<style>
+# before a rename posts `jasmine:ready` or `fieldnote:ready` and listens for
+# the matching `:init` forever. See SandboxFrame for the host half of that
+# compatibility.
+GRAIN_RUNTIME = """<style>
 :root {
   color-scheme: light;
-  --jasmine-bg: #fffdf8;
-  --jasmine-surface: #faf7f0;
-  --jasmine-border: #e3dcce;
-  --jasmine-text: #2e2a24;
-  --jasmine-muted: #6b6357;
-  --jasmine-accent: #2c7454;
-  --jasmine-accent-soft: #6fbf9b;
+  --grain-bg: #fffdf8;
+  --grain-surface: #faf7f0;
+  --grain-border: #e3dcce;
+  --grain-text: #2e2a24;
+  --grain-muted: #6b6357;
+  --grain-accent: #2c7454;
+  --grain-accent-soft: #6fbf9b;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --jasmine-bg: #0b0d10;
-  --jasmine-surface: #12161c;
-  --jasmine-border: #282f39;
-  --jasmine-text: #e7eaf0;
-  --jasmine-muted: #929ba8;
-  --jasmine-accent: #7c9cff;
-  --jasmine-accent-soft: #a8bcff;
+  --grain-bg: #0b0d10;
+  --grain-surface: #12161c;
+  --grain-border: #282f39;
+  --grain-text: #e7eaf0;
+  --grain-muted: #929ba8;
+  --grain-accent: #7c9cff;
+  --grain-accent-soft: #a8bcff;
 }
-html, body { background: var(--jasmine-bg); color: var(--jasmine-text); }
+:root {
+  --jasmine-bg: var(--grain-bg);
+  --jasmine-surface: var(--grain-surface);
+  --jasmine-border: var(--grain-border);
+  --jasmine-text: var(--grain-text);
+  --jasmine-muted: var(--grain-muted);
+  --jasmine-accent: var(--grain-accent);
+  --jasmine-accent-soft: var(--grain-accent-soft);
+}
+html, body { background: var(--grain-bg); color: var(--grain-text); }
 </style>
 <script>
 (function () {
@@ -58,7 +71,7 @@ html, body { background: var(--jasmine-bg); color: var(--jasmine-text); }
   var counter = 0;
   var handler = null;
   var delivered = false;
-  window.jasmine = {
+  window.grain = {
     snapshots: {},
     theme: "light",
     query: function (dataset, query) {
@@ -66,7 +79,7 @@ html, body { background: var(--jasmine-bg); color: var(--jasmine-text); }
         var requestId = "q" + (counter += 1);
         pending[requestId] = { resolve: resolve, reject: reject };
         parent.postMessage(
-          { type: "jasmine:query", requestId: requestId, dataset: dataset, query: query || {} },
+          { type: "grain:query", requestId: requestId, dataset: dataset, query: query || {} },
           "*"
         );
       });
@@ -74,40 +87,42 @@ html, body { background: var(--jasmine-bg); color: var(--jasmine-text); }
   };
   // onData may be assigned before or after the host delivers data, so the
   // setter replays whatever already arrived instead of dropping the render.
-  Object.defineProperty(window.jasmine, "onData", {
+  Object.defineProperty(window.grain, "onData", {
     get: function () { return handler; },
     set: function (fn) {
       handler = fn;
-      if (delivered && typeof fn === "function") fn(window.jasmine.snapshots);
+      if (delivered && typeof fn === "function") fn(window.grain.snapshots);
     }
   });
-  // Same object under the old name: assignments through either reference are
-  // visible through the other, onData included.
-  window.fieldnote = window.jasmine;
+  // Same object under the old names: assignments through any reference are
+  // visible through the others, onData included.
+  window.jasmine = window.grain;
+  window.fieldnote = window.grain;
   window.addEventListener("message", function (event) {
     var msg = event.data || {};
-    if (msg.type === "jasmine:init") {
-      window.jasmine.snapshots = msg.snapshots || {};
+    if (msg.type === "grain:init") {
+      window.grain.snapshots = msg.snapshots || {};
       if (msg.theme === "dark" || msg.theme === "light") {
-        window.jasmine.theme = msg.theme;
+        window.grain.theme = msg.theme;
         document.documentElement.setAttribute("data-theme", msg.theme);
       }
       delivered = true;
-      if (typeof handler === "function") handler(window.jasmine.snapshots);
+      if (typeof handler === "function") handler(window.grain.snapshots);
     }
-    if (msg.type === "jasmine:result" && pending[msg.requestId]) {
+    if (msg.type === "grain:result" && pending[msg.requestId]) {
       var entry = pending[msg.requestId];
       delete pending[msg.requestId];
       if (msg.error) entry.reject(new Error(msg.error));
       else entry.resolve(msg.result);
     }
   });
-  parent.postMessage({ type: "jasmine:ready" }, "*");
+  parent.postMessage({ type: "grain:ready" }, "*");
 })();
 </script>"""
 
-# The old module-level name, for any in-tree importer that has not moved yet.
-FIELDNOTE_RUNTIME = JASMINE_RUNTIME
+# The old module-level names, for any in-tree importer that has not moved yet.
+JASMINE_RUNTIME = GRAIN_RUNTIME
+FIELDNOTE_RUNTIME = GRAIN_RUNTIME
 
 CODEGEN_INSTRUCTIONS = """You generate a single self-contained HTML fragment for a data mini-app
 that runs inside a locked-down sandboxed iframe.
@@ -117,17 +132,17 @@ Hard constraints — the sandbox enforces them, so violations just break the app
 - NO external URLs of any kind: no CDN scripts, stylesheets, fonts, images, or fetch/XHR —
   the frame's CSP is default-src 'none' with connect-src 'none'.
 - Data arrives ONLY through the provided runtime (already injected before your code):
-  * `window.jasmine.snapshots` — object mapping dataset name to {columns, rows, row_count}.
-  * `window.jasmine.onData = (snapshots) => …` — called when snapshots arrive; render there.
-  * `await window.jasmine.query(name, {filters, group_by, metrics, order_by, limit})` —
+  * `window.grain.snapshots` — object mapping dataset name to {columns, rows, row_count}.
+  * `window.grain.onData = (snapshots) => …` — called when snapshots arrive; render there.
+  * `await window.grain.query(name, {filters, group_by, metrics, order_by, limit})` —
     live typed queries (preview only; may reject when offline — fall back to snapshots).
-  * `window.jasmine.theme` — "light" or "dark", set before onData fires.
+  * `window.grain.theme` — "light" or "dark", set before onData fires.
 - Do not emit <html>, <head>, <body>, <meta>, or another copy of the runtime.
 - The app must work in BOTH themes, so do not hardcode colours. The runtime already
   sets the page background and text colour and exposes these variables — use them:
-  --jasmine-bg, --jasmine-surface, --jasmine-border, --jasmine-text, --jasmine-muted,
-  --jasmine-accent, --jasmine-accent-soft. For chart series and anything the variables
-  do not cover, read window.jasmine.theme inside onData and pick a palette.
+  --grain-bg, --grain-surface, --grain-border, --grain-text, --grain-muted,
+  --grain-accent, --grain-accent-soft. For chart series and anything the variables
+  do not cover, read window.grain.theme inside onData and pick a palette.
 
 Return ONLY the HTML fragment, no markdown fences, no commentary."""
 
@@ -194,7 +209,7 @@ def build_code_manifest(
     else:
         parts = [f"App name: {app_name}", f"Request: {prompt}"]
         if schema_notes:
-            parts.append("Available datasets (via window.jasmine):\n" + "\n".join(schema_notes))
+            parts.append("Available datasets (via window.grain):\n" + "\n".join(schema_notes))
         else:
             parts.append("No datasets are bound; build a static informational page.")
         if previous_html:
@@ -210,7 +225,7 @@ def build_code_manifest(
             )
 
     lint_generated_html(body)
-    html = JASMINE_RUNTIME + "\n" + body
+    html = GRAIN_RUNTIME + "\n" + body
     manifest = {
         "schema_version": 2,
         "kind": "code",

@@ -8,11 +8,15 @@ import { ApiHealthBanner } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
 import { PaneToggle, useCollapsiblePane } from "./collapsible-pane";
 import { CreateMenu } from "./create-menu";
-import { SettingsMenu } from "./settings-menu";
+import { WorkspaceSettingsMenu } from "./settings-menu";
 import { useWorkspace } from "./use-workspace";
-import { ActivityView } from "./views/activity";
+import { InboxView, asCall } from "./views/inbox";
 import { AdminView } from "./views/admin";
+import { DatasetsView } from "./views/datasets";
 import { AgentsView } from "./views/agents";
+import { SpacesView } from "./views/spaces";
+import { spaceNameOf } from "./views/space-threads";
+import { AppsView } from "./views/apps";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
 import { ChatSplit } from "./views/chat-split";
@@ -26,7 +30,6 @@ import { McpView } from "./views/mcp";
 import { MemoryView } from "./views/memory";
 import {
   DEFAULT_GROUP_VIEW,
-  NAV_GROUPS,
   RAIL_GROUPS,
   groupForView,
   type CreateAction,
@@ -56,8 +59,12 @@ export function Workspace() {
     activeConversation,
     messages,
     sources,
+    spaces,
     agentCalls,
     auditEvents,
+    inbox,
+    createDatasetFromSource,
+    createDatasetVersionFromSource,
     graph,
     memories,
     datasets,
@@ -127,6 +134,7 @@ export function Workspace() {
     setFocusedDashboard,
     loadWorkspace,
     refreshOffScreenWork,
+    refreshSecondary,
     refreshPendingEdits,
     reloadOpenDocument,
     reloadOpenProject,
@@ -230,6 +238,11 @@ export function Workspace() {
         onClick={() => selectConversation(conversation.id)}
       >
         <span>{conversation.title}</span>
+        {spaceNameOf(conversation, spaces) && (
+          <span className="thread-space-chip">
+            {spaceNameOf(conversation, spaces)}
+          </span>
+        )}
         <time>{formatRelative(conversation.updated_at)}</time>
       </button>
       {share && (
@@ -269,9 +282,13 @@ export function Workspace() {
     );
   };
 
-  // Per-view badge numbers. A view with no count (Chat, Graph, Activity) is
-  // absent: Graph's size is a projection of Sources, so counting it in the
-  // Knowledge badge would double-count what the user actually put in.
+  // Per-view badge numbers, shown on the tab strip inside a group. A view with
+  // no count (Chat, Graph, Inbox) is absent: Graph's size is a projection of
+  // Sources, so counting it in the Knowledge badge would double-count what the
+  // user actually put in. Deliberately NOT summed onto the rail: the rail's one
+  // number is the Inbox's count of requests waiting on a human, and an
+  // inventory figure beside it would make "3" mean stock on one row and
+  // attention on the next.
   const viewCounts: Partial<Record<View, number>> = {
     sources: sources.length,
     memory: memories.length,
@@ -281,9 +298,9 @@ export function Workspace() {
     // not here, so counting it twice would make both numbers wrong.
     boards: kanbanBoards.length,
     todos: todoLists.length,
-    // Both kinds live on that page, so the badge counts both; a number that
-    // only counted half of what the page shows is worse than no number.
-    dashboards: dashboardApps.length + dashboards.length,
+    datasets: datasets.length,
+    dashboards: dashboards.length,
+    apps: dashboardApps.length,
     data: dbConnections.length,
     mcp: mcpServers.length,
     "sandbox-tools": sandboxTools.length,
@@ -317,16 +334,6 @@ export function Workspace() {
     setSidebarOpen(false);
   }
 
-  /** Totals for the groups the Settings menu hides; badges must not hide too. */
-  const groupCounts: Partial<Record<GroupId, number>> = Object.fromEntries(
-    NAV_GROUPS.filter((group) =>
-      group.items.some((item) => viewCounts[item.view] !== undefined),
-    ).map((group) => [
-      group.id,
-      group.items.reduce((sum, item) => sum + (viewCounts[item.view] ?? 0), 0),
-    ]),
-  );
-
   // "Workflow" in the Create menu opens the composer inside the panel that owns
   // workflows, rather than compiling anything on the way past. The panel lowers
   // the flag once it has acted, so navigating back later does not reopen a
@@ -349,10 +356,10 @@ export function Workspace() {
     if (action.id === "latex") return createProject(name, "", "latex");
     if (action.id === "board") return createBoard(name);
     // A workflow is a sentence, compiled and reviewed before it exists at all,
-    // so the composer *is* the creation step — same as a dashboard's editor.
+    // so the composer *is* the creation step — same as an app's editor.
     if (action.id === "workflow") return setWorkflowRequested(true);
-    // A dashboard is named, bound to data and generated in one editor; opening
-    // it *is* the creation step, and it lands on the gallery when closed.
+    // An app is named, bound to data and generated in one editor; opening
+    // it *is* the creation step, and it lands on the Apps gallery when closed.
     return setEditing("new");
   }
 
@@ -372,7 +379,12 @@ export function Workspace() {
         {/* Above everything else because everything else is scoped to it. */}
         <WorkspaceSwitcher />
 
-        <button className="chrome-button new-thread-button" onClick={newConversation}>
+        <button
+          className="chrome-button new-thread-button"
+          // Wrapped: newConversation takes an optional space id now, and a
+          // MouseEvent must not arrive in that slot.
+          onClick={() => void newConversation()}
+        >
           <Plus size={16} />
           New thread
         </button>
@@ -382,7 +394,18 @@ export function Workspace() {
         <nav className="primary-nav" aria-label="Workspace">
           {RAIL_GROUPS.map((group) => {
             const Icon = group.icon;
-            const total = groupCounts[group.id];
+            // The shell's ONE numeric badge: requests parked waiting on a
+            // human, on the destination that answers them. Counted from the
+            // unbounded feed, not from the fifty-row call window — the window
+            // is how this number used to read zero over a real backlog. Until
+            // the feed's first read lands, the window count stands in rather
+            // than showing a zero that is not yet known to be true.
+            const approvalBadge =
+              group.id !== "inbox"
+                ? 0
+                : inbox
+                  ? inbox.approvals.length + inbox.budget_holds.length
+                  : pendingApprovals.length;
             return (
               <button
                 key={group.id}
@@ -392,11 +415,72 @@ export function Workspace() {
               >
                 <Icon size={17} />
                 {group.label}
-                {total !== undefined && <span className="nav-count">{total}</span>}
+                {approvalBadge > 0 && (
+                  <span className="approval-count">{approvalBadge}</span>
+                )}
               </button>
             );
           })}
         </nav>
+
+        {/* Waiting-on-you: the top of the Inbox, rendered where the eye lands
+            first. A run that parked overnight greets the user before they open
+            anything; each row is decidable in place, and the strip caps at two
+            because it is a doorbell, not the door — the Inbox is one click up. */}
+        {inbox && inbox.approvals.length > 0 && (
+          <div className="waiting-strip" role="group" aria-label="Waiting on you">
+            <span className="waiting-strip-title">Waiting on you</span>
+            {inbox.approvals.slice(0, 2).map((row) => (
+              <div key={row.id} className="waiting-strip-item">
+                <button
+                  className="waiting-strip-open"
+                  onClick={() => {
+                    if (row.conversation_id) {
+                      void selectConversation(row.conversation_id);
+                    } else {
+                      openGroup("inbox");
+                    }
+                  }}
+                >
+                  <strong>{row.name}</strong>
+                  <span>
+                    {row.conversation_title || row.origin} ·{" "}
+                    {formatRelative(row.created_at)}
+                  </span>
+                </button>
+                <button
+                  className="icon-button waiting-approve"
+                  title={`Approve ${row.name}`}
+                  aria-label={`Approve ${row.name}`}
+                  onClick={() =>
+                    void decideAgentCall(asCall(row), "approved", false)
+                      .then(refreshSecondary)
+                      .catch(() => undefined)
+                  }
+                >
+                  ✓
+                </button>
+                <button
+                  className="icon-button waiting-deny"
+                  title={`Deny ${row.name}`}
+                  aria-label={`Deny ${row.name}`}
+                  onClick={() =>
+                    void decideAgentCall(asCall(row), "denied", false)
+                      .then(refreshSecondary)
+                      .catch(() => undefined)
+                  }
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {inbox.approvals.length > 2 && (
+              <button className="waiting-strip-more" onClick={() => openGroup("inbox")}>
+                {inbox.approvals.length - 2} more in Inbox
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Beneath the destinations, and deliberately not among them: a pin is
             not a place the product has, it is a chart *this user* wanted where
@@ -523,12 +607,7 @@ export function Workspace() {
           </div>
           <div className="topbar-actions">
             <CreateMenu create={create} />
-            <SettingsMenu
-              activeGroup={activeGroup.id}
-              counts={groupCounts}
-              approvals={pendingApprovals.length}
-              open={openGroup}
-            />
+            <WorkspaceSettingsMenu activeGroup={activeGroup.id} open={openGroup} />
             <ThemeToggle />
             {/* The prompt-injection screen's posture, shown only when it is on:
                 a status indicator, not a control. "enforce" is the mode that
@@ -622,7 +701,11 @@ export function Workspace() {
                 regenerate={regenerate}
                 decideAgentCall={decideAgentCall}
                 openCitation={openCitation}
-                onAttach={() => setView("sources")}
+                attach={{
+                  upload: uploadFiles,
+                  uploading,
+                  createDataset: createDatasetFromSource,
+                }}
                 approval={{
                   mode: activeThread?.approval_mode ?? "ask_writes",
                   setMode: setApprovalMode,
@@ -676,12 +759,41 @@ export function Workspace() {
           <GraphView graph={graph} rebuild={rebuildKnowledgeGraph} openChunk={openChunk} />
         )}
 
-        {view === "dashboards" && (
-          <DashboardsView
+        {view === "datasets" && (
+          <DatasetsView
+            datasets={datasets}
+            sources={sources}
+            createDataset={createDatasetFromSource}
+            createVersion={createDatasetVersionFromSource}
+            // The cross-link that closes the connect-data → chart-it trek:
+            // dashboards are written by the agent, so "Chart this" hands the
+            // composer the sentence and goes where the agent answers.
+            chartThis={(dataset) => {
+              setDraft(`Build a chart from the “${dataset.name}” dataset: `);
+              setView("chat");
+              setSidebarOpen(false);
+            }}
+            setError={setError}
+          />
+        )}
+
+        {view === "apps" && (
+          <AppsView
             apps={dashboardApps}
             openEditor={setEditing}
             publish={publishGeneratedApp}
             rollback={rollbackGeneratedApp}
+          />
+        )}
+
+        {view === "dashboards" && (
+          <DashboardsView
+            apps={dashboardApps}
+            askForChart={() => {
+              setDraft("Build a chart from my data: ");
+              setView("chat");
+              setSidebarOpen(false);
+            }}
             dashboards={dashboards}
             templates={dashboardTemplates}
             datasets={datasets}
@@ -809,6 +921,17 @@ export function Workspace() {
 
         {/* Self-contained like WorkflowsView: the agent list is fetched when
             somebody opens the editor, not at page load. */}
+        {view === "spaces" && (
+          <SpacesView
+            spaces={spaces}
+            conversations={conversations}
+            sources={sources}
+            setError={setError}
+            refreshSpaces={refreshSecondary}
+            onSelectConversation={selectConversation}
+            onNewThread={(spaceId) => void newConversation(spaceId)}
+          />
+        )}
         {view === "agents" && <AgentsView setError={setError} />}
 
         {/* Self-contained like AgentsView: the skill list is nobody's business
@@ -852,11 +975,13 @@ export function Workspace() {
         )}
 
         {view === "activity" && (
-          <ActivityView
-            calls={agentCalls}
+          <InboxView
+            feed={inbox}
+            refreshFeed={() => void refreshSecondary().catch(() => undefined)}
             events={auditEvents}
             decide={decideAgentCall}
             activeRun={activeRun}
+            openConversation={(id) => void selectConversation(id)}
           />
         )}
 

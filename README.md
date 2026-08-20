@@ -1,6 +1,7 @@
-# Jasmine
+# Grain
 
-Jasmine is a local-first agentic knowledge workspace. It combines cited chat,
+**Grain**, by Rice Labs, is a local-first agentic knowledge workspace. It
+combines cited chat,
 explicit tool approval, a rebuildable knowledge graph, bounded analytical
 dashboards, and immutable published app snapshots.
 

@@ -55,6 +55,7 @@ EMBEDDING = "embedding"
 CODEGEN = "codegen"
 CONTEXT_BLURB = "context_blurb"
 MEMORY_EXTRACTION = "memory_extraction"
+CONVERSATION_SUMMARY = "conversation_summary"
 GRAPH_EXTRACTION = "graph_extraction"
 WORKFLOW_COMPILE = "workflow_compile"
 # The prompt-injection screen's builtin classifier. Billed like every other
@@ -68,6 +69,7 @@ OPERATIONS = (
     CODEGEN,
     CONTEXT_BLURB,
     MEMORY_EXTRACTION,
+    CONVERSATION_SUMMARY,
     GRAPH_EXTRACTION,
     WORKFLOW_COMPILE,
     SCREEN,

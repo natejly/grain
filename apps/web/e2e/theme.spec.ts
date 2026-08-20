@@ -46,7 +46,7 @@ test.describe("theme", () => {
     expect(await page.evaluate(themeAttribute)).toBe("dark");
     expect(await page.evaluate(bodyBackground)).toBe(INK);
     expect(
-      await page.evaluate(() => localStorage.getItem("jasmine-theme")),
+      await page.evaluate(() => localStorage.getItem("grain-theme")),
     ).toBe("dark");
 
     // Explicit light must beat a dark system preference too, not just the

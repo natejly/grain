@@ -15,6 +15,7 @@ import type {
   DocumentVersion,
   Folder,
   GeneratedApp,
+  InboxFeed,
   IntegrationProvider,
   KnowledgeGraph,
   McpServer,
@@ -26,6 +27,7 @@ import type {
   SandboxTool,
   Skill,
   Source,
+  Space,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
@@ -86,8 +88,13 @@ export function useWorkspace() {
   const [activeConversation, setActiveConversation] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
+  const [spaces, setSpaces] = useState<Space[]>([]);
   const [agentCalls, setAgentCalls] = useState<AgentToolCall[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  // The unified attention feed (GET /api/inbox): the server-truth waiting set
+  // behind the rail badge, the sidebar strip and the Inbox page. Null until
+  // the first read lands, so "0" is never shown before it is known.
+  const [inbox, setInbox] = useState<InboxFeed | null>(null);
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -234,14 +241,22 @@ export function useWorkspace() {
   );
 
   const refreshSecondary = useCallback(async () => {
-    const [nextSources, nextAgentCalls, nextAudit] = await Promise.all([
+    const [nextSources, nextSpaces, nextAgentCalls, nextAudit, nextInbox] = await Promise.all([
       api.listSources(),
+      api.listSpaces(),
       api.listAgentToolCalls(),
       api.listAuditEvents(),
+      // Beside — not derived from — the call list: `listAgentToolCalls` is a
+      // fifty-row window of calls of ANY status, so counting its proposed rows
+      // is how the badge used to undercount a backlog. The feed is the
+      // server's own unbounded waiting set.
+      api.getInbox(),
     ]);
     setSources(nextSources);
+    setSpaces(nextSpaces);
     setAgentCalls(nextAgentCalls);
     setAuditEvents(nextAudit);
+    setInbox(nextInbox);
   }, []);
 
   const refreshExpansion = useCallback(async () => {
@@ -282,6 +297,32 @@ export function useWorkspace() {
     setDashboardTemplates(nextTemplates);
     setDashboardPins(nextPins);
   }, []);
+
+  /** Make a dataset from an indexed tabular source, and show it everywhere. */
+  const createDatasetFromSource = useCallback(
+    async (name: string, sourceId: string) => {
+      try {
+        await api.createDataset(name, sourceId);
+        await refreshExpansion();
+      } catch (caught) {
+        setError(describeError(caught, "Could not create the dataset"));
+      }
+    },
+    [refreshExpansion],
+  );
+
+  /** A new immutable version; the old one stays and its bindings keep working. */
+  const createDatasetVersionFromSource = useCallback(
+    async (datasetId: string, sourceId: string) => {
+      try {
+        await api.createDatasetVersion(datasetId, sourceId);
+        await refreshExpansion();
+      } catch (caught) {
+        setError(describeError(caught, "Could not create the version"));
+      }
+    },
+    [refreshExpansion],
+  );
 
   const refreshArtifacts = useCallback(async () => {
     const [nextDocuments, nextFolders, nextBoards] = await Promise.all([
@@ -429,8 +470,10 @@ export function useWorkspace() {
         boot,
         chats,
         nextSources,
+        nextSpaces,
         nextAgentCalls,
         nextAudit,
+        nextInbox,
         nextGraph,
         nextMemories,
         nextDatasets,
@@ -442,8 +485,10 @@ export function useWorkspace() {
         api.bootstrap(),
         api.listConversations(),
         api.listSources(),
+        api.listSpaces(),
         api.listAgentToolCalls(),
         api.listAuditEvents(),
+        api.getInbox(),
         api.getGraph(),
         api.listMemory(),
         api.listDatasets(),
@@ -461,8 +506,10 @@ export function useWorkspace() {
         return [...createdDuringLoad, ...chats];
       });
       setSources(nextSources);
+      setSpaces(nextSpaces);
       setAgentCalls(nextAgentCalls);
       setAuditEvents(nextAudit);
+      setInbox(nextInbox);
       setGraph(nextGraph);
       setMemories(nextMemories);
       setDatasets(nextDatasets);
@@ -474,7 +521,12 @@ export function useWorkspace() {
       if (chats[0] && !activeConversationRef.current) {
         setActiveConversation(chats[0].id);
         activeConversationRef.current = chats[0].id;
-        setMessages(await api.listMessages(chats[0].id));
+        const loaded = await api.listMessages(chats[0].id);
+        // The user may have switched threads while this fetch was in flight —
+        // "New thread" clicked right after page load — and a stale transcript
+        // replacing theirs puts one thread's messages under another's header.
+        // Same guard the stream loop uses, for the same reason.
+        if (activeConversationRef.current === chats[0].id) setMessages(loaded);
       }
     } catch (caught) {
       setError(describeError(caught, "Could not load workspace"));
@@ -717,7 +769,6 @@ export function useWorkspace() {
 
   const sourceHandlers = createSourceHandlers({
     setError,
-    setView,
     setUploading,
     setDragging,
     refreshSecondary,
@@ -757,8 +808,13 @@ export function useWorkspace() {
     activeConversation,
     messages,
     sources,
+    spaces,
     agentCalls,
     auditEvents,
+    inbox,
+    refreshSecondary,
+    createDatasetFromSource,
+    createDatasetVersionFromSource,
     graph,
     memories,
     datasets,

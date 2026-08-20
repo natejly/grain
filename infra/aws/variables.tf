@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "project" {
   description = "Name prefix for every resource. Short, lowercase, DNS-safe."
   type        = string
-  default     = "fieldnote"
+  default     = "grain"
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{2,20}$", var.project))
@@ -74,7 +74,7 @@ variable "ecs_ami_ssm_parameter" {
 
 variable "data_volume_gb" {
   description = <<-EOT
-    Persistent gp3 volume mounted at /var/lib/fieldnote, holding OBJECTS_DIR and
+    Persistent gp3 volume mounted at /var/lib/grain, holding OBJECTS_DIR and
     SANDBOX_WORKDIR. Separate from the root volume so replacing the instance
     does not destroy uploaded originals or dataset snapshots.
   EOT

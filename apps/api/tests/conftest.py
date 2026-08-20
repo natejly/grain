@@ -15,8 +15,56 @@ from app.config import project_root  # noqa: E402
 # anchored the same way. Resolving them against the cwd instead deletes a phantom
 # apps/api/data copy while the app keeps using a stale repo-root database — the
 # failure mode recorded in tasks/lessons.md.
-TEST_DB = project_root() / "data" / "test_workspace.db"
-TEST_OBJECTS = project_root() / "data" / "test_objects"
+#
+# Per-process names, not a shared one. Two suites running at once — two working
+# trees, two editor sessions, a human and CI — against one sqlite file corrupt
+# it ("database disk image is malformed", then a thousand errors that look like
+# schema bugs). The pid keeps each run on its own file; the sweep below clears
+# any siblings a crashed run left behind, but only when they are not locked by
+# a live process — never the file another run is writing this second.
+_SUFFIX = f"_{os.getpid()}"
+TEST_DB = project_root() / "data" / f"test_workspace{_SUFFIX}.db"
+TEST_OBJECTS = project_root() / "data" / f"test_objects{_SUFFIX}"
+
+
+def _pid_is_live(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _sweep_leftovers() -> None:
+    """Remove siblings a crashed run left behind — and nothing a live run owns.
+
+    Only pid-suffixed files are considered, and only when their pid is dead:
+    POSIX unlink succeeds on a file another process has open, so a "is it
+    locked" probe cannot protect a concurrent run — the pid can. The legacy
+    unsuffixed `test_workspace.db` is deliberately left alone; an old checkout's
+    run may still be writing it, and it is one stale file, not a leak.
+    """
+    data = project_root() / "data"
+    if not data.exists():
+        return
+    for stale in list(data.glob("test_workspace_*.db")) + [
+        path for path in data.glob("test_objects_*") if path.is_dir()
+    ]:
+        tail = stale.name.rsplit("_", 1)[-1].removesuffix(".db")
+        if not tail.isdigit() or _pid_is_live(int(tail)):
+            continue
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+        else:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
+
+_sweep_leftovers()
 if TEST_DB.exists():
     TEST_DB.unlink()
 if TEST_OBJECTS.exists():

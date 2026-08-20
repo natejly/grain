@@ -3,7 +3,7 @@
 // written straight into Secrets Manager (see secrets.tf).
 
 aws_region = "us-east-1"
-project    = "fieldnote"
+project    = "grain"
 
 // Must be covered by acm_certificate_arn, and must match the Google OAuth
 // console redirect entry character for character.
@@ -32,7 +32,7 @@ alarm_email = "ops@example.com"
 
 // Optional CI deploy role.
 // enable_github_oidc = true
-// github_repo        = "yourorg/dashbored"
+// github_repo        = "ricelabs/grain"
 
 // Anything else on Settings that you want to override, upper-cased field name
 // to value. These are visible to anyone who can DescribeTaskDefinition.

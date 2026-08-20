@@ -45,6 +45,7 @@ import {
   inputLabel,
   isBudgetPark,
   nodeStatusLabel,
+  BUDGET_RUN_LABEL,
   resolvePausedReason,
   runIsSettled,
   runStatusLabel,
@@ -92,12 +93,11 @@ export type WorkflowsViewProps = {
 };
 
 /**
- * How many workflows are scanned for runs waiting on a human when the view
- * opens. A bound rather than a page: the answer to "is anything waiting for me"
- * has to arrive with the list, and a workspace with hundreds of automations
- * should not open with hundreds of requests.
+ * How much history one workflow's run panel shows. This is the only bound
+ * left in this file: "is anything waiting for me" comes from GET /api/inbox,
+ * which has no horizon — the 25-workflow scan that used to answer it here
+ * could not see workflow #26's parked run.
  */
-const INBOX_WORKFLOWS = 25;
 const RUNS_PER_WORKFLOW = 20;
 
 /**
@@ -718,40 +718,62 @@ export function WorkflowsView({
     [heldByBudget, hasProposal],
   );
 
+  /**
+   * What is waiting, from the server's own unbounded feed.
+   *
+   * This view used to reconstruct its inbox by scanning the first twenty-five
+   * workflows' last twenty runs each — twenty-five requests whose bounds meant
+   * workflow #26's parked run, or a run older than its workflow's twentieth,
+   * was invisible on the exact surface that promised to show it. The feed is
+   * one request and has no horizon; runs-per-workflow history now loads when a
+   * workflow is selected, not for the whole roster up front.
+   */
+  const [feedWaiting, setFeedWaiting] = useState<
+    Array<{
+      workflowRunId: string;
+      workflowId: string;
+      name: string;
+      held: boolean;
+      created_at: string;
+    }>
+  >([]);
+
   const load = useCallback(async () => {
     try {
-      const rows = await api.listWorkflows();
+      const [rows, feed] = await Promise.all([api.listWorkflows(), api.getInbox()]);
       setWorkflows(rows);
-      const scanned = await Promise.all(
-        rows.slice(0, INBOX_WORKFLOWS).map(async (workflow) => {
-          try {
-            return [
-              workflow.id,
-              await api.listWorkflowRuns(workflow.id, RUNS_PER_WORKFLOW),
-            ] as const;
-          } catch {
-            // One workflow's history failing must not blank the list.
-            return [workflow.id, [] as WorkflowRun[]] as const;
-          }
-        }),
+      const parked = [
+        ...feed.approvals
+          .filter((row) => row.workflow_run_id)
+          .map((row) => ({
+            workflowRunId: row.workflow_run_id,
+            workflowId: row.workflow_id,
+            name: row.workflow_name,
+            held: false,
+            created_at: row.created_at,
+          })),
+        ...feed.budget_holds
+          .filter((row) => row.workflow_run_id)
+          .map((row) => ({
+            workflowRunId: row.workflow_run_id,
+            workflowId: row.workflow_id,
+            name: row.workflow_name,
+            held: true,
+            created_at: row.created_at,
+          })),
+      ];
+      // One row per run: a run is parked on a decision or on money, never both.
+      setFeedWaiting(
+        [...new Map(parked.map((item) => [item.workflowRunId, item])).values()].sort(
+          (a, b) => a.created_at.localeCompare(b.created_at),
+        ),
       );
-      setRunsByWorkflow(Object.fromEntries(scanned));
-      // One question for the whole inbox: is anything in it held by the
-      // ceiling rather than waiting for a decision? Asked only when something
-      // is stopped and did not say why.
-      if (
-        scanned.some(([, runs]) =>
-          runs.some((run) => run.status === "waiting_for_approval" && !run.paused_reason),
-        )
-      ) {
-        await readHeld();
-      }
     } catch (caught) {
       setError(describeError(caught, "Could not load workflows"));
     } finally {
       setLoaded(true);
     }
-  }, [setError, readHeld]);
+  }, [setError]);
 
   useEffect(() => {
     void load();
@@ -790,6 +812,8 @@ export function WorkflowsView({
   // polling interval, and a new identity every render would tear the interval
   // down and rebuild it 1.2 seconds at a time.
   const settled = useRef(new Set<string>());
+  /** Runs whose park the waiting strip has already been told about. */
+  const stripKnows = useRef(new Set<string>());
   const changed = useRef(onWorkspaceChanged);
   useEffect(() => {
     changed.current = onWorkspaceChanged;
@@ -825,6 +849,19 @@ export function WorkflowsView({
         // (the same serializer drops it), so an unguarded call here would put
         // a request a second behind every open parked run. The memo is cleared
         // when the run moves on, so a second park asks again.
+        // The waiting strip reads the unbounded feed, which was fetched when
+        // the view loaded — a run that parks AFTER that load has to push its
+        // row in. Once per park, not once per poll tick, for the same
+        // request-storm reason as `askedHeld` below; the memo clears when the
+        // run moves on so a second park refreshes again.
+        if (detail.status === "waiting_for_approval") {
+          if (!stripKnows.current.has(detail.id)) {
+            stripKnows.current.add(detail.id);
+            void load().catch(() => undefined);
+          }
+        } else {
+          stripKnows.current.delete(detail.id);
+        }
         if (detail.status === "waiting_for_approval" && !detail.paused_reason) {
           if (!askedHeld.current.has(detail.id)) {
             askedHeld.current.add(detail.id);
@@ -845,12 +882,14 @@ export function WorkflowsView({
           // run was in — a run reading "Succeeded" in the banner and "Queued"
           // in the list two inches away, indefinitely.
           void refreshRuns(detail.workflow_id).catch(() => undefined);
+          // And the waiting strip, whose row this settle just retired.
+          void load().catch(() => undefined);
         }
       } catch (caught) {
         setError(describeError(caught, "Could not open that run"));
       }
     },
-    [setError, readHeld, refreshRuns],
+    [setError, readHeld, refreshRuns, load],
   );
 
   // A run that has not settled is a run worth re-reading: nodes go from running
@@ -871,6 +910,9 @@ export function WorkflowsView({
     setActiveId(workflow.id);
     setRunDetail(null);
     setInputProblems([]);
+    // Run history loads on selection, not for the whole roster up front — the
+    // feed answers "what is waiting" without it.
+    void refreshRuns(workflow.id).catch(() => undefined);
   }
 
   async function saved(workflow: Workflow) {
@@ -948,19 +990,15 @@ export function WorkflowsView({
       await api.decideAgentToolCall(callId, decision, remember, { inputs });
       if (runDetail) await openRun(runDetail.id);
       if (watchedWorkflow) await refreshRuns(watchedWorkflow);
+      // The decision just emptied (or failed to empty) a slot in the waiting
+      // strip; re-read the feed so the strip agrees with what was decided.
+      await load();
       onWorkspaceChanged?.();
     } catch (caught) {
       setError(describeError(caught, "Could not record that decision"));
     }
   }
 
-  // Every run, across every workflow scanned, that stopped and is waiting for a
-  // person. The reason this view exists rather than only a per-workflow page.
-  const waiting = workflows.flatMap((workflow) =>
-    (runsByWorkflow[workflow.id] ?? [])
-      .filter((item) => item.status === "waiting_for_approval")
-      .map((item) => ({ workflow, run: item })),
-  );
 
   const nodeRuns = Object.fromEntries(
     (runDetail?.nodes ?? []).map((node) => [node.node_key, node]),
@@ -1012,29 +1050,29 @@ export function WorkflowsView({
           </button>
         </div>
 
-        {waiting.length > 0 && (
+        {feedWaiting.length > 0 && (
           <div className="workflow-inbox">
             <span className="workflow-inbox-title">
               <ShieldQuestion size={13} />
               Waiting for you
             </span>
-            {waiting.map(({ workflow, run: parked }) => (
+            {feedWaiting.map((parked) => (
               <button
-                key={parked.id}
+                key={parked.workflowRunId}
                 className="workflow-inbox-item"
                 onClick={() => {
-                  select(workflow);
-                  void openRun(parked.id);
+                  const workflow = workflows.find((row) => row.id === parked.workflowId);
+                  if (workflow) select(workflow);
+                  void openRun(parked.workflowRunId);
                 }}
               >
-                <strong>{workflow.name}</strong>
+                <strong>{parked.name || "Workflow"}</strong>
                 <span>
-                  {/* The inbox holds two different stops. One wants your
+                  {/* The strip holds two different stops. One wants your
                       decision; the other wants a bigger number, and calling
                       both "waiting for you" is what sends an owner looking for
                       a card that was never written. */}
-                  {runStatusLabel(parked.status, pausedReasonOf(parked))} ·{" "}
-                  {parked.trigger === "schedule" ? "Scheduled run" : "Manual run"} ·{" "}
+                  {parked.held ? BUDGET_RUN_LABEL : "Waiting for your decision"} ·{" "}
                   {formatRelative(parked.created_at)}
                 </span>
               </button>

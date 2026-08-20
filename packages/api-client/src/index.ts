@@ -178,6 +178,13 @@ export type Conversation = {
   /** True when the caller may toggle `shared` (its creator, or a workspace owner).
    *  Lets the rail disable the control rather than surprise a member with a 403. */
   can_share: boolean;
+  /**
+   * The space this thread lives in, or "" for none. Unlike a subject, a space
+   * thread stays in the rail with ordinary personal/shared semantics — the
+   * space only adds standing context (instructions, knowledge, memory) to its
+   * turns on the server side.
+   */
+  space_id: string;
   created_at: string;
   updated_at: string;
 };
@@ -190,8 +197,12 @@ export type Conversation = {
  * - `ask_writes` — read-only tools run, writes park. The default.
  * - `ask_all` — everything parks, searches included.
  * - `auto_writes` — writes execute unattended. The bypass.
+ * - `plan` — the thread researches and proposes: reads run, writes are refused
+ *   outright, and the model exits by proposing a plan on an approval card
+ *   (`exit_plan_mode`). Approving the plan drops the thread back to
+ *   `ask_writes`.
  */
-export type ApprovalMode = "ask_writes" | "ask_all" | "auto_writes";
+export type ApprovalMode = "ask_writes" | "ask_all" | "auto_writes" | "plan";
 
 export type Citation = {
   chunk_id: string;
@@ -271,7 +282,8 @@ export type Run = {
 
 export type SendMessageResponse = {
   message: Message;
-  run: Run;
+  /** Null exactly when the message was an aside — nothing queued, nothing to follow. */
+  run: Run | null;
   replayed: boolean;
 };
 
@@ -289,7 +301,32 @@ export type Source = {
   status: "queued" | "processing" | "ready" | "stored" | "failed" | "deleted";
   error: string;
   chunk_count: number;
+  /** The space whose threads this file informs; "" is the workspace library. */
+  space_id: string;
   created_at: string;
+};
+
+export type Space = {
+  id: string;
+  name: string;
+  /** Appended to the system prompt of every turn in the space's threads. "" = none. */
+  instructions: string;
+  /** How much the space holds — rail threads and live knowledge files. */
+  thread_count: number;
+  source_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SpaceCreateBody = {
+  name: string;
+  instructions?: string;
+};
+
+/** Absent field = unchanged; `instructions: ""` clears them. */
+export type SpaceUpdateBody = {
+  name?: string;
+  instructions?: string;
 };
 
 export type ProvenanceChunk = {
@@ -790,6 +827,55 @@ export type AuditEvent = {
   resource_id: string;
   detail: Record<string, unknown>;
   created_at: string;
+};
+
+/** One proposed tool call whose run is parked on the decision. */
+export type InboxApproval = {
+  id: string;
+  run_id: string;
+  conversation_id: string;
+  conversation_title: string;
+  name: string;
+  proposal_preview: string;
+  /** chat | subject | workflow | schedule — decides the deep link offered. */
+  origin: string;
+  workflow_run_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  created_at: string;
+};
+
+/** One run the spend ceiling is holding. Nothing to approve — an owner raises
+ * the ceiling on the admin budget page to release it. */
+export type InboxBudgetHold = {
+  run_id: string;
+  conversation_id: string;
+  origin: string;
+  workflow_run_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  created_at: string;
+};
+
+/** One finished workflow run — the Inbox's history shelf, not its work. */
+export type InboxRun = {
+  id: string;
+  workflow_id: string;
+  workflow_name: string;
+  status: string;
+  error: string;
+  created_at: string;
+};
+
+/**
+ * The attention feed. `approvals` and `budget_holds` are the waiting set and
+ * arrive UNBOUNDED, oldest first — the server's contract is that nothing
+ * parked can be pushed off this list by newer, already-decided calls.
+ */
+export type InboxFeed = {
+  approvals: InboxApproval[];
+  budget_holds: InboxBudgetHold[];
+  recent_runs: InboxRun[];
 };
 
 export type GraphEntity = {
@@ -1933,10 +2019,13 @@ export class WorkspaceApi {
     return this.request("/api/conversations");
   }
 
-  createConversation(title = "New conversation"): Promise<Conversation> {
+  createConversation(title = "New conversation", spaceId = ""): Promise<Conversation> {
     return this.request(
       "/api/conversations",
-      { method: "POST", body: JSON.stringify({ title }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ title, ...(spaceId ? { space_id: spaceId } : {}) }),
+      },
       true,
     );
   }
@@ -2044,6 +2133,25 @@ export class WorkspaceApi {
     );
   }
 
+  /**
+   * An aside ("/btw"): record a message in the thread without starting a turn.
+   *
+   * The server creates the Message and nothing else — no run, no agent turn —
+   * and the next real turn reads it as transcript context. Same endpoint as
+   * `sendMessage`, distinguished by the `aside` flag rather than a second
+   * route, so thread visibility and idempotency are one code path server-side.
+   */
+  sendAside(conversationId: string, content: string): Promise<SendMessageResponse> {
+    return this.request(
+      `/api/conversations/${conversationId}/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({ content, aside: true }),
+      },
+      true,
+    );
+  }
+
   cancelRun(runId: string): Promise<Run> {
     return this.request(`/api/runs/${runId}/cancel`, { method: "POST" }, true);
   }
@@ -2052,9 +2160,10 @@ export class WorkspaceApi {
     return this.request("/api/sources");
   }
 
-  uploadSource(file: File): Promise<Source> {
+  uploadSource(file: File, spaceId = ""): Promise<Source> {
     const body = new FormData();
     body.set("file", file);
+    if (spaceId) body.set("space_id", spaceId);
     return this.request("/api/sources", { method: "POST", body }, true);
   }
 
@@ -2119,6 +2228,11 @@ export class WorkspaceApi {
     return this.request("/api/agent-tool-calls");
   }
 
+  /** The unified attention feed: everything waiting on a person, unbounded. */
+  getInbox(): Promise<InboxFeed> {
+    return this.request("/api/inbox");
+  }
+
   /**
    * What a reviewer changed about the call before allowing it.
    *
@@ -2152,6 +2266,32 @@ export class WorkspaceApi {
   }
 
   // --- Agents (authored system prompts + provisioned tools) ---
+
+  // --- Spaces (thread groups with standing instructions and knowledge) ---
+
+  listSpaces(): Promise<Space[]> {
+    return this.request("/api/spaces");
+  }
+
+  createSpace(body: SpaceCreateBody): Promise<Space> {
+    return this.request("/api/spaces", { method: "POST", body: JSON.stringify(body) }, true);
+  }
+
+  updateSpace(spaceId: string, body: SpaceUpdateBody): Promise<Space> {
+    return this.request(`/api/spaces/${spaceId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Destructive on the server: the space's threads, knowledge files and
+   * memory go with it — the confirm copy in the view says so. `true` because
+   * the route requires an Idempotency-Key, so a retry deletes once.
+   */
+  deleteSpace(spaceId: string): Promise<void> {
+    return this.request(`/api/spaces/${spaceId}`, { method: "DELETE" }, true);
+  }
 
   listAgents(): Promise<AgentInfo[]> {
     return this.request("/api/agents");

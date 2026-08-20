@@ -10,7 +10,7 @@
 #      available"
 #   4. install the nightly objects backup
 set -euo pipefail
-exec > >(tee /var/log/fieldnote-bootstrap.log) 2>&1
+exec > >(tee /var/log/grain-bootstrap.log) 2>&1
 
 REGION="${region}"
 DATA_MOUNT="${data_mount}"
@@ -48,12 +48,12 @@ fi
 # blkid succeeds only on a formatted device, so this formats exactly once in the
 # volume's life. Getting this wrong reformats the object store on every reboot.
 if ! blkid "$DEVICE" >/dev/null 2>&1; then
-  mkfs.xfs -L fieldnote "$DEVICE"
+  mkfs.xfs -L grain "$DEVICE"
 fi
 
 mkdir -p "$DATA_MOUNT"
-grep -q "LABEL=fieldnote" /etc/fstab || \
-  echo "LABEL=fieldnote $DATA_MOUNT xfs defaults,noatime,nofail 0 2" >>/etc/fstab
+grep -q "LABEL=grain" /etc/fstab || \
+  echo "LABEL=grain $DATA_MOUNT xfs defaults,noatime,nofail 0 2" >>/etc/fstab
 mount -a
 
 # OBJECTS_DIR and SANDBOX_WORKDIR. The sandbox tree is world-traversable so the
@@ -80,7 +80,7 @@ chmod 0700 "$DATA_MOUNT/objects"
 # The image URI lives in an SSM parameter rather than being baked in here, so
 # rolling the sandbox image is `aws ssm put-parameter` plus a Run Command
 # instead of replacing the instance. See docs/DEPLOY-AWS.md.
-cat >/usr/local/bin/fieldnote-sandbox-image <<'SCRIPT'
+cat >/usr/local/bin/grain-sandbox-image <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
 REGION="$(curl -sf -H "X-aws-ec2-metadata-token: $(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/placement/region)"
@@ -91,19 +91,19 @@ docker pull "$IMAGE"
 # Nothing prunes automatically: an old sandbox image is the rollback target.
 echo "sandbox image ready: $IMAGE"
 SCRIPT
-sed -i "s|__SANDBOX_IMAGE_PARAM__|${sandbox_image_param}|" /usr/local/bin/fieldnote-sandbox-image
-chmod 0755 /usr/local/bin/fieldnote-sandbox-image
+sed -i "s|__SANDBOX_IMAGE_PARAM__|${sandbox_image_param}|" /usr/local/bin/grain-sandbox-image
+chmod 0755 /usr/local/bin/grain-sandbox-image
 
-cat >/etc/systemd/system/fieldnote-sandbox-image.service <<'EOF'
+cat >/etc/systemd/system/grain-sandbox-image.service <<'EOF'
 [Unit]
-Description=Pull the Jasmine sandbox execution image into the host Docker daemon
+Description=Pull the Grain sandbox execution image into the host Docker daemon
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/fieldnote-sandbox-image
+ExecStart=/usr/local/bin/grain-sandbox-image
 Restart=on-failure
 RestartSec=30
 
@@ -116,27 +116,27 @@ EOF
 # the host cannot propagate into the backup even if this flag changes.
 # One line per command: a backslash continuation inside an unquoted heredoc is
 # consumed by the shell writing the file, not preserved into it.
-cat >/usr/local/bin/fieldnote-backup <<EOF
+cat >/usr/local/bin/grain-backup <<EOF
 #!/bin/bash
 set -euo pipefail
 aws s3 sync "$DATA_MOUNT/objects" "s3://${objects_bucket}/objects/" --region "$REGION" --only-show-errors --sse aws:kms --sse-kms-key-id "${kms_key_arn}"
 echo "objects backup complete: \$(date -u +%FT%TZ)"
 EOF
-chmod 0755 /usr/local/bin/fieldnote-backup
+chmod 0755 /usr/local/bin/grain-backup
 
-cat >/etc/systemd/system/fieldnote-backup.service <<'EOF'
+cat >/etc/systemd/system/grain-backup.service <<'EOF'
 [Unit]
 Description=Sync the object store to S3
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/fieldnote-backup
+ExecStart=/usr/local/bin/grain-backup
 EOF
 
 # 07:10 UTC, inside the same window as the RDS backup (07:00-08:00) and the DLM
 # snapshot, so the three artefacts are one logical recovery point rather than
 # three unrelated ones. docs/RUNBOOK.md asks for exactly that.
-cat >/etc/systemd/system/fieldnote-backup.timer <<'EOF'
+cat >/etc/systemd/system/grain-backup.timer <<'EOF'
 [Unit]
 Description=Nightly object store backup
 
@@ -155,7 +155,7 @@ if ! dnf install -y amazon-cloudwatch-agent >/dev/null; then
   echo "WARNING: cloudwatch agent install failed; host logs stay local" >&2
 fi
 if [ -d /opt/aws/amazon-cloudwatch-agent ]; then
-cat >/opt/aws/amazon-cloudwatch-agent/etc/fieldnote.json <<EOF
+cat >/opt/aws/amazon-cloudwatch-agent/etc/grain.json <<EOF
 {
   "agent": { "metrics_collection_interval": 300 },
   "metrics": {
@@ -180,7 +180,7 @@ cat >/opt/aws/amazon-cloudwatch-agent/etc/fieldnote.json <<EOF
       "files": {
         "collect_list": [
           {"file_path": "/var/log/messages", "log_group_name": "${host_log_group}", "log_stream_name": "{instance_id}/messages"},
-          {"file_path": "/var/log/fieldnote-bootstrap.log", "log_group_name": "${host_log_group}", "log_stream_name": "{instance_id}/bootstrap"},
+          {"file_path": "/var/log/grain-bootstrap.log", "log_group_name": "${host_log_group}", "log_stream_name": "{instance_id}/bootstrap"},
           {"file_path": "/var/log/ecs/ecs-agent.log", "log_group_name": "${host_log_group}", "log_stream_name": "{instance_id}/ecs-agent"}
         ]
       }
@@ -189,12 +189,12 @@ cat >/opt/aws/amazon-cloudwatch-agent/etc/fieldnote.json <<EOF
 }
 EOF
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-  -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/fieldnote.json
+  -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/grain.json
 fi
 
 systemctl daemon-reload
-systemctl enable --now fieldnote-sandbox-image.service
-systemctl enable --now fieldnote-backup.timer
+systemctl enable --now grain-sandbox-image.service
+systemctl enable --now grain-backup.timer
 systemctl restart ecs || systemctl start ecs
 
 echo "bootstrap complete"

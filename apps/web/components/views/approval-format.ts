@@ -1,7 +1,7 @@
 import type { AgentToolCall, ApprovalMode } from "@workspace/api-client";
 
 /**
- * The three approval modes, as a person has to understand them.
+ * The four approval modes, as a person has to understand them.
  *
  * The failure mode this whole surface is designed around is not switching the
  * bypass *on* — it is forgetting it is on. So every string here is written to
@@ -37,6 +37,13 @@ export const APPROVAL_MODES: ApprovalModeInfo[] = [
     label: "Auto-approve writes",
     detail: "Writes go through without asking. Denied tools stay denied.",
     bypass: true,
+  },
+  {
+    mode: "plan",
+    label: "Plan first",
+    detail:
+      "Research only — nothing changes until you approve the plan it proposes.",
+    bypass: false,
   },
 ];
 

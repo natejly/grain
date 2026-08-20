@@ -12,6 +12,7 @@ import type { Dispatch, FormEvent, RefObject, SetStateAction } from "react";
 import { api } from "../api";
 import { readBudgetPark, type BudgetPark } from "../views/budget-format";
 import { readCitationCheck } from "../views/citation-format";
+import { parseAside } from "../views/commands";
 import { describeError } from "../views/shared";
 
 /**
@@ -230,7 +231,11 @@ export function createThreadHandlers({
 
   /** Re-ask the most recent user prompt as a fresh turn. */
   async function regenerate() {
-    const lastUser = [...messages].reverse().find((item) => item.role === "user");
+    // Skip asides: a "/btw" note has no run and was never a prompt, so
+    // regenerating must re-ask the last thing that actually asked something.
+    const lastUser = [...messages]
+      .reverse()
+      .find((item) => item.role === "user" && item.run_id !== "");
     if (!lastUser || activeRun || !activeConversation) return;
     setError("");
     try {
@@ -245,7 +250,7 @@ export function createThreadHandlers({
           ? items
           : [...items, response.message],
       );
-      void followRun(response.run.id, activeConversation);
+      if (response.run) void followRun(response.run.id, activeConversation);
     } catch (caught) {
       // An agent deleted out from under a thread leaves the picker on a
       // dead id, and every later send fails identically. Clear it so the
@@ -444,10 +449,24 @@ export function createThreadHandlers({
     event?.preventDefault();
     const content = draft.trim();
     if (!content || activeRun) return;
+    // "/btw …" is an aside: recorded in the thread, read by the next turn, no
+    // run started. A bare "/btw" is an aside with nothing in it — the draft
+    // stays put rather than an empty note being recorded.
+    const aside = parseAside(content);
+    if (aside === "") return;
     setDraft("");
     setError("");
     try {
       const conversationId = await ensureConversation();
+      if (aside !== null) {
+        const noted = await api.sendAside(conversationId, aside);
+        setMessages((items) =>
+          items.some((item) => item.id === noted.message.id)
+            ? items
+            : [...items, noted.message],
+        );
+        return;
+      }
       const response = await api.sendMessage(conversationId, content, agentId, controls);
       setMessages((items) => {
         const existing = items.some((item) => item.id === response.message.id);
@@ -456,7 +475,7 @@ export function createThreadHandlers({
       // The turn was accepted, so a per-turn skill has done its job; clear it
       // beside the draft so it does not attach itself to the next message.
       onSent?.();
-      void followRun(response.run.id, conversationId);
+      if (response.run) void followRun(response.run.id, conversationId);
     } catch (caught) {
       setDraft(content);
       // An agent deleted out from under a thread leaves the picker on a

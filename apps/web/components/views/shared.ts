@@ -14,6 +14,8 @@ export type View =
   | "memory"
   | "graph"
   | "dashboards"
+  | "apps"
+  | "datasets"
   | "integrations"
   | "documents"
   | "boards"
@@ -25,7 +27,8 @@ export type View =
   | "activity"
   | "admin"
   | "workflows"
-  | "crons";
+  | "crons"
+  | "spaces";
 
 /**
  * An unreachable API already has a dedicated banner with a retry, so it returns
@@ -78,13 +81,23 @@ export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
  */
 export const PAGE_TITLES: Record<View, string> = {
   chat: "Chat",
+  // A group of threads with standing context — instructions, knowledge files,
+  // its own memory shelf. Beside Chat because that is what it groups.
+  spaces: "Spaces",
   agents: "Agents",
   skills: "Skills",
   sources: "Sources",
   memory: "Memory",
   graph: "Graph",
   dashboards: "Dashboards",
-  documents: "Files",
+  // Programs the sandbox builds and publishes — releases, visibility, their
+  // own frame. Split from Dashboards so neither word has to mean two things.
+  apps: "Apps",
+  // The immutable table versions dashboards bind to. They existed since ADR
+  // 0003 with no page — created as an upload side effect, visible only inside
+  // the app editor's binding chips.
+  datasets: "Datasets",
+  documents: "Documents",
   boards: "Boards",
   todos: "Lists",
   data: "Databases",
@@ -97,10 +110,13 @@ export const PAGE_TITLES: Record<View, string> = {
   // "sandbox" destination the docstring above refuses — nobody operates a
   // machine here, they configure a capability.
   "sandbox-tools": "Sandbox tools",
-  activity: "Activity",
+  // The approval queue. "Activity" described the audit half of the page; the
+  // half a user actually comes for is the requests waiting on them.
+  activity: "Inbox",
   admin: "Admin",
   workflows: "Workflows",
-  crons: "Automations",
+  // A cron is a schedule. Its old title, "Automations", is the *group* now.
+  crons: "Schedules",
 };
 
 export function formatBytes(bytes: number): string {

@@ -198,7 +198,7 @@ class Settings(BaseSettings):
     # Built from infra/sandbox/Dockerfile, which is also the package policy:
     # the sandbox has no network, so anything importable has to already be in
     # the image. `make sandbox-image` builds it.
-    sandbox_container_image: str = "jasmine-sandbox:latest"
+    sandbox_container_image: str = "grain-sandbox:latest"
     sandbox_docker_binary: str = "docker"
     # Interpreter for the `subprocess` driver. Blank means the API's own venv,
     # whose package set is NOT the container image's — code that imports scipy in
@@ -244,7 +244,7 @@ class Settings(BaseSettings):
 
     # --- LaTeX compile (server-side TeX Live) --------------------------------
     latex_compile_enabled: bool = True
-    latex_compile_image: str = "jasmine-latex:latest"
+    latex_compile_image: str = "grain-latex:latest"
     latex_compile_timeout_seconds: int = 60
     latex_compile_memory_mb: int = 2048
     latex_compile_cpus: float = 2.0
@@ -329,6 +329,24 @@ class Settings(BaseSettings):
     # Ceiling on rows returned by the LIKE prefilter that feeds lexical scoring.
     memory_lexical_candidate_limit: int = 400
     memory_transcript_messages: int = 10
+
+    # --- Conversation index -------------------------------------------------
+    # Past-conversation search: transcript windows + per-thread summaries in
+    # `conversation_chunks`, quoted back to agents by `search_conversations`.
+    # Off, nothing is indexed, the tool reports the feature disabled, and a
+    # turn is byte-identical to before the feature existed.
+    conversation_index_enabled: bool = True
+    # Quotes one search returns. Six matches memory_recall_limit: enough to
+    # cover a question that spans threads, small enough that the tool result
+    # stays inside MAX_RESULT_CHARS without gutting each quote.
+    conversation_search_limit: int = 6
+    # Ceiling on rows the LIKE prefilter returns for lexical scoring; same
+    # shape and same rationale as memory_lexical_candidate_limit.
+    conversation_lexical_candidate_limit: int = 400
+    # Ceiling on chunk vectors one search scores, newest first — a recency
+    # window, exactly the memory_recall_candidate_cap trade.
+    conversation_vector_candidate_cap: int = 20000
+
     run_lease_seconds: int = 90
 
     # --- Workflow schedules ------------------------------------------------
@@ -374,7 +392,7 @@ class Settings(BaseSettings):
     # Unlike session_cookie_name above, this one *is* a user-visible surface:
     # it is the From address a recipient reads in their mail client, so it
     # carries the product name and nothing depends on its old value.
-    email_from: str = "no-reply@jasmine.local"
+    email_from: str = "no-reply@grain.local"
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""

@@ -50,6 +50,8 @@ export function createBoardHandlers({ setError, setBoards }: BoardHandlerDeps) {
   }
 
   async function removeBoard(board: Board) {
+    // A board takes its cards with it, which is more than the button says.
+    if (!window.confirm(`Delete “${board.name}” and its cards?`)) return;
     try {
       await api.deleteBoard(board.id);
       setBoards((items) => items.filter((item) => item.id !== board.id));

@@ -254,7 +254,7 @@ test.fixme("the dashboard panel revises the chart it is beside", async ({ page }
   // will not appear.
   await page.reload();
 
-  await openView(page, "Files", /^Dashboards/);
+  await openView(page, "Library", /^Dashboards/);
   await page.getByRole("button", { name: /^All dashboards/ }).click();
   // The catalog's open button is named by the dashboard and what it draws, so
   // it is anchored rather than matched exactly.

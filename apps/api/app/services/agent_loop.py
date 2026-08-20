@@ -22,11 +22,18 @@ from ..models import (
     ToolPolicy,
     WorkflowRun,
 )
-from . import budget, orgs, screen, skills, subjects, usage
+from . import budget, orgs, screen, skills, spaces, subjects, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .harness import ModelStep, resolve_harness
-from .llm_tools import ToolContext, ToolResult, ToolSpec, build_registry
+from .llm_tools import (
+    EXIT_PLAN_MODE,
+    ToolContext,
+    ToolResult,
+    ToolSpec,
+    build_registry,
+    exit_plan_mode_spec,
+)
 from .model import CHAT_INSTRUCTIONS, _openai_input
 from .retrieval import Evidence
 from .usage import usage_scope
@@ -279,13 +286,19 @@ WORKFLOW_SCOPE: PolicyScope = "workflow"
 #: - ``ask_all``      everything parks, read-only searches included, for a thread
 #:                    working somewhere sensitive enough to want each look first.
 #: - ``auto_writes``  writes execute without parking. The bypass.
-ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes"]
+#: - ``plan``         the thread is researching, not acting: read-only tools
+#:                    run, write-capable tools are refused outright (deny, not
+#:                    ask — stricter than ``ask_all``), and the mode is left by
+#:                    the model proposing a plan through ``exit_plan_mode``,
+#:                    whose approval card carries the plan itself.
+ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes", "plan"]
 
 ASK_WRITES: ApprovalMode = "ask_writes"
 ASK_ALL: ApprovalMode = "ask_all"
 AUTO_WRITES: ApprovalMode = "auto_writes"
+PLAN: ApprovalMode = "plan"
 
-APPROVAL_MODES: Tuple[ApprovalMode, ...] = (ASK_WRITES, ASK_ALL, AUTO_WRITES)
+APPROVAL_MODES: Tuple[ApprovalMode, ...] = (ASK_WRITES, ASK_ALL, AUTO_WRITES, PLAN)
 
 #: `MODE_DECIDER_PREFIX` is the prefix `AgentToolCall.decided_by` carries when a
 #: *mode* let a call through. The column otherwise holds a user id, and ids here
@@ -510,6 +523,23 @@ def evaluate_policy(
 
     if scope != CHAT_SCOPE or mode == ASK_WRITES or base == "deny":
         result = Verdict(policy=base)
+    elif mode == PLAN:
+        # Plan mode. Read-only tools keep whatever the rows above said, so a
+        # standing `ask` still asks; `exit_plan_mode` parks unconditionally,
+        # because approving that card *is* approving the plan and no standing
+        # row may pre-answer it; and anything write-capable is refused outright.
+        # A plan-mode turn is never *offered* a write tool (`_plan_narrowed`
+        # strips them from the registry), so this deny is the second,
+        # independent lock — it catches a queued write from a conversation
+        # switched into plan mode while parked. `by_mode` stays "" on that
+        # deny: the attribution marks a bypass letting a write through, and
+        # refusing one is the opposite of that.
+        if spec is not None and spec.name == EXIT_PLAN_MODE:
+            result = Verdict(policy="ask")
+        elif spec is not None and not spec.read_only:
+            result = Verdict(policy="deny")
+        else:
+            result = Verdict(policy=base)
     elif mode == ASK_ALL:
         result = Verdict(policy="ask")
     else:
@@ -681,12 +711,45 @@ def approval_mode_for_run(
     enforce mode (shadow records the same flag but never escalates) and on chat
     scope like the rest of this function. Read per call, so a hit recorded from a
     tool output mid-turn escalates the very next call in the same turn.
+
+    The escalation lands on `ask_all` even for a thread in `plan` mode, and that
+    is a deliberate trade rather than an oversight: the two modes are not
+    ordered. Plan is stricter about writes (deny beats ask) but looser about
+    reads (they run silently, and a read with attacker-shaped arguments is an
+    exfiltration channel). `ask_all` is the posture where *nothing* runs without
+    a person seeing it — reads park, and the write a planning model should not
+    be proposing anyway meets a human decision instead of a silent deny.
     """
     if scope != CHAT_SCOPE or not run.conversation_id:
         return ASK_WRITES
     settings = settings or get_settings()
     if settings.screen_mode == "enforce" and _run_was_flagged(db, run):
         return ASK_ALL
+    conversation = db.get(Conversation, run.conversation_id)
+    if conversation is None or conversation.workspace_id != run.workspace_id:
+        conversation = None
+    # Plan mode outranks the development bypass below, alone among the modes:
+    # the bypass exists to skip approval friction while developing, and a
+    # developer who switched a thread into plan mode is exercising plan mode
+    # itself — a flag that quietly turned it back into `auto_writes` would make
+    # the feature untestable in the only environment the flag can be on.
+    #
+    # Refreshed rather than trusted, for the same reason `_drain_pending`
+    # refreshes the run: switching a thread's mode is a safety switch, and one
+    # that waits for the current turn to finish is not one. Sessions here are
+    # opened with `expire_on_commit=False`, so a Conversation still resident in
+    # the identity map would keep answering with whatever it said when the turn
+    # began — for all six iterations of it. As written today the identity map's
+    # references are weak and this function drops the only strong one before it
+    # returns, so the refresh changes no behaviour; it is what stops the
+    # behaviour from being an accident of garbage collection that any future
+    # caller holding on to a Conversation would silently undo. No guard for a
+    # conversation deleted mid-turn: purging one deletes its runs too, and
+    # `_drain_pending`'s `db.refresh(run)` reaches that first.
+    if conversation is not None:
+        db.refresh(conversation)
+        if conversation.approval_mode == PLAN:
+            return PLAN
     # The development bypass, and it deliberately sits BELOW the injection
     # escalation rather than above it. `DEV_UNRESTRICTED_AGENT` is a bypass, and
     # a bypass that outranked the screen would be strictly weaker than the
@@ -701,25 +764,8 @@ def approval_mode_for_run(
     # — is the code that is already there and already tested.
     if settings.dev_unrestricted_agent:
         return AUTO_WRITES
-    conversation = db.get(Conversation, run.conversation_id)
-    if conversation is None or conversation.workspace_id != run.workspace_id:
+    if conversation is None:
         return ASK_WRITES
-    # Refreshed rather than trusted, for the same reason `_drain_pending`
-    # refreshes the run a few lines earlier: turning the bypass back off is a
-    # safety switch, and one that waits for the current turn to finish is not
-    # one. Sessions here are opened with `expire_on_commit=False`, so a
-    # Conversation still resident in the identity map would keep answering with
-    # whatever it said when the turn began — for all six iterations of it.
-    #
-    # As written today that cannot happen, because the identity map's references
-    # are weak and this function drops the only strong one before it returns. So
-    # this line changes no behaviour; it is what stops the behaviour from being
-    # an accident of garbage collection that any future caller holding on to a
-    # Conversation would silently undo.
-    #
-    # No guard for a conversation deleted mid-turn: purging one deletes its runs
-    # too, and the `db.refresh(run)` above reaches that first.
-    db.refresh(conversation)
     # Spelled out rather than cast: a column holding a value this enum has since
     # dropped must land on the strict mode, not on whatever it says.
     if conversation.approval_mode == ASK_ALL:
@@ -1203,6 +1249,14 @@ class AgentDirectives:
     allowed: Optional[frozenset[str]]
 
 
+def _space_id_for(db: Session, run: Run) -> str:
+    """The run's space, for the ToolContext — "" for every failure, and "" by
+    construction for workflow, cron and subject runs."""
+    return spaces.space_id_for_conversation(
+        db, workspace_id=run.workspace_id, conversation_id=run.conversation_id
+    )
+
+
 def resolve_directives(db: Session, run: Run) -> AgentDirectives:
     """`run.agent_id` → the instructions and tool subset this turn runs under.
 
@@ -1233,6 +1287,16 @@ def resolve_directives(db: Session, run: Run) -> AgentDirectives:
                 parsed = None
             if isinstance(parsed, list):
                 allowed = frozenset(str(item) for item in parsed)
+    # A space's standing instructions compose with the agent's voice rather
+    # than replacing it — only an agent replaces the base — and sit before the
+    # skill splice so the most turn-specific layer stays last. Trusted like
+    # `Agent.instructions` (member-authored through an authenticated PATCH),
+    # so not `_screen`ed. `for_run` degrades every failure — missing
+    # conversation, deleted space, cross-workspace id, blank text — to None or
+    # "" here: no injection, never a failed turn.
+    space = spaces.for_run(db, run)
+    if space is not None and space.instructions.strip():
+        instructions = f"{instructions}\n\n{spaces.space_block(space)}"
     # A skill invoked for this turn is spliced onto the agent's voice, not in
     # place of it: same instruction path, resolved once per loop entry, so a
     # turn that parks and resumes re-injects the identical body. A deleted skill
@@ -1281,6 +1345,44 @@ def _registry_for(
             subjects.allowed_tools_for(db, context, subject.kind if subject else ""),
         )
     return build_registry(db, context, allowed=allowed)
+
+
+#: Spliced onto the turn's instructions while its conversation is in plan mode,
+#: the same way a skill's body is spliced on — and like a skill it is resolved
+#: per loop entry, so a resume whose approval already lifted the mode rebuilds
+#: without it.
+PLAN_MODE_INSTRUCTIONS = (
+    "Plan mode is on for this conversation. The user wants to review a plan "
+    "before anything is changed. Research with the read-only tools available; "
+    "do not attempt to create, edit, or delete anything — write-capable tools "
+    "are withheld until the plan is approved. When you know enough to propose, "
+    "call `exit_plan_mode` with the complete plan (as markdown) in the `plan` "
+    "argument. The user reviews it there: approval turns plan mode off so the "
+    "work can begin, and denial means revise the plan and propose again."
+)
+
+
+def _plan_narrowed(
+    registry: Dict[str, ToolSpec], instructions: str, mode: ApprovalMode
+) -> Tuple[Dict[str, ToolSpec], str]:
+    """The turn's registry and instructions, adjusted for plan mode.
+
+    Narrowing follows `_registry_for`'s rule that a tool a turn must not run is
+    *absent*, not present-and-denied: a planning model is never offered a
+    write-capable tool, so it plans around what it can see instead of burning
+    iterations on refusals. `evaluate_policy`'s plan branch stays as the
+    second, independent lock for the call that arrives anyway.
+
+    `exit_plan_mode` is added here rather than shipped by a registry family
+    because it is mode machinery, not a capability: an agent's provisioned
+    subset must not be able to strip it (a plan mode with no exit is a locked
+    room), and no other mode should ever offer it.
+    """
+    if mode != PLAN:
+        return registry, instructions
+    narrowed = {name: spec for name, spec in registry.items() if spec.read_only}
+    narrowed[EXIT_PLAN_MODE] = exit_plan_mode_spec()
+    return narrowed, f"{instructions}\n\n{PLAN_MODE_INSTRUCTIONS}"
 
 
 def _advance(
@@ -1407,9 +1509,14 @@ def run_agent_turn(
     if not workflow_node and backs_workflow:
         raise RuntimeError("This run belongs to a workflow; start it through the executor")
     subject = subjects.resolve(db, run)
-    context = subjects.tool_context(run, subject)
+    context = subjects.tool_context(run, subject, space_id=_space_id_for(db, run))
     directives = resolve_directives(db, run)
     registry = _registry_for(db, context, subject, directives, settings)
+    registry, instructions = _plan_narrowed(
+        registry,
+        directives.instructions,
+        approval_mode_for_run(db, run, scope=scope, settings=settings),
+    )
     state = LoopState(
         input_items=[
             {
@@ -1475,7 +1582,7 @@ def run_agent_turn(
             step=model_step or _default_model_step(settings, run, list(evidence)),
             settings=settings,
             scope=scope,
-            instructions=directives.instructions,
+            instructions=instructions,
         )
     return _finish(db, run, outcome)
 
@@ -1612,10 +1719,21 @@ def _continue(
     from .workflows import executor as workflow_executor
 
     subject = subjects.resolve(db, run)
-    context = subjects.tool_context(run, subject)
+    context = subjects.tool_context(run, subject, space_id=_space_id_for(db, run))
     directives = resolve_directives(db, run)
     registry = _registry_for(db, context, subject, directives, settings)
     scope = policy_scope_for_run(db, run)
+    registry, instructions = _plan_narrowed(
+        registry,
+        directives.instructions,
+        approval_mode_for_run(db, run, scope=scope, settings=settings),
+    )
+    if any(call.get("name") == EXIT_PLAN_MODE for call in state.pending_calls):
+        # The approval that resumes this turn may itself have lifted plan mode,
+        # rebuilding the full registry above — but the parked `exit_plan_mode`
+        # call at the head of the queue still needs its spec to execute rather
+        # than land on "unknown tool".
+        registry.setdefault(EXIT_PLAN_MODE, exit_plan_mode_spec())
     with usage_scope(
         workspace_id=run.workspace_id,
         run_id=run.id,
@@ -1636,7 +1754,7 @@ def _continue(
             step=model_step or _default_model_step(settings, run, state.evidence),
             settings=settings,
             scope=scope,
-            instructions=directives.instructions,
+            instructions=instructions,
         )
     if workflow_run is not None:
         # The agent node's turn is over; the graph is not. Returning None keeps

@@ -40,10 +40,10 @@ eval:
 	PYTHONPATH=apps/api .venv/bin/python apps/api/scripts/evaluate_retrieval.py
 
 sandbox-image:
-	docker build -t $${SANDBOX_CONTAINER_IMAGE:-jasmine-sandbox:latest} infra/sandbox
+	docker build -t $${SANDBOX_CONTAINER_IMAGE:-grain-sandbox:latest} infra/sandbox
 
 latex-image:
-	docker build -t $${LATEX_COMPILE_IMAGE:-jasmine-latex:latest} infra/latex
+	docker build -t $${LATEX_COMPILE_IMAGE:-grain-latex:latest} infra/latex
 
 migrate:
 	cd apps/api && ../../.venv/bin/alembic upgrade head

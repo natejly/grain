@@ -32,11 +32,11 @@ from ..schemas import (
     ToolPolicyRequest,
 )
 from ..services import conversations
-from ..services.agent_loop import policy_scope_for_run
+from ..services.agent_loop import ASK_WRITES, PLAN, policy_scope_for_run
 from ..services.artifacts import documents, proposals
 from ..services.audit import record_audit
 from ..services.events import append_event
-from ..services.llm_tools import ToolContext, registry_families
+from ..services.llm_tools import EXIT_PLAN_MODE, ToolContext, registry_families
 from ..services.runs import deny_tool_call, execute_tool_call, resume_run
 from ..services.subjects import open_document_id
 from ..services.workflows import executor as workflow_executor
@@ -633,7 +633,40 @@ def decide_agent_tool_call(
         # also schedule `resume_run`, or the tool the other reviewer denied is
         # executed by the loser's background task.
         raise HTTPException(status_code=409, detail="Tool call already decided")
-    if payload.remember and call.name != workflow_executor.MANUAL_TOOL_NAME:
+    if call.name == EXIT_PLAN_MODE and payload.decision == "approved":
+        # Approving the plan IS leaving plan mode, and it happens HERE — before
+        # the resume is scheduled — so `_continue` re-enters the loop under the
+        # restored mode: full registry, no plan instructions, and the rest of
+        # this same turn can implement what was just approved. (The executor of
+        # the parked call writes nothing; a denial changes nothing, so the model
+        # revises the plan still inside plan mode.) Restores `ask_writes`, the
+        # default, rather than whatever mode preceded plan: re-arming a bypass
+        # nobody re-asked for is exactly the surprise the modes exist to avoid.
+        conversation = db.scalar(
+            select(Conversation).where(
+                Conversation.id == run.conversation_id,
+                Conversation.workspace_id == actor.workspace_id,
+            )
+        )
+        if conversation is not None and conversation.approval_mode == PLAN:
+            conversation.approval_mode = ASK_WRITES
+            record_audit(
+                db,
+                workspace_id=actor.workspace_id,
+                actor_id=actor.user_id,
+                action="conversation.approval_mode_set",
+                resource_type="conversation",
+                resource_id=conversation.id,
+                detail={"from": PLAN, "to": ASK_WRITES, "via": EXIT_PLAN_MODE},
+            )
+    if payload.remember and call.name not in (
+        workflow_executor.MANUAL_TOOL_NAME,
+        # `exit_plan_mode` always parks by construction (`evaluate_policy`'s
+        # plan branch never consults standing rows for it), so a remembered
+        # allow would gate nothing and only litter the policy list — the same
+        # reasoning as the manual sentinel below.
+        EXIT_PLAN_MODE,
+    ):
         # "Always allow" answers the question the card asked, and no other. A
         # card raised by a workflow node is asking about unattended execution, so
         # remembering it grants at workflow scope; a chat card grants at chat

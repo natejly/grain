@@ -123,8 +123,8 @@ describe("pruning panes whose conversation is gone", () => {
 });
 
 describe("persisting the layout", () => {
-  it("uses the jasmine-namespaced storage key", () => {
-    expect(CHAT_PANES_KEY).toBe("jasmine.chat-panes");
+  it("uses the grain-namespaced storage key", () => {
+    expect(CHAT_PANES_KEY).toBe("grain.chat-panes");
   });
 
   it("round-trips a layout through serialize and parse", () => {

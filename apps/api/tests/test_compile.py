@@ -119,8 +119,8 @@ def test_compile_container_validation_runs_first():
 
 @pytest.mark.latex
 @pytest.mark.skipif(
-    not image_available("jasmine-latex:latest"),
-    reason="requires jasmine-latex Docker image (make latex-image)",
+    not image_available("grain-latex:latest"),
+    reason="requires grain-latex Docker image (make latex-image)",
 )
 def test_fullpage_and_tikz_compile():
     """Packages outside the old core tier compile with full TeX Live."""

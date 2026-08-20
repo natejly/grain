@@ -38,6 +38,7 @@ from ..schemas import (
 )
 from ..services import conversations, orgs, subjects
 from ..services import skills as skills_service
+from ..services import spaces as spaces_service
 from ..services.artifacts import documents
 from ..services.audit import record_audit
 from ..services.events import append_event
@@ -104,6 +105,7 @@ def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationO
         shared=bool(conversation.shared),
         owned=conversation.created_by == actor.user_id,
         can_share=_can_share(conversation, actor),
+        space_id=conversation.space_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -111,6 +113,7 @@ def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationO
 
 @router.get("/conversations", response_model=List[ConversationOut])
 def list_conversations(
+    space_id: Optional[str] = Query(default=None),
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[ConversationOut]:
@@ -123,7 +126,7 @@ def list_conversations(
     # ones. The `workspace_id` filter is never removed — `shared` only relaxes
     # the within-workspace creator filter, so this can never return another
     # workspace's rows, and another member's personal thread stays hidden.
-    conversations_list = db.scalars(
+    stmt = (
         select(Conversation)
         .where(
             Conversation.workspace_id == actor.workspace_id,  # NEVER removed
@@ -133,6 +136,12 @@ def list_conversations(
         )
         .order_by(Conversation.updated_at.desc())
     )
+    if space_id is not None:
+        # Exact, "" included, so the space page lists its threads and a caller
+        # asking for "no space" is expressible. Only ever narrows the query —
+        # the visibility predicate above is untouched.
+        stmt = stmt.where(Conversation.space_id == space_id)
+    conversations_list = db.scalars(stmt)
     return [_conversation_out(conversation, actor) for conversation in conversations_list]
 
 
@@ -154,11 +163,23 @@ def create_conversation(
         if conversation is None or conversation.workspace_id != actor.workspace_id:
             raise replayed_resource_gone()
         return _conversation_out(conversation, actor)
+    space_id = ""
+    if payload.space_id:
+        # Proved against the caller's workspace before it is stamped; a foreign
+        # or deleted space is the same fact to this caller — 404 — never a
+        # thread that silently lost its scope.
+        try:
+            space_id = spaces_service.get_space(
+                db, workspace_id=actor.workspace_id, space_id=payload.space_id
+            ).id
+        except spaces_service.SpaceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     conversation = Conversation(
         id=new_id(),
         workspace_id=actor.workspace_id,
         created_by=actor.user_id,
         title=payload.title.strip() or "New conversation",
+        space_id=space_id,
     )
     db.add(conversation)
     record_key(
@@ -520,6 +541,59 @@ def send_message(
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.aside:
+        # An aside ("/btw") is a message, not a turn: it lands in the transcript
+        # and is read as context by whichever turn comes next — `_transcript`
+        # collects by conversation, not by run — but nothing is queued and no
+        # agent runs. Its own idempotency operation, because the resource a
+        # replay must return is a message rather than a run.
+        replay = find_replay(
+            db, workspace_id=actor.workspace_id, operation="message.aside", key=key
+        )
+        if replay:
+            message = db.scalar(
+                select(Message).where(
+                    Message.id == replay.resource_id,
+                    Message.workspace_id == actor.workspace_id,
+                )
+            )
+            if message is None:
+                raise replayed_resource_gone()
+            return SendMessageResponse(
+                message=_message_out(message, actor.user_name),
+                run=None,
+                replayed=True,
+            )
+        message = Message(
+            id=new_id(),
+            workspace_id=actor.workspace_id,
+            conversation_id=conversation.id,
+            run_id="",
+            role="user",
+            created_by=actor.user_id,
+            content=payload.content,
+        )
+        db.add(message)
+        record_key(
+            db,
+            workspace_id=actor.workspace_id,
+            operation="message.aside",
+            key=key,
+            resource_id=message.id,
+        )
+        record_audit(
+            db,
+            workspace_id=actor.workspace_id,
+            actor_id=actor.user_id,
+            action="message.aside",
+            resource_type="message",
+            resource_id=message.id,
+            detail={"conversation_id": conversation.id},
+        )
+        db.commit()
+        return SendMessageResponse(
+            message=_message_out(message, actor.user_name), run=None
+        )
     replay = find_replay(
         db, workspace_id=actor.workspace_id, operation="message.send", key=key
     )

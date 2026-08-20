@@ -1,14 +1,15 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 /**
  * Reaching a view, the way a user does.
  *
  * The shell has three surfaces and they are addressed by accessible name, not
- * by class: the left rail holds the places you work, the Settings menu in the
- * top right holds the places you configure, and a group's siblings sit in a tab
- * strip above the view. Names are used because labels like "Create" and "Files"
- * also appear on buttons *inside* the views — an unscoped getByRole would match
- * those too.
+ * by class: the left rail holds the places you work (Inbox included — the
+ * approval queue is work, not configuration), the workspace-settings menu in
+ * the top right holds the places you configure, and a group's siblings sit in
+ * a tab strip above the view. Names are used because labels like "Create" and
+ * "Documents" also appear on buttons *inside* the views — an unscoped
+ * getByRole would match those too.
  *
  * One copy of these helpers rather than one per spec: four near-identical
  * `openView` definitions is four places to update the next time navigation
@@ -16,6 +17,35 @@ import type { Page } from "@playwright/test";
  */
 
 export const rail = (page: Page) => page.getByRole("navigation", { name: "Workspace" });
+
+/**
+ * Open a fresh thread and wait until it is really the active one.
+ *
+ * "New thread" creates the conversation over the network; a fill+Enter typed
+ * before the switch lands puts the prompt in the PREVIOUS thread. That race is
+ * how the agent-write specs kept failing under load with two specs' tool cards
+ * in one transcript. The empty-thread starter heading renders only when the
+ * active conversation has no messages — but when NO thread was active before
+ * the click (a fresh page load), that heading is already up, so it cannot be
+ * the switch signal on its own. The rail row is: the "New conversation" entry
+ * appears exactly when the created thread lands and becomes active, so waiting
+ * for one more of them is what actually observes the switch.
+ */
+export async function newThread(page: Page) {
+  await page.getByRole("button", { name: "New thread" }).click();
+  // No counting: every count-based signal tried here raced the rail's first
+  // load, because the "No conversations." placeholder also shows while the
+  // list is still fetching, so a baseline read then is wrong by however many
+  // threads earlier specs left. The switch itself is what must be observed,
+  // and it has a conjunction all its own: the ACTIVE rail row is the fresh
+  // untitled thread, and the transcript is empty enough to show the starter.
+  // The one thread that satisfies both is an empty "New conversation" that is
+  // currently active — which is the state this helper exists to reach.
+  await expect(page.locator(".thread.active")).toContainText("New conversation");
+  await expect(
+    page.getByRole("heading", { name: "Ask, and approve what the agent does" }),
+  ).toBeVisible();
+}
 
 export const tabs = (page: Page, group: string) =>
   page.getByRole("navigation", { name: `${group} views` });
@@ -31,11 +61,11 @@ export async function openView(page: Page, group: string, tab?: RegExp | string)
   await tabs(page, group).getByRole("button", { name: tab }).click();
 }
 
-/** Open a destination behind the Settings menu — Connections, Activity, Admin. */
+/** Open a destination behind the workspace-settings menu — Connections, Admin. */
 export async function openSettings(page: Page, group: string, tab?: RegExp | string) {
-  await page.getByRole("button", { name: /^Settings/ }).click();
+  await page.getByRole("button", { name: "Workspace settings" }).click();
   await page
-    .getByRole("group", { name: "Settings" })
+    .getByRole("group", { name: "Workspace settings" })
     .getByRole("button", { name: new RegExp(`^${group}`) })
     .click();
   if (!tab) return;

@@ -57,7 +57,9 @@ export type SourcesViewProps = {
   uploading: boolean;
   dragging: boolean;
   setDragging: (value: boolean) => void;
-  uploadFiles: (files: FileList | File[]) => Promise<void>;
+  // Returns the uploaded Source (the attach popover chains a dataset on it);
+  // this page fires and forgets, so the row is simply unused here.
+  uploadFiles: (files: FileList | File[]) => Promise<unknown>;
   removeSource: (source: Source) => Promise<void>;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
 };

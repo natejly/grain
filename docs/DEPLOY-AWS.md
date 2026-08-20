@@ -1,4 +1,4 @@
-# Deploying Jasmine on AWS
+# Deploying Grain on AWS
 
 Terraform for everything here lives in `infra/aws/`. This document is the
 decision, the topology and the runbook; the Terraform is the authority on the
@@ -107,7 +107,7 @@ single-host failure mode with a manual recovery procedure.
      ┌─────────────────────────────────┐     │  m7g.large, public IP    │
      │ ECS task "api" (bridge, :8000)  │     │  ECS agent + Docker      │
      │   /var/run/docker.sock  ────────┼─────┼──► host daemon           │
-     │   /var/lib/fieldnote    ────────┼─────┼──► gp3 100 GB (encrypted)│
+     │   /var/lib/grain    ────────┼─────┼──► gp3 100 GB (encrypted)│
      │   root, task role: NO POLICIES  │     │                          │
      └──────────────┬──────────────────┘     │  sibling containers:     │
                     │ docker run --rm        │  --network none          │
@@ -190,13 +190,13 @@ Bind-mounts two host paths:
 | Host path | Container path | Why |
 |---|---|---|
 | `/var/run/docker.sock` | `/var/run/docker.sock` | the `container` sandbox driver |
-| `/var/lib/fieldnote` | `/var/lib/fieldnote` | **must be the same string** |
+| `/var/lib/grain` | `/var/lib/grain` | **must be the same string** |
 
 That second row is the detail that decides whether the sandbox works at all.
 `container_provider.py` builds `-v {session_dir}:/workspace` and hands it to the
 **host** daemon, which resolves the bind source against the **host** filesystem.
 If the API container saw the session directory at `/data/sandboxes/abc` while
-the host knew it as `/var/lib/fieldnote/sandboxes/abc`, Docker would mount an
+the host knew it as `/var/lib/grain/sandboxes/abc`, Docker would mount an
 empty host directory and every execution would silently run against nothing.
 
 The task runs as `root`, because `/var/run/docker.sock` is `root:docker` and the
@@ -243,7 +243,7 @@ setting them configures nothing.
 So:
 
 - **Originals and dataset snapshots live on an encrypted gp3 volume** attached to
-  the host at `/var/lib/fieldnote/objects`, separate from the root volume so
+  the host at `/var/lib/grain/objects`, separate from the root volume so
   replacing the instance does not destroy them. `prevent_destroy` is set on it.
 - **The S3 bucket is the backup**, not the store: a nightly `aws s3 sync` at
   07:10 UTC, with bucket versioning on, KMS encryption, a lifecycle rule to IA at
@@ -260,10 +260,10 @@ So:
 
 Two ECR repositories, both `IMMUTABLE`-tagged, scan-on-push, KMS-encrypted:
 
-- `fieldnote/api` — the FastAPI application. Pulled by the ECS task.
-- `fieldnote/sandbox` — `infra/sandbox/Dockerfile`. Pulled by the **host Docker
+- `grain/api` — the FastAPI application. Pulled by the ECS task.
+- `grain/sandbox` — `infra/sandbox/Dockerfile`. Pulled by the **host Docker
   daemon**, never by a task: no ECS task references it, so nothing would fetch
-  it automatically. `user_data` installs a `fieldnote-sandbox-image.service` unit
+  it automatically. `user_data` installs a `grain-sandbox-image.service` unit
   that reads the image URI from an SSM parameter and pulls it at boot.
 
 Immutable tags mean a deploy is a new tag and a rollback is an older tag, rather
@@ -331,21 +331,21 @@ alias table, so the environment variable name *is* the field name in caps.
 
 | Secrets Manager | Env var | `Settings` field | Notes |
 |---|---|---|---|
-| `fieldnote/database-url` | `DATABASE_URL` | `database_url: str` | written by Terraform |
-| `fieldnote/openai-api-key` | `OPENAI_API_KEY` | `openai_api_key: Optional[SecretStr]` | placeholder; set by hand |
-| `fieldnote/integrations-key` | `INTEGRATIONS_ENCRYPTION_KEY` | `integrations_encryption_key: Optional[SecretStr]` | Fernet; **unrecoverable if lost** |
-| `fieldnote/google-login-client-secret` | `GOOGLE_LOGIN_CLIENT_SECRET` | `google_login_client_secret: Optional[SecretStr]` | placeholder |
+| `grain/database-url` | `DATABASE_URL` | `database_url: str` | written by Terraform |
+| `grain/openai-api-key` | `OPENAI_API_KEY` | `openai_api_key: Optional[SecretStr]` | placeholder; set by hand |
+| `grain/integrations-key` | `INTEGRATIONS_ENCRYPTION_KEY` | `integrations_encryption_key: Optional[SecretStr]` | Fernet; **unrecoverable if lost** |
+| `grain/google-login-client-secret` | `GOOGLE_LOGIN_CLIENT_SECRET` | `google_login_client_secret: Optional[SecretStr]` | placeholder |
 
 Three of the four are created as `REPLACE_ME` with `ignore_changes`, so their
 real values never enter Terraform state:
 
 ```bash
-aws secretsmanager put-secret-value --secret-id fieldnote/openai-api-key \
+aws secretsmanager put-secret-value --secret-id grain/openai-api-key \
   --secret-string 'sk-...'
 
 python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' \
   | xargs -I{} aws secretsmanager put-secret-value \
-      --secret-id fieldnote/integrations-key --secret-string '{}'
+      --secret-id grain/integrations-key --secret-string '{}'
 ```
 
 `DATABASE_URL` is the exception, and the reason is a code constraint rather than
@@ -381,7 +381,7 @@ $0.40/secret/month, so this deployment pays **$1.60/month** for the difference.
 It buys resource policies, native rotation if `DATABASE_URL` is ever restructured
 to allow it, and — the reason that actually decided it — a distinct ARN per
 secret so the execution role's grant is four enumerated ARNs rather than a path
-prefix. A `fieldnote/*` prefix wildcard would silently grant every secret anyone
+prefix. A `grain/*` prefix wildcard would silently grant every secret anyone
 adds under it later. One SSM `String` parameter *is* used, for the sandbox image
 URI, because it is not a secret and it is read by the host's boot script.
 
@@ -391,14 +391,14 @@ URI, because it is not a secret and it is read by the host's boot script.
 
 `make migrate` is `cd apps/api && ../../.venv/bin/alembic upgrade head`. On AWS
 it is the same command, in the same image as the API, as a one-off ECS task
-(`fieldnote-migrate`) with its own task role that holds no permissions and, in
+(`grain-migrate`) with its own task role that holds no permissions and, in
 particular, no Docker socket.
 
 ```bash
 CLUSTER=$(terraform -chdir=infra/aws output -raw ecs_cluster_name)
 
 TASK=$(aws ecs run-task --cluster "$CLUSTER" \
-        --task-definition fieldnote-migrate --launch-type EC2 \
+        --task-definition grain-migrate --launch-type EC2 \
         --query 'tasks[0].taskArn' --output text)
 
 aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK"
@@ -418,9 +418,9 @@ keep migrations additive (add columns/tables, backfill, drop in a later release)
 or take an explicit window:
 
 ```bash
-aws ecs update-service --cluster "$CLUSTER" --service fieldnote-api --desired-count 0
+aws ecs update-service --cluster "$CLUSTER" --service grain-api --desired-count 0
 # ... run the migration ...
-aws ecs update-service --cluster "$CLUSTER" --service fieldnote-api --desired-count 1
+aws ecs update-service --cluster "$CLUSTER" --service grain-api --desired-count 1
 ```
 
 ---
@@ -442,12 +442,12 @@ Then point the host at it and make it pull. The image URI lives in an SSM
 parameter so that rolling it does not mean replacing the instance:
 
 ```bash
-aws ssm put-parameter --name /fieldnote/sandbox-image --overwrite \
+aws ssm put-parameter --name /grain/sandbox-image --overwrite \
     --type String --value "$REG:$TAG"
 
 aws ssm send-command --document-name AWS-RunShellScript \
     --targets "Key=instanceids,Values=$(terraform -chdir=infra/aws output -raw instance_id)" \
-    --parameters 'commands=["/usr/local/bin/fieldnote-sandbox-image"]'
+    --parameters 'commands=["/usr/local/bin/grain-sandbox-image"]'
 ```
 
 Finally set `sandbox_image_tag` in `terraform.tfvars` and apply, which updates
@@ -531,8 +531,8 @@ before treating this table as the budget.
 
 ```bash
 # 1. State backend. It will hold the RDS password; encrypt it.
-aws s3api create-bucket --bucket fieldnote-tfstate --region us-east-1
-aws s3api put-bucket-versioning --bucket fieldnote-tfstate \
+aws s3api create-bucket --bucket grain-tfstate --region us-east-1
+aws s3api put-bucket-versioning --bucket grain-tfstate \
   --versioning-configuration Status=Enabled
 
 # 2. Certificate for api.example.com, in the same region as the ALB.
@@ -542,7 +542,7 @@ aws acm request-certificate --domain-name api.example.com \
 # 3. Configure and apply. Uncomment the backend block in versions.tf first.
 cd infra/aws
 cp terraform.tfvars.example terraform.tfvars   # edit it
-terraform init -backend-config=bucket=fieldnote-tfstate \
+terraform init -backend-config=bucket=grain-tfstate \
                -backend-config=key=prod/terraform.tfstate \
                -backend-config=region=us-east-1 -backend-config=encrypt=true
 terraform apply
@@ -569,8 +569,8 @@ docker buildx build --platform linux/arm64 -t "$REG:$TAG" --push -f apps/api/Doc
 
 # migrate first (§7), then:
 terraform -chdir=infra/aws apply -var="api_image_tag=$TAG"
-aws ecs update-service --cluster fieldnote-cluster --service fieldnote-api \
-  --task-definition fieldnote-api --force-new-deployment
+aws ecs update-service --cluster grain-cluster --service grain-api \
+  --task-definition grain-api --force-new-deployment
 ```
 
 Expect **30–60 seconds of downtime per deploy**. The fixed host port means two
@@ -605,7 +605,7 @@ aws ssm send-command --document-name AWS-RunShellScript \
   --parameters 'commands=["cloud-init clean --logs && cloud-init init && cloud-init modules --mode=final"]'
 ```
 
-or simply reboot the instance. Check `/var/log/fieldnote-bootstrap.log`.
+or simply reboot the instance. Check `/var/log/grain-bootstrap.log`.
 
 ### Recover from instance loss
 
@@ -634,7 +634,7 @@ set `db_multi_az = true` (+$23/month) if that is unacceptable.
 `docs/RUNBOOK.md` still applies for failed ingestion, stuck runs, graph
 projection, dataset failures and app publication. Two amendments for AWS:
 
-- "Process logs remain on stdout" now means the `/fieldnote/api` CloudWatch log
+- "Process logs remain on stdout" now means the `/grain/api` CloudWatch log
   group.
 - "Back up the database and object bucket as one logical recovery point" is
   implemented as the aligned 07:00–07:15 UTC window described in §4.
@@ -762,6 +762,6 @@ CMD ["uvicorn", "app.main:app", "--app-dir", "apps/api", \
 ```
 
 Build it for the host's architecture (`--platform linux/arm64` for `m7g.large`)
-and push it to the `fieldnote/api` repository. The same image serves the
+and push it to the `grain/api` repository. The same image serves the
 migration task, which overrides `workingDirectory` to `/app/apps/api` and the
 command to `alembic upgrade head`.

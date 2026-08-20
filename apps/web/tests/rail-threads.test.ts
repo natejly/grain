@@ -29,6 +29,7 @@ function conversation(overrides: Partial<Conversation> = {}): Conversation {
     title: "Thread",
     subject_kind: "",
     subject_id: "",
+    space_id: "",
     approval_mode: "ask_writes",
     shared: false,
     owned: true,

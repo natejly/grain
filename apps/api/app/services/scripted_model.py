@@ -224,27 +224,27 @@ def scripted_app_html(app_name: str, binding_names: List[str]) -> str:
     """Stand in for model.generate_code: a plain table over the bound datasets.
 
     Not scripted per prompt. Generated apps are judged by what renders in the
-    frame, so a fixed page that actually reads `window.jasmine` is a more
+    frame, so a fixed page that actually reads `window.grain` is a more
     useful double than a canned string — it exercises the runtime the real
     generated code has to use, including its theme variables.
     """
     names = json.dumps(binding_names)
     return f"""<style>
-  body {{ margin: 0; padding: 24px; background: var(--jasmine-bg);
-         color: var(--jasmine-text);
+  body {{ margin: 0; padding: 24px; background: var(--grain-bg);
+         color: var(--grain-text);
          font-family: ui-sans-serif, system-ui, sans-serif; }}
   h1 {{ font-size: 18px; margin: 0 0 16px; }}
-  h2 {{ font-size: 13px; color: var(--jasmine-muted); margin: 20px 0 8px; }}
+  h2 {{ font-size: 13px; color: var(--grain-muted); margin: 20px 0 8px; }}
   table {{ border-collapse: collapse; width: 100%; font-size: 12px; }}
-  th, td {{ border: 1px solid var(--jasmine-border); padding: 6px 9px; text-align: left; }}
-  th {{ background: var(--jasmine-surface); }}
-  p {{ color: var(--jasmine-muted); font-size: 12px; }}
+  th, td {{ border: 1px solid var(--grain-border); padding: 6px 9px; text-align: left; }}
+  th {{ background: var(--grain-surface); }}
+  p {{ color: var(--grain-muted); font-size: 12px; }}
 </style>
 <h1>{app_name}</h1>
 <div id="root"><p>Waiting for data…</p></div>
 <script>
   var BOUND = {names};
-  window.jasmine.onData = function (snapshots) {{
+  window.grain.onData = function (snapshots) {{
     var root = document.getElementById("root");
     root.innerHTML = "";
     BOUND.forEach(function (name) {{

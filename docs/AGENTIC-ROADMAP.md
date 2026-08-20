@@ -136,7 +136,7 @@ grepping the entire `services/mcp/` directory for those terms returns **nothing*
 completely.
 
 **2.5 — We have *less* MCP transport defence than credited, not more.** The
-enterprise researcher wrote that "Jasmine already has MCP connectors defaulting to
+enterprise researcher wrote that "Grain already has MCP connectors defaulting to
 ask-before-running plus HTTPS-only exact-host allowlisting with SSRF defences,"
 described as "arguably stronger than OpenAI's." Half of that is right and the good
 half is somewhere else. Ask-before-running is real (`mcp/registry.py:156` sets

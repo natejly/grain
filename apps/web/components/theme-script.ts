@@ -9,10 +9,10 @@
  * theme opposite to their OS never sees a flash of the wrong one.
  */
 
-export const THEME_STORAGE_KEY = "jasmine-theme";
+export const THEME_STORAGE_KEY = "grain-theme";
 
 /** Fires on the window when the stored preference changes in this tab. */
-export const THEME_CHANGE_EVENT = "jasmine:themechange";
+export const THEME_CHANGE_EVENT = "grain:themechange";
 
 export const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem(${JSON.stringify(
   THEME_STORAGE_KEY,

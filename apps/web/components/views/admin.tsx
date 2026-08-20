@@ -363,26 +363,19 @@ export function AdminView({ setError }: AdminViewProps) {
           </ul>
         </Panel>
 
-        <Panel title="Awaiting approval" count={activity.pending_approvals.length}>
+        {/* The read-only "Awaiting approval" panel is gone on purpose: the
+            Inbox lists the same parked calls for every member AND decides
+            them. A second copy an owner could look at but not act on taught
+            people to check two places and trust neither. Tool-call counts stay
+            — they are operations telemetry, not a queue. */}
+        <Panel title="Tool calls" count={0}>
           <CountRow
             counts={activity.tool_call_status_counts}
             empty="No tool calls yet."
           />
-          {activity.pending_approvals.length === 0 ? (
-            <p className="admin-empty">Nothing is parked on a decision.</p>
-          ) : (
-            <ul className="admin-list">
-              {activity.pending_approvals.map((approval) => (
-                <li key={approval.id}>
-                  <div>
-                    <strong>{approval.name}</strong>
-                    <span>{formatRelative(approval.created_at)}</span>
-                    <small>{approval.proposal_preview}</small>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+          <p className="admin-empty">
+            Parked approvals are decided in the Inbox, not here.
+          </p>
         </Panel>
 
         <Panel title="Sandbox sessions" count={live.length}>

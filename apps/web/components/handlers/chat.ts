@@ -120,9 +120,9 @@ export function createChatHandlers({
     }
   }
 
-  async function newConversation() {
+  async function newConversation(spaceId = "") {
     try {
-      const conversation = await api.createConversation();
+      const conversation = await api.createConversation(undefined, spaceId);
       setConversations((items) => [conversation, ...items]);
       setActiveConversation(conversation.id);
       activeConversationRef.current = conversation.id;
@@ -132,6 +132,23 @@ export function createChatHandlers({
     } catch (caught) {
       setError(describeError(caught, "Could not create conversation"));
     }
+  }
+
+  /**
+   * The active conversation, made if it does not exist yet. One copy, shared by
+   * the send path and the approval-mode setter: both are things a person does
+   * to a thread they can already see (the empty composer renders before the
+   * row exists), so both must conjure the thread rather than silently no-op
+   * against a null id — which is exactly what /plan picked on a fresh thread
+   * used to do while `createConversation` was still in flight.
+   */
+  async function ensureConversation(): Promise<string> {
+    if (activeConversation) return activeConversation;
+    const created = await api.createConversation();
+    setActiveConversation(created.id);
+    activeConversationRef.current = created.id;
+    setConversations((items) => [created, ...items]);
+    return created.id;
   }
 
   const thread = createThreadHandlers({
@@ -163,14 +180,7 @@ export function createChatHandlers({
     onSent: clearAttachedSkill,
     onScreenFlag,
     /** Typing into an empty rail starts a thread rather than refusing. */
-    ensureConversation: async () => {
-      if (activeConversation) return activeConversation;
-      const created = await api.createConversation();
-      setActiveConversation(created.id);
-      activeConversationRef.current = created.id;
-      setConversations((items) => [created, ...items]);
-      return created.id;
-    },
+    ensureConversation,
     onToolProposed: refreshSecondary,
     /**
      * A chat turn is the workspace's main event, so a finished one refreshes

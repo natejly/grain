@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { STORAGE_STATE } from "./credentials";
-import { createFromMenu, openSettings, openView } from "./shell";
+import { createFromMenu, newThread, openSettings, openView } from "./shell";
 
 /**
  * The spend ceiling, from the wall a user hits to the number that releases them.
@@ -200,7 +200,7 @@ test("a chat turn stopped by the ceiling explains itself, and the raise releases
   await page.goto("/");
   await putCeiling(page, { ...UNLIMITED, usd_per_window: 0 });
 
-  await page.getByRole("button", { name: "New thread" }).click();
+  await newThread(page);
   await page.locator(".composer textarea").fill("What do these sources say?");
   await page.getByRole("button", { name: "Send message" }).click();
 

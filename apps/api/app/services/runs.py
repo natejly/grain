@@ -12,6 +12,7 @@ from ..clock import utcnow
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import Message, Run, Tool, ToolCall, ToolGrant
+from . import spaces
 from .agent_loop import (
     PAUSED_FOR_BUDGET,
     resume_after_budget,
@@ -20,6 +21,7 @@ from .agent_loop import (
 )
 from .audit import record_audit
 from .citations import summarize_citations, validate_citations
+from .conversation_index import update_conversation_index
 from .events import append_event
 from .memory import recall, render_memory_context, write_conversation_memory
 from .model import stream_words
@@ -198,6 +200,14 @@ def _finish_run(
         # session; that is worth a line rather than a silent `pass`.
         logger.warning(
             "memory persistence raised for run %s", run.id, exc_info=True
+        )
+    try:
+        # Same contract as the memory write above, and a miss costs even less:
+        # search-time reconcile indexes anything this call did not.
+        update_conversation_index(run.id)
+    except Exception:
+        logger.warning(
+            "conversation indexing raised for run %s", run.id, exc_info=True
         )
 
 
@@ -460,10 +470,16 @@ def process_run(run_id: str) -> None:
             execute_tool_call(call.id)
             return
 
+        # Resolved once for the turn: retrieval and recall must agree on the
+        # scope, and a deleted or foreign space degrades to "" in the resolver.
+        space_id = spaces.space_id_for_conversation(
+            db, workspace_id=run.workspace_id, conversation_id=run.conversation_id
+        )
         evidence = search_evidence(
             db,
             workspace_id=run.workspace_id,
             query=run.prompt,
+            space_id=space_id,
         )
         citations = _citations(evidence)
         append_event(

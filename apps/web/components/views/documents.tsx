@@ -163,6 +163,22 @@ export function DocumentsView({
     setDirty(false);
   }, [active?.id, active?.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Cmd/Ctrl+S saves the open document — the shortcut every editor teaches,
+  // caught at the document level so it works from the textarea and from the
+  // preview alike, and always prevented so the browser's own save dialog never
+  // appears over an editor that has its own Save. No-op when nothing changed.
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "s" || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      if (!dirty) return;
+      void saveDocument(active.id, draft).then(() => setDirty(false));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, dirty, draft, saveDocument]);
+
   // A proposed create has no document to sit under, so it rides along with the
   // open document's own proposals rather than hiding until the doc exists.
   const pending = pendingEdits ?? [];
@@ -221,7 +237,7 @@ export function DocumentsView({
             toggle={toggleList}
             controls="documents-file-list"
           />
-          <span>Files</span>
+          <span>Documents</span>
           <button
             className="icon-button"
             onClick={() => {

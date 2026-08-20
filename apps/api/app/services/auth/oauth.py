@@ -42,7 +42,7 @@ GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 # client; a login must never carry data-access consent along with it.
 GOOGLE_LOGIN_SCOPE = "openid email profile"
 
-STATE_COOKIE_NAME = "fieldnote_oauth_state"
+STATE_COOKIE_NAME = "grain_oauth_state"
 STATE_COOKIE_MAX_AGE = 600
 
 PROVIDER_GOOGLE = "google"

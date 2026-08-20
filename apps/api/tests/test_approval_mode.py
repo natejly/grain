@@ -426,7 +426,7 @@ def test_no_mode_can_clear_a_deny(owner: TestClient, db: Any) -> None:
     identity = identity_of(owner)
     grant(db, identity, WRITE, "deny", CHAT_SCOPE)
     spec = Probe(WRITE, read_only=False).spec()
-    for mode in (ASK_WRITES, ASK_ALL, AUTO_WRITES):
+    for mode in (ASK_WRITES, ASK_ALL, AUTO_WRITES, agent_loop.PLAN):
         assert (
             resolve_policy(
                 db,

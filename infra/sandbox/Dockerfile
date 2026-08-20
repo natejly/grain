@@ -76,4 +76,4 @@ WORKDIR /workspace
 
 # No ENTRYPOINT on purpose. The provider passes an explicit argv, so the image
 # cannot be coaxed into running something the provider did not name.
-CMD ["python3", "-c", "print('jasmine sandbox image')"]
+CMD ["python3", "-c", "print('grain sandbox image')"]

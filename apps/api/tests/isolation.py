@@ -95,6 +95,7 @@ from app.models import (
     Skill,
     SkillVersion,
     Source,
+    Space,
     SyncJob,
     Tool,
     ToolCall,
@@ -272,6 +273,16 @@ def build_tenant(label: str) -> Tenant:
         db.add(chunk)
         db.flush()
         ids["chunk"] = chunk.id
+
+        space = Space(
+            workspace_id=workspace_id,
+            name=f"{label} space",
+            instructions=f"{label} secret space instructions",
+            created_by=user_id,
+        )
+        db.add(space)
+        db.flush()
+        ids["space"] = space.id
 
         tool = Tool(
             workspace_id=workspace_id,
@@ -1239,6 +1250,26 @@ ROUTE_CASES: List[RouteCase] = [
     ),
     RouteCase(
         "GET", "/api/runs/{run_id}/events", DENY, path_ids={"run_id": "run"}
+    ),
+    # The Inbox's attention feed: a pure workspace-scoped list with no id in
+    # the request, so the sweep's job is proving tenant A's feed never carries
+    # a row of tenant B's.
+    RouteCase("GET", "/api/inbox", SCOPED),
+    # -- spaces ------------------------------------------------------------
+    RouteCase("GET", "/api/spaces", SCOPED),
+    RouteCase("POST", "/api/spaces", SCOPED, body={"name": "mine"}),
+    RouteCase(
+        "GET", "/api/spaces/{space_id}", DENY, path_ids={"space_id": "space"}
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/spaces/{space_id}",
+        DENY,
+        path_ids={"space_id": "space"},
+        body={"name": "probe"},
+    ),
+    RouteCase(
+        "DELETE", "/api/spaces/{space_id}", DENY, path_ids={"space_id": "space"}
     ),
     # -- sources -----------------------------------------------------------
     RouteCase("GET", "/api/sources", SCOPED),

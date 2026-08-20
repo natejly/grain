@@ -14,6 +14,7 @@ from pypdf import PdfReader
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import SessionLocal
 from ..models import Chunk, Source
@@ -308,6 +309,34 @@ def object_path(workspace_id: str, source_id: str, filename: str) -> Path:
     directory = settings.objects_dir / workspace_id / source_id
     directory.mkdir(parents=True, exist_ok=True)
     return directory / sanitize_filename(filename)
+
+
+def purge_source(db: Session, *, workspace_id: str, source_id: str) -> Optional[Source]:
+    """Take one source out of retrieval: soft-delete the row, drop its index.
+
+    The shared half of source deletion — the route (`DELETE /api/sources/{id}`)
+    and a space teardown both run exactly this, so what "deleted" means cannot
+    drift between them. Does not commit, does not touch the disk file, and does
+    not mark the graph stale: the caller owns the transaction and everything
+    that must happen after it, and returns are for that caller's benefit —
+    `None` when nothing live matched, else the row (whose `object_key` names
+    the bytes to remove once the commit has held).
+    """
+    source = db.scalar(
+        select(Source).where(
+            Source.id == source_id,
+            Source.workspace_id == workspace_id,
+            Source.deleted_at.is_(None),
+        )
+    )
+    if source is None:
+        return None
+    source.deleted_at = utcnow()
+    source.status = "deleted"
+    # Postings reference chunks, so they go first — see clear_source_postings.
+    clear_source_postings(db, source.id)
+    db.execute(delete(Chunk).where(Chunk.source_id == source.id))
+    return source
 
 
 #: How a browser asks for the bytes `object_path` wrote. Declared here, beside
