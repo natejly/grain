@@ -208,11 +208,10 @@ test.describe("dashboards", () => {
     await page.goto("/");
     await openView(page, "Library", /^Dashboards/);
 
-    // Requirement 2: one dropdown holding every dashboard in the workspace.
-    const catalog = page.getByRole("button", { name: /^All dashboards/ });
-    await expect(catalog).toBeVisible();
-    await catalog.click();
-    const menu = page.getByRole("group", { name: "All dashboards" });
+    // One page section holding every dashboard in the workspace — a shelf on
+    // the page rather than a popover you summon and lose on click-away.
+    const menu = page.getByRole("region", { name: "All dashboards" });
+    await expect(menu).toBeVisible();
     for (const name of DASHBOARDS) {
       await expect(menu.getByRole("button", { name: `Pin ${name}` })).toBeVisible();
     }
@@ -225,7 +224,6 @@ test.describe("dashboards", () => {
       "aria-pressed",
       "true",
     );
-    await page.keyboard.press("Escape");
 
     // Requirement 1: pinned dashboards appear beneath the rail's own items.
     const pinned = page.getByRole("navigation", { name: "Pinned dashboards" });
@@ -384,11 +382,10 @@ test.describe("dashboards", () => {
         .getByRole("navigation", { name: "Pinned dashboards" })
         .getByRole("button", { name: DASHBOARDS[1] }),
     ).toHaveCount(0);
-    // Unpinning is not deleting: the dashboard is still the workspace's.
-    await page.getByRole("button", { name: /^All dashboards/ }).click();
+    // Unpinning is not deleting: the dashboard is still on the shelf.
     await expect(
       page
-        .getByRole("group", { name: "All dashboards" })
+        .getByRole("region", { name: "All dashboards" })
         .getByRole("button", { name: `Pin ${DASHBOARDS[1]}` }),
     ).toBeVisible();
   });

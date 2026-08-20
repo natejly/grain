@@ -38,10 +38,12 @@ attach popover, Rules/Policies, new shell).
       source, new immutable version, no delete on purpose), ✔ attach popover
       "also create a dataset" chip preselected for tabular files (upload
       handler returns the Source), ✔ "Chart this" → prefilled chat composer,
-      ✔ Dashboards page "Ask the agent for a chart" button; REMAINING: icon
-      rail + contextual sidebar shell over a two-level NAV registry,
-      Boards&Todos merge, Dashboards real list page + finish-the-job pin
-      chooser, Connections move under Library→Data (+ Settings mirror),
+      ✔ Dashboards page "Ask the agent for a chart" button; ✔ SHELL (commit
+      31f860a): icon rail of four doors + contextual sidebars over a two-level
+      NAV registry (sections), Knowledge folded into Library, Databases moved
+      to Library→Data, collapse hides the sidebar and keeps the doors, mobile
+      drawer carries labelled destinations; REMAINING: Dashboards real list
+      page + finish-the-job pin chooser, Boards&Todos glyph/toast merge,
       Knowledge cross-links
 - [ ] Phase 4 — Trust surfaces: Rules/Policies (grant enumeration + revoke),
       member-readable org policy, scope labels, per-thread setting

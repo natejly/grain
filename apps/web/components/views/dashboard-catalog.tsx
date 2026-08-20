@@ -5,9 +5,8 @@ import type {
   DashboardTemplate,
   Dataset,
 } from "@workspace/api-client";
-import { ChevronDown, Pin, PinOff, Trash2 } from "lucide-react";
+import { Pin, PinOff, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { DisclosureMenu } from "../disclosure-menu";
 import { describeDashboard, refusalLines } from "./dashboard-format";
 
 /**
@@ -29,7 +28,14 @@ export type DashboardCatalogProps = {
   open: (dashboardId: string) => void;
 };
 
-/** Requirement 2: one dropdown, every dashboard in the workspace, pin from it. */
+/**
+ * Every dashboard in the workspace, as a page section rather than a popover.
+ *
+ * It was a dropdown for a while, which made the full inventory a thing you
+ * summon and lose on every click-away — and made "where do dashboards LIVE"
+ * answerable only by memory. A list that is simply on the page under the
+ * pinned grid is the honest shape: your screen first, the shelf below it.
+ */
 export function DashboardCatalog({
   dashboards,
   pinnedIds,
@@ -39,66 +45,50 @@ export function DashboardCatalog({
   open,
 }: DashboardCatalogProps) {
   return (
-    <DisclosureMenu
-      id="dashboard-catalog"
-      triggerLabel={`All dashboards, ${dashboards.length} in this workspace`}
-      triggerClassName="chrome-button"
-      menuLabel="All dashboards"
-      className="stretch"
-      trigger={
-        <>
-          All dashboards
-          <span className="nav-count">{dashboards.length}</span>
-          <ChevronDown size={14} aria-hidden="true" />
-        </>
-      }
-    >
-      {(close) =>
-        dashboards.length === 0 ? (
-          <p className="disclosure-empty">
-            None yet. Ask the assistant for a chart in chat.
-          </p>
-        ) : (
-          <ul className="dashboard-catalog-list">
-            {dashboards.map((dashboard) => {
-              const pinned = pinnedIds.has(dashboard.id);
-              return (
-                <li key={dashboard.id}>
-                  <button
-                    type="button"
-                    className="dashboard-catalog-open"
-                    onClick={() => {
-                      open(dashboard.id);
-                      close();
-                    }}
-                  >
-                    <strong>{dashboard.name}</strong>
-                    <span>{describeDashboard(dashboard)}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={`${pinned ? "Unpin" : "Pin"} ${dashboard.name}`}
-                    aria-pressed={pinned}
-                    onClick={() => void (pinned ? unpin : pin)(dashboard.id)}
-                  >
-                    {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={`Delete ${dashboard.name}`}
-                    onClick={() => void remove(dashboard)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )
-      }
-    </DisclosureMenu>
+    <section className="dashboard-catalog" aria-label="All dashboards">
+      <h2>
+        All dashboards
+        <span className="nav-count">{dashboards.length}</span>
+      </h2>
+      {dashboards.length === 0 ? (
+        <p className="section-note">None yet. Ask the agent for a chart.</p>
+      ) : (
+        <ul className="dashboard-catalog-list">
+          {dashboards.map((dashboard) => {
+            const pinned = pinnedIds.has(dashboard.id);
+            return (
+              <li key={dashboard.id}>
+                <button
+                  type="button"
+                  className="dashboard-catalog-open"
+                  onClick={() => open(dashboard.id)}
+                >
+                  <strong>{dashboard.name}</strong>
+                  <span>{describeDashboard(dashboard)}</span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`${pinned ? "Unpin" : "Pin"} ${dashboard.name}`}
+                  aria-pressed={pinned}
+                  onClick={() => void (pinned ? unpin : pin)(dashboard.id)}
+                >
+                  {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Delete ${dashboard.name}`}
+                  onClick={() => void remove(dashboard)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 

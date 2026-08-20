@@ -255,11 +255,10 @@ test.fixme("the dashboard panel revises the chart it is beside", async ({ page }
   await page.reload();
 
   await openView(page, "Library", /^Dashboards/);
-  await page.getByRole("button", { name: /^All dashboards/ }).click();
-  // The catalog's open button is named by the dashboard and what it draws, so
-  // it is anchored rather than matched exactly.
+  // The catalog is a page section now; its open button is named by the
+  // dashboard and what it draws, so it is anchored rather than matched exactly.
   await page
-    .getByRole("group", { name: "All dashboards" })
+    .getByRole("region", { name: "All dashboards" })
     .getByRole("button", { name: /^E2E Chat Dashboard/ })
     .click();
 

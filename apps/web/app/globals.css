@@ -8559,13 +8559,35 @@ select:focus-visible {
 
 /* ---- The catalogue dropdown ---- */
 
+/* A page section now, not a popover: same width discipline as Templates. */
+.dashboard-catalog {
+  width: min(1060px, 100%);
+  margin: 0 auto 30px;
+}
+
+.dashboard-catalog h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.dashboard-catalog h2 .nav-count {
+  margin-left: 0;
+}
+
 .dashboard-catalog-list {
   margin: 0;
-  padding: 0;
+  padding: 6px;
   list-style: none;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
 }
 
 .dashboard-catalog-list li {

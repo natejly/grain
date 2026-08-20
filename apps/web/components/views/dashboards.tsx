@@ -157,20 +157,6 @@ export function DashboardsView({
               Ask the agent for a chart
             </button>
           )}
-          <DashboardCatalog
-            dashboards={dashboards}
-            pinnedIds={pinnedIds}
-            pin={pinDashboard}
-            unpin={unpinDashboard}
-            remove={removeDashboard}
-            // Launching *is* pinning: there is no single-dashboard page to
-            // send someone to, and a chart you opened once is a chart you
-            // wanted on your screen. Already pinned, it is merely revealed.
-            open={(dashboardId) => {
-              if (!pinnedIds.has(dashboardId)) void pinDashboard(dashboardId);
-              setFocused(dashboardId);
-            }}
-          />
         </div>
       </div>
 
@@ -182,6 +168,23 @@ export function DashboardsView({
         chat={chat ? setChatting : undefined}
         saveLayout={saveDashboardLayout}
         focused={focused}
+      />
+
+      {/* Below the pinned grid, deliberately: your screen first, the shelf
+          holding everything the workspace has underneath it. */}
+      <DashboardCatalog
+        dashboards={dashboards}
+        pinnedIds={pinnedIds}
+        pin={pinDashboard}
+        unpin={unpinDashboard}
+        remove={removeDashboard}
+        // Launching *is* pinning: there is no single-dashboard page to
+        // send someone to, and a chart you opened once is a chart you
+        // wanted on your screen. Already pinned, it is merely revealed.
+        open={(dashboardId) => {
+          if (!pinnedIds.has(dashboardId)) void pinDashboard(dashboardId);
+          setFocused(dashboardId);
+        }}
       />
 
       <DashboardTemplates
