@@ -31,6 +31,7 @@ from ..schemas import (
     ConversationCreate,
     ConversationOut,
     ConversationShareRequest,
+    ConversationTitleRequest,
     MessageOut,
     RunOut,
     SendMessageRequest,
@@ -368,6 +369,47 @@ def set_approval_mode(
         resource_id=conversation.id,
         detail={"from": previous, "to": payload.mode},
     )
+    db.commit()
+    db.refresh(conversation)
+    return _conversation_out(conversation, actor)
+
+
+@router.put("/conversations/{conversation_id}/title", response_model=ConversationOut)
+def rename_conversation(
+    conversation_id: str,
+    payload: ConversationTitleRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    """Rename a thread.
+
+    Any member the thread is visible to may rename it, same as the approval
+    mode: a shared thread's name is the collaboration's, not the creator's,
+    and a personal thread is only ever visible to its creator anyway. Subject
+    threads are refused — their titles are derived from the subject they hang
+    off ("Document: Q3 notes"), and a hand-renamed one would stop saying what
+    it is attached to.
+
+    No `Idempotency-Key`: a PUT of a value, so a retry lands on the same state
+    by construction.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation.subject_id:
+        raise HTTPException(
+            status_code=409,
+            detail="A subject thread is named by what it is attached to",
+        )
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="A title needs at least one character")
+    conversation.title = title
     db.commit()
     db.refresh(conversation)
     return _conversation_out(conversation, actor)

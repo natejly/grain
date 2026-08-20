@@ -42,9 +42,10 @@ attach popover, Rules/Policies, new shell).
       31f860a): icon rail of four doors + contextual sidebars over a two-level
       NAV registry (sections), Knowledge folded into Library, Databases moved
       to Library→Data, collapse hides the sidebar and keeps the doors, mobile
-      drawer carries labelled destinations; REMAINING: Dashboards real list
-      page + finish-the-job pin chooser, Boards&Todos glyph/toast merge,
-      Knowledge cross-links
+      drawer carries labelled destinations; ✔ Dashboards real list page
+      (83aa547: catalog popover → on-page shelf under the pinned grid);
+      REMAINING: finish-the-job pin chooser on chat chart artifacts,
+      Boards&Todos glyph/toast merge, Knowledge cross-links
 - [ ] Phase 4 — Trust surfaces: Rules/Policies (grant enumeration + revoke),
       member-readable org policy, scope labels, per-thread setting
       persistence, review banner (editor never replaced), status popover

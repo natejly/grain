@@ -2085,6 +2085,14 @@ export class WorkspaceApi {
     });
   }
 
+  /** Rename a thread. A PUT of a value, like share — retries land identically. */
+  renameConversation(conversationId: string, title: string): Promise<Conversation> {
+    return this.request(`/api/conversations/${conversationId}/title`, {
+      method: "PUT",
+      body: JSON.stringify({ title }),
+    });
+  }
+
   deleteConversation(conversationId: string): Promise<void> {
     return this.request(
       `/api/conversations/${conversationId}`,

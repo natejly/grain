@@ -1246,6 +1246,13 @@ ROUTE_CASES: List[RouteCase] = [
         "filter, before the creator/owner gate is even reached.",
     ),
     RouteCase(
+        "PUT",
+        "/api/conversations/{conversation_id}/title",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"title": "renamed"},
+    ),
+    RouteCase(
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
     ),
     RouteCase(

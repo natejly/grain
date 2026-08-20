@@ -385,6 +385,19 @@ export function useWorkspace() {
     [patchConversation],
   );
 
+  /** Rename a thread and replace its rail row with the server's copy. */
+  const renameConversation = useCallback(
+    async (conversationId: string, title: string) => {
+      setError("");
+      try {
+        patchConversation(await api.renameConversation(conversationId, title));
+      } catch (caught) {
+        setError(describeError(caught, "Could not rename the thread"));
+      }
+    },
+    [patchConversation],
+  );
+
   /**
    * Open a conversation in an extra pane beside the primary chat.
    *
@@ -843,6 +856,7 @@ export function useWorkspace() {
     focusPane,
     refreshConversations,
     patchConversation,
+    renameConversation,
     shareConversation,
     draft,
     setDraft,

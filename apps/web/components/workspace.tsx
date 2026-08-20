@@ -1,12 +1,13 @@
 "use client";
 
 import type { Conversation, DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, Columns2, LogOut, Menu, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
+import { BarChart3, CircleDot, Columns2, LogOut, Menu, Pencil, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
 import { PaneToggle, useCollapsiblePane } from "./collapsible-pane";
+import { CommandPalette } from "./command-palette";
 import { CreateMenu } from "./create-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
 import { useWorkspace } from "./use-workspace";
@@ -90,6 +91,7 @@ export function Workspace() {
     refreshConversations,
     patchConversation,
     shareConversation,
+    renameConversation,
     draft,
     setDraft,
     selectedAgentId,
@@ -226,8 +228,56 @@ export function Workspace() {
    * owner) — a member seeing it on every row could not act on most of them, and
    * a control that 403s on click is worse than no control.
    */
+  // Which rail row is an input right now, and what it says. Shell state (not
+  // row state) so exactly one rename can be open at a time.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  // ⌘K / Ctrl+K, from anywhere — inputs included, which is why this handler
+  // exists at the window and preventDefaults: the browser wants the shortcut
+  // for its own search bar.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((value) => !value);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  async function submitRename(conversation: Conversation) {
+    const title = renameDraft.trim();
+    setRenamingId(null);
+    if (!title || title === conversation.title) return;
+    await renameConversation(conversation.id, title);
+  }
+
   const renderThread = (conversation: Conversation) => {
     const share = shareControl(conversation, activeConversation);
+    if (renamingId === conversation.id) {
+      return (
+        <div key={conversation.id} className="thread active">
+          <input
+            className="thread-rename-input"
+            value={renameDraft}
+            aria-label={`Rename ${conversation.title}`}
+            autoFocus
+            onChange={(event) => setRenameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void submitRename(conversation);
+              }
+              if (event.key === "Escape") setRenamingId(null);
+            }}
+            onBlur={() => void submitRename(conversation)}
+          />
+        </div>
+      );
+    }
     return (
     <div
       key={conversation.id}
@@ -245,6 +295,23 @@ export function Workspace() {
         )}
         <time>{formatRelative(conversation.updated_at)}</time>
       </button>
+      {/* Rename rides only the OPEN thread, like share: an affordance on every
+          row is sidebar noise. Subject threads are named by what they hang
+          off, so they never offer it — the server refuses anyway. */}
+      {activeConversation === conversation.id && !conversation.subject_id && (
+        <button
+          className="thread-rename"
+          title="Rename thread"
+          aria-label={`Rename ${conversation.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setRenamingId(conversation.id);
+            setRenameDraft(conversation.title);
+          }}
+        >
+          <Pencil size={13} />
+        </button>
+      )}
       {share && (
         <button
           className={share.shared ? "thread-share shared" : "thread-share"}
@@ -399,6 +466,18 @@ export function Workspace() {
 
   return (
     <div className={railCollapsed ? "workspace-shell rail-collapsed" : "workspace-shell"}>
+      <CommandPalette
+        open={paletteOpen}
+        close={() => setPaletteOpen(false)}
+        conversations={conversations}
+        openView={(next) => {
+          setView(next);
+          setSidebarOpen(false);
+        }}
+        openThread={(id) => void selectConversation(id)}
+        create={create}
+      />
+
       {/* Band 1: the icon rail — four doors, always visible on desktop. The
           places you work and nothing else; creating and configuring live in
           the top-right, and everything deeper is summoned per destination in

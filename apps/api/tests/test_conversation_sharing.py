@@ -256,3 +256,60 @@ def test_unsharing_hides_the_thread_from_other_members_again(workspace_members):
     # Back to personal: B loses sight of it, and every by-id path 404s once more.
     assert conversation_id not in [c["id"] for c in client_b.get("/api/conversations").json()]
     assert client_b.get(f"/api/conversations/{conversation_id}/messages").status_code == 404
+
+
+def test_rename_follows_visibility_and_refuses_subject_threads(workspace_members):
+    client_a, _ = workspace_members["a"]
+    client_b, _, _ = workspace_members["b"]
+    conversation_id = _make_personal_thread(client_a)
+
+    # The creator renames their personal thread; padding is trimmed.
+    renamed = client_a.put(
+        f"/api/conversations/{conversation_id}/title", json={"title": "  Q3 planning  "}
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Q3 planning"
+
+    # Invisible means unrenameable — and 404, never 403, so the id's existence
+    # is not confirmed to someone it is hidden from.
+    assert (
+        client_b.put(
+            f"/api/conversations/{conversation_id}/title", json={"title": "B's now"}
+        ).status_code
+        == 404
+    )
+
+    # Shared, the name belongs to the collaboration: any member may change it,
+    # same rule as the approval mode.
+    client_a.put(f"/api/conversations/{conversation_id}/share", json={"shared": True})
+    assert (
+        client_b.put(
+            f"/api/conversations/{conversation_id}/title", json={"title": "Ours"}
+        ).status_code
+        == 200
+    )
+
+    # All-whitespace collapses to empty, and an unfindable rail row is refused.
+    assert (
+        client_a.put(
+            f"/api/conversations/{conversation_id}/title", json={"title": "   "}
+        ).status_code
+        == 422
+    )
+
+    # A subject thread is named by what it hangs off; hand-renaming would make
+    # it stop saying so.
+    document = client_a.post(
+        "/api/documents",
+        headers=_key(),
+        json={"title": "Rename target", "kind": "markdown", "content": "x"},
+    ).json()
+    subject = client_a.post(
+        f"/api/documents/{document['id']}/conversation", headers=_key()
+    ).json()
+    assert (
+        client_a.put(
+            f"/api/conversations/{subject['id']}/title", json={"title": "nope"}
+        ).status_code
+        == 409
+    )

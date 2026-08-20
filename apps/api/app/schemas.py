@@ -360,6 +360,17 @@ class ConversationOut(ApiModel):
     updated_at: datetime
 
 
+class ConversationTitleRequest(BaseModel):
+    """The body of `PUT /api/conversations/{id}/title`.
+
+    Bounded like the create path's title: a name, not a document. Whitespace
+    is the caller's to trim — the route strips and refuses an empty result,
+    because a thread whose rail row shows nothing cannot be found again.
+    """
+
+    title: str = Field(min_length=1, max_length=160)
+
+
 class ConversationShareRequest(BaseModel):
     """The body of `PUT /api/conversations/{id}/share`.
 
