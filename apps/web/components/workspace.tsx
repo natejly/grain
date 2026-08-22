@@ -45,6 +45,7 @@ import {
   shareControl,
   type View,
 } from "./views/shared";
+import { GalleryView } from "./views/gallery";
 import { SkillsView } from "./views/skills";
 import { SourcesView } from "./views/sources";
 import { TodosView } from "./views/todos";
@@ -1062,6 +1063,10 @@ export function Workspace() {
         {/* Self-contained like AgentsView: the skill list is nobody's business
             until they open this or type "/" in the composer. */}
         {view === "skills" && <SkillsView setError={setError} />}
+
+        {/* Self-contained like SkillsView: what the marketplace holds is
+            nobody's business until they browse it. */}
+        {view === "gallery" && <GalleryView setError={setError} />}
 
         {/* Self-contained: a workflow's run history is nobody's business until
             they open this, so it is fetched here rather than at page load. */}

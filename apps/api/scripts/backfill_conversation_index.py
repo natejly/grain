@@ -7,7 +7,7 @@ The search-time reconcile does the same thing lazily, five conversations per
 search — this is the bulk path, for bringing a whole deployment's history
 online at once instead of as searches happen to touch it.
 
-    PYTHONPATH=apps/api python apps/api/scripts/backfill_conversation_index.py                    # every workspace
+    PYTHONPATH=apps/api python apps/api/scripts/backfill_conversation_index.py     # every workspace
     PYTHONPATH=apps/api python apps/api/scripts/backfill_conversation_index.py --workspace <id>
 
 Idempotent: chunk coverage is by message id, so a second run writes nothing and

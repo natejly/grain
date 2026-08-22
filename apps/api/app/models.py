@@ -1554,6 +1554,76 @@ class SkillVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class Listing(Base):
+    """A published marketplace entry: the mutable head over immutable versions.
+
+    Mirrors the `GeneratedApp`/`AppRelease` split. This row is the *identity* —
+    slug, title, visibility, status — while every publish appends a
+    `ListingVersion` snapshot, so what an installer receives can never be
+    mutated after the fact by editing the source. `workspace_id` is the
+    publisher's workspace; `organization_id` is denormalized here (not read
+    through the workspace join) because the org tier is the visibility boundary
+    and a boundary read through a second table is a boundary that can drift.
+
+    `status` reserves 'taken_down' now — the report→takedown flow lands before
+    any public tier — so that flow needs no migration revisit. `author_name` is
+    a free-text byline captured at publish because `created_by` columns are not
+    user FKs anywhere in this schema; revisit before a public tier.
+    """
+
+    __tablename__ = "listings"
+    __table_args__ = (UniqueConstraint("organization_id", "slug"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), index=True
+    )
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # skill | workflow | agent
+    slug: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    visibility: Mapped[str] = mapped_column(String(20), default="workspace")
+    status: Mapped[str] = mapped_column(String(20), default="published")
+    author_name: Mapped[str] = mapped_column(String(120), default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    install_count: Mapped[int] = mapped_column(Integer, default=0)
+    latest_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ListingVersion(Base):
+    """One immutable published payload of a listing.
+
+    `payload_json` is the *entire* transferable content — produced only by the
+    per-kind allowlist serializers in `services/marketplace.py`, so a secret or
+    workspace id can only ride along by changing that serializer, never by a
+    field slipping through. `source_id` is a plain string, not an FK, for the
+    same reason `Run.skill_id` and `Dashboard.template_id` are: deleting the
+    source must never take published history with it.
+    """
+
+    __tablename__ = "listing_versions"
+    __table_args__ = (
+        UniqueConstraint("listing_id", "version"),
+        Index("ix_listing_versions_ws_listing", "workspace_id", "listing_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    payload_json: Mapped[str] = mapped_column(Text)
+    #: sha256 over the canonical payload_json, the skills.py convention.
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    changelog: Mapped[str] = mapped_column(Text, default="")
+    source_id: Mapped[str] = mapped_column(String(36), default="")
+    source_version: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Dashboard(Base):
     """One saved view over one dataset: a query and how to draw its answer.
 

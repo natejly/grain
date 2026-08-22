@@ -76,6 +76,8 @@ from app.models import (
     GraphEntity,
     GraphProjection,
     IntegrationAccount,
+    Listing,
+    ListingVersion,
     McpServer,
     McpTool,
     Membership,
@@ -927,6 +929,48 @@ def build_tenant(label: str) -> Tenant:
         assert org_membership is not None, "create_identity writes an org admin"
         ids["org_membership"] = org_membership.id
 
+        # A workspace-tier marketplace listing. The payload body carries the
+        # marker string, so a cross-tenant browse or detail read that leaked it
+        # would trip the same scan as everything else — a listing's payload is a
+        # prompt, and a leaked prompt is the marketplace's version of the skill
+        # leak above.
+        listing = Listing(
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            kind="skill",
+            slug=f"{label.lower()}-listing",
+            title=f"{label} listing",
+            description=f"{label} secret listing description",
+            visibility="workspace",
+            status="published",
+            author_name=f"{label} author",
+            created_by=user_id,
+            latest_version=1,
+        )
+        db.add(listing)
+        db.flush()
+        ids["listing"] = listing.id
+        listing_version = ListingVersion(
+            workspace_id=workspace_id,
+            listing_id=listing.id,
+            version=1,
+            payload_json=json.dumps(
+                {
+                    "title": f"{label} listing",
+                    "description": f"{label} secret listing description",
+                    "body": f"{label} secret listing body",
+                    "args_json": "[]",
+                }
+            ),
+            content_hash="0" * 64,
+            source_id=skill.id,
+            source_version=1,
+            created_by=user_id,
+        )
+        db.add(listing_version)
+        db.flush()
+        ids["listing_version"] = listing_version.id
+
         db.commit()
     finally:
         db.close()
@@ -1423,6 +1467,34 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/skills/{skill_id}/versions/{version_id}/restore",
         DENY,
         path_ids={"skill_id": "skill", "version_id": "skill_version"},
+    ),
+    # -- marketplace --------------------------------------------------------
+    # A listing's payload is instructions verbatim, so a cross-tenant detail
+    # read is a prompt leak, and a cross-tenant install would copy another
+    # workspace's prompt into the caller's. The fixture listing is
+    # workspace-tier, so every id route 404s on the visibility chokepoint.
+    RouteCase("GET", "/api/marketplace/listings", SCOPED),
+    # Publishing names its source in the body: A pointing at B's skill must 404
+    # on the skill lookup — a 2xx would republish another workspace's prompt
+    # under A's name.
+    RouteCase(
+        "POST",
+        "/api/marketplace/listings",
+        DENY,
+        body={"kind": "skill", "source_id": "", "slug": "isolation-probe"},
+        body_ids={"source_id": "skill"},
+    ),
+    RouteCase(
+        "GET",
+        "/api/marketplace/listings/{listing_id}",
+        DENY,
+        path_ids={"listing_id": "listing"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/marketplace/listings/{listing_id}/install",
+        DENY,
+        path_ids={"listing_id": "listing"},
     ),
     # -- audit / graph / memory -------------------------------------------
     RouteCase("GET", "/api/audit-events", SCOPED),

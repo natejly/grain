@@ -28,7 +28,8 @@ export type View =
   | "admin"
   | "workflows"
   | "crons"
-  | "spaces";
+  | "spaces"
+  | "gallery";
 
 /**
  * An unreachable API already has a dedicated banner with a retry, so it returns
@@ -117,6 +118,9 @@ export const PAGE_TITLES: Record<View, string> = {
   workflows: "Workflows",
   // A cron is a schedule. Its old title, "Automations", is the *group* now.
   crons: "Schedules",
+  // Where published skills (and later workflows and agents) are browsed and
+  // installed. In Library because it is a shelf you take things from.
+  gallery: "Gallery",
 };
 
 export function formatBytes(bytes: number): string {

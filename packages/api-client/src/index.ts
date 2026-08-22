@@ -502,6 +502,67 @@ export type SkillUpdateBody = {
   shared?: boolean;
 };
 
+/**
+ * A marketplace listing: the browse-card view of something published. `mine`
+ * and `can_manage` are the caller's standing, resolved server-side like the
+ * skill rights above.
+ */
+export type Listing = {
+  id: string;
+  kind: "skill" | "workflow" | "agent";
+  slug: string;
+  title: string;
+  description: string;
+  visibility: "workspace" | "org";
+  status: string;
+  author_name: string;
+  install_count: number;
+  latest_version: number;
+  mine: boolean;
+  can_manage: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One immutable published version, for the detail drawer's history. */
+export type ListingVersion = {
+  id: string;
+  version: number;
+  changelog: string;
+  content_hash: string;
+  created_at: string;
+};
+
+/**
+ * The detail view: the card plus the FULL payload an install would copy. The
+ * gallery renders the payload before the Install button enables — installing
+ * instructions you have not read is not consent.
+ */
+export type ListingDetail = Listing & {
+  payload: Record<string, unknown>;
+  versions: ListingVersion[];
+};
+
+export type ListingPublishBody = {
+  kind?: "skill";
+  source_id: string;
+  slug: string;
+  title?: string;
+  description?: string;
+  author_name?: string;
+  /** Required when republishing an existing slug. */
+  changelog?: string;
+};
+
+/** What installing created: an ordinary local row in the caller's workspace. */
+export type ListingInstallResult = {
+  kind: string;
+  resource_id: string;
+  name: string;
+  title: string;
+  warnings: string[];
+};
+
 /** One registry tool, as the provisioning checklist renders it. */
 export type ToolInfo = {
   name: string;
@@ -2373,6 +2434,35 @@ export class WorkspaceApi {
     return this.request(
       `/api/skills/${skillId}/versions/${versionId}/restore`,
       { method: "POST" },
+    );
+  }
+
+  // --- Marketplace (publish, browse, install) ---
+
+  /** Listings visible to the caller: their workspace's, plus org-tier ones. */
+  listListings(): Promise<Listing[]> {
+    return this.request("/api/marketplace/listings");
+  }
+
+  getListing(listingId: string): Promise<ListingDetail> {
+    return this.request(`/api/marketplace/listings/${listingId}`);
+  }
+
+  /** Snapshot a skill into a listing (or, same slug + same source, a new version). */
+  publishListing(body: ListingPublishBody): Promise<ListingDetail> {
+    return this.request(
+      "/api/marketplace/listings",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    );
+  }
+
+  /** Copy the listing's payload into the caller's workspace as a local row. */
+  installListing(listingId: string): Promise<ListingInstallResult> {
+    return this.request(
+      `/api/marketplace/listings/${listingId}/install`,
+      { method: "POST" },
+      true,
     );
   }
 

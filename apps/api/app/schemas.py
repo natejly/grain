@@ -307,6 +307,70 @@ class SkillVersionOut(ApiModel):
     created_at: datetime
 
 
+class ListingOut(ApiModel):
+    id: str
+    kind: str
+    slug: str
+    title: str
+    description: str = ""
+    visibility: str
+    status: str
+    author_name: str = ""
+    install_count: int = 0
+    latest_version: int = 1
+    #: True when the listing was published from the caller's own workspace —
+    #: the gallery shows a "yours" marker and the manage affordances on these.
+    mine: bool = False
+    #: True when the caller may edit or delist it (publisher-or-owner).
+    can_manage: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class ListingVersionOut(ApiModel):
+    id: str
+    version: int
+    changelog: str = ""
+    content_hash: str = ""
+    created_at: datetime
+
+
+class ListingDetailOut(ListingOut):
+    """The browse card plus everything an installer must be able to read.
+
+    `payload` is the FULL latest published payload — the gallery renders it
+    before the Install button enables, because consenting to instructions you
+    have not seen is not consent.
+    """
+
+    payload: Dict[str, Any] = {}
+    versions: List[ListingVersionOut] = []
+
+
+class ListingCreate(BaseModel):
+    kind: Literal["skill"] = "skill"
+    #: The id of the thing being published, in the caller's workspace.
+    source_id: str
+    slug: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    #: Blank falls back to the source's own title.
+    title: str = Field(default="", max_length=160)
+    description: str = Field(default="", max_length=500)
+    author_name: str = Field(default="", max_length=120)
+    #: Required when republishing an existing slug; ignored on first publish.
+    changelog: str = Field(default="", max_length=2000)
+    visibility: Literal["workspace"] = "workspace"
+
+
+class InstallOut(ApiModel):
+    """What installing created: an ordinary local row, plus any degradations."""
+
+    kind: str
+    resource_id: str
+    name: str
+    title: str
+    warnings: List[str] = []
+
+
 class ToolInfoOut(ApiModel):
     """One registry tool, for the provisioning checklist."""
 
