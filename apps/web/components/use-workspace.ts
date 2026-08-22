@@ -28,6 +28,7 @@ import type {
   Skill,
   Source,
   Space,
+  SpaceTemplate,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
@@ -89,6 +90,9 @@ export function useWorkspace() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
+  // Saved starting points for spaces. Lives here beside `spaces` (and
+  // `dashboardTemplates`) because the list refreshes with its sibling.
+  const [spaceTemplates, setSpaceTemplates] = useState<SpaceTemplate[]>([]);
   const [agentCalls, setAgentCalls] = useState<AgentToolCall[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   // The unified attention feed (GET /api/inbox): the server-truth waiting set
@@ -241,9 +245,17 @@ export function useWorkspace() {
   );
 
   const refreshSecondary = useCallback(async () => {
-    const [nextSources, nextSpaces, nextAgentCalls, nextAudit, nextInbox] = await Promise.all([
+    const [
+      nextSources,
+      nextSpaces,
+      nextSpaceTemplates,
+      nextAgentCalls,
+      nextAudit,
+      nextInbox,
+    ] = await Promise.all([
       api.listSources(),
       api.listSpaces(),
+      api.listSpaceTemplates(),
       api.listAgentToolCalls(),
       api.listAuditEvents(),
       // Beside — not derived from — the call list: `listAgentToolCalls` is a
@@ -254,6 +266,7 @@ export function useWorkspace() {
     ]);
     setSources(nextSources);
     setSpaces(nextSpaces);
+    setSpaceTemplates(nextSpaceTemplates);
     setAgentCalls(nextAgentCalls);
     setAuditEvents(nextAudit);
     setInbox(nextInbox);
@@ -484,6 +497,7 @@ export function useWorkspace() {
         chats,
         nextSources,
         nextSpaces,
+        nextSpaceTemplates,
         nextAgentCalls,
         nextAudit,
         nextInbox,
@@ -499,6 +513,7 @@ export function useWorkspace() {
         api.listConversations(),
         api.listSources(),
         api.listSpaces(),
+        api.listSpaceTemplates(),
         api.listAgentToolCalls(),
         api.listAuditEvents(),
         api.getInbox(),
@@ -520,6 +535,7 @@ export function useWorkspace() {
       });
       setSources(nextSources);
       setSpaces(nextSpaces);
+      setSpaceTemplates(nextSpaceTemplates);
       setAgentCalls(nextAgentCalls);
       setAuditEvents(nextAudit);
       setInbox(nextInbox);
@@ -822,6 +838,7 @@ export function useWorkspace() {
     messages,
     sources,
     spaces,
+    spaceTemplates,
     agentCalls,
     auditEvents,
     inbox,

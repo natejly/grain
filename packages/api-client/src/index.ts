@@ -329,6 +329,34 @@ export type SpaceUpdateBody = {
   instructions?: string;
 };
 
+/**
+ * A reusable starting point for a space: instructions written down once.
+ *
+ * A snapshot, not a link — saving one copies a space's instructions at that
+ * moment, and instantiating it copies them forward into a new space. Editing
+ * either afterwards moves neither.
+ */
+export type SpaceTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  /** Plain historical agent ids; a deleted agent stays listed, harmlessly. */
+  agent_ids: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type SpaceTemplateCreateBody = {
+  name: string;
+  description?: string;
+  /** Used when `from_space_id` is empty; the snapshot wins otherwise. */
+  instructions?: string;
+  agent_ids?: string[];
+  /** "" = author from scratch; an id = snapshot that space's instructions. */
+  from_space_id?: string;
+};
+
 export type ProvenanceChunk = {
   id: string;
   source_id: string;
@@ -2319,6 +2347,37 @@ export class WorkspaceApi {
     return this.request(`/api/spaces/${spaceId}`, { method: "DELETE" }, true);
   }
 
+  // --- Space templates (saved starting points for spaces) ---
+
+  listSpaceTemplates(): Promise<SpaceTemplate[]> {
+    return this.request("/api/space-templates");
+  }
+
+  createSpaceTemplate(body: SpaceTemplateCreateBody): Promise<SpaceTemplate> {
+    return this.request(
+      "/api/space-templates",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    );
+  }
+
+  deleteSpaceTemplate(templateId: string): Promise<void> {
+    return this.request(
+      `/api/space-templates/${templateId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /** A new space carrying the template's instructions, via the ordinary create path. */
+  instantiateSpaceTemplate(templateId: string, name: string): Promise<Space> {
+    return this.request(
+      `/api/space-templates/${templateId}/instantiate`,
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
+  }
+
   listAgents(): Promise<AgentInfo[]> {
     return this.request("/api/agents");
   }
@@ -2945,6 +3004,15 @@ export class WorkspaceApi {
     return this.request(`/api/dashboards/${dashboardId}`, { method: "DELETE" }, true);
   }
 
+  /** A verbatim copy named "<name> copy"; 409 when that name is already taken. */
+  duplicateDashboard(dashboardId: string): Promise<Dashboard> {
+    return this.request(
+      `/api/dashboards/${dashboardId}/duplicate`,
+      { method: "POST" },
+      true,
+    );
+  }
+
   // --- Dashboard templates --------------------------------------------------
   // The two writes below go through `workflowWrite`, and throw
   // `WorkflowCompileError`, on purpose rather than by accident. A template that
@@ -3430,6 +3498,45 @@ export class WorkspaceApi {
     return this.request(`/api/workflows/runs/${workflowRunId}`);
   }
 
+  // --- Workflow templates (saved automation shapes, never scheduled) ---
+
+  listWorkflowTemplates(): Promise<WorkflowTemplate[]> {
+    return this.request("/api/workflow-templates");
+  }
+
+  /** Snapshot a stored workflow's graph and prompt under a template name. */
+  createWorkflowTemplate(payload: {
+    name: string;
+    description?: string;
+    from_workflow_id: string;
+  }): Promise<WorkflowTemplate> {
+    return this.request(
+      "/api/workflow-templates",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  deleteWorkflowTemplate(templateId: string): Promise<void> {
+    return this.request(
+      `/api/workflow-templates/${templateId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /**
+   * Copy a template into a runnable workflow. Always lands as a draft with an
+   * empty schedule — someone must review and activate it before it can fire.
+   */
+  instantiateWorkflowTemplate(templateId: string, name = ""): Promise<Workflow> {
+    return this.request(
+      `/api/workflow-templates/${templateId}/instantiate`,
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
+  }
+
   // --- Personal crons (automation) ------------------------------------------
   // Plain `this.request`, not `workflowWrite`: a cron does not compile, so
   // there is no findings report to preserve — a bad schedule or IANA zone is a
@@ -3721,6 +3828,22 @@ export type WorkflowUpdateInput = {
   /** Either recompiles the sentence or re-validates the graph; bumps version. */
   source_prompt?: string;
   graph?: WorkflowGraph;
+};
+
+/**
+ * A stored automation shape, detached from any schedule.
+ *
+ * A snapshot of a workflow's graph and source prompt. Instantiating one always
+ * produces a *draft* workflow with an empty cron — a template can never
+ * schedule anything by itself.
+ */
+export type WorkflowTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  source_prompt: string;
+  graph: WorkflowGraph;
+  created_at: string;
 };
 
 export type WorkflowRunStatus =

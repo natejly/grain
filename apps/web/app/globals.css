@@ -6892,6 +6892,23 @@ select:focus-visible {
   line-height: 1.5;
 }
 
+/* Saved automation shapes, under the roster: quiet, because a template is a
+   starting point, not work in flight. Clicking one drafts a copy. */
+.workflow-templates {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.workflow-templates-title {
+  display: block;
+  padding: 0 6px 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 /* An unattended run that parked at 3am is useless if nobody can see it
    waiting, so it sits above the list rather than inside whichever workflow
    happens to own it. */
@@ -9454,6 +9471,13 @@ select:focus-visible {
 }
 
 .spaces-create input {
+  width: 100%;
+}
+
+/* The template picker rides in the create form: picking one routes the same
+   name through instantiate, so "blank or from a playbook" is one decision
+   made in one place. */
+.spaces-create select {
   width: 100%;
 }
 

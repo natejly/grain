@@ -96,6 +96,7 @@ from app.models import (
     SkillVersion,
     Source,
     Space,
+    SpaceTemplate,
     SyncJob,
     Tool,
     ToolCall,
@@ -105,6 +106,7 @@ from app.models import (
     Workflow,
     WorkflowNodeRun,
     WorkflowRun,
+    WorkflowTemplate,
     Workspace,
     WorkspaceInvite,
     new_id,
@@ -283,6 +285,21 @@ def build_tenant(label: str) -> Tenant:
         db.add(space)
         db.flush()
         ids["space"] = space.id
+
+        # A saved starting point whose id another tenant can name: naming it
+        # would let you read its instructions, instantiate it into your own
+        # workspace, or delete it.
+        space_template = SpaceTemplate(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} space template",
+            description=f"{label} secret space template",
+            instructions=f"{label} secret template instructions",
+            agent_ids_json=json.dumps([agent_id]),
+        )
+        db.add(space_template)
+        db.flush()
+        ids["space_template"] = space_template.id
 
         tool = Tool(
             workspace_id=workspace_id,
@@ -770,6 +787,21 @@ def build_tenant(label: str) -> Tenant:
         db.add(node_run)
         db.flush()
         ids["workflow_node_run"] = node_run.id
+
+        # The automation's saved shape. The graph is the workflow's own — real
+        # and parseable — so a foreign instantiate that somehow got past the
+        # workspace filter would fail for the wrong reason, not this one.
+        workflow_template = WorkflowTemplate(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} workflow template",
+            description=f"{label} secret workflow template",
+            graph_json=workflow.graph_json,
+            source_prompt=workflow.source_prompt,
+        )
+        db.add(workflow_template)
+        db.flush()
+        ids["workflow_template"] = workflow_template.id
 
         # A personal cron whose id another tenant can name: naming it would let
         # you read its prompt, fire it unattended, or delete it. `run-now`'s DENY
@@ -1282,6 +1314,32 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase(
         "DELETE", "/api/spaces/{space_id}", DENY, path_ids={"space_id": "space"}
     ),
+    # -- space templates ---------------------------------------------------
+    RouteCase("GET", "/api/space-templates", SCOPED),
+    # The foreign id rides in the body: snapshotting another tenant's space
+    # would read its instructions into a row the caller can then list.
+    RouteCase(
+        "POST",
+        "/api/space-templates",
+        DENY,
+        body={"name": "stolen", "from_space_id": ""},
+        body_ids={"from_space_id": "space"},
+        note="templates another tenant's space instructions",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/space-templates/{template_id}",
+        DENY,
+        path_ids={"template_id": "space_template"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/space-templates/{template_id}/instantiate",
+        DENY,
+        path_ids={"template_id": "space_template"},
+        body={"name": "probe"},
+        note="builds a space from another tenant's template",
+    ),
     # -- sources -----------------------------------------------------------
     RouteCase("GET", "/api/sources", SCOPED),
     RouteCase("POST", "/api/sources", SCOPED, files=True),
@@ -1699,6 +1757,13 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"dashboard_id": "dashboard"},
     ),
     RouteCase(
+        "POST",
+        "/api/dashboards/{dashboard_id}/duplicate",
+        DENY,
+        path_ids={"dashboard_id": "dashboard"},
+        note="copies another tenant's dashboard into the caller's workspace",
+    ),
+    RouteCase(
         "DELETE",
         "/api/dashboards/{dashboard_id}",
         DENY,
@@ -1985,6 +2050,33 @@ ROUTE_CASES: List[RouteCase] = [
     # resource to point it at, and with WORKFLOW_CRON_SECRET unset (as it is
     # here) it refuses outright. See api/workflows.py:tick.
     RouteCase("POST", "/api/workflows/tick", PUBLIC),
+    # -- workflow templates ------------------------------------------------
+    RouteCase("GET", "/api/workflow-templates", SCOPED),
+    # The foreign id rides in the body: snapshotting another tenant's workflow
+    # would copy its graph — tool names, prompts, arguments — into a row the
+    # caller can then read at leisure.
+    RouteCase(
+        "POST",
+        "/api/workflow-templates",
+        DENY,
+        body={"name": "stolen", "from_workflow_id": ""},
+        body_ids={"from_workflow_id": "workflow"},
+        note="templates another tenant's automation",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/workflow-templates/{template_id}",
+        DENY,
+        path_ids={"template_id": "workflow_template"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/workflow-templates/{template_id}/instantiate",
+        DENY,
+        path_ids={"template_id": "workflow_template"},
+        body={"name": ""},
+        note="copies another tenant's automation into a runnable workflow",
+    ),
     # -- crons -------------------------------------------------------------
     # A cron id is worth as much as a workflow id: naming another tenant's
     # automation would let you read its prompt, fire it unattended, or delete it.

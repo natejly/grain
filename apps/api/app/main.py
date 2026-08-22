@@ -37,6 +37,7 @@ from .api import (
     sources,
     spaces,
     system,
+    templates,
     todos,
     tools,
     workflows,
@@ -128,6 +129,7 @@ app.include_router(analytics.router)
 app.include_router(dashboards.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)
+app.include_router(templates.router)
 app.include_router(crons.router)
 app.include_router(admin.router)
 app.include_router(org.router)

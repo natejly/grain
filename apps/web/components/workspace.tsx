@@ -61,6 +61,7 @@ export function Workspace() {
     messages,
     sources,
     spaces,
+    spaceTemplates,
     agentCalls,
     auditEvents,
     inbox,
@@ -200,6 +201,7 @@ export function Workspace() {
     unpinDashboard,
     saveDashboardLayout,
     bindDashboardTemplate,
+    duplicateDashboard,
     removeDashboard,
     publishGeneratedApp,
     rollbackGeneratedApp,
@@ -930,6 +932,7 @@ export function Workspace() {
             unpinDashboard={unpinDashboard}
             saveDashboardLayout={saveDashboardLayout}
             bindDashboardTemplate={bindDashboardTemplate}
+            duplicateDashboard={duplicateDashboard}
             removeDashboard={removeDashboard}
             focused={focusedDashboard}
             setFocused={setFocusedDashboard}
@@ -1049,6 +1052,7 @@ export function Workspace() {
         {view === "spaces" && (
           <SpacesView
             spaces={spaces}
+            spaceTemplates={spaceTemplates}
             conversations={conversations}
             sources={sources}
             setError={setError}

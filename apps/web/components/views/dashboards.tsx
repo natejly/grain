@@ -54,6 +54,8 @@ export type DashboardsViewProps = {
       column_bindings: Record<string, string>;
     },
   ) => Promise<Dashboard>;
+  /** Copy a dashboard under "<name> copy", via handlers/dashboards.ts. */
+  duplicateDashboard: (dashboard: Dashboard) => Promise<void>;
   removeDashboard: (dashboard: Dashboard) => Promise<void>;
   /** Which pinned tile to reveal, set by the rail. Cleared once revealed. */
   focused: string | null;
@@ -98,6 +100,7 @@ export function DashboardsView({
   unpinDashboard,
   saveDashboardLayout,
   bindDashboardTemplate,
+  duplicateDashboard,
   removeDashboard,
   focused,
   setFocused,
@@ -177,6 +180,7 @@ export function DashboardsView({
         pinnedIds={pinnedIds}
         pin={pinDashboard}
         unpin={unpinDashboard}
+        duplicate={duplicateDashboard}
         remove={removeDashboard}
         // Launching *is* pinning: there is no single-dashboard page to
         // send someone to, and a chart you opened once is a chart you

@@ -5,7 +5,7 @@ import type {
   DashboardTemplate,
   Dataset,
 } from "@workspace/api-client";
-import { Pin, PinOff, Trash2 } from "lucide-react";
+import { Copy, Pin, PinOff, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { describeDashboard, refusalLines } from "./dashboard-format";
 
@@ -24,6 +24,8 @@ export type DashboardCatalogProps = {
   pinnedIds: Set<string>;
   pin: (dashboardId: string) => Promise<void>;
   unpin: (dashboardId: string) => Promise<void>;
+  /** Copy the definition under "<name> copy" — editing without losing the original. */
+  duplicate: (dashboard: Dashboard) => Promise<void>;
   remove: (dashboard: Dashboard) => Promise<void>;
   open: (dashboardId: string) => void;
 };
@@ -41,6 +43,7 @@ export function DashboardCatalog({
   pinnedIds,
   pin,
   unpin,
+  duplicate,
   remove,
   open,
 }: DashboardCatalogProps) {
@@ -74,6 +77,15 @@ export function DashboardCatalog({
                   onClick={() => void (pinned ? unpin : pin)(dashboard.id)}
                 >
                   {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Duplicate ${dashboard.name}`}
+                  title="Copy this dashboard under a new name"
+                  onClick={() => void duplicate(dashboard)}
+                >
+                  <Copy size={14} />
                 </button>
                 <button
                   type="button"

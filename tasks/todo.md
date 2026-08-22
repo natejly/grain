@@ -1,3 +1,36 @@
+# Feature sweep (started 2026-08-22, ultracode)
+
+Scope approved by user: everything from the 2026-08-22 brainstorm EXCEPT agent
+eval suites (deferred — see "Later in line" below). Build order is by
+dependency: internal reuse first, then Inbox-integrated features, then the
+egress tier (mail service, share links, webhooks) last since it needs new
+infra. Each feature lands with migration guards, route-table/tenant-isolation
+cases, unit tests, and its own commit.
+
+- [x] 1. Templates: space templates + duplicate dashboard + workflow templates
+- [ ] 2. Thread forking: branch a conversation from any message
+- [ ] 3. Comments & @mentions on documents/dashboards/threads → Inbox
+- [ ] 4. Assignable approvals: route an approval to a member; Inbox "assigned"
+- [ ] 5. Metric monitors: dataset/typed-query threshold trips → Inbox alerts
+- [ ] 6. Run undo: revert a run's write-tool effects from recorded state
+- [ ] 7. Per-agent cost attribution + spend anomaly flags → Inbox
+- [ ] 8. Mail service abstraction (console/dev fallback, SMTP config) — infra
+      for 9/11/12
+- [ ] 9. Share links: revocable read-only public URLs (dashboard/document/
+      artifact)
+- [ ] 10. Dashboard subscriptions: scheduled snapshot delivery
+- [ ] 11. Outbound webhooks + API tokens (trigger workflow / post to thread;
+      event push)
+- [ ] 12. Inbound email → thread (provider-webhook endpoint, pairs with Rules)
+- [ ] 13. Notification digests: daily pending-approvals email per member
+- [ ] Full gate: make lint, pytest, pnpm test, pnpm build, e2e
+
+## Later in line (explicitly deferred by user 2026-08-22)
+
+- [ ] Agent eval suites: save real threads as fixtures, replay against an
+      edited agent, diff transcripts (productize the scripted/hermetic
+      harness + memory-eval gate patterns). Do AFTER the feature sweep above.
+
 # Frontend redesign: "Foyer"
 
 Full spec: https://claude.ai/code/artifact/547d1b83-5525-4537-afe9-aa8b42a272bb

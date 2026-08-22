@@ -782,6 +782,35 @@ class Space(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class SpaceTemplate(Base):
+    """A reusable starting point for a space: instructions, written down once.
+
+    A snapshot, not a link. The template copies a space's instructions at the
+    moment it is saved, and instantiating it copies them forward into a new
+    `Space` row — editing either afterwards moves neither, which is what makes
+    "set up a client space the way we always do" reproducible rather than
+    coupled. `agent_ids_json` follows the same rule: plain historical ids
+    (never ForeignKeys, per the house convention for references that must
+    outlive their target), recorded so the template can say which agents the
+    playbook expects without a deleted agent breaking the template.
+    """
+
+    __tablename__ = "space_templates"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    #: The standing instructions a space built from this template starts with.
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    #: Agents this playbook expects, as a JSON list of plain ids ('[]' = none).
+    agent_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class Folder(Base):
     """Where a file is filed. Nests, and holds nothing of its own.
 
@@ -1742,6 +1771,30 @@ class Workflow(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class WorkflowTemplate(Base):
+    """A stored automation shape, detached from any schedule.
+
+    A snapshot of a workflow's `graph_json` and `source_prompt` — the whole
+    definition, per the Workflow docstring — with everything that could make it
+    *fire* deliberately left behind. Instantiating one re-validates the graph
+    and writes a fresh draft `Workflow` with empty schedule fields, so a
+    template can never smuggle a live cron into a workspace; someone has to
+    review and activate the copy, exactly as if they had compiled it themselves.
+    """
+
+    __tablename__ = "workflow_templates"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    graph_json: Mapped[str] = mapped_column(Text)
+    source_prompt: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class WorkflowRun(Base):
