@@ -971,6 +971,47 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["listing_version"] = listing_version.id
 
+        # An ORG-tier listing too, because the org arm of the visibility
+        # chokepoint is the one query in the marketplace that deliberately
+        # crosses workspaces — so the sweep must prove it still stops at the
+        # *organization*. The two tenants sit in two different orgs, so every
+        # case aimed at this row is a real cross-org probe.
+        listing_org = Listing(
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            kind="skill",
+            slug=f"{label.lower()}-org-listing",
+            title=f"{label} org listing",
+            description=f"{label} secret org listing description",
+            visibility="org",
+            status="published",
+            created_by=user_id,
+            latest_version=1,
+        )
+        db.add(listing_org)
+        db.flush()
+        ids["listing_org"] = listing_org.id
+        db.add(
+            ListingVersion(
+                workspace_id=workspace_id,
+                listing_id=listing_org.id,
+                version=1,
+                payload_json=json.dumps(
+                    {
+                        "title": f"{label} org listing",
+                        "description": "",
+                        "body": f"{label} secret org listing body",
+                        "args_json": "[]",
+                    }
+                ),
+                content_hash="1" * 64,
+                source_id=skill.id,
+                source_version=1,
+                created_by=user_id,
+            )
+        )
+        db.flush()
+
         db.commit()
     finally:
         db.close()
@@ -1495,6 +1536,36 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/marketplace/listings/{listing_id}/install",
         DENY,
         path_ids={"listing_id": "listing"},
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/marketplace/listings/{listing_id}",
+        DENY,
+        path_ids={"listing_id": "listing"},
+        body={"title": "renamed by A"},
+        note="Delisting or renaming another workspace's listing must 404.",
+    ),
+    # The org-tier row: visible one ring wider than the workspace, and these
+    # prove the widening stops at the organization boundary — B's org listing
+    # is still a 404 to A, on read, install, and manage alike.
+    RouteCase(
+        "GET",
+        "/api/marketplace/listings/{listing_id}",
+        DENY,
+        path_ids={"listing_id": "listing_org"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/marketplace/listings/{listing_id}/install",
+        DENY,
+        path_ids={"listing_id": "listing_org"},
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/marketplace/listings/{listing_id}",
+        DENY,
+        path_ids={"listing_id": "listing_org"},
+        body={"status": "delisted"},
     ),
     # -- audit / graph / memory -------------------------------------------
     RouteCase("GET", "/api/audit-events", SCOPED),

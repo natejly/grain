@@ -214,6 +214,9 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
                 <code className="skill-slug">{detail.slug}</code> ·{" "}
                 {detail.kind} · v{detail.latest_version}
                 {detail.author_name && <> · by {detail.author_name}</>}
+                {detail.visibility === "org" && detail.publisher_workspace && (
+                  <> · from {detail.publisher_workspace}</>
+                )}
                 {" · "}
                 {detail.install_count}{" "}
                 {detail.install_count === 1 ? "install" : "installs"}

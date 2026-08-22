@@ -29,12 +29,13 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..config import get_settings
 from ..database import get_db
-from ..models import Listing, ListingVersion, Skill
+from ..models import Listing, ListingVersion, Skill, Workspace
 from ..schemas import (
     InstallOut,
     ListingCreate,
     ListingDetailOut,
     ListingOut,
+    ListingUpdate,
     ListingVersionOut,
 )
 from ..services import marketplace as marketplace_service
@@ -86,10 +87,14 @@ def _detail(db: Session, listing: Listing, actor: Actor) -> ListingDetailOut:
         payload = {}
     versions = marketplace_service.list_versions(db, listing=listing)
     base = _out(listing, actor)
+    publisher = db.scalar(
+        select(Workspace.name).where(Workspace.id == listing.workspace_id)
+    )
     return ListingDetailOut(
         **base.model_dump(),
         payload=payload if isinstance(payload, dict) else {},
         versions=[ListingVersionOut.model_validate(row) for row in versions],
+        publisher_workspace=publisher or "",
     )
 
 
@@ -148,6 +153,16 @@ def publish_listing(
         if listing is None:
             raise replayed_resource_gone()
         return _detail(db, listing, actor)
+
+    # Publishing to the whole organization is owner-gated — the same tier of
+    # decision as flipping a skill `shared` or publishing an app, one ring out.
+    # Workspace-tier publishing stays open to any member: what transfers is
+    # something the workspace could already read.
+    if payload.visibility == "org" and actor.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Publishing to the organization requires the workspace owner",
+        )
 
     skill = skills_service.resolve_visible(
         db,
@@ -261,6 +276,83 @@ def publish_listing(
         resource_type="listing",
         resource_id=listing.id,
         detail={"slug": listing.slug, "kind": listing.kind, "version": version},
+    )
+    db.commit()
+    return _detail(db, listing, actor)
+
+
+@router.patch("/listings/{listing_id}", response_model=ListingDetailOut)
+def update_listing(
+    listing_id: str,
+    payload: ListingUpdate,
+    _: None = Depends(require_marketplace),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ListingDetailOut:
+    """Head metadata only: title, description, byline, visibility, delist.
+
+    The payload is deliberately not editable here — published versions are
+    immutable, and the only way to change what installs is to publish again.
+    A visible listing the caller may not manage answers 403, not 404: an org
+    reader is entitled to know the listing exists (they can see it), just not
+    to steer it. Loaded by workspace rather than through the browse chokepoint,
+    because a manager must be able to reach their own *delisted* row — undoing
+    a delist is the whole point of it being a status, not a delete.
+    """
+    listing = db.scalar(
+        select(Listing).where(
+            Listing.id == listing_id,
+            Listing.workspace_id == actor.workspace_id,
+            Listing.status != "taken_down",
+        )
+    )
+    if listing is None:
+        if (
+            marketplace_service.resolve_visible(
+                db,
+                workspace_id=actor.workspace_id,
+                organization_id=actor.organization_id,
+                listing_id=listing_id,
+            )
+            is not None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Only the publisher's workspace may change a listing",
+            )
+        raise HTTPException(status_code=404, detail="Listing not found")
+    if not _can_manage(actor, listing):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the publisher or their workspace owner may change a listing",
+        )
+    if payload.visibility == "org" and listing.visibility != "org" and actor.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Publishing to the organization requires the workspace owner",
+        )
+    if payload.title is not None:
+        listing.title = payload.title.strip()
+    if payload.description is not None:
+        listing.description = payload.description.strip()
+    if payload.author_name is not None:
+        listing.author_name = payload.author_name.strip()
+    if payload.visibility is not None:
+        listing.visibility = payload.visibility
+    if payload.status is not None:
+        listing.status = payload.status
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="listing.updated",
+        resource_type="listing",
+        resource_id=listing.id,
+        detail={
+            "slug": listing.slug,
+            "visibility": listing.visibility,
+            "status": listing.status,
+        },
     )
     db.commit()
     return _detail(db, listing, actor)

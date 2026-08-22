@@ -345,6 +345,9 @@ class ListingDetailOut(ListingOut):
 
     payload: Dict[str, Any] = {}
     versions: List[ListingVersionOut] = []
+    #: The name of the workspace that published it — provenance a reader of an
+    #: org-tier listing is entitled to before installing.
+    publisher_workspace: str = ""
 
 
 class ListingCreate(BaseModel):
@@ -358,7 +361,23 @@ class ListingCreate(BaseModel):
     author_name: str = Field(default="", max_length=120)
     #: Required when republishing an existing slug; ignored on first publish.
     changelog: str = Field(default="", max_length=2000)
-    visibility: Literal["workspace"] = "workspace"
+    #: "org" reaches every workspace of the organization and is owner-gated.
+    visibility: Literal["workspace", "org"] = "workspace"
+
+
+class ListingUpdate(BaseModel):
+    """Head metadata only — the published payload is immutable by design; to
+    change what installs, publish a new version. None means "leave alone"."""
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    description: Optional[str] = Field(default=None, max_length=500)
+    author_name: Optional[str] = Field(default=None, max_length=120)
+    #: Widening to "org" is owner-gated, like publishing at "org" is.
+    visibility: Optional[Literal["workspace", "org"]] = None
+    #: "delisted" withdraws it from every browse/install surface; copies
+    #: already installed are untouched. "taken_down" is not settable here —
+    #: that word is reserved for the future admin takedown flow.
+    status: Optional[Literal["published", "delisted"]] = None
 
 
 class InstallOut(ApiModel):

@@ -541,6 +541,8 @@ export type ListingVersion = {
 export type ListingDetail = Listing & {
   payload: Record<string, unknown>;
   versions: ListingVersion[];
+  /** The name of the workspace that published it — provenance for org readers. */
+  publisher_workspace: string;
 };
 
 export type ListingPublishBody = {
@@ -552,6 +554,18 @@ export type ListingPublishBody = {
   author_name?: string;
   /** Required when republishing an existing slug. */
   changelog?: string;
+  /** "org" reaches the whole organization and is owner-gated server-side. */
+  visibility?: "workspace" | "org";
+};
+
+/** Head metadata only; the published payload is immutable by design. */
+export type ListingUpdateBody = {
+  title?: string;
+  description?: string;
+  author_name?: string;
+  visibility?: "workspace" | "org";
+  /** "delisted" withdraws it from browse/install; installed copies stand. */
+  status?: "published" | "delisted";
 };
 
 /** What installing created: an ordinary local row in the caller's workspace. */
@@ -2455,6 +2469,14 @@ export class WorkspaceApi {
       { method: "POST", body: JSON.stringify(body) },
       true,
     );
+  }
+
+  /** Rename, redescribe, widen to the org, or delist — never edit the payload. */
+  updateListing(listingId: string, body: ListingUpdateBody): Promise<ListingDetail> {
+    return this.request(`/api/marketplace/listings/${listingId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
   }
 
   /** Copy the listing's payload into the caller's workspace as a local row. */

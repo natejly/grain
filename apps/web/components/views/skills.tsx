@@ -173,6 +173,7 @@ function PublishDrawer({ skill, setError, onClose }: PublishDrawerProps) {
   const [description, setDescription] = useState(skill.description);
   const [authorName, setAuthorName] = useState("");
   const [changelog, setChangelog] = useState("");
+  const [visibility, setVisibility] = useState<"workspace" | "org">("workspace");
   const [busy, setBusy] = useState(false);
   const [publishedVersion, setPublishedVersion] = useState<number | null>(null);
 
@@ -187,6 +188,7 @@ function PublishDrawer({ skill, setError, onClose }: PublishDrawerProps) {
         description,
         author_name: authorName,
         changelog,
+        visibility,
       });
       setPublishedVersion(listing.latest_version);
     } catch (caught) {
@@ -273,6 +275,21 @@ function PublishDrawer({ skill, setError, onClose }: PublishDrawerProps) {
                   placeholder="Required only when updating an existing listing"
                   aria-label="Listing changelog"
                 />
+              </label>
+              <label>
+                Visible to
+                <select
+                  value={visibility}
+                  onChange={(event) =>
+                    setVisibility(event.target.value as "workspace" | "org")
+                  }
+                  aria-label="Listing visibility"
+                >
+                  <option value="workspace">This workspace</option>
+                  {/* Owner-gated server-side; a member picking it gets the
+                      403's reason, not a silent downgrade. */}
+                  <option value="org">The whole organization</option>
+                </select>
               </label>
               <div className="agent-editor-actions">
                 <button className="ghost-button" onClick={onClose}>

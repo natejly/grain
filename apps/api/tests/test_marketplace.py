@@ -14,15 +14,19 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from typing import Any, Callable, Dict
 
 import pytest
+from conftest import TEST_BASE_URL, Identity, authenticate, issue_session
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import ListingVersion
+from app.main import app
+from app.models import ListingVersion, Membership, User, Workspace
 from app.services import marketplace as marketplace_service
 
 # --------------------------------------------------------------------------
@@ -46,6 +50,67 @@ def neighbor(identity_client: Callable[..., TestClient]) -> TestClient:
 
 def _key(prefix: str) -> Dict[str, str]:
     return {"Idempotency-Key": f"{prefix}-{uuid.uuid4().hex}"}
+
+
+def _workspace_of(client: TestClient) -> str:
+    return client.identity.workspace_id  # type: ignore[attr-defined,no-any-return]
+
+
+def _authenticated(user_id: str, workspace_id: str) -> TestClient:
+    token, csrf = issue_session(user_id)
+    identity = Identity(
+        user_id=user_id, workspace_id=workspace_id, token=token, csrf_token=csrf
+    )
+    client = authenticate(TestClient(app, base_url=TEST_BASE_URL), identity)
+    client.identity = identity  # type: ignore[attr-defined]
+    return client
+
+
+def sibling_workspace(client: TestClient, *, name: str = "Sibling") -> TestClient:
+    """A SECOND workspace under the caller's organization, with its own owner.
+
+    This is the org tier's novel query shape: a reader whom no workspace filter
+    admits and only the organization join may. Built directly in the DB because
+    the product has no create-second-workspace API to lean on."""
+    db = SessionLocal()
+    try:
+        organization_id = db.scalar(
+            select(Workspace.organization_id).where(
+                Workspace.id == _workspace_of(client)
+            )
+        )
+        assert organization_id
+        user = User(email=f"{os.urandom(6).hex()}@example.com", name=f"{name} owner")
+        db.add(user)
+        db.flush()
+        workspace = Workspace(organization_id=organization_id, name=f"{name} workspace")
+        db.add(workspace)
+        db.flush()
+        db.add(Membership(workspace_id=workspace.id, user_id=user.id, role="owner"))
+        db.commit()
+        user_id, workspace_id = user.id, workspace.id
+    finally:
+        db.close()
+    return _authenticated(user_id, workspace_id)
+
+
+def member_of(client: TestClient, *, name: str = "Member") -> TestClient:
+    """A plain member inside the caller's own workspace."""
+    db = SessionLocal()
+    try:
+        user = User(email=f"{os.urandom(6).hex()}@example.com", name=name)
+        db.add(user)
+        db.flush()
+        db.add(
+            Membership(
+                workspace_id=_workspace_of(client), user_id=user.id, role="member"
+            )
+        )
+        db.commit()
+        user_id = user.id
+    finally:
+        db.close()
+    return _authenticated(user_id, _workspace_of(client))
 
 
 def create_skill(client: TestClient, **overrides: Any) -> Dict[str, Any]:
@@ -267,6 +332,128 @@ def test_the_off_switch_answers_404_everywhere(
     assert owner.get(f"/api/marketplace/listings/{listing['id']}").status_code == 404
     assert publish(owner, skill["id"], slug="dark-2").status_code == 404
     assert install(owner, listing["id"]).status_code == 404
+
+
+# --------------------------------------------------------------------------
+# The org tier
+
+
+def test_an_org_listing_reaches_the_sibling_workspace_and_installs_locally(
+    owner: TestClient,
+) -> None:
+    skill = create_skill(owner, name="org-wide", title="Org wide", body="For everyone.")
+    listing = publish(owner, skill["id"], slug="org-wide", visibility="org").json()
+
+    sibling = sibling_workspace(owner)
+    cards = sibling.get("/api/marketplace/listings").json()
+    assert [card["id"] for card in cards] == [listing["id"]]
+    assert cards[0]["mine"] is False
+    assert cards[0]["can_manage"] is False
+
+    detail = sibling.get(f"/api/marketplace/listings/{listing['id']}").json()
+    assert detail["payload"]["body"] == "For everyone."
+    assert detail["publisher_workspace"] == "Marketplace workspace"
+
+    installed = install(sibling, listing["id"])
+    assert installed.status_code == 201, installed.text
+    # The copy lands in the INSTALLER's workspace, private, and the publisher's
+    # workspace gains nothing.
+    copy = sibling.get(f"/api/skills/{installed.json()['resource_id']}").json()
+    assert copy["body"] == "For everyone."
+    assert copy["shared"] is False
+    # (Names are per-workspace, so the copy may share the source's name; what
+    # must not happen is a new ROW appearing in the publisher's workspace.)
+    owner_ids = {row["id"] for row in owner.get("/api/skills").json()}
+    assert owner_ids == {skill["id"]}
+
+
+def test_a_workspace_listing_stays_invisible_to_the_sibling(owner: TestClient) -> None:
+    skill = create_skill(owner, name="homebody", title="Homebody", body="Stays put.")
+    listing = publish(owner, skill["id"], slug="homebody").json()
+    sibling = sibling_workspace(owner)
+    assert sibling.get("/api/marketplace/listings").json() == []
+    assert (
+        sibling.get(f"/api/marketplace/listings/{listing['id']}").status_code == 404
+    )
+    assert install(sibling, listing["id"]).status_code == 404
+
+
+def test_org_visibility_is_owner_gated_at_publish_and_at_widen(
+    owner: TestClient,
+) -> None:
+    member = member_of(owner)
+    skill = create_skill(member, name="member-made", title="Member made", body="Fine.")
+
+    # A member may publish to the workspace, not to the organization.
+    refused = publish(member, skill["id"], slug="member-made", visibility="org")
+    assert refused.status_code == 403
+    published = publish(member, skill["id"], slug="member-made")
+    assert published.status_code == 201
+    listing_id = published.json()["id"]
+
+    # Widening later is the same decision, behind the same gate: the authoring
+    # member may rename their listing but not push it out of the workspace.
+    renamed = member.patch(
+        f"/api/marketplace/listings/{listing_id}", json={"title": "Member's finest"}
+    )
+    assert renamed.status_code == 200
+    widened = member.patch(
+        f"/api/marketplace/listings/{listing_id}", json={"visibility": "org"}
+    )
+    assert widened.status_code == 403
+    by_owner = owner.patch(
+        f"/api/marketplace/listings/{listing_id}", json={"visibility": "org"}
+    )
+    assert by_owner.status_code == 200
+    sibling = sibling_workspace(owner)
+    assert [row["id"] for row in sibling.get("/api/marketplace/listings").json()] == [
+        listing_id
+    ]
+
+
+def test_delist_withdraws_everywhere_and_restore_returns(owner: TestClient) -> None:
+    skill = create_skill(owner, name="seasonal", title="Seasonal", body="Sometimes.")
+    listing = publish(owner, skill["id"], slug="seasonal", visibility="org").json()
+    sibling = sibling_workspace(owner)
+
+    # A visible-but-foreign manager attempt is a 403, not a silent no-op.
+    assert (
+        sibling.patch(
+            f"/api/marketplace/listings/{listing['id']}", json={"status": "delisted"}
+        ).status_code
+        == 403
+    )
+
+    delisted = owner.patch(
+        f"/api/marketplace/listings/{listing['id']}", json={"status": "delisted"}
+    )
+    assert delisted.status_code == 200
+    assert sibling.get("/api/marketplace/listings").json() == []
+    assert (
+        sibling.get(f"/api/marketplace/listings/{listing['id']}").status_code == 404
+    )
+    assert install(sibling, listing["id"]).status_code == 404
+
+    # Delisting is a status, not a delete: the manager restores it whole.
+    restored = owner.patch(
+        f"/api/marketplace/listings/{listing['id']}", json={"status": "published"}
+    )
+    assert restored.status_code == 200
+    assert [row["id"] for row in sibling.get("/api/marketplace/listings").json()] == [
+        listing["id"]
+    ]
+
+
+def test_a_non_author_member_may_not_manage_a_listing(owner: TestClient) -> None:
+    member = member_of(owner)
+    skill = create_skill(owner, name="owned", title="Owned", body="The owner's.")
+    listing = publish(owner, skill["id"], slug="owned").json()
+    assert (
+        member.patch(
+            f"/api/marketplace/listings/{listing['id']}", json={"title": "Grabbed"}
+        ).status_code
+        == 403
+    )
 
 
 # --------------------------------------------------------------------------
