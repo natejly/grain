@@ -21,14 +21,30 @@ import math
 import re
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Listing, ListingVersion, Skill
+from ..models import Agent, Listing, ListingVersion, Skill, Workflow
+from .llm_tools import ToolContext, registry_families
 
 #: What installing may not silently collide with forever: cap the suffix probe.
 _MAX_NAME_ATTEMPTS = 50
+
+#: Families whose tools exist in every workspace by construction. Everything
+#: else — MCP servers, sandbox custom tools, connected integrations, database
+#: connections — is workspace furniture: its *names* would travel but the things
+#: they name would not, so those names are dropped at publish and reported as
+#: `unresolved_tools` instead of being smuggled into a grant that cannot resolve.
+PORTABLE_FAMILIES = frozenset(
+    {"core", "memory", "graph", "artifacts", "projects", "dashboards", "sandbox"}
+)
+
+#: What every published workflow's trigger becomes. A schedule is an intent of
+#: the publisher's workspace ("run this against OUR sources every Monday"), not
+#: part of the program — an installer re-arms scheduling deliberately, the same
+#: way an installed agent is re-enabled deliberately.
+MANUAL_TRIGGER = {"kind": "manual", "cron": "", "timezone": "UTC"}
 
 
 class SkillPayload(BaseModel):
@@ -49,6 +65,102 @@ def snapshot_skill(skill: Skill) -> SkillPayload:
         description=skill.description,
         body=skill.body,
         args_json=skill.args_json,
+    )
+
+
+class AgentPayload(BaseModel):
+    """The whole of what a published agent is.
+
+    `allowed_tools_json` keeps the source's semantics — "" is "the whole
+    registry", a JSON list is an explicit narrowing — but a list is already
+    reduced to PORTABLE_FAMILIES at publish. What was dropped is named in
+    `unresolved_tools`, so the gallery can render the requires-checklist
+    honestly instead of the installer discovering the holes at run time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str
+    instructions: str
+    allowed_tools_json: str
+    unresolved_tools: List[str] = Field(default_factory=list)
+
+
+class WorkflowPayload(BaseModel):
+    """The whole of what a published workflow is: the program, never the timer.
+
+    The trigger inside `graph_json` is forced to manual and the schedule
+    columns are simply not fields here — excluded by construction, not
+    stripped. Crons are not a publishable kind at all: a cron is a personal
+    prompt on a timer, and both halves of that are workspace-bound.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str
+    source_prompt: str
+    graph_json: str
+
+
+def _family_of_name(db: Session, *, workspace_id: str, user_id: str) -> dict:
+    context = ToolContext(
+        workspace_id=workspace_id, user_id=user_id, conversation_id=""
+    )
+    return {
+        name: family
+        for family, tools in registry_families(db, context)
+        for name in tools
+    }
+
+
+def registry_names(db: Session, *, workspace_id: str, user_id: str) -> set:
+    """Every tool name this workspace's registry offers right now."""
+    return set(_family_of_name(db, workspace_id=workspace_id, user_id=user_id))
+
+
+def snapshot_agent(db: Session, agent: Agent, *, user_id: str) -> AgentPayload:
+    if not agent.allowed_tools_json:
+        return AgentPayload(
+            name=agent.name,
+            description=agent.description,
+            instructions=agent.instructions,
+            allowed_tools_json="",
+        )
+    try:
+        raw = json.loads(agent.allowed_tools_json)
+    except ValueError:
+        raw = []
+    names = [name for name in raw if isinstance(name, str)] if isinstance(raw, list) else []
+    families = _family_of_name(db, workspace_id=agent.workspace_id, user_id=user_id)
+    portable = sorted(
+        name for name in names if families.get(name) in PORTABLE_FAMILIES
+    )
+    unresolved = sorted(
+        name for name in names if families.get(name) not in PORTABLE_FAMILIES
+    )
+    return AgentPayload(
+        name=agent.name,
+        description=agent.description,
+        instructions=agent.instructions,
+        allowed_tools_json=json.dumps(portable, separators=(",", ":")),
+        unresolved_tools=unresolved,
+    )
+
+
+def snapshot_workflow(workflow: Workflow) -> WorkflowPayload:
+    """Raises ValueError when the stored graph does not parse — a workflow that
+    unreadable cannot be honestly published, only fixed."""
+    graph = json.loads(workflow.graph_json)
+    if not isinstance(graph, dict):
+        raise ValueError("workflow graph is not an object")
+    graph["trigger"] = dict(MANUAL_TRIGGER)
+    return WorkflowPayload(
+        name=workflow.name,
+        description=workflow.description,
+        source_prompt=workflow.source_prompt,
+        graph_json=json.dumps(graph, separators=(",", ":"), sort_keys=True),
     )
 
 

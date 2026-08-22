@@ -546,7 +546,7 @@ export type ListingDetail = Listing & {
 };
 
 export type ListingPublishBody = {
-  kind?: "skill";
+  kind?: "skill" | "workflow" | "agent";
   source_id: string;
   slug: string;
   title?: string;
@@ -2479,11 +2479,18 @@ export class WorkspaceApi {
     });
   }
 
-  /** Copy the listing's payload into the caller's workspace as a local row. */
-  installListing(listingId: string): Promise<ListingInstallResult> {
+  /**
+   * Copy the listing's payload into the caller's workspace as a local row.
+   * For an agent, `body.allowed_tools` is the scope-review sheet's confirmed
+   * subset — it can only narrow what the listing requested.
+   */
+  installListing(
+    listingId: string,
+    body?: { allowed_tools?: string[] },
+  ): Promise<ListingInstallResult> {
     return this.request(
       `/api/marketplace/listings/${listingId}/install`,
-      { method: "POST" },
+      { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) },
       true,
     );
   }

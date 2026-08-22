@@ -4,6 +4,7 @@ import type { Skill, SkillArg, SkillVersion } from "@workspace/api-client";
 import { History, Pencil, Plus, Share2, Sparkles, Store, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { PublishDrawer } from "./publish-listing";
 import { describeError, slugify } from "./shared";
 
 /**
@@ -142,7 +143,13 @@ export function SkillsView({ setError }: SkillsViewProps) {
 
       {publishing !== null && (
         <PublishDrawer
-          skill={publishing}
+          kind="skill"
+          sourceId={publishing.id}
+          defaults={{
+            slug: publishing.name,
+            title: publishing.title,
+            description: publishing.description,
+          }}
           setError={setError}
           onClose={() => setPublishing(null)}
         />
@@ -151,166 +158,6 @@ export function SkillsView({ setError }: SkillsViewProps) {
   );
 }
 
-type PublishDrawerProps = {
-  skill: Skill;
-  setError: (message: string) => void;
-  onClose: () => void;
-};
-
-/**
- * Snapshot a skill into the gallery. Publishing is open to any member at
- * workspace visibility — sharing an instruction block with people who can
- * already see your shared skills is not an escalation — and the server is
- * what refuses a secret-bearing body or a taken slug, with a reason the
- * drawer surfaces verbatim.
- *
- * The changelog field only matters when the slug already has a listing (a
- * republish appends a version); on a first publish the server ignores it.
- */
-function PublishDrawer({ skill, setError, onClose }: PublishDrawerProps) {
-  const [slug, setSlug] = useState(skill.name);
-  const [title, setTitle] = useState(skill.title);
-  const [description, setDescription] = useState(skill.description);
-  const [authorName, setAuthorName] = useState("");
-  const [changelog, setChangelog] = useState("");
-  const [visibility, setVisibility] = useState<"workspace" | "org">("workspace");
-  const [busy, setBusy] = useState(false);
-  const [publishedVersion, setPublishedVersion] = useState<number | null>(null);
-
-  const submit = async () => {
-    setBusy(true);
-    try {
-      const listing = await api.publishListing({
-        kind: "skill",
-        source_id: skill.id,
-        slug,
-        title,
-        description,
-        author_name: authorName,
-        changelog,
-        visibility,
-      });
-      setPublishedVersion(listing.latest_version);
-    } catch (caught) {
-      setError(describeError(caught, "Could not publish the skill"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="drawer-scrim" onClick={onClose}>
-      <div className="agent-drawer" onClick={(event) => event.stopPropagation()}>
-        <div className="drawer-header">
-          <div>
-            <span>Publish to the gallery</span>
-            <strong>{skill.title}</strong>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close">
-            <X size={15} />
-          </button>
-        </div>
-
-        <div className="mcp-form agent-form">
-          {publishedVersion !== null ? (
-            <>
-              <p className="mcp-card-meta" role="status">
-                Published as <code className="skill-slug">{slug}</code> (v
-                {publishedVersion}). The workspace can install it from the
-                Gallery; installs are copies, so later edits here change nothing
-                already installed until you publish again.
-              </p>
-              <div className="agent-editor-actions">
-                <button className="primary-button" onClick={onClose}>
-                  Done
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <label>
-                Gallery slug
-                <input
-                  value={slug}
-                  onChange={(event) => setSlug(slugify(event.target.value))}
-                  maxLength={80}
-                  aria-label="Listing slug"
-                />
-              </label>
-              <label>
-                Title
-                <input
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  maxLength={160}
-                  aria-label="Listing title"
-                />
-              </label>
-              <label>
-                Description
-                <input
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  maxLength={500}
-                  placeholder="What installing this gets someone"
-                  aria-label="Listing description"
-                />
-              </label>
-              <label>
-                Byline
-                <input
-                  value={authorName}
-                  onChange={(event) => setAuthorName(event.target.value)}
-                  maxLength={120}
-                  placeholder="Shown as “by …” on the card"
-                  aria-label="Listing byline"
-                />
-              </label>
-              <label>
-                Changelog
-                <input
-                  value={changelog}
-                  onChange={(event) => setChangelog(event.target.value)}
-                  maxLength={2000}
-                  placeholder="Required only when updating an existing listing"
-                  aria-label="Listing changelog"
-                />
-              </label>
-              <label>
-                Visible to
-                <select
-                  value={visibility}
-                  onChange={(event) =>
-                    setVisibility(event.target.value as "workspace" | "org")
-                  }
-                  aria-label="Listing visibility"
-                >
-                  <option value="workspace">This workspace</option>
-                  {/* Owner-gated server-side; a member picking it gets the
-                      403's reason, not a silent downgrade. */}
-                  <option value="org">The whole organization</option>
-                </select>
-              </label>
-              <div className="agent-editor-actions">
-                <button className="ghost-button" onClick={onClose}>
-                  Cancel
-                </button>
-                <button
-                  className="primary-button"
-                  onClick={() => void submit()}
-                  disabled={busy || slug.trim().length === 0}
-                >
-                  <Store size={14} />
-                  {busy ? "Publishing…" : "Publish"}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 type SkillEditorProps = {
   /** null = creating a new skill. */

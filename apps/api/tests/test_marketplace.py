@@ -26,7 +26,13 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import ListingVersion, Membership, User, Workspace
+from app.models import (
+    Agent,
+    ListingVersion,
+    Membership,
+    User,
+    Workspace,
+)
 from app.services import marketplace as marketplace_service
 
 # --------------------------------------------------------------------------
@@ -454,6 +460,169 @@ def test_a_non_author_member_may_not_manage_a_listing(owner: TestClient) -> None
         ).status_code
         == 403
     )
+
+
+# --------------------------------------------------------------------------
+# Workflows and agents as listable kinds
+
+
+def _plant_agent(client: TestClient, *, allowed_tools_json: str) -> str:
+    """An agent written directly, so the test controls `allowed_tools_json`
+    verbatim — including names the agents API would refuse to grant."""
+    db = SessionLocal()
+    try:
+        agent = Agent(
+            workspace_id=_workspace_of(client),
+            name="Portable analyst",
+            description="Answers from evidence.",
+            instructions="Cite everything you claim.",
+            allowed_tools_json=allowed_tools_json,
+            created_by=client.identity.user_id,  # type: ignore[attr-defined]
+            enabled=True,
+        )
+        db.add(agent)
+        db.commit()
+        return agent.id
+    finally:
+        db.close()
+
+
+def _graph(trigger: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "name": "Evidence sweep",
+        "description": "Gather the passages.",
+        "trigger": trigger,
+        "nodes": [
+            {
+                "id": "gather",
+                "kind": "tool",
+                "tool": "search_sources",
+                "arguments": {"query": "quarterly figures"},
+                "description": "Find the passages.",
+            }
+        ],
+        "edges": [],
+    }
+
+
+def create_workflow(client: TestClient, trigger: Dict[str, Any]) -> Dict[str, Any]:
+    response = client.post("/api/workflows", json={"graph": _graph(trigger)})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_an_agent_payload_drops_workspace_tools_and_names_them(
+    owner: TestClient,
+) -> None:
+    agent_id = _plant_agent(
+        owner,
+        allowed_tools_json=json.dumps(["search_sources", "mcp_fetch_secretly"]),
+    )
+    listing = publish(
+        owner, agent_id, kind="agent", slug="portable-analyst"
+    ).json()
+    # The strip test, agent edition: exactly the allowlist, and the
+    # workspace-specific grant travels as a *name in the warnings*, never as a
+    # grant in the payload.
+    assert set(listing["payload"].keys()) == {
+        "name",
+        "description",
+        "instructions",
+        "allowed_tools_json",
+        "unresolved_tools",
+    }
+    assert json.loads(listing["payload"]["allowed_tools_json"]) == ["search_sources"]
+    assert listing["payload"]["unresolved_tools"] == ["mcp_fetch_secretly"]
+
+
+def test_an_installed_agent_lands_disabled_with_the_confirmed_subset(
+    owner: TestClient,
+) -> None:
+    agent_id = _plant_agent(
+        owner,
+        allowed_tools_json=json.dumps(["search_sources", "recall_memory"]),
+    )
+    listing = publish(owner, agent_id, kind="agent", slug="scoped-analyst").json()
+
+    # The scope sheet confirmed only one of the two requested tools.
+    installed = owner.post(
+        f"/api/marketplace/listings/{listing['id']}/install",
+        json={"allowed_tools": ["search_sources"]},
+        headers=_key("install"),
+    )
+    assert installed.status_code == 201, installed.text
+    rows = {row["id"]: row for row in owner.get("/api/agents").json()}
+    copy = rows[installed.json()["resource_id"]]
+    # Disabled ALWAYS — enabling is a separate deliberate act in the editor.
+    assert copy["enabled"] is False
+    assert copy["allowed_tools"] == ["search_sources"]
+
+
+def test_a_workflow_payload_is_the_program_never_the_timer(owner: TestClient) -> None:
+    workflow = create_workflow(
+        owner, {"kind": "schedule", "cron": "0 9 * * 1", "timezone": "UTC"}
+    )
+    listing = publish(
+        owner, workflow["id"], kind="workflow", slug="evidence-sweep"
+    ).json()
+    assert set(listing["payload"].keys()) == {
+        "name",
+        "description",
+        "source_prompt",
+        "graph_json",
+    }
+    graph = json.loads(listing["payload"]["graph_json"])
+    assert graph["trigger"] == {"kind": "manual", "cron": "", "timezone": "UTC"}
+    assert "schedule_cron" not in listing["payload"]
+
+
+def test_an_installed_workflow_is_a_manual_draft_and_warns_on_holes(
+    owner: TestClient,
+) -> None:
+    workflow = create_workflow(owner, {"kind": "manual", "cron": "", "timezone": "UTC"})
+    listing = publish(
+        owner, workflow["id"], kind="workflow", slug="sweep-org", visibility="org"
+    ).json()
+
+    sibling = sibling_workspace(owner)
+    clean = install(sibling, listing["id"])
+    assert clean.status_code == 201, clean.text
+    assert clean.json()["warnings"] == []
+    rows = {row["id"]: row for row in sibling.get("/api/workflows").json()}
+    copy = rows[clean.json()["resource_id"]]
+    assert copy["status"] == "draft"
+    assert copy["trigger_kind"] == "manual"
+
+    # A listing whose graph names a tool that no longer resolves anywhere: the
+    # install still lands (a draft with a named hole beats a refusal with no
+    # artifact to fix), and the hole is named in the warnings.
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(ListingVersion)
+            .filter_by(listing_id=listing["id"])
+            .one()
+        )
+        payload = json.loads(row.payload_json)
+        graph = json.loads(payload["graph_json"])
+        graph["nodes"][0]["tool"] = "vanished_tool"
+        payload["graph_json"] = json.dumps(graph, separators=(",", ":"), sort_keys=True)
+        row.payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        db.commit()
+    finally:
+        db.close()
+    holed = install(sibling, listing["id"])
+    assert holed.status_code == 201, holed.text
+    assert any("vanished_tool" in warning for warning in holed.json()["warnings"])
+
+
+def test_crons_are_not_a_publishable_kind(owner: TestClient) -> None:
+    refused = owner.post(
+        "/api/marketplace/listings",
+        json={"kind": "cron", "source_id": "anything", "slug": "never"},
+        headers=_key("publish"),
+    )
+    assert refused.status_code == 422
 
 
 # --------------------------------------------------------------------------

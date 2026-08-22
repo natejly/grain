@@ -351,7 +351,9 @@ class ListingDetailOut(ListingOut):
 
 
 class ListingCreate(BaseModel):
-    kind: Literal["skill"] = "skill"
+    #: Crons are deliberately not here: a cron is a personal prompt on a timer,
+    #: and both halves of that are workspace-bound.
+    kind: Literal["skill", "workflow", "agent"] = "skill"
     #: The id of the thing being published, in the caller's workspace.
     source_id: str
     slug: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -378,6 +380,15 @@ class ListingUpdate(BaseModel):
     #: already installed are untouched. "taken_down" is not settable here —
     #: that word is reserved for the future admin takedown flow.
     status: Optional[Literal["published", "delisted"]] = None
+
+
+class ListingInstallBody(BaseModel):
+    """Optional install-time choices. For an agent, `allowed_tools` is the
+    scope-review sheet's confirmed subset — it can only narrow what the payload
+    requested, and what survives is still intersected with the installing
+    workspace's live registry."""
+
+    allowed_tools: Optional[List[str]] = Field(default=None, max_length=200)
 
 
 class InstallOut(ApiModel):

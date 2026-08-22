@@ -23,6 +23,7 @@ import {
   Plus,
   ShieldQuestion,
   Sparkles,
+  Store,
   Trash2,
   TriangleAlert,
   UserRound,
@@ -33,6 +34,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api } from "../api";
 import { BudgetHold } from "./budget";
 import { ProposalDiff } from "./proposal-diff";
+import { PublishDrawer } from "./publish-listing";
 import { describeError, formatRelative } from "./shared";
 import {
   attributeProblems,
@@ -616,6 +618,8 @@ export function WorkflowsView({
   const [busy, setBusy] = useState(false);
   /** The API's last refusal of a run payload, one entry per offending input. */
   const [inputProblems, setInputProblems] = useState<InputProblem[]>([]);
+  /** The workflow whose publish drawer is open, or null. */
+  const [publishing, setPublishing] = useState<Workflow | null>(null);
 
   const active = workflows.find((item) => item.id === activeId) ?? null;
   const runs = runsByWorkflow[activeId] ?? [];
@@ -1164,6 +1168,15 @@ export function WorkflowsView({
                 {active.status === "active" ? "Disable" : "Activate"}
               </button>
               <button
+                className="ghost-button"
+                disabled={busy}
+                onClick={() => setPublishing(active)}
+                aria-label={`Publish ${active.name} to the gallery`}
+              >
+                <Store size={14} />
+                Publish
+              </button>
+              <button
                 className="icon-button"
                 aria-label={`Delete ${active.name}`}
                 onClick={() => void remove(active)}
@@ -1340,6 +1353,20 @@ export function WorkflowsView({
             </section>
           </div>
         </div>
+      )}
+
+      {publishing !== null && (
+        <PublishDrawer
+          kind="workflow"
+          sourceId={publishing.id}
+          defaults={{
+            slug: publishing.name,
+            title: publishing.name,
+            description: publishing.description || publishing.source_prompt,
+          }}
+          setError={setError}
+          onClose={() => setPublishing(null)}
+        />
       )}
     </div>
   );

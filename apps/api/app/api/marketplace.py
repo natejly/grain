@@ -20,7 +20,7 @@ The whole router sits behind `marketplace_enabled`; off, every route answers
 from __future__ import annotations
 
 import json
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -29,11 +29,12 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..config import get_settings
 from ..database import get_db
-from ..models import Listing, ListingVersion, Skill, Workspace
+from ..models import Agent, Listing, ListingVersion, Skill, Workflow, Workspace
 from ..schemas import (
     InstallOut,
     ListingCreate,
     ListingDetailOut,
+    ListingInstallBody,
     ListingOut,
     ListingUpdate,
     ListingVersionOut,
@@ -41,6 +42,8 @@ from ..schemas import (
 from ..services import marketplace as marketplace_service
 from ..services import skills as skills_service
 from ..services.audit import record_audit
+from ..services.llm_tools import ToolContext, build_registry
+from ..services.workflows.validate import parse_graph, validate_graph
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
 
@@ -96,6 +99,56 @@ def _detail(db: Session, listing: Listing, actor: Actor) -> ListingDetailOut:
         versions=[ListingVersionOut.model_validate(row) for row in versions],
         publisher_workspace=publisher or "",
     )
+
+
+def _load_source(db: Session, actor: Actor, payload: ListingCreate):
+    """The thing being published, snapshotted through its kind's allowlist.
+
+    Returns (snapshot, source_version, default_title), or raises the 404/422
+    the load deserves. Skills keep their own visibility rule (own-or-shared);
+    agents and workflows are workspace-wide by construction, so the workspace
+    filter is the whole rule for them.
+    """
+    if payload.kind == "skill":
+        skill = skills_service.resolve_visible(
+            db,
+            workspace_id=actor.workspace_id,
+            user_id=actor.user_id,
+            skill_id=payload.source_id,
+        )
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        return marketplace_service.snapshot_skill(skill), skill.version, skill.title
+    if payload.kind == "agent":
+        agent = db.scalar(
+            select(Agent).where(
+                Agent.id == payload.source_id,
+                Agent.workspace_id == actor.workspace_id,
+            )
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        # Agents carry no version counter; 0 is the honest "unversioned source".
+        return (
+            marketplace_service.snapshot_agent(db, agent, user_id=actor.user_id),
+            0,
+            agent.name,
+        )
+    workflow = db.scalar(
+        select(Workflow).where(
+            Workflow.id == payload.source_id,
+            Workflow.workspace_id == actor.workspace_id,
+        )
+    )
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    try:
+        workflow_snapshot = marketplace_service.snapshot_workflow(workflow)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="This workflow's graph is unreadable"
+        ) from None
+    return workflow_snapshot, workflow.version, workflow.name
 
 
 def _load_visible(db: Session, actor: Actor, listing_id: str) -> Listing:
@@ -164,16 +217,7 @@ def publish_listing(
             detail="Publishing to the organization requires the workspace owner",
         )
 
-    skill = skills_service.resolve_visible(
-        db,
-        workspace_id=actor.workspace_id,
-        user_id=actor.user_id,
-        skill_id=payload.source_id,
-    )
-    if skill is None:
-        raise HTTPException(status_code=404, detail="Skill not found")
-
-    snapshot = marketplace_service.snapshot_skill(skill)
+    snapshot, source_version, default_title = _load_source(db, actor, payload)
     payload_json = marketplace_service.serialize_payload(snapshot)
     digest = marketplace_service.payload_hash(payload_json)
 
@@ -192,12 +236,12 @@ def publish_listing(
             Listing.slug == payload.slug,
         )
     )
-    title = payload.title.strip() or skill.title
+    title = payload.title.strip() or default_title
     if existing is None:
         listing = Listing(
             organization_id=actor.organization_id,
             workspace_id=actor.workspace_id,
-            kind="skill",
+            kind=payload.kind,
             slug=payload.slug,
             title=title,
             description=payload.description.strip(),
@@ -218,8 +262,8 @@ def publish_listing(
         head = marketplace_service.latest_version(db, listing=existing)
         if (
             not _can_manage(actor, existing)
-            or existing.kind != "skill"
-            or (head is not None and head.source_id != skill.id)
+            or existing.kind != payload.kind
+            or (head is not None and head.source_id != payload.source_id)
         ):
             # Including a *different* source under the same slug, even by the
             # same publisher: a slug names one thing's lineage, not a name pool.
@@ -255,8 +299,8 @@ def publish_listing(
             payload_json=payload_json,
             content_hash=digest,
             changelog=payload.changelog.strip() if version > 1 else "",
-            source_id=skill.id,
-            source_version=skill.version,
+            source_id=payload.source_id,
+            source_version=source_version,
             created_by=actor.user_id,
         )
     )
@@ -361,6 +405,7 @@ def update_listing(
 @router.post("/listings/{listing_id}/install", response_model=InstallOut, status_code=201)
 def install_listing(
     listing_id: str,
+    payload: Optional[ListingInstallBody] = None,
     key: str = Depends(idempotency_key),
     _: None = Depends(require_marketplace),
     actor: Actor = Depends(get_actor),
@@ -370,31 +415,58 @@ def install_listing(
         db, workspace_id=actor.workspace_id, operation="listing.install", key=key
     )
     if replay:
-        skill = db.scalar(
-            select(Skill).where(
-                Skill.id == replay.resource_id,
-                Skill.workspace_id == actor.workspace_id,
-            )
-        )
-        if skill is None:
-            raise replayed_resource_gone()
-        return InstallOut(
-            kind="skill", resource_id=skill.id, name=skill.name, title=skill.title
-        )
+        return _replayed_install(db, actor, replay.resource_id)
 
     listing = _load_visible(db, actor, listing_id)
     head = marketplace_service.latest_version(db, listing=listing)
     if head is None:
         raise HTTPException(status_code=404, detail="Listing not found")
+
+    if listing.kind == "skill":
+        result = _install_skill(db, actor, listing, head)
+    elif listing.kind == "agent":
+        result = _install_agent(db, actor, listing, head, payload)
+    else:
+        result = _install_workflow(db, actor, listing, head)
+
+    listing.install_count += 1
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="listing.install",
+        key=key,
+        resource_id=result.resource_id,
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="listing.installed",
+        resource_type="listing",
+        resource_id=listing.id,
+        detail={
+            "slug": listing.slug,
+            "kind": listing.kind,
+            "resource_id": result.resource_id,
+        },
+    )
+    db.commit()
+    return result
+
+
+def _payload_unreadable() -> HTTPException:
+    return HTTPException(status_code=422, detail="This listing's payload is unreadable")
+
+
+def _install_skill(
+    db: Session, actor: Actor, listing: Listing, head: ListingVersion
+) -> InstallOut:
     try:
         snapshot = marketplace_service.SkillPayload.model_validate_json(
             head.payload_json
         )
     except ValueError:
-        raise HTTPException(
-            status_code=422, detail="This listing's payload is unreadable"
-        ) from None
-
+        raise _payload_unreadable() from None
     name = marketplace_service.free_skill_name(
         db, workspace_id=actor.workspace_id, base=listing.slug
     )
@@ -412,24 +484,184 @@ def install_listing(
         args=skills_service.parse_args(snapshot.args_json),
         shared=False,
     )
-    listing.install_count += 1
-    record_key(
-        db,
-        workspace_id=actor.workspace_id,
-        operation="listing.install",
-        key=key,
-        resource_id=skill.id,
-    )
-    record_audit(
-        db,
-        workspace_id=actor.workspace_id,
-        actor_id=actor.user_id,
-        action="listing.installed",
-        resource_type="listing",
-        resource_id=listing.id,
-        detail={"slug": listing.slug, "kind": listing.kind, "skill_id": skill.id},
-    )
-    db.commit()
     return InstallOut(
         kind="skill", resource_id=skill.id, name=skill.name, title=skill.title
     )
+
+
+def _install_agent(
+    db: Session,
+    actor: Actor,
+    listing: Listing,
+    head: ListingVersion,
+    body: Optional[ListingInstallBody],
+) -> InstallOut:
+    try:
+        snapshot = marketplace_service.AgentPayload.model_validate_json(
+            head.payload_json
+        )
+    except ValueError:
+        raise _payload_unreadable() from None
+
+    warnings: list[str] = []
+    if snapshot.unresolved_tools:
+        warnings.append(
+            "Not published with the listing (workspace-specific in the "
+            "publisher's workspace): " + ", ".join(snapshot.unresolved_tools)
+        )
+
+    local = marketplace_service.registry_names(
+        db, workspace_id=actor.workspace_id, user_id=actor.user_id
+    )
+    confirmed = None if body is None else body.allowed_tools
+    if not snapshot.allowed_tools_json:
+        # The source saw the whole registry. Without a scope sheet's confirmed
+        # subset that semantics carries over ("" narrows nothing) — the agent
+        # still lands disabled, and every tool call still meets ToolPolicy and
+        # the org ceiling; with one, the subset is the grant.
+        allowed_json = (
+            ""
+            if confirmed is None
+            else json.dumps(sorted(set(confirmed) & local), separators=(",", ":"))
+        )
+    else:
+        try:
+            requested = set(json.loads(snapshot.allowed_tools_json))
+        except ValueError:
+            raise _payload_unreadable() from None
+        if confirmed is not None:
+            requested &= set(confirmed)
+        missing = sorted(requested - local)
+        if missing:
+            warnings.append(
+                "Not available in this workspace: " + ", ".join(missing)
+            )
+        allowed_json = json.dumps(sorted(requested & local), separators=(",", ":"))
+
+    # ALWAYS disabled on arrival — even when the installer just confirmed the
+    # scope sheet. Enabling is a separate deliberate act in the agent editor,
+    # so adding a row here can never trip the last-enabled-agent invariant
+    # either. The local ToolPolicy/OrgToolPolicy ceilings are untouched: the
+    # subset narrows what the agent sees, never what the workspace permits.
+    agent = Agent(
+        workspace_id=actor.workspace_id,
+        name=snapshot.name,
+        instructions=snapshot.instructions,
+        description=snapshot.description,
+        allowed_tools_json=allowed_json,
+        created_by=actor.user_id,
+        enabled=False,
+    )
+    db.add(agent)
+    db.flush()
+    return InstallOut(
+        kind="agent",
+        resource_id=agent.id,
+        name=agent.name,
+        title=agent.name,
+        warnings=warnings,
+    )
+
+
+def _install_workflow(
+    db: Session, actor: Actor, listing: Listing, head: ListingVersion
+) -> InstallOut:
+    try:
+        snapshot = marketplace_service.WorkflowPayload.model_validate_json(
+            head.payload_json
+        )
+        document = json.loads(snapshot.graph_json)
+    except ValueError:
+        raise _payload_unreadable() from None
+    graph, parse_errors = parse_graph(document)
+    if graph is None or parse_errors:
+        raise _payload_unreadable()
+
+    # Revalidate against the INSTALLING workspace's registry. What the
+    # publisher's workspace offered is irrelevant here; what matters is
+    # whether each node's tool resolves where the copy will run. Failures are
+    # warnings, not refusals — the workflow lands as a draft either way, and a
+    # draft with a named hole beats a refusal with no artifact to fix.
+    context = ToolContext(
+        workspace_id=actor.workspace_id, user_id=actor.user_id, conversation_id=""
+    )
+    report = validate_graph(graph, build_registry(db, context))
+    warnings = [error.render() for error in report.errors]
+    local_agents = {
+        row
+        for row in db.scalars(
+            select(Agent.id).where(
+                Agent.workspace_id == actor.workspace_id, Agent.enabled.is_(True)
+            )
+        )
+    }
+    foreign_agents = sorted(
+        {
+            node.id
+            for node in graph.nodes
+            if node.kind == "agent" and node.agent and node.agent not in local_agents
+        }
+    )
+    if foreign_agents:
+        warnings.append(
+            "These steps name an agent this workspace does not have and need "
+            "re-pointing here: " + ", ".join(foreign_agents)
+        )
+
+    workflow = Workflow(
+        workspace_id=actor.workspace_id,
+        created_by=actor.user_id,
+        name=snapshot.name,
+        description=snapshot.description,
+        source_prompt=snapshot.source_prompt,
+        graph_json=snapshot.graph_json,
+        status="draft",
+        trigger_kind="manual",
+    )
+    db.add(workflow)
+    db.flush()
+    return InstallOut(
+        kind="workflow",
+        resource_id=workflow.id,
+        name=workflow.name,
+        title=workflow.name,
+        warnings=warnings,
+    )
+
+
+def _replayed_install(db: Session, actor: Actor, resource_id: str) -> InstallOut:
+    """A retried install answered from what the first attempt created. The kind
+    is recovered from whichever table holds the row — ids are UUIDs, so at most
+    one of these resolves."""
+    skill = db.scalar(
+        select(Skill).where(
+            Skill.id == resource_id, Skill.workspace_id == actor.workspace_id
+        )
+    )
+    if skill is not None:
+        return InstallOut(
+            kind="skill", resource_id=skill.id, name=skill.name, title=skill.title
+        )
+    agent = db.scalar(
+        select(Agent).where(
+            Agent.id == resource_id, Agent.workspace_id == actor.workspace_id
+        )
+    )
+    if agent is not None:
+        return InstallOut(
+            kind="agent", resource_id=agent.id, name=agent.name, title=agent.name
+        )
+    workflow = db.scalar(
+        select(Workflow).where(
+            Workflow.id == resource_id,
+            Workflow.workspace_id == actor.workspace_id,
+        )
+    )
+    if workflow is not None:
+        return InstallOut(
+            kind="workflow",
+            resource_id=workflow.id,
+            name=workflow.name,
+            title=workflow.name,
+        )
+    raise replayed_resource_gone()

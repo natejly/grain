@@ -1,35 +1,53 @@
 "use client";
 
-import type { Listing, ListingDetail } from "@workspace/api-client";
+import type {
+  Listing,
+  ListingDetail,
+  ToolInfo,
+  WorkflowGraph,
+} from "@workspace/api-client";
 import { Download, Search, Store, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { describeError, formatRelative } from "./shared";
+import { WorkflowGraphView } from "./workflow-graph";
 
 /**
- * The marketplace's browse-and-install surface.
+ * The marketplace's browse-and-install surface, for all three kinds.
  *
- * Two rules the drawer enforces rather than suggests:
+ * Rules the drawer enforces rather than suggests:
  *
  * - The Install button does not enable until the listing's FULL payload has
  *   been fetched and rendered in front of the installer. A listing's body is
  *   instructions the model will follow; installing unread instructions is not
  *   consent, so the preview is a hard gate, not an optional affordance.
- * - What arrives is a copy, and the drawer says so: the installed skill is
- *   local, private (`shared=false`), and the installer's to edit or delete.
- *
- * Self-contained like SkillsView: the list is fetched when the page opens,
- * never at workspace load.
+ * - An agent's tool grants go through the scope sheet: requested tools are
+ *   listed against the local registry, write-capable ones UNCHECKED by
+ *   default, and only the confirmed subset becomes the installed grant. The
+ *   copy still lands disabled — re-arming is a separate act in the editor.
+ * - The requires-vs-installed checklist renders BEFORE install, so "this
+ *   workflow needs a tool this workspace does not have" is something the
+ *   installer reads, not something a run discovers.
  */
 
 type GalleryViewProps = {
   setError: (message: string) => void;
 };
 
+const KIND_TABS = [
+  { key: "all", label: "All" },
+  { key: "skill", label: "Skills" },
+  { key: "workflow", label: "Workflows" },
+  { key: "agent", label: "Agents" },
+] as const;
+
+type KindFilter = (typeof KIND_TABS)[number]["key"];
+
 export function GalleryView({ setError }: GalleryViewProps) {
   const [listings, setListings] = useState<Listing[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<KindFilter>("all");
   /** The id whose detail drawer is open, or null. */
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -48,14 +66,15 @@ export function GalleryView({ setError }: GalleryViewProps) {
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return listings;
-    return listings.filter((listing) =>
-      [listing.title, listing.slug, listing.description, listing.author_name]
+    return listings.filter((listing) => {
+      if (kind !== "all" && listing.kind !== kind) return false;
+      if (!needle) return true;
+      return [listing.title, listing.slug, listing.description, listing.author_name]
         .join("\n")
         .toLowerCase()
-        .includes(needle),
-    );
-  }, [listings, query]);
+        .includes(needle);
+    });
+  }, [listings, query, kind]);
 
   return (
     <div className="content-page">
@@ -63,8 +82,8 @@ export function GalleryView({ setError }: GalleryViewProps) {
         <div>
           <h1>Gallery</h1>
           <p>
-            Skills your workspace published. Installing copies one into your
-            workspace as your own private skill.
+            Skills, workflows and agents your workspace published. Installing
+            copies one into your workspace as your own inert, editable copy.
           </p>
         </div>
         <label className="memory-search">
@@ -78,11 +97,25 @@ export function GalleryView({ setError }: GalleryViewProps) {
         </label>
       </div>
 
+      <div className="mcp-card-actions" role="tablist" aria-label="Listing kinds">
+        {KIND_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            role="tab"
+            aria-selected={kind === tab.key}
+            className={kind === tab.key ? "primary-button" : "ghost-button"}
+            onClick={() => setKind(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {loaded && listings.length === 0 ? (
         <div className="empty-state">
           <p>
-            Nothing published yet. Publish a skill from the Skills page and it
-            will appear here for the whole workspace.
+            Nothing published yet. Publish a skill, workflow or agent from its
+            own page and it will appear here for the whole workspace.
           </p>
         </div>
       ) : (
@@ -125,7 +158,7 @@ export function GalleryView({ setError }: GalleryViewProps) {
           ))}
           {loaded && visible.length === 0 && (
             <div className="empty-state">
-              <p>Nothing in the gallery matches “{query.trim()}”.</p>
+              <p>Nothing here matches.</p>
             </div>
           )}
         </div>
@@ -150,22 +183,71 @@ type ListingDrawerProps = {
   onInstalled: () => void;
 };
 
-/**
- * The detail drawer: the whole payload, the version trail, and — only below
- * all of that — the Install button. `detail` being loaded is what enables the
- * button, so the full body is on screen before installing is possible at all.
- */
+/** The parsed halves of a payload the drawer can render, by kind. */
+function payloadString(detail: ListingDetail | null, field: string): string {
+  const value = detail?.payload[field];
+  return typeof value === "string" ? value : "";
+}
+
+/** The agent payload's requested tool names, or null for "the whole registry". */
+function requestedTools(detail: ListingDetail): string[] | null {
+  const raw = payloadString(detail, "allowed_tools_json");
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function unresolvedTools(detail: ListingDetail): string[] {
+  const raw = detail.payload.unresolved_tools;
+  return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : [];
+}
+
+function workflowGraph(detail: ListingDetail): WorkflowGraph | null {
+  const raw = payloadString(detail, "graph_json");
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as WorkflowGraph;
+  } catch {
+    return null;
+  }
+}
+
 function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDrawerProps) {
   const [detail, setDetail] = useState<ListingDetail | null>(null);
+  const [tools, setTools] = useState<ToolInfo[]>([]);
   const [installing, setInstalling] = useState(false);
-  const [installedAs, setInstalledAs] = useState<string | null>(null);
+  const [installed, setInstalled] = useState<{ name: string; warnings: string[] } | null>(
+    null,
+  );
+  /** The scope sheet's state: tool name -> confirmed. Agents only. */
+  const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const fetched = await api.getListing(listingId);
-        if (!cancelled) setDetail(fetched);
+        const [fetched, registry] = await Promise.all([
+          api.getListing(listingId),
+          api.listTools(),
+        ]);
+        if (cancelled) return;
+        setDetail(fetched);
+        setTools(registry);
+        if (fetched.kind === "agent") {
+          const local = new Map(registry.map((tool) => [tool.name, tool]));
+          const requested = requestedTools(fetched) ?? registry.map((t) => t.name);
+          // Write-capable tools arrive UNCHECKED: capability is confirmed per
+          // tool by the installer, not inherited from the publisher's grant.
+          setConfirmed(
+            Object.fromEntries(
+              requested.map((name) => [name, local.get(name)?.read_only === true]),
+            ),
+          );
+        }
       } catch (caught) {
         setError(describeError(caught, "Could not load the listing"));
       }
@@ -176,10 +258,19 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
   }, [listingId, setError]);
 
   const install = async () => {
+    if (detail === null) return;
     setInstalling(true);
     try {
-      const result = await api.installListing(listingId);
-      setInstalledAs(result.name);
+      const body =
+        detail.kind === "agent"
+          ? {
+              allowed_tools: Object.entries(confirmed)
+                .filter(([, keep]) => keep)
+                .map(([name]) => name),
+            }
+          : undefined;
+      const result = await api.installListing(listingId, body);
+      setInstalled({ name: result.name, warnings: result.warnings });
       onInstalled();
     } catch (caught) {
       setError(describeError(caught, "Could not install this listing"));
@@ -188,9 +279,18 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
     }
   };
 
-  const body = typeof detail?.payload.body === "string" ? detail.payload.body : "";
-  const description =
-    typeof detail?.payload.description === "string" ? detail.payload.description : "";
+  const localNames = useMemo(() => new Set(tools.map((tool) => tool.name)), [tools]);
+  const graph = detail?.kind === "workflow" ? workflowGraph(detail) : null;
+  const workflowNeeds = useMemo(() => {
+    if (!graph) return [];
+    return [
+      ...new Set(
+        graph.nodes
+          .filter((node) => node.kind === "tool" && node.tool)
+          .map((node) => node.tool as string),
+      ),
+    ];
+  }, [graph]);
 
   return (
     <div className="drawer-scrim" onClick={onClose}>
@@ -211,8 +311,8 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
           ) : (
             <>
               <div className="mcp-card-meta">
-                <code className="skill-slug">{detail.slug}</code> ·{" "}
-                {detail.kind} · v{detail.latest_version}
+                <code className="skill-slug">{detail.slug}</code> · {detail.kind} · v
+                {detail.latest_version}
                 {detail.author_name && <> · by {detail.author_name}</>}
                 {detail.visibility === "org" && detail.publisher_workspace && (
                   <> · from {detail.publisher_workspace}</>
@@ -221,14 +321,116 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
                 {detail.install_count}{" "}
                 {detail.install_count === 1 ? "install" : "installs"}
               </div>
-              {description && <p>{description}</p>}
+              {payloadString(detail, "description") && (
+                <p>{payloadString(detail, "description")}</p>
+              )}
 
               {/* The consent surface: everything the install would copy,
                   verbatim, before any button. */}
-              <fieldset className="agent-provisioning">
-                <legend>What this skill tells the model to do</legend>
-                <p className="agent-instructions">{body}</p>
-              </fieldset>
+              {detail.kind === "skill" && (
+                <fieldset className="agent-provisioning">
+                  <legend>What this skill tells the model to do</legend>
+                  <p className="agent-instructions">{payloadString(detail, "body")}</p>
+                </fieldset>
+              )}
+
+              {detail.kind === "agent" && (
+                <>
+                  <fieldset className="agent-provisioning">
+                    <legend>This agent&apos;s instructions</legend>
+                    <p className="agent-instructions">
+                      {payloadString(detail, "instructions") ||
+                        "(stock instructions — no custom prompt)"}
+                    </p>
+                  </fieldset>
+                  <fieldset className="agent-provisioning">
+                    <legend>Tools it asks for — confirm each grant</legend>
+                    {requestedTools(detail) === null && (
+                      <p className="mcp-card-meta">
+                        Published with access to the publisher&apos;s whole
+                        registry; here, only what you check below is granted.
+                      </p>
+                    )}
+                    {Object.keys(confirmed).length === 0 && (
+                      <p className="mcp-card-meta">No tools requested.</p>
+                    )}
+                    {Object.keys(confirmed)
+                      .sort()
+                      .map((name) => {
+                        const tool = tools.find((t) => t.name === name);
+                        const present = localNames.has(name);
+                        return (
+                          <label key={name} className="mcp-tool">
+                            <input
+                              type="checkbox"
+                              checked={confirmed[name] === true}
+                              disabled={!present}
+                              onChange={(event) =>
+                                setConfirmed((state) => ({
+                                  ...state,
+                                  [name]: event.target.checked,
+                                }))
+                              }
+                            />
+                            <span>
+                              {name}
+                              {tool && !tool.read_only && (
+                                <span className="status-pill"> writes</span>
+                              )}
+                              {!present && (
+                                <span className="status-pill"> missing here</span>
+                              )}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    {unresolvedTools(detail).length > 0 && (
+                      <p className="mcp-card-meta">
+                        Not published with the listing (workspace-specific for
+                        the publisher): {unresolvedTools(detail).join(", ")}
+                      </p>
+                    )}
+                  </fieldset>
+                </>
+              )}
+
+              {detail.kind === "workflow" && (
+                <>
+                  {payloadString(detail, "source_prompt") && (
+                    <fieldset className="agent-provisioning">
+                      <legend>Asked for as</legend>
+                      <p className="agent-instructions">
+                        {payloadString(detail, "source_prompt")}
+                      </p>
+                    </fieldset>
+                  )}
+                  <fieldset className="agent-provisioning">
+                    <legend>Needs these tools</legend>
+                    {workflowNeeds.length === 0 && (
+                      <p className="mcp-card-meta">No tool steps.</p>
+                    )}
+                    <ul className="skill-version-list">
+                      {workflowNeeds.map((name) => (
+                        <li key={name}>
+                          <span>
+                            {name}
+                            <span className="status-pill">
+                              {" "}
+                              {localNames.has(name) ? "available" : "missing here"}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </fieldset>
+                  {graph && (
+                    <fieldset className="agent-provisioning">
+                      <legend>What it does</legend>
+                      <WorkflowGraphView graph={graph} />
+                    </fieldset>
+                  )}
+                </>
+              )}
 
               <fieldset className="agent-provisioning">
                 <legend>Versions</legend>
@@ -245,11 +447,23 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
                 </ul>
               </fieldset>
 
-              {installedAs !== null ? (
-                <p className="mcp-card-meta" role="status">
-                  Installed as <code className="skill-slug">/{installedAs}</code> —
-                  your own private copy, on the Skills page.
-                </p>
+              {installed !== null ? (
+                <div role="status">
+                  <p className="mcp-card-meta">
+                    Installed as <code className="skill-slug">{installed.name}</code>
+                    {detail.kind === "skill" &&
+                      " — your own private copy, on the Skills page."}
+                    {detail.kind === "agent" &&
+                      " — disabled until you enable it in the agent editor."}
+                    {detail.kind === "workflow" &&
+                      " — a manual draft on the Workflows page."}
+                  </p>
+                  {installed.warnings.map((warning) => (
+                    <p key={warning} className="mcp-card-meta">
+                      ⚠ {warning}
+                    </p>
+                  ))}
+                </div>
               ) : (
                 <div className="agent-editor-actions">
                   <button className="ghost-button" onClick={onClose}>
