@@ -2429,6 +2429,28 @@
         "title": "ConversationCreate",
         "type": "object"
       },
+      "ConversationForkRequest": {
+        "description": "The body of `POST /api/conversations/{id}/fork`.\n\nThe anchor message is the fork point: everything said up to and including\nit is copied into the new thread. The id is proved to belong to the named\nconversation at the route \u2014 a message from any other thread is a 404, so\nthe pair of ids never becomes an existence oracle. The title is optional;\nblank falls back to \"Fork of <source title>\". Bounded like the create\npath's title: a name, not a document.",
+        "properties": {
+          "message_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "title": "ConversationForkRequest",
+        "type": "object"
+      },
       "ConversationOut": {
         "properties": {
           "approval_mode": {
@@ -12346,6 +12368,86 @@
           }
         },
         "summary": "Set Approval Mode",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/conversations/{conversation_id}/fork": {
+      "post": {
+        "description": "Branch a new thread from everything said up to one message.\n\nThe source is resolved through the same visibility chokepoint as reading\nit (`conversations.resolve_visible`): a foreign workspace's thread or\nanother member's personal thread is the same 404 here as on\n`GET .../messages`. The anchor must belong to *that* conversation \u2014 a\nmessage id from any other thread, this workspace's included, is also a\n404, so the pair of ids never becomes an existence oracle.\n\nThe fork is a plain personal thread: created by the caller, unshared,\nsubjectless, kept in the source's space so it stays findable where the\noriginal lives. Only the transcript up to and including the anchor is\ncopied \u2014 fresh message ids, `run_id` cleared, sender attribution kept \u2014\nand nothing that hangs off the source's runs comes along: a run's tool\ncalls and parked agent state are bound to their original `call_id`\npairing and must never be resumable from a copy.",
+        "operationId": "fork_conversation_api_conversations__conversation_id__fork_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationForkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fork Conversation",
         "tags": [
           "chat"
         ]

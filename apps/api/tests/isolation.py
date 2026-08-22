@@ -1285,6 +1285,17 @@ ROUTE_CASES: List[RouteCase] = [
         body={"title": "renamed"},
     ),
     RouteCase(
+        "POST",
+        "/api/conversations/{conversation_id}/fork",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"message_id": "placeholder", "title": "forked"},
+        body_ids={"message_id": "message"},
+        note="Forking another tenant's thread would copy its whole transcript "
+        "into the caller's workspace; the visibility gate must refuse before "
+        "the anchor message is even looked at.",
+    ),
+    RouteCase(
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
     ),
     RouteCase(

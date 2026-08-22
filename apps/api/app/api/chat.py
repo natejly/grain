@@ -9,7 +9,7 @@ from typing import List, Optional, cast
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
@@ -31,6 +31,7 @@ from ..schemas import (
     ApprovalModeRequest,
     CitationCheck,
     ConversationCreate,
+    ConversationForkRequest,
     ConversationOut,
     ConversationShareRequest,
     ConversationTitleRequest,
@@ -254,6 +255,135 @@ def create_conversation(
     db.commit()
     db.refresh(conversation)
     return _conversation_out(conversation, actor)
+
+
+@router.post(
+    "/conversations/{conversation_id}/fork",
+    response_model=ConversationOut,
+    status_code=201,
+)
+def fork_conversation(
+    conversation_id: str,
+    payload: ConversationForkRequest,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    """Branch a new thread from everything said up to one message.
+
+    The source is resolved through the same visibility chokepoint as reading
+    it (`conversations.resolve_visible`): a foreign workspace's thread or
+    another member's personal thread is the same 404 here as on
+    `GET .../messages`. The anchor must belong to *that* conversation — a
+    message id from any other thread, this workspace's included, is also a
+    404, so the pair of ids never becomes an existence oracle.
+
+    The fork is a plain personal thread: created by the caller, unshared,
+    subjectless, kept in the source's space so it stays findable where the
+    original lives. Only the transcript up to and including the anchor is
+    copied — fresh message ids, `run_id` cleared, sender attribution kept —
+    and nothing that hangs off the source's runs comes along: a run's tool
+    calls and parked agent state are bound to their original `call_id`
+    pairing and must never be resumable from a copy.
+    """
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="conversation.fork",
+        key=key,
+    )
+    if replay:
+        fork = db.get(Conversation, replay.resource_id)
+        if fork is None or fork.workspace_id != actor.workspace_id:
+            raise replayed_resource_gone()
+        return _conversation_out(fork, actor)
+    source = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if source is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    anchor = db.scalar(
+        select(Message).where(
+            Message.id == payload.message_id,
+            Message.conversation_id == conversation_id,
+            Message.workspace_id == actor.workspace_id,
+        )
+    )
+    if anchor is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    fork = Conversation(
+        id=new_id(),
+        workspace_id=actor.workspace_id,
+        created_by=actor.user_id,
+        title=(payload.title.strip() or f"Fork of {source.title}")[:200],
+        shared=False,
+        space_id=source.space_id,
+    )
+    db.add(fork)
+    # Everything up to and including the anchor, in the transcript's own
+    # (created_at, id) order — the `ix_messages_conversation_created` ordering
+    # with the id as tiebreak, so two messages sharing a timestamp copy
+    # deterministically and the anchor's same-instant successors stay behind.
+    # Timestamps are preserved so the copied transcript reads in the order it
+    # was spoken; run_id is cleared because the copied words answer no run of
+    # this thread's.
+    copied = 0
+    for message in db.scalars(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.workspace_id == actor.workspace_id,
+            or_(
+                Message.created_at < anchor.created_at,
+                and_(
+                    Message.created_at == anchor.created_at,
+                    Message.id <= anchor.id,
+                ),
+            ),
+        )
+        .order_by(Message.created_at.asc(), Message.id.asc())
+    ):
+        db.add(
+            Message(
+                id=new_id(),
+                workspace_id=actor.workspace_id,
+                conversation_id=fork.id,
+                run_id="",
+                role=message.role,
+                content=message.content,
+                created_by=message.created_by,
+                citations_json=message.citations_json,
+                citation_report_json=message.citation_report_json,
+                created_at=message.created_at,
+            )
+        )
+        copied += 1
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="conversation.fork",
+        key=key,
+        resource_id=fork.id,
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="conversation.forked",
+        resource_type="conversation",
+        resource_id=fork.id,
+        detail={
+            "source_conversation_id": conversation_id,
+            "message_id": anchor.id,
+            "messages": copied,
+        },
+    )
+    db.commit()
+    db.refresh(fork)
+    return _conversation_out(fork, actor)
 
 
 def _subject_conversation(

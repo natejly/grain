@@ -4241,6 +4241,43 @@ select:focus-visible {
   opacity: 1;
 }
 
+/* The per-message fork affordance: the copy button's quiet hover-reveal
+   treatment, icon-only. Alone on a user message it pushes itself to the row's
+   right edge; beside the copy button (assistant messages) the copy button
+   already did the pushing, so the auto margin comes off. */
+.fork-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.fork-button:hover {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.message-author .fork-button {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.message-author .copy-button + .fork-button {
+  margin-left: 0;
+}
+
+.message:hover .message-author .fork-button {
+  opacity: 1;
+}
+
 .code-block {
   position: relative;
   margin: 10px 0;

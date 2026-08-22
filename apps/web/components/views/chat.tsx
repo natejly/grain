@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Copy,
   FileText,
+  GitFork,
   Paperclip,
   RefreshCw,
   ShieldAlert,
@@ -188,6 +189,13 @@ export type ChatViewProps = {
     detach: () => void;
     setArg: (name: string, value: unknown) => void;
   };
+  /**
+   * Branch a new thread from everything said up to one message. Optional and
+   * only passed by the rail chat: the panels beside a document or dashboard
+   * hold a subject's one thread, where a fork would have nowhere to go — no
+   * prop, no button, exactly like `attach` and `approval`.
+   */
+  fork?: (messageId: string) => Promise<void>;
 };
 
 /**
@@ -965,6 +973,7 @@ export function ChatView({
   onSelectAgent,
   turnControls,
   skills,
+  fork,
 }: ChatViewProps) {
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
@@ -1085,6 +1094,22 @@ export function ChatView({
                   <span>{senderLabel(message, Boolean(sharedThread))}</span>
                   {message.role === "assistant" && message.content && (
                     <CopyButton value={message.content} label="Copy message" />
+                  )}
+                  {/* Branch a fresh thread from everything said up to here.
+                      Any message is a fork point — the reply you want to
+                      re-ask after, or your own question worth re-asking — and
+                      the server copies the prefix, so this is one call and a
+                      jump, not a client-side splice. */}
+                  {fork && (
+                    <button
+                      type="button"
+                      className="fork-button"
+                      aria-label="Fork thread from this message"
+                      title="Fork thread from this message"
+                      onClick={() => void fork(message.id)}
+                    >
+                      <GitFork size={13} />
+                    </button>
                   )}
                 </div>
                 <div className="message-body">

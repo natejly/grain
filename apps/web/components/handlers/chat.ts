@@ -208,6 +208,29 @@ export function createChatHandlers({
     },
   });
 
+  /**
+   * Branch a new personal thread from everything said up to one message, and
+   * land in it. The fork is just another conversation — the send/stream loop
+   * needs no special case — so all this does is prepend the server's row,
+   * make it active (state and ref together, like `selectConversation`), and
+   * load its copied transcript.
+   */
+  async function forkThread(messageId: string) {
+    if (!activeConversation) return;
+    setError("");
+    try {
+      const fork = await api.forkConversation(activeConversation, messageId);
+      setConversations((items) => [fork, ...items]);
+      setActiveConversation(fork.id);
+      activeConversationRef.current = fork.id;
+      setView("chat");
+      setSidebarOpen(false);
+      setMessages(await api.listMessages(fork.id));
+    } catch (caught) {
+      setError(describeError(caught, "Could not fork the thread"));
+    }
+  }
+
   async function removeConversation(
     conversation: Conversation,
     event?: MouseEvent,
@@ -269,6 +292,7 @@ export function createChatHandlers({
   return {
     selectConversation,
     newConversation,
+    forkThread,
     removeConversation,
     setApprovalMode,
     decideAgentCall: thread.decideAgentCall,

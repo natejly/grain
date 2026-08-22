@@ -182,6 +182,7 @@ export function Workspace() {
     removeSandboxTool,
     selectConversation,
     newConversation,
+    forkThread,
     removeConversation,
     decideAgentCall,
     setApprovalMode,
@@ -860,6 +861,7 @@ export function Workspace() {
                   detach: detachSkill,
                   setArg: setSkillArg,
                 }}
+                fork={forkThread}
               />
             }
           />

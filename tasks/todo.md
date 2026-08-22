@@ -8,7 +8,7 @@ infra. Each feature lands with migration guards, route-table/tenant-isolation
 cases, unit tests, and its own commit.
 
 - [x] 1. Templates: space templates + duplicate dashboard + workflow templates
-- [ ] 2. Thread forking: branch a conversation from any message
+- [x] 2. Thread forking: branch a conversation from any message
 - [ ] 3. Comments & @mentions on documents/dashboards/threads → Inbox
 - [ ] 4. Assignable approvals: route an approval to a member; Inbox "assigned"
 - [ ] 5. Metric monitors: dataset/typed-query threshold trips → Inbox alerts

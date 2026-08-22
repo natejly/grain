@@ -381,6 +381,21 @@ class ConversationShareRequest(BaseModel):
     shared: bool
 
 
+class ConversationForkRequest(BaseModel):
+    """The body of `POST /api/conversations/{id}/fork`.
+
+    The anchor message is the fork point: everything said up to and including
+    it is copied into the new thread. The id is proved to belong to the named
+    conversation at the route — a message from any other thread is a 404, so
+    the pair of ids never becomes an existence oracle. The title is optional;
+    blank falls back to "Fork of <source title>". Bounded like the create
+    path's title: a name, not a document.
+    """
+
+    message_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(default="", max_length=200)
+
+
 class ApprovalModeRequest(BaseModel):
     """The body of `PUT /api/conversations/{id}/approval-mode`.
 

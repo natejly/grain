@@ -2123,6 +2123,32 @@ export class WorkspaceApi {
     });
   }
 
+  /**
+   * Branch a new personal thread from everything said up to one message.
+   *
+   * The server copies the transcript prefix (fresh message ids, no run
+   * linkage) into a brand-new unshared conversation owned by the caller and
+   * returns it; nothing that hangs off the source's runs comes along. Blank
+   * title falls back to "Fork of <source title>" server-side.
+   */
+  forkConversation(
+    conversationId: string,
+    messageId: string,
+    title = "",
+  ): Promise<Conversation> {
+    return this.request(
+      `/api/conversations/${conversationId}/fork`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          message_id: messageId,
+          ...(title ? { title } : {}),
+        }),
+      },
+      true,
+    );
+  }
+
   /** Rename a thread. A PUT of a value, like share — retries land identically. */
   renameConversation(conversationId: string, title: string): Promise<Conversation> {
     return this.request(`/api/conversations/${conversationId}/title`, {
