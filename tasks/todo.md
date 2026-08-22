@@ -49,9 +49,16 @@ attach popover, Rules/Policies, new shell).
 - [ ] Phase 4 — Trust surfaces: Rules/Policies (grant enumeration + revoke),
       member-readable org policy, scope labels, per-thread setting
       persistence, review banner (editor never replaced), status popover
-- [ ] Phase 5 — Power tier: Cmd+K palette + G-chords, universal Favorites
-      pinning + sidebar pruning, unified right-split band, agent live
-      try-chat, English-first Schedule composer
+- [ ] Phase 5 — Power tier (started 2026-08-19, reframed as Claude-desktop
+      parity per user): ✔ Cmd+K palette (76bad8d — every view incl. settings,
+      the six creates with in-place naming, thread search by title);
+      ✔ thread rename (PUT /conversations/{id}/title, inline rail edit,
+      subject threads refused); ✔ transcript deep search in the palette
+      (b4993d8 — GET /conversations/search over the conversation index, same
+      visibility chokepoint as the agent tool); REMAINING for desktop parity:
+      artifacts-style right split pane (the big one), message edit,
+      G-chords + universal Favorites + sidebar pruning + agent live try-chat
+      + English-first Schedule composer
 - [ ] Phase 6 — Layouts & polish: saved named layouts, per-collection open
       behavior, graph legend/selection, onboarding walkthrough, mobile
       bottom-tab shell
