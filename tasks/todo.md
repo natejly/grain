@@ -271,3 +271,41 @@ cannot disagree; GET /api/memory widens via an explicit ALL_SPACES constant
 so space rows stay administrable. 0042_spaces gained has_table guards after
 the migration-replay tests caught partial-DB builds. Detail rename input is
 aria-label "Rename space" (create input owns "Space name").
+
+
+# Agentic sandbox: install stuff, connect stuff, edit files (started 2026-08-22)
+
+Goal: evolve the ADR-0005 execution sandbox from "run pre-baked Python" into a
+Claude-Code-like session — the agent can install packages, hold user-provided
+credentials, and read/write/edit files, all inside the existing approval and
+egress machinery. Default egress stays `none`; nothing widens by default.
+
+- [ ] A. Egress for installs: `services/sandbox/egress_proxy.py` — a filtering
+      HTTP/HTTPS CONNECT proxy (stdlib only) enforcing the host allowlist and
+      refusing ALWAYS_DENIED_CIDRS by resolved IP (connect to the resolved IP,
+      no re-resolve, so DNS rebinding cannot help). Container driver gains real
+      `allowlist`/`open`: per-session internal docker network + proxy sidecar
+      (reuses grain-sandbox image + bind-mounted proxy script), sandbox joins
+      the internal net with HTTP_PROXY/HTTPS_PROXY set; no route out except the
+      proxy, so the CIDR denial is structural. `open` = proxy with any host but
+      denied CIDRs still refused. Update session.tool_egress's container branch.
+- [ ] B. Persistent installs on local drivers: PIP_TARGET/PYTHONPATH and
+      npm_config_prefix pointed into the bind-mounted workspace so installs
+      survive per-exec containers (e2b untouched — its venv already persists).
+- [ ] C. File tools in `sandbox/tools.py`: sandbox_read_file + sandbox_list_files
+      (read-only), sandbox_write_file + sandbox_edit (write; previews render
+      unified diffs so ProposalDiff shows red/green in chat/Inbox for free).
+- [ ] D. Connect stuff: `SandboxSecret` model (Fernet-encrypted values) +
+      migration 0045_sandbox_secrets (down_revision 0044 in this tree — NOTE:
+      two untracked 0045/0046 migrations exist in concurrent sessions; renumber
+      onto their head at merge, the usual convention) + /api/sandbox/secrets
+      (owner-write, member-read names-only) + isolation RouteCases + injection
+      into SandboxSpec.env via ensure_session + local drivers persist spec.env
+      per session (sibling file outside the mount) + approval preview names the
+      secrets present (never values) beside the network line + minimal web UI
+      card in Connections + api-client methods.
+- [ ] E. Docs: amend ADR 0005 (egress-proxy section), .env.example knobs.
+- [ ] F. Gate: ruff/mypy, full pytest, alembic up/down/up on scratch DB,
+      tsc/pnpm test/build if web touched. Container e2e is NOT runnable here
+      (colima daemon down) — argv construction + proxy protocol are unit-tested
+      instead; live docker verification owed when the daemon is up.
