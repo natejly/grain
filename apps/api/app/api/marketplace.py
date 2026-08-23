@@ -780,6 +780,11 @@ def update_install(
     A diverged copy (edited locally since install) refuses to be replaced
     unless `confirm_overwrite` says so; for skills even the overwrite is
     recoverable, because applying it appends an ordinary skill version.
+
+    A pin does not block this route: a pin means "stop OFFERING updates"
+    (install_state suppression), not "freeze against my own explicit acts" —
+    the same reading that lets a re-install take the head. The pin survives
+    the update, now freezing the version just taken.
     """
     replay = find_replay(
         db, workspace_id=actor.workspace_id, operation="listing.update", key=key
@@ -830,6 +835,10 @@ def update_install(
         result = _update_workflow_copy(db, actor, lineage, head)
 
     lineage.listing_version_id = head.id
+    # The recomputed baseline is the LOCAL copy's identity — for a workflow
+    # that includes the spliced local trigger, so it is deliberately NOT the
+    # published payload's hash. Divergence always means "the copy changed
+    # since this moment", never "the copy differs from the payload".
     lineage.content_hash_at_install = (
         marketplace_service.local_content_hash(
             db,
@@ -981,12 +990,29 @@ def _update_workflow_copy(
     # into the stored graph so the two places the product reads it from — the
     # graph (editor, recompile) and the columns (scheduler) — keep agreeing,
     # and an armed schedule survives the update instead of being disarmed by
-    # the next graph save.
-    document["trigger"] = {
-        "kind": workflow.trigger_kind,
-        "cron": workflow.schedule_cron,
-        "timezone": workflow.schedule_timezone,
-    }
+    # the next graph save. A manual trigger is normalized to the canonical
+    # shape (no leftover cron), and the splice is re-validated: the columns
+    # are only ever written from a validated graph today, but a trigger the
+    # grammar rejects must not be stored where the editor would choke on it.
+    document["trigger"] = (
+        dict(marketplace_service.MANUAL_TRIGGER)
+        if workflow.trigger_kind == "manual"
+        else {
+            "kind": workflow.trigger_kind,
+            "cron": workflow.schedule_cron,
+            "timezone": workflow.schedule_timezone,
+        }
+    )
+    respliced, splice_errors = parse_graph(document)
+    if respliced is None or splice_errors:
+        document["trigger"] = dict(marketplace_service.MANUAL_TRIGGER)
+        workflow.trigger_kind = "manual"
+        workflow.schedule_cron = ""
+        workflow.schedule_timezone = "UTC"
+        warnings.append(
+            "Your copy's trigger could not be carried over — the updated "
+            "workflow is back on a manual trigger; re-arm it deliberately."
+        )
     workflow.graph_json = json.dumps(document, separators=(",", ":"), sort_keys=True)
     workflow.version += 1
     db.flush()

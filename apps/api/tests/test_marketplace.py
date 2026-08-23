@@ -1024,20 +1024,19 @@ def test_a_workflow_update_keeps_an_armed_schedule(owner: TestClient) -> None:
     ).json()
     copy = install(owner, listing["id"]).json()
 
-    # The installer arms their copy the way the product does: trigger in the
-    # graph, columns derived from it.
-    db = SessionLocal()
-    try:
-        armed = db.get(Workflow, copy["resource_id"])
-        assert armed is not None
-        graph = json.loads(armed.graph_json)
-        graph["trigger"] = {"kind": "schedule", "cron": "0 9 * * 1", "timezone": "UTC"}
-        armed.graph_json = json.dumps(graph, separators=(",", ":"), sort_keys=True)
-        armed.trigger_kind = "schedule"
-        armed.schedule_cron = "0 9 * * 1"
-        db.commit()
-    finally:
-        db.close()
+    # The installer arms their copy through the REAL save path — the graph
+    # carries the schedule, `_apply` derives the columns from it, and the
+    # workflow goes active: the state `dispatch_due` actually fires from.
+    armed = owner.patch(
+        f"/api/workflows/{copy['resource_id']}",
+        json={
+            "graph": _graph(
+                {"kind": "schedule", "cron": "0 9 * * 1", "timezone": "UTC"}
+            ),
+            "status": "active",
+        },
+    )
+    assert armed.status_code == 200, armed.text
     assert _state_of(owner, listing["id"]) == "diverged"
 
     db = SessionLocal()
@@ -1060,6 +1059,8 @@ def test_a_workflow_update_keeps_an_armed_schedule(owner: TestClient) -> None:
         updated = db.get(Workflow, copy["resource_id"])
         assert updated is not None
         assert updated.description == "Sharper sweep."
+        # Still active, still scheduled: the firing schedule keeps firing.
+        assert updated.status == "active"
         assert updated.trigger_kind == "schedule"
         assert updated.schedule_cron == "0 9 * * 1"
         stored = json.loads(updated.graph_json)
@@ -1068,3 +1069,23 @@ def test_a_workflow_update_keeps_an_armed_schedule(owner: TestClient) -> None:
     finally:
         db.close()
     assert _state_of(owner, listing["id"]) == "installed"
+
+
+def test_a_pin_stops_offers_but_not_an_explicit_update(owner: TestClient) -> None:
+    skill = create_skill(owner, name="frozen", title="Frozen", body="v1.")
+    listing = publish(owner, skill["id"], slug="frozen").json()
+    copy = install(owner, listing["id"]).json()
+    assert pin(owner, listing["id"], True).status_code == 200
+    owner.patch(f"/api/skills/{skill['id']}", json={"body": "v2."})
+    publish(owner, skill["id"], slug="frozen", changelog="v2")
+    # Not offered...
+    assert _state_of(owner, listing["id"]) == "installed"
+    # ...but an explicit update is the caller's own act — the pin stops
+    # offers, not the owner of the copy — and it survives, now freezing the
+    # version just taken.
+    applied = apply_update(owner, listing["id"])
+    assert applied.status_code == 200, applied.text
+    detail = owner.get(f"/api/marketplace/listings/{listing['id']}").json()
+    assert detail["pinned"] is True
+    assert detail["install_state"] == "installed"
+    assert owner.get(f"/api/skills/{copy['resource_id']}").json()["body"] == "v2."

@@ -489,10 +489,12 @@ def install_states(
                 workflow.graph_json,
             )
 
+    # Columns only — a full ListingVersion row would drag every installed
+    # listing's payload body along on each gallery render.
     versions = {
         row.id: row.version
-        for row in db.scalars(
-            select(ListingVersion).where(
+        for row in db.execute(
+            select(ListingVersion.id, ListingVersion.version).where(
                 ListingVersion.id.in_(
                     [install.listing_version_id for install in installs]
                 )
