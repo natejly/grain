@@ -45,7 +45,7 @@ from .session import (
     record_execution,
     tool_egress,
 )
-from .tools import _current_call, _over_exec_cap, _render
+from .tools import _current_call, _over_exec_cap, _render, _secrets_line
 from .types import SandboxError, SandboxQuotaError
 
 #: A `{{name}}` reference. Names are validated at the create route against the
@@ -121,7 +121,8 @@ def _preview(tool_id: str):
         command = " ".join(_substitute(_load_argv(tool), args))
         return (
             f"Run this custom tool `{tool.name}` in a sandbox "
-            f"({_egress_line(tool)}):\n\n```bash\n{command}\n```"
+            f"({_egress_line(tool)}; {_secrets_line(db, context.workspace_id)}):"
+            f"\n\n```bash\n{command}\n```"
         )
 
     return preview

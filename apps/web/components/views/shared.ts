@@ -24,6 +24,7 @@ export type View =
   | "projects"
   | "mcp"
   | "sandbox-tools"
+  | "sandbox-secrets"
   | "activity"
   | "admin"
   | "workflows"
@@ -110,6 +111,7 @@ export const PAGE_TITLES: Record<View, string> = {
   // "sandbox" destination the docstring above refuses — nobody operates a
   // machine here, they configure a capability.
   "sandbox-tools": "Sandbox tools",
+  "sandbox-secrets": "Sandbox secrets",
   // The approval queue. "Activity" described the audit half of the page; the
   // half a user actually comes for is the requests waiting on them.
   activity: "Inbox",

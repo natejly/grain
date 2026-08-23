@@ -32,6 +32,7 @@ from ...config import Settings
 from ...models import SandboxExecution, SandboxSession, SandboxTool, new_id
 from . import policy
 from .provider import get_provider
+from .secrets import secret_env
 from .types import (
     ExecResult,
     NetworkPolicy,
@@ -318,13 +319,21 @@ def ensure_session(
     # refuse if the number is taken.
     limit = settings.sandbox_max_concurrent_per_workspace
     provider = get_provider(settings)
+    # Policy env first, then the workspace's own secrets. `validate_name` refuses
+    # any secret that would collide with a policy key, so the merge order cannot
+    # let a secret overwrite `GRAIN_SANDBOX` and lie to the code about its box —
+    # but the ordering is written down anyway, because a future policy key must
+    # keep winning. Secrets are frozen onto the machine here exactly like the
+    # egress policy: a secret added later reaches the next session, not this one.
+    env = dict(policy.sandbox_env(settings))
+    env.update(secret_env(db, workspace_id=workspace_id, settings=settings))
     spec = SandboxSpec(
         workspace_id=workspace_id,
         template=settings.sandbox_template,
         timeout_seconds=settings.sandbox_session_timeout_seconds,
         network=eff_network,
         allow_hosts=tuple(eff_hosts),
-        env=policy.sandbox_env(settings),
+        env=env,
         metadata=policy.session_metadata(workspace_id=workspace_id, user_id=user_id),
     )
 

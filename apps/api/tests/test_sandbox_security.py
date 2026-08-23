@@ -438,6 +438,13 @@ TOOL_PROBES: Dict[str, Dict[str, Any]] = {
     "run_command": {"command": "cat /home/user/*.csv"},
     "sandbox_upload": {"paths": ["attacker.csv"]},
     "sandbox_download": {"path": "victim.csv"},
+    # The Claude-Code file loop. Each takes a session, so each must be probed
+    # with another workspace's session id — a write or edit that reached a
+    # foreign machine would be the worst of the four.
+    "sandbox_read": {"path": "victim.csv"},
+    "sandbox_write": {"path": "pwned.txt", "content": "owned"},
+    "sandbox_edit": {"path": "victim.csv", "find": "a", "replace": "b"},
+    "sandbox_list": {"path": "."},
 }
 
 

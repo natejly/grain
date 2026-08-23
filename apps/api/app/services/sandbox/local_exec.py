@@ -95,6 +95,68 @@ def ensure_session_root(base: Path, external_id: str, *, mode: int = 0) -> Path:
     return path
 
 
+def _session_sidecar(base: Path, external_id: str, suffix: str) -> Path:
+    """A file that belongs to a session but lives *beside* its directory.
+
+    Deliberately outside `session_root(base, external_id)`, so it is invisible to
+    the sandbox: `snapshot`/`harvest`/`list_files` only ever walk inside the
+    session root, and the container mounts only that root — so a per-session env
+    file placed here is never harvested as an artifact, never listed to the
+    model, and never readable by the code running in the box. The id is
+    driver-generated, but the same containment check `session_root` applies is
+    applied here too, because this turns a string into a filesystem path.
+    """
+    if not external_id or "/" in external_id or "\\" in external_id or external_id.startswith("."):
+        raise SandboxError("invalid sandbox id")
+    return base / f".{external_id}{suffix}"
+
+
+def write_session_env(base: Path, external_id: str, env: Mapping[str, str]) -> None:
+    """Persist a session's environment, so a per-`docker run --rm` execution can
+    reconstruct it — the local drivers hold no live machine to carry it.
+
+    Written 0600 and beside the session directory rather than inside it: this is
+    the one place decrypted secrets touch the local disk, and it must not inherit
+    the 0777 the container driver widens the *session root* to for its bind mount.
+    """
+    import json
+
+    path = _session_sidecar(base, external_id, ".env.json")
+    path.write_text(json.dumps(dict(env)), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        # A platform that refuses the chmod (rare) still gets the file; the
+        # secret is no more exposed than the SQLite database beside it.
+        pass
+
+
+def read_session_env(base: Path, external_id: str) -> Dict[str, str]:
+    """A session's persisted environment, or empty if none was written.
+
+    Absent is the normal case for a session created before this existed, or one
+    with no secrets — so a missing or unreadable file degrades to "no extra
+    environment", never an error that would break every execution.
+    """
+    import json
+
+    try:
+        path = _session_sidecar(base, external_id, ".env.json")
+    except SandboxError:
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): str(v) for k, v in parsed.items()}
+
+
 def _is_contained_regular_file(path: Path, root: Path) -> bool:
     """True only for a real file that genuinely lives under `root`.
 
@@ -348,6 +410,18 @@ class LocalProvider:
 
     def _dir(self, handle: SandboxHandle) -> Path:
         return session_root(self._workdir, handle.external_id)
+
+    def _process_env(self, handle: SandboxHandle) -> Dict[str, str]:
+        """The environment a run actually gets: the frozen base folded with the
+        secrets this session was created with.
+
+        `self._env` is the scrubbed base every session shares; the per-session
+        sidecar carries the workspace's decrypted secrets (`spec.env`), which the
+        local drivers cannot keep in a live machine because there isn't one. The
+        base loses on a key collision, but the create route refuses secret names
+        that collide with policy keys, so in practice these two never overlap.
+        """
+        return {**self._env, **read_session_env(self._workdir, handle.external_id)}
 
     def _resolve(self, root: Path, path: str) -> Path:
         """Map a sandbox-visible path onto the host, refusing to escape.

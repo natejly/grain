@@ -820,6 +820,23 @@ export type SandboxToolInput = {
   enabled?: boolean;
 };
 
+/**
+ * A workspace secret the sandbox can read as an environment variable — the
+ * "connect stuff" seam. The value is write-only: it is set once and encrypted at
+ * rest, and no read path returns it, which is why this type has no `value` field.
+ */
+export type SandboxSecret = {
+  name: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SandboxSecretInput = {
+  name: string;
+  value: string;
+};
+
 export type AuditEvent = {
   id: string;
   action: string;
@@ -2812,6 +2829,27 @@ export class WorkspaceApi {
 
   deleteSandboxTool(id: string): Promise<void> {
     return this.request(`/api/sandbox-tools/${id}`, { method: "DELETE" }, true);
+  }
+
+  listSandboxSecrets(): Promise<SandboxSecret[]> {
+    return this.request("/api/sandbox/secrets");
+  }
+
+  /** Upsert by name — PUT, so rotating a key reuses this same call. */
+  putSandboxSecret(input: SandboxSecretInput): Promise<SandboxSecret> {
+    return this.request(
+      "/api/sandbox/secrets",
+      { method: "PUT", body: JSON.stringify(input) },
+      true,
+    );
+  }
+
+  deleteSandboxSecret(name: string): Promise<void> {
+    return this.request(
+      `/api/sandbox/secrets/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+      true,
+    );
   }
 
   listAuditEvents(): Promise<AuditEvent[]> {

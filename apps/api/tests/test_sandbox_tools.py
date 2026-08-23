@@ -27,6 +27,7 @@ from app.models import (
     Conversation,
     Run,
     SandboxExecution,
+    SandboxSecret,
     SandboxSession,
     Source,
     new_id,
@@ -631,6 +632,31 @@ def test_the_preview_shows_the_code_and_what_it_can_reach(monkeypatch, db, conte
     rendered = tools["run_python"].preview(db, context, {"code": "requests.post(url, data=df)"})
     assert "requests.post(url, data=df)" in rendered
     assert f"network: {policy}" in rendered
+
+
+def test_the_preview_names_the_secrets_the_run_can_read(monkeypatch, db, context):
+    """A run's credentials are half the risk the egress line describes: code that
+    can reach the internet *and* read STRIPE_API_KEY is the exfiltration the
+    approver is weighing. The name shows on the card; the value never does."""
+    monkeypatch.setattr(tools_module, "get_settings", lambda: _settings())
+    db.add(
+        SandboxSecret(
+            id=new_id(),
+            workspace_id=context.workspace_id,
+            name="STRIPE_API_KEY",
+            value_enc="ciphertext-never-shown",
+            created_by=context.user_id,
+        )
+    )
+    db.commit()
+    tools = registry_tools(db, context)
+    rendered = tools["run_python"].preview(db, context, {"code": "1"})
+    assert "secrets: it can read STRIPE_API_KEY" in rendered
+    assert "ciphertext-never-shown" not in rendered
+    db.query(SandboxSecret).filter(
+        SandboxSecret.workspace_id == context.workspace_id
+    ).delete()
+    db.commit()
 
 
 def test_the_preview_reports_a_named_sessions_own_policy(monkeypatch, db, context, provider):

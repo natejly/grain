@@ -62,6 +62,9 @@ class SubprocessProvider(local_exec.LocalProvider):
 
         external_id = f"local-{uuid.uuid4().hex[:16]}"
         local_exec.ensure_session_root(self._workdir, external_id)
+        # Persist the session's injected secrets beside its directory: this driver
+        # runs a fresh process per execution and holds no machine to carry them.
+        local_exec.write_session_env(self._workdir, external_id, spec.env)
         return SandboxHandle(provider=self.name, external_id=external_id)
 
     def run_code(
@@ -80,7 +83,8 @@ class SubprocessProvider(local_exec.LocalProvider):
         root = local_exec.ensure_session_root(self._workdir, handle.external_id)
         script = root / ".grain_exec.py"
         script.write_text(code, encoding="utf-8")
-        return self._run([self._python, str(script)], root, timeout, on_output)
+        env = self._process_env(handle)
+        return self._run([self._python, str(script)], root, timeout, on_output, env)
 
     def run_command(
         self,
@@ -102,7 +106,8 @@ class SubprocessProvider(local_exec.LocalProvider):
         # shlex.split plus shell=False, so `; rm -rf ~` is an argument to
         # whatever was named rather than a second command. The driver has no
         # isolation to protect, but it should at least not add a shell to it.
-        return self._run(argv, working, timeout, on_output)
+        env = self._process_env(handle)
+        return self._run(argv, working, timeout, on_output, env)
 
     def _run(
         self,
@@ -110,6 +115,7 @@ class SubprocessProvider(local_exec.LocalProvider):
         cwd: Path,
         timeout: float,
         on_output: OutputSink,
+        env: Mapping[str, str],
     ) -> ExecResult:
         before = local_exec.snapshot(cwd)
         preexec = local_exec.rlimit_preexec(
@@ -124,7 +130,7 @@ class SubprocessProvider(local_exec.LocalProvider):
         result = local_exec.run_process(
             argv,
             cwd=cwd,
-            env=self._env,
+            env=env,
             timeout=timeout,
             on_output=on_output,
             preexec=preexec,

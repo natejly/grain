@@ -37,6 +37,7 @@ import {
   type GroupId,
 } from "./views/navigation";
 import { ProjectsView } from "./views/projects";
+import { SandboxSecretsView } from "./views/sandbox-secrets";
 import { SandboxToolsView } from "./views/sandbox-tools";
 import {
   PAGE_TITLES,
@@ -73,6 +74,7 @@ export function Workspace() {
     integrations,
     mcpServers,
     sandboxTools,
+    sandboxSecrets,
     documents,
     folders,
     activeDocument,
@@ -179,6 +181,8 @@ export function Workspace() {
     addSandboxTool,
     setSandboxToolEnabled,
     removeSandboxTool,
+    addSandboxSecret,
+    removeSandboxSecret,
     selectConversation,
     newConversation,
     removeConversation,
@@ -371,6 +375,7 @@ export function Workspace() {
     data: dbConnections.length,
     mcp: mcpServers.length,
     "sandbox-tools": sandboxTools.length,
+    "sandbox-secrets": sandboxSecrets.length,
     integrations: integrations.filter((item) => item.account).length,
   };
 
@@ -1096,6 +1101,14 @@ export function Workspace() {
             addTool={addSandboxTool}
             setToolEnabled={setSandboxToolEnabled}
             removeTool={removeSandboxTool}
+          />
+        )}
+
+        {view === "sandbox-secrets" && (
+          <SandboxSecretsView
+            secrets={sandboxSecrets}
+            addSecret={addSandboxSecret}
+            removeSecret={removeSandboxSecret}
           />
         )}
 

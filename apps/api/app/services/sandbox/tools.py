@@ -42,6 +42,7 @@ from ..llm_tools import MAX_RESULT_CHARS, ToolContext, ToolResult, ToolSpec
 from ..projects import store
 from .outputs import persist_artifacts
 from .provider import get_provider
+from .secrets import secret_names
 from .session import (
     allow_hosts_for,
     clip,
@@ -238,6 +239,17 @@ def _policy_line(db: Session, context: ToolContext, args: Dict[str, Any]) -> str
     )
 
 
+def _secrets_line(db: Session, workspace_id: str) -> str:
+    """The credentials sentence for the approval card, shown next to the egress
+    one. Code the approver is about to run reads these from its environment, so
+    what it can *do* with the network depends on what it can *read* here — both
+    belong on the same card. Names only; a value never leaves the box."""
+    names = secret_names(db, workspace_id=workspace_id)
+    if not names:
+        return "secrets: none"
+    return f"secrets: it can read {', '.join(names)} from its environment"
+
+
 # --------------------------------------------------------------------------
 # Rendering a result for the model
 
@@ -414,7 +426,11 @@ def _preview_execution(
     clipped = body[:PREVIEW_CODE_CHARS]
     if len(body) > PREVIEW_CODE_CHARS:
         clipped += "\n…(truncated)"
-    return f"{verb} ({_policy_line(db, context, args)}):\n\n```{fence}\n{clipped}\n```"
+    return (
+        f"{verb} ({_policy_line(db, context, args)}; "
+        f"{_secrets_line(db, context.workspace_id)}):"
+        f"\n\n```{fence}\n{clipped}\n```"
+    )
 
 
 def _preview_run_python(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:

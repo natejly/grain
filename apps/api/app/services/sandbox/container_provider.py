@@ -102,6 +102,10 @@ class ContainerProvider(local_exec.LocalProvider):
         self._preflight()
         external_id = f"box-{uuid.uuid4().hex[:16]}"
         local_exec.ensure_session_root(self._workdir, external_id, mode=SESSION_MODE)
+        # Persist the session's injected secrets beside its directory (0600, and
+        # outside the bind mount) so each throwaway `docker run` can pass them in
+        # via -e without the values ever being readable from inside the box.
+        local_exec.write_session_env(self._workdir, external_id, spec.env)
         return SandboxHandle(provider=self.name, external_id=external_id)
 
     def _cli_env(self) -> Dict[str, str]:
@@ -170,7 +174,10 @@ class ContainerProvider(local_exec.LocalProvider):
         # code is not in the process table and a traceback carries real line
         # numbers against a real file.
         (root / ".grain_exec.py").write_text(code, encoding="utf-8")
-        return self._run(root, ["python3", f"{MOUNT}/.grain_exec.py"], timeout, on_output)
+        env = self._process_env(handle)
+        return self._run(
+            root, ["python3", f"{MOUNT}/.grain_exec.py"], timeout, on_output, env
+        )
 
     def run_command(
         self,
@@ -190,9 +197,12 @@ class ContainerProvider(local_exec.LocalProvider):
             raise SandboxError(f"could not parse command: {exc}") from exc
         if not argv:
             raise SandboxError("empty command")
-        return self._run(root, argv, timeout, on_output)
+        env = self._process_env(handle)
+        return self._run(root, argv, timeout, on_output, env)
 
-    def _docker_argv(self, root: Path, inner: Sequence[str], name: str) -> List[str]:
+    def _docker_argv(
+        self, root: Path, inner: Sequence[str], name: str, env: Mapping[str, str]
+    ) -> List[str]:
         argv = [
             self._docker,
             "run",
@@ -232,7 +242,7 @@ class ContainerProvider(local_exec.LocalProvider):
             "-w",
             MOUNT,
         ]
-        for key, value in sorted(self._env.items()):
+        for key, value in sorted(env.items()):
             argv += ["-e", f"{key}={value}"]
         argv.append(self._image)
         argv.extend(inner)
@@ -244,11 +254,12 @@ class ContainerProvider(local_exec.LocalProvider):
         inner: Sequence[str],
         timeout: float,
         on_output: OutputSink,
+        env: Mapping[str, str],
     ) -> ExecResult:
         before = local_exec.snapshot(root)
         name = f"grain-{uuid.uuid4().hex[:16]}"
         result = local_exec.run_process(
-            self._docker_argv(root, inner, name),
+            self._docker_argv(root, inner, name, env),
             cwd=self._workdir,
             env=self._cli_env(),
             # Give docker a moment past the inner budget to tear down, so a

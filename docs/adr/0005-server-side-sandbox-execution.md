@@ -164,8 +164,52 @@ instance of the residual risk this ADR already names. Egress is where sandboxes
 leak, the leak does not need a kernel escape, and "the provider says it is
 sandboxed" is not the same claim as "this network cannot carry your data out."
 
+## Secrets — connecting the sandbox to services
+
+The sandbox can now hold **workspace secrets**: a credential the workspace lets
+its generated code read as an environment variable. An owner registers one by
+name at `PUT /api/sandbox/secrets` (`STRIPE_API_KEY`, a database URL); the value
+is Fernet-encrypted at rest under the same `INTEGRATIONS_ENCRYPTION_KEY` the OAuth
+connectors use, and generated code reads it from `os.environ`. This is the "connect
+stuff" half of the feature — the ability to install packages was always there
+under an open network; reaching a named service needed a place to put the key.
+
+Three rules keep it from being a new hole rather than a new arm:
+
+- **The value never enters the model's world.** No read path returns it: `list_secrets`
+  answers with names and metadata only, and `SecretOut` has no value field to
+  blank. The one decryption is `secret_env`, called by `ensure_session` on the way
+  to `provider.create`, folding the plaintext straight into the machine's
+  environment. It is never a prompt, a tool argument, or a line in the transcript.
+- **A secret cannot shadow the policy environment.** The sandbox env is *built*,
+  not filtered, and its keys (`GRAIN_SANDBOX`, `NO_NETWORK`, …) are load-bearing —
+  they are how the code is told where it is running. `validate_name` refuses those
+  keys and the whole `GRAIN_` prefix, so a secret can never overwrite one and lie
+  to the code about its own box. Policy env wins the merge; the ordering is written
+  down anyway, because a future policy key must keep winning.
+- **Reachable outward only when egress already allows it.** A secret in the
+  environment is exfiltratable by prompt-injected code exactly when that code has
+  a socket — i.e. never under the default `SANDBOX_NETWORK_POLICY=none`, and
+  otherwise under the same allowlist every other outbound byte obeys. The coupling
+  is the network policy's, not a second dial. The approval card states both facts
+  on one line — the egress sentence and the names of the secrets a run can see —
+  so the reviewer weighs "this code can reach the internet" and "this code can read
+  the Stripe key" as the single risk they actually are.
+
+Write is owner-only (`require_owner`) and read is member-visible, matching how the
+workspace treats any shared credential: every member's sandbox code can *use* the
+secret because they share the machine, but adding or removing one is an owner act.
+The tenant boundary is the `workspace_id` on the actor, applied to every query —
+no route here accepts or returns a provider-side id.
+
 ## Consequences
 
+- **Secrets inherit the egress risk; they do not create a new one.** A registered
+  credential is inert under `none` and only exfiltratable under the same policy
+  that already governs every outbound byte. The feature adds reach, not a second
+  place to audit: the one question remains `SANDBOX_NETWORK_POLICY`, and the
+  approval card now names the credentials so that question is answered with the
+  network one.
 - **Turning egress on re-opens the one serious risk.** With the default `none`
   there is no exfiltration path: prompt-injected code can read the documents in
   the sandbox and has nowhere to send them. That property is worth defending,
