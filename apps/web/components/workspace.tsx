@@ -53,6 +53,7 @@ import { TodosView } from "./views/todos";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
 import { CronsView } from "./views/crons";
+import { MonitorsView } from "./views/monitors";
 import { WorkspaceSwitcher } from "./workspace-selection";
 
 export function Workspace() {
@@ -217,6 +218,7 @@ export function Workspace() {
     removeComment,
     loadMembers,
     resolveMention,
+    resolveAlert,
     assignApproval,
   } = useWorkspace();
   // Always present: this component only renders inside the authenticated gate.
@@ -475,7 +477,12 @@ export function Workspace() {
   const selfId = bootstrap?.identity.user_id ?? "";
   const waitingOnMe = inbox ? actionableApprovals(inbox.approvals, selfId) : [];
   const inboxBadge = inbox
-    ? waitingOnMe.length + inbox.budget_holds.length + inbox.mentions.length
+    ? waitingOnMe.length +
+      inbox.budget_holds.length +
+      inbox.mentions.length +
+      // Monitor alerts wait on a human too — '' -targeted, so they wait on
+      // every member until one resolves them for the room.
+      inbox.alerts.length
     : pendingApprovals.length;
 
   /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
@@ -1135,6 +1142,12 @@ export function Workspace() {
             fetched here rather than at page load. */}
         {view === "crons" && <CronsView setError={setError} />}
 
+        {/* Self-contained like CronsView, but the dataset picker reads the
+            shell's datasets list — the same rows the Datasets page shows. */}
+        {view === "monitors" && (
+          <MonitorsView setError={setError} datasets={datasets} />
+        )}
+
         {view === "mcp" && (
           <McpView
             servers={mcpServers}
@@ -1164,6 +1177,8 @@ export function Workspace() {
             activeRun={activeRun}
             openConversation={(id) => void selectConversation(id)}
             resolveMention={resolveMention}
+            resolveAlert={resolveAlert}
+            openMonitors={() => setView("monitors")}
             identityId={selfId}
             loadMembers={loadMembers}
             assignApproval={assignApproval}

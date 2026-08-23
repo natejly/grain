@@ -40,6 +40,7 @@ from ..database import get_db
 from ..models import Agent, Workflow, WorkflowNodeRun, WorkflowRun
 from ..schemas import ApiModel
 from ..services import crons as cron_service
+from ..services import monitors as monitor_service
 from ..services.audit import record_audit
 from ..services.llm_tools import ToolContext, build_registry
 from ..services.runs import process_run
@@ -146,6 +147,10 @@ class WorkflowTickOut(ApiModel):
     #: synchronously and is not counted here. Reported separately so "a workflow
     #: fired" and "a cron fired" stay distinct facts about one tick.
     crons_dispatched: List[str]
+    #: Monitors this tick claimed and evaluated (services/monitors.py). An
+    #: evaluation is a bounded read done inline — nothing is enqueued — and the
+    #: id names the monitor the tick spent time on, not a verdict.
+    monitors_evaluated: List[str]
     moment: datetime
 
 
@@ -702,6 +707,10 @@ def tick(
     # an ordinary Run on the chat background path — `recover_durable_work` will
     # re-run it if a process dies mid-turn, so no cron-specific recovery is needed.
     cron_run_ids = cron_service.dispatch_due(db)
+    # Monitors ride the same tick, the same claim pattern, the same clock. An
+    # evaluation is a bounded dataset read, so it runs inline rather than on a
+    # background task, and a bad monitor skips-with-audit instead of raising.
+    monitor_ids = monitor_service.dispatch_due(db)
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
     for workflow_run_id in recovered:
@@ -712,5 +721,6 @@ def tick(
         dispatched=[workflow_run.id for workflow_run in started],
         recovered=recovered,
         crons_dispatched=cron_run_ids,
+        monitors_evaluated=monitor_ids,
         moment=schedule.floor_minute(utcnow()),
     )

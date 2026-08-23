@@ -111,6 +111,20 @@ class InboxMentionOut(ApiModel):
     created_at: datetime
 
 
+class InboxAlertOut(ApiModel):
+    """One open monitor alert. Automation, so member-visible by definition —
+    the query below filters on `target_user_id == ''` (the monitor sweep only
+    ever writes '' -targeted rows), the holds-tab pattern: no conversation
+    predicate, every member sees it, and resolving it resolves it for all."""
+
+    id: str
+    title: str
+    body: str
+    #: Deep link to the monitor that tripped, for the Monitors view.
+    monitor_id: str
+    created_at: datetime
+
+
 class InboxRunOut(ApiModel):
     """One finished workflow run — the Inbox's history shelf, not its work."""
 
@@ -126,6 +140,7 @@ class InboxOut(ApiModel):
     approvals: List[InboxApprovalOut]
     budget_holds: List[InboxBudgetHoldOut]
     mentions: List[InboxMentionOut]
+    alerts: List[InboxAlertOut]
     recent_runs: List[InboxRunOut]
 
 
@@ -309,6 +324,34 @@ def read_inbox(
         for row in open_mentions
     ]
 
+    # Monitor alerts are the fourth waiting set, and like budget holds they are
+    # automation: written by the sweep with `target_user_id == ''`, so every
+    # member sees the same list and one resolve clears it for the room. The
+    # filter pins '' rather than the ('', actor) pair because the sweep never
+    # writes a personally-targeted alert — a row claiming to be one would be a
+    # bug, not work. Same contract as every waiting set: unbounded, oldest
+    # first, over the (workspace_id, status, created_at) index.
+    open_alerts = db.scalars(
+        select(Notification)
+        .where(
+            Notification.workspace_id == actor.workspace_id,
+            Notification.kind == "monitor_alert",
+            Notification.status == "open",
+            Notification.target_user_id == "",
+        )
+        .order_by(Notification.created_at.asc())
+    ).all()
+    alerts = [
+        InboxAlertOut(
+            id=row.id,
+            title=row.title,
+            body=row.body,
+            monitor_id=row.monitor_id,
+            created_at=row.created_at,
+        )
+        for row in open_alerts
+    ]
+
     outcomes = db.execute(
         select(WorkflowRun, Workflow.name)
         .join(Workflow, Workflow.id == WorkflowRun.workflow_id)
@@ -335,5 +378,6 @@ def read_inbox(
         approvals=approvals,
         budget_holds=budget_holds,
         mentions=mentions,
+        alerts=alerts,
         recent_runs=recent_runs,
     )

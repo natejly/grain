@@ -78,9 +78,14 @@ describe("navigation model", () => {
     // old label ("Automations") is what the group is called now.
     const automations = NAV_GROUPS.find((group) => group.id === "workflows");
     expect(automations?.label).toBe("Automations");
+    // Monitors is the third kind of automation: a threshold watched on a
+    // timer. It lives here — not under Library's Data shelf — because a
+    // monitor is something that runs without you, and the person looking for
+    // "why did this alert fire" thinks "automation", not "dataset".
     expect(automations?.items.map((item) => item.label)).toEqual([
       "Workflows",
       "Schedules",
+      "Monitors",
     ]);
   });
 

@@ -236,6 +236,7 @@ def test_the_feed_is_workspace_scoped(client, identity_client):
     body = response.json()
     assert call_id not in [row["id"] for row in body["approvals"]]
     assert body["budget_holds"] == []
-    # The mentions set rides the same workspace filter — a fresh tenant's
-    # feed carries none of the dev workspace's notifications.
+    # The mentions and alerts sets ride the same workspace filter — a fresh
+    # tenant's feed carries none of the dev workspace's notifications.
     assert body["mentions"] == []
+    assert body["alerts"] == []

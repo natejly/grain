@@ -83,6 +83,7 @@ from app.models import (
     MemoryItem,
     Message,
     ModelUsage,
+    Monitor,
     Notification,
     OAuthState,
     OrgMembership,
@@ -852,6 +853,34 @@ def build_tenant(label: str) -> Tenant:
         db.add(cron)
         db.flush()
         ids["cron"] = cron.id
+
+        # A metric monitor over this tenant's dataset. Naming it would let you
+        # read its query (which names dataset columns), fire an evaluation, or
+        # delete the watchfulness — `run-now`'s DENY is the sharp one, and the
+        # create case plants THIS tenant's dataset id to prove a monitor cannot
+        # be built over another tenant's data.
+        monitor = Monitor(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} secret monitor",
+            dataset_id=dataset.id,
+            query_json=json.dumps(
+                {
+                    "metrics": [
+                        {"field": "amount", "operation": "sum", "label": "total"}
+                    ],
+                    "limit": 1,
+                }
+            ),
+            comparator="gt",
+            threshold=5.0,
+            schedule_cron="0 9 * * *",
+            schedule_timezone="UTC",
+            enabled=True,
+        )
+        db.add(monitor)
+        db.flush()
+        ids["monitor"] = monitor.id
 
         # A standing chat grant, so the scope split has something to be wrong
         # about: `test_workflow_policy_scope.py` proves this row does not reach
@@ -2230,6 +2259,46 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase("DELETE", "/api/crons/{cron_id}", DENY, path_ids={"cron_id": "cron"}),
     RouteCase(
         "POST", "/api/crons/{cron_id}/run-now", DENY, path_ids={"cron_id": "cron"}
+    ),
+    # -- monitors ----------------------------------------------------------
+    # The cron posture, plus one sharper case: create names a *dataset* in the
+    # body, and planting another tenant's dataset id must 404 before any
+    # validation detail could confirm the id — a monitor is a standing read of
+    # that dataset, so building one over foreign data is the whole attack.
+    RouteCase("GET", "/api/monitors", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/monitors",
+        DENY,
+        body={
+            "name": "stolen watch",
+            "dataset_id": "",
+            "query": {"metrics": [{"operation": "count", "label": "rows"}]},
+            "comparator": "gt",
+            "threshold": 0,
+            "schedule_cron": "0 9 * * *",
+            "schedule_timezone": "UTC",
+        },
+        body_ids={"dataset_id": "dataset"},
+        note="builds a standing read over another tenant's dataset",
+    ),
+    RouteCase(
+        "PUT",
+        "/api/monitors/{monitor_id}",
+        DENY,
+        path_ids={"monitor_id": "monitor"},
+        body={"enabled": False},
+    ),
+    RouteCase(
+        "DELETE", "/api/monitors/{monitor_id}", DENY, path_ids={"monitor_id": "monitor"}
+    ),
+    # The sharp one: a foreign monitor cannot be evaluated — an evaluation
+    # reads the dataset behind it.
+    RouteCase(
+        "POST",
+        "/api/monitors/{monitor_id}/run-now",
+        DENY,
+        path_ids={"monitor_id": "monitor"},
     ),
     # -- integrations ------------------------------------------------------
     RouteCase("GET", "/api/integrations", SCOPED),

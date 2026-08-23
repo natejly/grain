@@ -917,6 +917,17 @@ export type InboxMention = {
   created_at: string;
 };
 
+/** One open monitor alert. Automation, so member-visible: every member sees
+ * the same row, and one resolve clears it for the whole room. */
+export type InboxAlert = {
+  id: string;
+  title: string;
+  body: string;
+  /** Deep link to the monitor that tripped, for the Monitors view. */
+  monitor_id: string;
+  created_at: string;
+};
+
 /** One finished workflow run — the Inbox's history shelf, not its work. */
 export type InboxRun = {
   id: string;
@@ -936,6 +947,7 @@ export type InboxFeed = {
   approvals: InboxApproval[];
   budget_holds: InboxBudgetHold[];
   mentions: InboxMention[];
+  alerts: InboxAlert[];
   recent_runs: InboxRun[];
 };
 
@@ -3734,6 +3746,47 @@ export class WorkspaceApi {
     return this.request(`/api/crons/${cronId}/run-now`, { method: "POST" }, true);
   }
 
+  // --- Metric monitors ---
+  // The crons' sibling: same tick, same schedule affordances, but a firing is
+  // a dataset READ compared against a threshold — the only write is the
+  // monitor_alert row the ok→tripped edge leaves in every member's Inbox.
+
+  listMonitors(): Promise<Monitor[]> {
+    return this.request("/api/monitors");
+  }
+
+  createMonitor(payload: MonitorCreateInput): Promise<Monitor> {
+    return this.request(
+      "/api/monitors",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  /** Edit fields or flip `enabled`. Changing what is watched (dataset, query,
+   * comparator, threshold) resets the stored edge state to "never evaluated",
+   * so the new question's first trip alerts. */
+  updateMonitor(monitorId: string, payload: MonitorUpdateInput): Promise<Monitor> {
+    return this.request(
+      `/api/monitors/${monitorId}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  deleteMonitor(monitorId: string): Promise<void> {
+    return this.request(`/api/monitors/${monitorId}`, { method: "DELETE" }, true);
+  }
+
+  /**
+   * Evaluate the monitor now, ignoring its schedule and claim. The answer is
+   * honest: "skipped" with a reason when the query cannot answer, and the edge
+   * rule still applies — an already-tripped monitor writes no duplicate alert.
+   */
+  runMonitorNow(monitorId: string): Promise<MonitorRunNowResult> {
+    return this.request(`/api/monitors/${monitorId}/run-now`, { method: "POST" }, true);
+  }
+
   /**
    * Can a stored cron actually fire? Asked of the ticker, which is the only
    * thing that knows.
@@ -4195,4 +4248,67 @@ export type CronUpdateInput = {
   enabled?: boolean;
   prompt?: string;
   body?: string;
+};
+
+export type MonitorComparator = "gt" | "lt" | "gte" | "lte";
+
+/**
+ * A threshold question asked of a dataset on a schedule — the Cron's sibling,
+ * riding the same tick. An evaluation is a read: the stored query runs, the
+ * first metric of the first row is compared against `threshold`, and only the
+ * ok→tripped edge writes a `monitor_alert` into every member's Inbox.
+ */
+export type Monitor = {
+  id: string;
+  name: string;
+  /** Resolved under the monitor's own workspace at every evaluation. */
+  dataset_id: string;
+  /** Must carry at least one metric — its first metric is the watched value. */
+  query: DatasetQuery;
+  comparator: MonitorComparator;
+  threshold: number;
+  /** 5-field cron expression, shown verbatim — never reworded into prose. */
+  schedule_cron: string;
+  schedule_timezone: string;
+  enabled: boolean;
+  /** "ok" | "tripped" | "" (never evaluated) — the stored edge state. */
+  last_state: string;
+  /** The last observed value, JSON-encoded; "" before the first evaluation. */
+  last_value_json: string;
+  /** The atomic claim column: when the ticker last evaluated this, null if never. */
+  last_dispatched_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MonitorCreateInput = {
+  name: string;
+  dataset_id: string;
+  query: DatasetQuery;
+  comparator: MonitorComparator;
+  threshold: number;
+  schedule_cron: string;
+  schedule_timezone: string;
+};
+
+export type MonitorUpdateInput = {
+  name?: string;
+  dataset_id?: string;
+  query?: DatasetQuery;
+  comparator?: MonitorComparator;
+  threshold?: number;
+  schedule_cron?: string;
+  schedule_timezone?: string;
+  /** The enable/disable toggle: a disabled monitor never evaluates. */
+  enabled?: boolean;
+};
+
+/** What one run-now evaluation concluded, honestly — including a skip. */
+export type MonitorRunNowResult = {
+  /** "ok" | "tripped" | "skipped". */
+  state: string;
+  /** The observed value, JSON-encoded; "" when skipped. */
+  value_json: string;
+  /** Why a skip skipped; "" otherwise. */
+  reason: string;
 };

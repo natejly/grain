@@ -76,5 +76,24 @@ export function createCommentHandlers({ setError, refreshFeed }: CommentHandlerD
     }
   }
 
-  return { loadComments, addComment, removeComment, loadMembers, resolveMention };
+  /** The same notification store, worn by a monitor alert: '' -targeted, so
+   * resolving clears it for every member — hence the honest separate copy. */
+  async function resolveAlert(notificationId: string): Promise<void> {
+    setError("");
+    try {
+      await api.resolveNotification(notificationId);
+      await refreshFeed();
+    } catch (caught) {
+      setError(describeError(caught, "Could not resolve the alert"));
+    }
+  }
+
+  return {
+    loadComments,
+    addComment,
+    removeComment,
+    loadMembers,
+    resolveMention,
+    resolveAlert,
+  };
 }

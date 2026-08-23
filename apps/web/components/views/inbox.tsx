@@ -2,6 +2,7 @@
 
 import {
   AtSign,
+  Bell,
   Check,
   CircleDollarSign,
   Clock,
@@ -59,6 +60,11 @@ export type InboxViewProps = {
   resolveMention: (notificationId: string) => Promise<void>;
   /** Jump to whatever a mention deep-links: its thread, document or dashboard. */
   openMention: (mention: InboxMention) => void;
+  /** Flip a monitor alert out of the waiting set — for the whole room, since
+   * an alert is '' -targeted and every member sees the same row. */
+  resolveAlert: (notificationId: string) => Promise<void>;
+  /** Jump to the Monitors view, where the tripped monitor is defined. */
+  openMonitors: () => void;
   /** The signed-in member's user id — what splits the queue into "assigned to
    * you" vs the rest. "" until bootstrap's first read lands. */
   identityId: string;
@@ -69,7 +75,7 @@ export type InboxViewProps = {
   assignApproval: (callId: string, userId: string) => Promise<boolean>;
 };
 
-type Section = "approvals" | "holds" | "mentions" | "runs" | "history";
+type Section = "approvals" | "holds" | "mentions" | "alerts" | "runs" | "history";
 
 const ORIGIN_LABELS: Record<string, string> = {
   chat: "Chat",
@@ -263,6 +269,8 @@ export function InboxView({
   openConversation,
   resolveMention,
   openMention,
+  resolveAlert,
+  openMonitors,
   identityId,
   loadMembers,
   assignApproval,
@@ -299,6 +307,7 @@ export function InboxView({
   );
   const holds = feed?.budget_holds ?? [];
   const mentions = feed?.mentions ?? [];
+  const alerts = feed?.alerts ?? [];
   const runs = feed?.recent_runs ?? [];
 
   // J/K walk the queue, A/D decide the focused row — triage without a mouse.
@@ -333,6 +342,7 @@ export function InboxView({
     { id: "approvals", label: "Needs approval", count: approvals.length },
     { id: "holds", label: "Budget holds", count: holds.length },
     { id: "mentions", label: "Mentions", count: mentions.length },
+    { id: "alerts", label: "Alerts", count: alerts.length },
     { id: "runs", label: "Runs" },
     { id: "history", label: "History" },
   ];
@@ -550,6 +560,60 @@ export function InboxView({
                 </article>
               );
             })
+          )}
+        </div>
+      )}
+
+      {section === "alerts" && (
+        <div className="approval-panel inbox-queue">
+          {alerts.length === 0 ? (
+            <div className="approval-empty">
+              <div>
+                <Check size={18} />
+              </div>
+              <strong>No monitor has tripped</strong>
+              <p>
+                When a metric monitor crosses its threshold, the alert appears
+                here for every member until someone resolves it.
+              </p>
+            </div>
+          ) : (
+            alerts.map((alert) => (
+              <article key={alert.id} className="approval-card">
+                <div className="approval-card-top">
+                  <div className="tool-glyph">
+                    <Bell size={17} />
+                  </div>
+                  <div>
+                    <span>
+                      Monitor alert · waiting{" "}
+                      {formatRelative(alert.created_at).replace(" ago", "")}
+                    </span>
+                    <strong>{alert.title}</strong>
+                  </div>
+                  {alert.monitor_id && (
+                    <button
+                      type="button"
+                      className="ghost-button approval-open"
+                      onClick={openMonitors}
+                    >
+                      <ExternalLink size={13} />
+                      Open monitors
+                    </button>
+                  )}
+                </div>
+                {alert.body && <p className="inbox-hold-note">{alert.body}</p>}
+                <div className="decision-buttons">
+                  <button
+                    className="approve"
+                    onClick={() => void resolveAlert(alert.id).then(refreshFeed)}
+                  >
+                    <Check size={15} />
+                    Resolve
+                  </button>
+                </div>
+              </article>
+            ))
           )}
         </div>
       )}

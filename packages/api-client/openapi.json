@@ -4626,6 +4626,41 @@
         "title": "Identity",
         "type": "object"
       },
+      "InboxAlertOut": {
+        "description": "One open monitor alert. Automation, so member-visible by definition \u2014\nthe query below filters on `target_user_id == ''` (the monitor sweep only\never writes '' -targeted rows), the holds-tab pattern: no conversation\npredicate, every member sees it, and resolving it resolves it for all.",
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "monitor_id": {
+            "title": "Monitor Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body",
+          "monitor_id",
+          "created_at"
+        ],
+        "title": "InboxAlertOut",
+        "type": "object"
+      },
       "InboxApprovalOut": {
         "description": "One proposed tool call whose run is parked on the decision.",
         "properties": {
@@ -4798,6 +4833,13 @@
       },
       "InboxOut": {
         "properties": {
+          "alerts": {
+            "items": {
+              "$ref": "#/components/schemas/InboxAlertOut"
+            },
+            "title": "Alerts",
+            "type": "array"
+          },
           "approvals": {
             "items": {
               "$ref": "#/components/schemas/InboxApprovalOut"
@@ -4831,6 +4873,7 @@
           "approvals",
           "budget_holds",
           "mentions",
+          "alerts",
           "recent_runs"
         ],
         "title": "InboxOut",
@@ -5530,6 +5573,278 @@
           "model"
         ],
         "title": "ModelProviderStatus",
+        "type": "object"
+      },
+      "MonitorCreateRequest": {
+        "properties": {
+          "comparator": {
+            "enum": [
+              "gt",
+              "lt",
+              "gte",
+              "lte"
+            ],
+            "title": "Comparator",
+            "type": "string"
+          },
+          "dataset_id": {
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "query": {
+            "$ref": "#/components/schemas/DatasetQuery"
+          },
+          "schedule_cron": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "default": "UTC",
+            "maxLength": 64,
+            "title": "Schedule Timezone",
+            "type": "string"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "dataset_id",
+          "query",
+          "comparator",
+          "threshold",
+          "schedule_cron"
+        ],
+        "title": "MonitorCreateRequest",
+        "type": "object"
+      },
+      "MonitorOut": {
+        "properties": {
+          "comparator": {
+            "title": "Comparator",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Dispatched At"
+          },
+          "last_state": {
+            "title": "Last State",
+            "type": "string"
+          },
+          "last_value_json": {
+            "title": "Last Value Json",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "query": {
+            "$ref": "#/components/schemas/DatasetQuery"
+          },
+          "schedule_cron": {
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "title": "Schedule Timezone",
+            "type": "string"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "dataset_id",
+          "query",
+          "comparator",
+          "threshold",
+          "schedule_cron",
+          "schedule_timezone",
+          "enabled",
+          "last_state",
+          "last_value_json",
+          "last_dispatched_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MonitorOut",
+        "type": "object"
+      },
+      "MonitorRunNowOut": {
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "value_json": {
+            "title": "Value Json",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "value_json",
+          "reason"
+        ],
+        "title": "MonitorRunNowOut",
+        "type": "object"
+      },
+      "MonitorUpdateRequest": {
+        "description": "Every field optional \u2014 the PUT sets only what it names.\n\n`enabled` lives here too, so an enable/disable is a one-field update rather\nthan a separate route \u2014 the crons router's shape.",
+        "properties": {
+          "comparator": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gt",
+                  "lt",
+                  "gte",
+                  "lte"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comparator"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatasetQuery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schedule_cron": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Cron"
+          },
+          "schedule_timezone": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Timezone"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          }
+        },
+        "title": "MonitorUpdateRequest",
         "type": "object"
       },
       "NotificationOut": {
@@ -8597,6 +8912,13 @@
             "title": "Moment",
             "type": "string"
           },
+          "monitors_evaluated": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Monitors Evaluated",
+            "type": "array"
+          },
           "recovered": {
             "items": {
               "type": "string"
@@ -8609,6 +8931,7 @@
           "dispatched",
           "recovered",
           "crons_dispatched",
+          "monitors_evaluated",
           "moment"
         ],
         "title": "WorkflowTickOut",
@@ -17266,6 +17589,303 @@
         "summary": "Forget Memory",
         "tags": [
           "memory"
+        ]
+      }
+    },
+    "/api/monitors": {
+      "get": {
+        "operationId": "list_monitors_api_monitors_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MonitorOut"
+                  },
+                  "title": "Response List Monitors Api Monitors Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Monitors",
+        "tags": [
+          "monitors"
+        ]
+      },
+      "post": {
+        "operationId": "create_monitor_api_monitors_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitorCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Monitor",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
+    "/api/monitors/{monitor_id}": {
+      "delete": {
+        "operationId": "delete_monitor_api_monitors__monitor_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Monitor",
+        "tags": [
+          "monitors"
+        ]
+      },
+      "put": {
+        "operationId": "update_monitor_api_monitors__monitor_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitorUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Monitor",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
+    "/api/monitors/{monitor_id}/run-now": {
+      "post": {
+        "description": "Evaluate the monitor immediately, without touching the atomic claim.\n\nClaim-free on purpose, like a cron's run-now: the claim makes the ticker\nfire once per minute, and a person pressing the button is asking for one\nmore answer regardless of the tick. The edge rule still applies \u2014 pressing\nrun-now on an already-tripped monitor re-reads the value but writes no\nduplicate alert.",
+        "operationId": "run_monitor_now_api_monitors__monitor_id__run_now_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorRunNowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Monitor Now",
+        "tags": [
+          "monitors"
         ]
       }
     },

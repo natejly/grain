@@ -1941,6 +1941,60 @@ class Cron(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class Monitor(Base):
+    """A stored question about a dataset's number, asked on a schedule.
+
+    The Cron's shape, deliberately: the same 5-field `schedule_cron` + IANA
+    zone pair validated by the same functions, the same `last_dispatched_at`
+    conditional-UPDATE claim advanced by the same tick. What a monitor does on
+    firing is *read*: it runs its stored `query_json` (a `schemas.DatasetQuery`)
+    against `dataset_id`, compares the first metric of the first row against
+    `threshold`, and — only on the ok→tripped edge, which is what `last_state`
+    exists to detect — writes one `monitor_alert` notification for every
+    member. No run, no agent, no policy question: a monitor holds no authority
+    because it never executes anything.
+
+    `dataset_id` is a plain column, not a ForeignKey, per the house convention
+    for references that outlive their target: a monitor over a purged dataset
+    keeps its definition and simply skips (with an audit) until repointed.
+    """
+
+    __tablename__ = "monitors"
+    __table_args__ = (
+        # The sweep's scan: every enabled monitor of a workspace, once a minute.
+        Index("ix_monitors_workspace_enabled", "workspace_id", "enabled"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    # Resolved under the monitor's own workspace at every evaluation — a foreign
+    # id here is a skip, never a read.
+    dataset_id: Mapped[str] = mapped_column(String(36), default="")
+    # A serialized schemas.DatasetQuery; must carry >= 1 metric (validated at
+    # CRUD time — the first metric of the first result row is the value watched).
+    query_json: Mapped[str] = mapped_column(Text, default="")
+    # gt | lt | gte | lte — how the observed value trips against `threshold`.
+    comparator: Mapped[str] = mapped_column(String(8), default="gt")
+    threshold: Mapped[float] = mapped_column(Float, default=0.0)
+    schedule_cron: Mapped[str] = mapped_column(String(120), default="")
+    schedule_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The atomic claim column, exactly as Cron carries it.
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    # The last observed value, JSON-encoded ('' before the first evaluation),
+    # kept so the UI can say what tripped without re-running the query.
+    last_value_json: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # ok | tripped | '' (never evaluated) — the edge detector: an alert is
+    # written only when a tripped evaluation follows a non-tripped state.
+    last_state: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class ModelUsage(Base):
     """One billable model call: what it spent, who caused it, and at what rate.
 
