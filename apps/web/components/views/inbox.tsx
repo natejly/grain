@@ -549,9 +549,7 @@ export function InboxView({
                   <div className="decision-buttons">
                     <button
                       className="approve"
-                      onClick={() =>
-                        void resolveMention(mention.id).then(refreshFeed)
-                      }
+                      onClick={() => void resolveMention(mention.id)}
                     >
                       <Check size={15} />
                       Resolve
@@ -606,7 +604,7 @@ export function InboxView({
                 <div className="decision-buttons">
                   <button
                     className="approve"
-                    onClick={() => void resolveAlert(alert.id).then(refreshFeed)}
+                    onClick={() => void resolveAlert(alert.id)}
                   >
                     <Check size={15} />
                     Resolve

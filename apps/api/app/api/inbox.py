@@ -297,8 +297,10 @@ def read_inbox(
     # `target_user_id` is never '' for a mention — which is why the filter is
     # the actor's own id rather than the `('', actor)` pair the ''-targeted
     # kinds (monitor alerts, spend anomalies) will use. Same contract as the
-    # sets above: unbounded, oldest first, over the composite
-    # (workspace_id, status, created_at) index.
+    # sets above: unbounded, oldest first. The composite
+    # (workspace_id, status, created_at) index narrows the scan to this
+    # workspace's open rows; kind and target_user_id are not in it and are
+    # filtered from that (small, self-limiting) set.
     open_mentions = db.scalars(
         select(Notification)
         .where(
@@ -330,7 +332,9 @@ def read_inbox(
     # filter pins '' rather than the ('', actor) pair because the sweep never
     # writes a personally-targeted alert — a row claiming to be one would be a
     # bug, not work. Same contract as every waiting set: unbounded, oldest
-    # first, over the (workspace_id, status, created_at) index.
+    # first, and the same index story as mentions above — the
+    # (workspace_id, status, created_at) index narrows to the workspace's open
+    # rows, kind and target_user_id filter from there.
     open_alerts = db.scalars(
         select(Notification)
         .where(

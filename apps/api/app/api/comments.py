@@ -347,8 +347,11 @@ def delete_comment(
     db: Session = Depends(get_db),
 ) -> None:
     """Soft-delete. Resolved under the workspace first so a foreign comment is
-    a 404; only then does the author/owner gate answer 403. Naturally
-    idempotent — deleting a deleted comment changes nothing — so no key."""
+    a 404, then through the same subject-visibility gate as create/list — a
+    comment on a conversation the caller cannot see answers 404 exactly like a
+    missing one, even for the workspace owner. Only then does the author/owner
+    gate answer 403. Naturally idempotent — deleting a deleted comment changes
+    nothing — so no key."""
     comment = db.scalar(
         select(Comment).where(
             Comment.id == comment_id, Comment.workspace_id == actor.workspace_id
@@ -356,12 +359,27 @@ def delete_comment(
     )
     if comment is None:
         raise HTTPException(status_code=404, detail="Comment not found")
+    _resolve_subject(
+        db,
+        actor=actor,
+        subject_kind=comment.subject_kind,
+        subject_id=comment.subject_id,
+    )
     if comment.created_by != actor.user_id and actor.role != "owner":
         raise HTTPException(
             status_code=403, detail="Only the author or a workspace owner may delete"
         )
     if comment.deleted_at is None:
         comment.deleted_at = utcnow()
+        # The mentions this comment produced snapshotted its body; the delete
+        # must take those snapshots with it, or the text stays readable in
+        # every mentioned inbox forever.
+        cleared = notifications.resolve_for_comment(
+            db,
+            workspace_id=actor.workspace_id,
+            comment_id=comment.id,
+            resolved_by=actor.user_id,
+        )
         record_audit(
             db,
             workspace_id=actor.workspace_id,
@@ -372,6 +390,7 @@ def delete_comment(
             detail={
                 "subject_kind": comment.subject_kind,
                 "subject_id": comment.subject_id,
+                "notifications_resolved": len(cleared),
             },
         )
         db.commit()
@@ -390,6 +409,13 @@ def resolve_notification(
     A row targeted at another member is answered exactly like a missing one:
     someone else's mention is not this caller's to resolve, and a 403 would
     confirm it exists.
+
+    A ''-targeted (broadcast) row is any member's to resolve, and resolving it
+    clears it workspace-wide — deliberately. Broadcast kinds (monitor alerts,
+    spend anomalies) announce workspace facts, and acknowledgement is
+    PagerDuty-style: the first member to ack has acked for the room. There is
+    no per-member read state by design; who acted is recorded on the row
+    (`resolved_by`) and audited below in the same transaction.
     """
     notification = db.scalar(
         select(Notification).where(

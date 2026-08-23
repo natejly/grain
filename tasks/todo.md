@@ -304,3 +304,25 @@ cannot disagree; GET /api/memory widens via an explicit ALL_SPACES constant
 so space rows stay administrable. 0042_spaces gained has_table guards after
 the migration-replay tests caught partial-DB builds. Detail rename input is
 aria-label "Rename space" (create input owns "Space name").
+
+## Merge notes (feature-sweep, 2026-08-23)
+
+- MIGRATION RENUMBERING (QA finding #1, do at merge time): this branch's
+  migration chain 0045–0055 must be renumbered onto the then-current head at
+  merge. Last common revision is 0044_conversation_index; mainline
+  feat/agentic-workspace and bg/marketplace-todo both claimed 0045+
+  independently (mainline: 0045_conversation_defaults → 0046_model_usage_agent
+  → 0047_favorites; marketplace: 0045_marketplace → 0046_listing_installs).
+  Whoever merges second re-parents their whole chain (rename files, update
+  revision/down_revision pairs) and coordinates with the marketplace session so
+  both don't take the same slots.
+
+Known follow-ups deferred from the F3 QA review:
+
+- QA #5: no caps/pagination on comment POST volume (50 mentions x 10KB bodies)
+  or GET /api/inbox — member-DoS surface; fold into the F13 digests/inbox work.
+- QA #9: comment-create TOCTOU between resolve_visible and commit on a
+  concurrent un-share, and an N+1 resolve_visible per mention (bounded at 50)
+  — revisit if mention fan-out grows.
+- QA #10: mention chips in comment-format.ts re-derive from current member
+  names, so a rename leaves stale chip text — cosmetic only.

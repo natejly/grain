@@ -229,6 +229,74 @@ def test_only_the_author_or_an_owner_deletes_a_comment(workspace):
     assert created["id"] not in [row["id"] for row in listed]
 
 
+def test_delete_answers_404_when_the_subject_is_not_visible(workspace):
+    """Delete goes through the same visibility gate as create/list: a comment
+    on a private thread is a 404 to a non-viewer — never a 403, which would
+    confirm the comment exists — and even the workspace owner cannot moderate
+    a comment on a thread they cannot see. Sharing the thread restores the
+    ordinary author/owner rules."""
+    client_a, _owner = workspace["a"]
+    client_b, _user_b = workspace["b"]
+
+    # B's private thread: the owner A is a non-viewer with a real comment id.
+    thread_id = _make_thread(client_b, "B's private notes")
+    created = _comment(
+        client_b, subject_kind="conversation", subject_id=thread_id, body="mine"
+    )
+    assert created.status_code == 201
+    comment_id = created.json()["id"]
+
+    refused = client_a.delete(f"/api/comments/{comment_id}")
+    assert refused.status_code == 404
+
+    # Sharing makes the subject visible; now the owner gate answers normally.
+    shared = client_b.put(
+        f"/api/conversations/{thread_id}/share",
+        headers=_key(),
+        json={"shared": True},
+    )
+    assert shared.status_code == 200
+    removed = client_a.delete(f"/api/comments/{comment_id}")
+    assert removed.status_code == 204
+
+
+def test_deleting_a_comment_takes_its_mention_snapshots_with_it(workspace):
+    """The mention notification snapshots the comment body; deleting the
+    comment must resolve the open mention AND blank the snapshot, or the
+    deleted text stays readable in the mentioned inbox forever."""
+    client_a, owner = workspace["a"]
+    client_b, user_b = workspace["b"]
+    document_id = _make_document(client_a, "Retracted")
+    created = _comment(
+        client_a,
+        subject_kind="document",
+        subject_id=document_id,
+        body="regrettable words",
+        mentions=[user_b],
+    ).json()
+    assert created["id"] in [row["comment_id"] for row in _mentions_of(client_b)]
+
+    removed = client_a.delete(f"/api/comments/{created['id']}")
+    assert removed.status_code == 204
+
+    # Gone from the mentioned inbox, and the snapshot itself is redacted.
+    assert created["id"] not in [row["comment_id"] for row in _mentions_of(client_b)]
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Notification)
+            .filter(Notification.comment_id == created["id"])
+            .all()
+        )
+        assert rows, "the mention row must survive as a resolved record"
+        for row in rows:
+            assert row.status == "resolved"
+            assert row.body == ""
+            assert row.resolved_by == owner.user_id
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # Mentions
 # ---------------------------------------------------------------------------
