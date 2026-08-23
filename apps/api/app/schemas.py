@@ -650,6 +650,9 @@ class AgentToolCallOut(ApiModel):
     #: legible, rather than only in an audit table a chat user never opens. The
     #: *mode* and not `decided_by`, which would put a user id on the wire.
     approved_by_mode: str = ""
+    #: The member this approval is routed to, "" for anyone. Routing only —
+    #: `decided_by` still records who answered.
+    assigned_to: str = ""
     created_at: datetime
 
 

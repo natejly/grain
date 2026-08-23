@@ -49,6 +49,7 @@ import {
 export type { ChatPane } from "./chat-panes";
 import { createBoardHandlers } from "./handlers/boards";
 import { createChatHandlers } from "./handlers/chat";
+import { createApprovalHandlers } from "./handlers/approvals";
 import { createCommentHandlers } from "./handlers/comments";
 import { createDashboardHandlers } from "./handlers/dashboards";
 import { createDocumentHandlers } from "./handlers/documents";
@@ -837,6 +838,11 @@ export function useWorkspace() {
     refreshFeed: refreshSecondary,
   });
 
+  const approvalHandlers = createApprovalHandlers({
+    setError,
+    refreshFeed: refreshSecondary,
+  });
+
   return {
     bootstrap,
     conversations,
@@ -949,5 +955,6 @@ export function useWorkspace() {
     ...dashboardHandlers,
     ...integrationHandlers,
     ...commentHandlers,
+    ...approvalHandlers,
   };
 }

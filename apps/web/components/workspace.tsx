@@ -11,6 +11,7 @@ import { CommandPalette } from "./command-palette";
 import { CreateMenu } from "./create-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
 import { useWorkspace } from "./use-workspace";
+import { actionableApprovals } from "./views/approval-format";
 import { InboxView, asCall } from "./views/inbox";
 import { AdminView } from "./views/admin";
 import { DatasetsView } from "./views/datasets";
@@ -216,6 +217,7 @@ export function Workspace() {
     removeComment,
     loadMembers,
     resolveMention,
+    assignApproval,
   } = useWorkspace();
   // Always present: this component only renders inside the authenticated gate.
   const { session, signOut } = useSession();
@@ -468,8 +470,12 @@ export function Workspace() {
   // the fifty-row call window — the window is how this number used to read
   // zero over a real backlog. Until the feed's first read lands, the window
   // count stands in rather than showing a zero not yet known to be true.
+  // An approval routed to a colleague is *their* wait, so it neither counts
+  // here nor previews in the strip — it still lists in the Inbox, dimmed.
+  const selfId = bootstrap?.identity.user_id ?? "";
+  const waitingOnMe = inbox ? actionableApprovals(inbox.approvals, selfId) : [];
   const inboxBadge = inbox
-    ? inbox.approvals.length + inbox.budget_holds.length + inbox.mentions.length
+    ? waitingOnMe.length + inbox.budget_holds.length + inbox.mentions.length
     : pendingApprovals.length;
 
   /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
@@ -594,10 +600,10 @@ export function Workspace() {
             first. A run that parked overnight greets the user before they open
             anything; each row is decidable in place, and the strip caps at two
             because it is a doorbell, not the door — the Inbox is one click up. */}
-        {inbox && inbox.approvals.length > 0 && (
+        {inbox && waitingOnMe.length > 0 && (
           <div className="waiting-strip" role="group" aria-label="Waiting on you">
             <span className="waiting-strip-title">Waiting on you</span>
-            {inbox.approvals.slice(0, 2).map((row) => (
+            {waitingOnMe.slice(0, 2).map((row) => (
               <div key={row.id} className="waiting-strip-item">
                 <button
                   className="waiting-strip-open"
@@ -641,9 +647,9 @@ export function Workspace() {
                 </button>
               </div>
             ))}
-            {inbox.approvals.length > 2 && (
+            {waitingOnMe.length > 2 && (
               <button className="waiting-strip-more" onClick={() => openGroup("inbox")}>
-                {inbox.approvals.length - 2} more in Inbox
+                {waitingOnMe.length - 2} more in Inbox
               </button>
             )}
           </div>
@@ -1158,6 +1164,9 @@ export function Workspace() {
             activeRun={activeRun}
             openConversation={(id) => void selectConversation(id)}
             resolveMention={resolveMention}
+            identityId={selfId}
+            loadMembers={loadMembers}
+            assignApproval={assignApproval}
             openMention={(mention) => {
               // The deep link in precedence order: the thread the comment sits
               // on, else the document, else the dashboard (revealed the way the

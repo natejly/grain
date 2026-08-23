@@ -1344,6 +1344,18 @@
         "title": "AgentApprovalRequest",
         "type": "object"
       },
+      "AgentCallAssignRequest": {
+        "description": "Who a parked approval should wait on. \"\" hands it back to anyone.",
+        "properties": {
+          "user_id": {
+            "default": "",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "title": "AgentCallAssignRequest",
+        "type": "object"
+      },
       "AgentCreate": {
         "properties": {
           "allowed_tools": {
@@ -1463,6 +1475,11 @@
             },
             "title": "Artifacts",
             "type": "array"
+          },
+          "assigned_to": {
+            "default": "",
+            "title": "Assigned To",
+            "type": "string"
           },
           "conversation_id": {
             "title": "Conversation Id",
@@ -4612,6 +4629,10 @@
       "InboxApprovalOut": {
         "description": "One proposed tool call whose run is parked on the decision.",
         "properties": {
+          "assigned_to": {
+            "title": "Assigned To",
+            "type": "string"
+          },
           "conversation_id": {
             "title": "Conversation Id",
             "type": "string"
@@ -4669,6 +4690,7 @@
           "workflow_run_id",
           "workflow_id",
           "workflow_name",
+          "assigned_to",
           "created_at"
         ],
         "title": "InboxApprovalOut",
@@ -9701,6 +9723,75 @@
           }
         },
         "summary": "List Agent Tool Calls",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
+    "/api/agent-tool-calls/{tool_call_id}/assign": {
+      "post": {
+        "description": "Route a parked approval to one member, or back to anyone with \"\".\n\nRouting, not deciding: the call stays `proposed`, the run stays parked, and\nthe compare-and-set decision claim is untouched. Setting the same assignee\ntwice is the same state twice \u2014 a natural upsert \u2014 which is why this takes\nno Idempotency-Key. Foreign tool-call ids and foreign user ids both answer\n404: the refusal must confirm neither the call nor the user exists.",
+        "operationId": "assign_agent_tool_call_api_agent_tool_calls__tool_call_id__assign_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_call_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCallAssignRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentToolCallOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assign Agent Tool Call",
         "tags": [
           "tools"
         ]

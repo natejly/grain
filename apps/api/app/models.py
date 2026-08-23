@@ -729,6 +729,12 @@ class AgentToolCall(Base):
     artifacts_json: Mapped[str] = mapped_column(Text, default="[]")
     decided_by: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Routing, not decision: the member this approval waits on, "" for anyone.
+    # A historical user reference in the house convention — plain string, ''
+    # -unset, never NULL — and deliberately separate from `decided_by`, which
+    # records who answered (or which mode bypassed the question). Assignment
+    # only narrows who may answer; the decision machinery is untouched.
+    assigned_to: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     @property

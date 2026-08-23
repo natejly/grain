@@ -406,6 +406,9 @@ export type AgentToolCall = {
    * unreviewed without opening an audit table.
    */
   approved_by_mode: string;
+  /** The member this approval is routed to, "" for anyone. Routing only —
+   * the decision machinery and its attribution are untouched. */
+  assigned_to: string;
   created_at: string;
 };
 
@@ -880,6 +883,10 @@ export type InboxApproval = {
   workflow_run_id: string;
   workflow_id: string;
   workflow_name: string;
+  /** The member this approval is routed to, "" for anyone. The server never
+   * hides assigned-away rows — nothing parked is invisible — so the client
+   * partitions the queue by this field instead. */
+  assigned_to: string;
   created_at: string;
 };
 
@@ -2445,6 +2452,20 @@ export class WorkspaceApi {
         method: "POST",
         body: JSON.stringify({ decision, remember, ...amendment }),
       },
+      true,
+    );
+  }
+
+  /**
+   * Route a parked approval to one member, or back to anyone with "".
+   * Routing, not deciding — the call stays proposed; while the row names a
+   * member, only that member's decision is accepted. A natural upsert, so no
+   * Idempotency-Key travels with it.
+   */
+  assignAgentToolCall(toolCallId: string, userId: string): Promise<AgentToolCall> {
+    return this.request(
+      `/api/agent-tool-calls/${toolCallId}/assign`,
+      { method: "POST", body: JSON.stringify({ user_id: userId }) },
       true,
     );
   }

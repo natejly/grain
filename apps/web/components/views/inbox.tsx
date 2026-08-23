@@ -10,14 +10,16 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentToolCall,
   AuditEvent,
   InboxApproval,
   InboxFeed,
   InboxMention,
+  WorkspaceMember,
 } from "@workspace/api-client";
+import { assigneeName, partitionApprovals } from "./approval-format";
 import type { ToolDecision } from "./chat";
 import { ProposalDiff } from "./proposal-diff";
 import { formatRelative } from "./shared";
@@ -57,6 +59,14 @@ export type InboxViewProps = {
   resolveMention: (notificationId: string) => Promise<void>;
   /** Jump to whatever a mention deep-links: its thread, document or dashboard. */
   openMention: (mention: InboxMention) => void;
+  /** The signed-in member's user id — what splits the queue into "assigned to
+   * you" vs the rest. "" until bootstrap's first read lands. */
+  identityId: string;
+  /** The workspace member list for the assignee control (the same list the
+   * @-picker reads; every member may see it). */
+  loadMembers: () => Promise<WorkspaceMember[]>;
+  /** Route one approval to a member, or back to anyone with "". */
+  assignApproval: (callId: string, userId: string) => Promise<boolean>;
 };
 
 type Section = "approvals" | "holds" | "mentions" | "runs" | "history";
@@ -100,6 +110,7 @@ export function asCall(row: InboxApproval): AgentToolCall {
     latency_ms: 0,
     proposal_preview: row.proposal_preview,
     approved_by_mode: "",
+    assigned_to: row.assigned_to,
     artifacts: [],
     created_at: row.created_at,
   };
@@ -111,12 +122,21 @@ function ApprovalRow({
   focused,
   onOpen,
   onDecided,
+  selfId,
+  members,
+  assign,
+  dimmed,
 }: {
   row: InboxApproval;
   decide: ToolDecision;
   focused: boolean;
   onOpen?: () => void;
   onDecided: () => void;
+  selfId: string;
+  members: WorkspaceMember[];
+  assign: (callId: string, userId: string) => Promise<boolean>;
+  /** True in the "assigned to others" group — their wait, not this reader's. */
+  dimmed?: boolean;
 }) {
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -136,12 +156,25 @@ function ApprovalRow({
     }
   }
 
+  async function route(userId: string) {
+    setBusy(true);
+    try {
+      await assign(row.id, userId);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const classNames = [
+    "approval-card",
+    focused ? "focused" : "",
+    dimmed ? "assigned-away" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <article
-      ref={ref}
-      className={focused ? "approval-card focused" : "approval-card"}
-      data-call-id={row.id}
-    >
+    <article ref={ref} className={classNames} data-call-id={row.id}>
       <div className="approval-card-top">
         <div className="tool-glyph">
           <InboxIcon size={17} />
@@ -179,6 +212,30 @@ function ApprovalRow({
         />
         Always allow {row.name} in this workspace
       </label>
+      <label className="approval-assignee">
+        Waiting on
+        <select
+          value={row.assigned_to}
+          disabled={busy}
+          aria-label={`Assign ${row.name} to a member`}
+          onChange={(event) => void route(event.target.value)}
+        >
+          <option value="">Anyone</option>
+          {members.map((member) => (
+            <option key={member.user_id} value={member.user_id}>
+              {member.user_id === selfId ? `${member.name} (you)` : member.name}
+            </option>
+          ))}
+          {/* A row routed to someone the list no longer names (a departed
+              member) still has to render its truth rather than "Anyone". */}
+          {row.assigned_to &&
+            !members.some((member) => member.user_id === row.assigned_to) && (
+              <option value={row.assigned_to}>
+                {assigneeName(row.assigned_to, members)}
+              </option>
+            )}
+        </select>
+      </label>
       <div className="decision-buttons">
         <button disabled={busy} onClick={() => void choose("denied")}>
           <X size={15} />
@@ -206,11 +263,40 @@ export function InboxView({
   openConversation,
   resolveMention,
   openMention,
+  identityId,
+  loadMembers,
+  assignApproval,
 }: InboxViewProps) {
   const [section, setSection] = useState<Section>("approvals");
   const [focusIndex, setFocusIndex] = useState(0);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
 
-  const approvals = feed?.approvals ?? [];
+  // The assignee control needs names once, not per keystroke; the same
+  // member-visible list the @-picker reads.
+  useEffect(() => {
+    let cancelled = false;
+    void loadMembers().then((rows) => {
+      if (!cancelled) setMembers(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Triage order: yours first, then anyone's, then — de-emphasized, at the
+  // bottom — the rows routed to colleagues. The flattened order is what J/K
+  // walk, so the keyboard and the page cannot disagree about "next". Memoised
+  // because the flattened array is a dependency of the keyboard effect.
+  const feedApprovals = feed?.approvals;
+  const buckets = useMemo(
+    () => partitionApprovals(feedApprovals ?? [], identityId),
+    [feedApprovals, identityId],
+  );
+  const approvals = useMemo(
+    () => [...buckets.mine, ...buckets.unassigned, ...buckets.others],
+    [buckets],
+  );
   const holds = feed?.budget_holds ?? [];
   const mentions = feed?.mentions ?? [];
   const runs = feed?.recent_runs ?? [];
@@ -300,20 +386,61 @@ export function InboxView({
                 Oldest first. <kbd>J</kbd>/<kbd>K</kbd> to move, <kbd>A</kbd> approve,{" "}
                 <kbd>D</kbd> deny.
               </p>
-              {approvals.map((row, index) => (
-                <ApprovalRow
-                  key={row.id}
-                  row={row}
-                  decide={decide}
-                  focused={index === focusIndex}
-                  onOpen={
-                    row.conversation_id
-                      ? () => openConversation(row.conversation_id)
-                      : undefined
-                  }
-                  onDecided={refreshFeed}
-                />
-              ))}
+              {(
+                [
+                  { label: "Assigned to you", rows: buckets.mine, offset: 0 },
+                  {
+                    label: "Unassigned",
+                    rows: buckets.unassigned,
+                    offset: buckets.mine.length,
+                  },
+                  {
+                    label: "Assigned to others",
+                    rows: buckets.others,
+                    offset: buckets.mine.length + buckets.unassigned.length,
+                  },
+                ] as const
+              ).map((group) => {
+                if (group.rows.length === 0) return null;
+                // One flat queue while nothing is routed; headers only earn
+                // their space once assignment splits the list.
+                const showHeader =
+                  buckets.mine.length + buckets.others.length > 0;
+                return (
+                  <div key={group.label} className="approval-group">
+                    {showHeader && (
+                      <h2
+                        className={
+                          group.label === "Assigned to others"
+                            ? "approval-group-title assigned-away"
+                            : "approval-group-title"
+                        }
+                      >
+                        {group.label}
+                        <span className="approval-count">{group.rows.length}</span>
+                      </h2>
+                    )}
+                    {group.rows.map((row, index) => (
+                      <ApprovalRow
+                        key={row.id}
+                        row={row}
+                        decide={decide}
+                        focused={group.offset + index === focusIndex}
+                        onOpen={
+                          row.conversation_id
+                            ? () => openConversation(row.conversation_id)
+                            : undefined
+                        }
+                        onDecided={refreshFeed}
+                        selfId={identityId}
+                        members={members}
+                        assign={assignApproval}
+                        dimmed={group.label === "Assigned to others"}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
             </>
           )}
         </div>

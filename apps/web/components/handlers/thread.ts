@@ -196,6 +196,9 @@ export function createThreadHandlers({
           // an optimistic row that guessed a bypass would put "ran unreviewed"
           // on a card the user is about to be asked to approve.
           approved_by_mode: String(data.approved_by_mode || ""),
+          // Routing happens from the Inbox after a park; a call streaming into
+          // the transcript has not been assigned to anyone yet.
+          assigned_to: "",
           created_at: new Date().toISOString(),
         },
       ];

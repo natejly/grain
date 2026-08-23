@@ -4,6 +4,7 @@ import json
 from typing import Any, List, Literal, Optional, Type, TypeVar, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from ..models import (
     SHARED_OWNER,
     AgentToolCall,
     Conversation,
+    Membership,
     Run,
     Tool,
     ToolCall,
@@ -90,6 +92,7 @@ def _agent_tool_call_out(call: AgentToolCall, conversation_id: str) -> AgentTool
         latency_ms=call.latency_ms,
         artifacts=_artifacts(call.artifacts_json),
         approved_by_mode=call.approved_by_mode,
+        assigned_to=call.assigned_to,
         created_at=call.created_at,
     )
 
@@ -571,6 +574,87 @@ def _validate_manual_submission(
         raise HTTPException(status_code=422, detail="; ".join(exc.problems)) from exc
 
 
+class AgentCallAssignRequest(BaseModel):
+    """Who a parked approval should wait on. "" hands it back to anyone."""
+
+    user_id: str = ""
+
+
+@router.post(
+    "/agent-tool-calls/{tool_call_id}/assign", response_model=AgentToolCallOut
+)
+def assign_agent_tool_call(
+    tool_call_id: str,
+    payload: AgentCallAssignRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> AgentToolCallOut:
+    """Route a parked approval to one member, or back to anyone with "".
+
+    Routing, not deciding: the call stays `proposed`, the run stays parked, and
+    the compare-and-set decision claim is untouched. Setting the same assignee
+    twice is the same state twice — a natural upsert — which is why this takes
+    no Idempotency-Key. Foreign tool-call ids and foreign user ids both answer
+    404: the refusal must confirm neither the call nor the user exists.
+    """
+    call = db.scalar(
+        select(AgentToolCall).where(
+            AgentToolCall.id == tool_call_id,
+            AgentToolCall.workspace_id == actor.workspace_id,
+        )
+    )
+    if call is None:
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    run = db.scalar(
+        select(Run).where(
+            Run.id == call.run_id, Run.workspace_id == actor.workspace_id
+        )
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    # Same gate as the decision endpoint: a member must not route (or even
+    # learn about) a call parked on another member's personal thread.
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
+    ):
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    if call.status != "proposed" or run.status != "waiting_for_approval":
+        raise HTTPException(status_code=409, detail="Tool call already decided")
+    if payload.user_id:
+        member = db.scalar(
+            select(Membership).where(
+                Membership.workspace_id == actor.workspace_id,
+                Membership.user_id == payload.user_id,
+            )
+        )
+        if member is None:
+            # 404, indistinguishable from a user that does not exist — the
+            # refusal must not confirm a foreign workspace's user id.
+            raise HTTPException(status_code=404, detail="Member not found")
+    call.assigned_to = payload.user_id
+    append_event(
+        db,
+        workspace_id=actor.workspace_id,
+        run_id=run.id,
+        event_type="tool.assigned",
+        payload={"tool_call_id": call.id, "assigned_to": payload.user_id},
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="tool_call.assigned",
+        resource_type="agent_tool_call",
+        resource_id=call.id,
+        detail={"tool": call.name, "assigned_to": payload.user_id},
+    )
+    db.commit()
+    return _agent_tool_call_out(call, run.conversation_id)
+
+
 @router.post(
     "/agent-tool-calls/{tool_call_id}/decision", response_model=AgentToolCallOut
 )
@@ -618,6 +702,14 @@ def decide_agent_tool_call(
         return _agent_tool_call_out(call, run.conversation_id)
     if run.status != "waiting_for_approval":
         raise HTTPException(status_code=409, detail="Run is not awaiting this approval")
+    # Assignment is routing: while the row names a member, only that member (or
+    # the unassigned '') may answer. A 409 like every other state conflict —
+    # and only after the 404s above, so a foreign-id probe learns nothing new.
+    if call.assigned_to not in ("", actor.user_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This approval is assigned to another member",
+        )
     amendment = _hunk_amendment(db, call=call, run=run, payload=payload, actor=actor)
     _validate_manual_submission(db, call=call, run=run, payload=payload, actor=actor)
 

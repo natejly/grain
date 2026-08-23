@@ -1,4 +1,8 @@
-import type { AgentToolCall, ApprovalMode } from "@workspace/api-client";
+import type {
+  AgentToolCall,
+  ApprovalMode,
+  WorkspaceMember,
+} from "@workspace/api-client";
 
 /**
  * The four approval modes, as a person has to understand them.
@@ -87,4 +91,54 @@ export function summariseAutoApproved(calls: AgentToolCall[]): string {
   if (names.length === 0) return "Nothing yet";
   if (names.length === 1) return names[0];
   return `${names[0]} and ${names.length - 1} more`;
+}
+
+/** Anything routable: the feed's approval rows and the shell's call rows both
+ * carry `assigned_to` ("" = anyone), which is all partitioning reads. */
+type Assignable = { assigned_to: string };
+
+/**
+ * The queue split by who each row waits on, order preserved within each group.
+ *
+ * The server deliberately never hides assigned-away approvals — nothing parked
+ * is invisible — so the split happens here: "yours" and "unassigned" are the
+ * actionable queue, "others" renders de-emphasized. Before the identity's
+ * first read lands (`selfId === ""`), nothing is claimed as yours; assigned
+ * rows fall to "others" rather than to a guess.
+ */
+export function partitionApprovals<T extends Assignable>(
+  rows: T[],
+  selfId: string,
+): { mine: T[]; unassigned: T[]; others: T[] } {
+  const mine: T[] = [];
+  const unassigned: T[] = [];
+  const others: T[] = [];
+  for (const row of rows) {
+    if (!row.assigned_to) unassigned.push(row);
+    else if (selfId && row.assigned_to === selfId) mine.push(row);
+    else others.push(row);
+  }
+  return { mine, unassigned, others };
+}
+
+/**
+ * The rows the caller can actually answer — theirs first, then anyone's —
+ * which is what the rail badge counts and the waiting strip previews. A row
+ * routed to a colleague is their wait, not this caller's, so it is neither
+ * counted at the rail nor put behind a decide button that would 409.
+ */
+export function actionableApprovals<T extends Assignable>(
+  rows: T[],
+  selfId: string,
+): T[] {
+  const { mine, unassigned } = partitionApprovals(rows, selfId);
+  return [...mine, ...unassigned];
+}
+
+/** A member's display name for the assignee control, falling back to the id
+ * so a departed member's assignment still reads as *somebody* specific. */
+export function assigneeName(userId: string, members: WorkspaceMember[]): string {
+  if (!userId) return "Anyone";
+  const member = members.find((item) => item.user_id === userId);
+  return member ? member.name : userId;
 }

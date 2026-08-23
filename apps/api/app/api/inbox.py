@@ -74,6 +74,10 @@ class InboxApprovalOut(ApiModel):
     #: can say "Weekly digest wants to run edit_document" without a second
     #: request per row.
     workflow_name: str
+    #: The member this approval is routed to, "" for anyone. Deliberately NOT a
+    #: server-side filter: nothing parked is invisible — the client de-emphasizes
+    #: rows assigned to someone else rather than this feed hiding them.
+    assigned_to: str
     created_at: datetime
 
 
@@ -195,6 +199,7 @@ def read_inbox(
             workflow_run_id=workflow_run_id or "",
             workflow_id=workflow_id or "",
             workflow_name=workflow_name or "",
+            assigned_to=call.assigned_to,
             created_at=call.created_at,
         )
         for (

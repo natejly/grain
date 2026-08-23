@@ -1508,6 +1508,19 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"tool_call_id": "agent_tool_call"},
         body={"decision": "approved", "remember": False},
     ),
+    # Assignment routes an approval, and both ids in the request are probes: a
+    # foreign call id must 404 before anything else is looked at, and a foreign
+    # user id must never be confirmed (the org/members pattern). The sweep
+    # sends both foreign at once; the own-call + foreign-user half is pinned in
+    # test_assigned_approvals.py.
+    RouteCase(
+        "POST",
+        "/api/agent-tool-calls/{tool_call_id}/assign",
+        DENY,
+        path_ids={"tool_call_id": "agent_tool_call"},
+        body={"user_id": ""},
+        body_ids={"user_id": "user"},
+    ),
     RouteCase("GET", "/api/tool-policies", SCOPED),
     RouteCase(
         "PUT",
