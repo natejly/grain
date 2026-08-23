@@ -1545,6 +1545,19 @@ ROUTE_CASES: List[RouteCase] = [
         body={"title": "renamed by A"},
         note="Delisting or renaming another workspace's listing must 404.",
     ),
+    RouteCase(
+        "POST",
+        "/api/marketplace/listings/{listing_id}/update",
+        DENY,
+        path_ids={"listing_id": "listing"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/marketplace/listings/{listing_id}/pin",
+        DENY,
+        path_ids={"listing_id": "listing"},
+        body={"pinned": True},
+    ),
     # The org-tier row: visible one ring wider than the workspace, and these
     # prove the widening stops at the organization boundary — B's org listing
     # is still a 404 to A, on read, install, and manage alike.
@@ -1566,6 +1579,19 @@ ROUTE_CASES: List[RouteCase] = [
         DENY,
         path_ids={"listing_id": "listing_org"},
         body={"status": "delisted"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/marketplace/listings/{listing_id}/update",
+        DENY,
+        path_ids={"listing_id": "listing_org"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/marketplace/listings/{listing_id}/pin",
+        DENY,
+        path_ids={"listing_id": "listing_org"},
+        body={"pinned": True},
     ),
     # -- audit / graph / memory -------------------------------------------
     RouteCase("GET", "/api/audit-events", SCOPED),

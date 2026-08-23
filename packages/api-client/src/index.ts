@@ -520,6 +520,15 @@ export type Listing = {
   latest_version: number;
   mine: boolean;
   can_manage: boolean;
+  /**
+   * The caller's workspace's relationship to the listing: "" (never installed,
+   * or the copy was deleted), "installed", "update_available", or "diverged"
+   * (the copy was edited locally since install). A pinned install reports
+   * "installed" even when newer versions exist — suppression happens
+   * server-side, so every surface agrees.
+   */
+  install_state: "" | "installed" | "update_available" | "diverged";
+  pinned: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -2491,6 +2500,32 @@ export class WorkspaceApi {
     return this.request(
       `/api/marketplace/listings/${listingId}/install`,
       { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) },
+      true,
+    );
+  }
+
+  /**
+   * Bring the workspace's installed copy up to the listing's head version.
+   * Refused (409) when already current or when the copy has local edits;
+   * `confirm_overwrite` is the consent that lets an update replace a
+   * diverged copy.
+   */
+  updateListingInstall(
+    listingId: string,
+    body?: { confirm_overwrite?: boolean },
+  ): Promise<ListingInstallResult> {
+    return this.request(
+      `/api/marketplace/listings/${listingId}/update`,
+      { method: "POST", body: JSON.stringify(body ?? {}) },
+      true,
+    );
+  }
+
+  /** Freeze (or unfreeze) the caller's install at its current version. */
+  pinListing(listingId: string, pinned: boolean): Promise<Listing> {
+    return this.request(
+      `/api/marketplace/listings/${listingId}/pin`,
+      { method: "POST", body: JSON.stringify({ pinned }) },
       true,
     );
   }

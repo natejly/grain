@@ -1624,6 +1624,38 @@ class ListingVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ListingInstall(Base):
+    """One workspace's living link to a listing it installed: the lineage row.
+
+    `UNIQUE(workspace_id, listing_id)` — one row per workspace per listing, so
+    update tracking is unambiguous; re-installing re-points the row at the new
+    copy rather than growing a second lineage. `target_id` is a plain string
+    (the installed Skill/Agent/Workflow id) for the usual reason: deleting the
+    copy must not delete the record that it was installed.
+
+    `content_hash_at_install` is the hash of the *local copy's* content the
+    moment it was written (per-kind, `marketplace.local_content_hash`), so
+    divergence — "you edited your copy" — is detected by comparing likes, and
+    an update never silently clobbers local edits.
+    """
+
+    __tablename__ = "listing_installs"
+    __table_args__ = (UniqueConstraint("workspace_id", "listing_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
+    listing_version_id: Mapped[str] = mapped_column(ForeignKey("listing_versions.id"))
+    target_kind: Mapped[str] = mapped_column(String(20))
+    target_id: Mapped[str] = mapped_column(String(36))
+    content_hash_at_install: Mapped[str] = mapped_column(String(64), default="")
+    #: A frozen known-good copy: excluded from update prompts, never nagged.
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class Dashboard(Base):
     """One saved view over one dataset: a query and how to draw its answer.
 

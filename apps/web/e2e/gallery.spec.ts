@@ -71,3 +71,79 @@ test("a skill published to the gallery installs as a private copy", async ({
   // Tidy the skills page (the listing itself is append-only and stays).
   await deleteSkillIfPresent(page, TITLE);
 });
+
+test("a republished listing offers and applies an update to the installed copy", async ({
+  page,
+}) => {
+  const SLUG2 = `e2e-update-${STAMP}`;
+  const TITLE2 = `E2E Update Skill ${STAMP}`;
+
+  // Author, publish, and install — the Phase 1 loop, compressed.
+  await page.goto("/");
+  await openView(page, "Chat", /^Skills/);
+  await page.getByRole("button", { name: "New skill" }).click();
+  await page.getByRole("textbox", { name: "Skill name" }).fill(SLUG2);
+  await page.getByRole("textbox", { name: "Skill title" }).fill(TITLE2);
+  await page.getByRole("textbox", { name: "Skill body" }).fill("First body.");
+  await page.getByRole("button", { name: "Create skill" }).click();
+  await page
+    .getByRole("button", { name: `Publish ${TITLE2} to the gallery` })
+    .click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText(`Published as ${SLUG2}`);
+  await page.getByRole("button", { name: "Done" }).click();
+
+  await openView(page, "Library", /^Gallery/);
+  const card = page.locator(".mcp-card", { hasText: SLUG2 });
+  await card.getByRole("button", { name: "View & install" }).click();
+  const drawer = page.locator(".agent-drawer");
+  await drawer.getByRole("button", { name: "Install a copy" }).click();
+  await expect(drawer.getByRole("status")).toContainText("Installed as");
+  await page.locator(".drawer-scrim").click({ position: { x: 5, y: 5 } });
+  await expect(
+    card.locator(".status-pill", { hasText: "installed" }),
+  ).toBeVisible();
+
+  // Sharpen the source and republish it — the changelog is what the
+  // republish arm demands.
+  await openView(page, "Chat", /^Skills/);
+  const source = page
+    .locator(".mcp-card", { hasText: `/${SLUG2}` })
+    .filter({ hasNotText: `/${SLUG2}-2` });
+  await source.getByRole("button", { name: "Edit" }).click();
+  await page
+    .getByRole("textbox", { name: "Skill body" })
+    .fill("Second body, sharper.");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await source
+    .getByRole("button", { name: `Publish ${TITLE2} to the gallery` })
+    .click();
+  await page.getByRole("textbox", { name: "Listing changelog" }).fill("Sharper.");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText(`Published as ${SLUG2}`);
+  await page.getByRole("button", { name: "Done" }).click();
+
+  // The gallery offers the update; applying it rewrites the copy in place.
+  await openView(page, "Library", /^Gallery/);
+  await expect(
+    card.locator(".status-pill", { hasText: "update available" }),
+  ).toBeVisible();
+  await card.getByRole("button", { name: "View & install" }).click();
+  await drawer.getByRole("button", { name: "Update to v2" }).click();
+  await expect(drawer.getByRole("status")).toContainText("Updated your copy");
+  await page.locator(".drawer-scrim").click({ position: { x: 5, y: 5 } });
+  await expect(
+    card.locator(".status-pill", { hasText: "update available" }),
+  ).toHaveCount(0);
+
+  // The copy itself carries the new body.
+  await openView(page, "Chat", /^Skills/);
+  const copy = page.locator(".mcp-card", { hasText: `/${SLUG2}-2` });
+  await copy.getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByRole("textbox", { name: "Skill body" })).toHaveValue(
+    "Second body, sharper.",
+  );
+  await page.getByRole("button", { name: "Close" }).click();
+
+  await deleteSkillIfPresent(page, TITLE2);
+});

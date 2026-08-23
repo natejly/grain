@@ -28,9 +28,11 @@ from app.database import SessionLocal
 from app.main import app
 from app.models import (
     Agent,
+    ListingInstall,
     ListingVersion,
     Membership,
     User,
+    Workflow,
     Workspace,
 )
 from app.services import marketplace as marketplace_service
@@ -469,6 +471,27 @@ def test_republish_with_org_visibility_widens_the_listing(owner: TestClient) -> 
     assert again.json()["visibility"] == "org"
 
 
+def test_a_taken_down_listing_refuses_republish(owner: TestClient) -> None:
+    """The republish arm honors the taken-down guard PATCH already enforces —
+    and answers with the same non-confirming "not available" as any conflict."""
+    skill = create_skill(owner, name="seized", title="Seized", body="v1.")
+    listing = publish(owner, skill["id"], slug="seized").json()
+    db = SessionLocal()
+    try:
+        from app.models import Listing
+
+        row = db.get(Listing, listing["id"])
+        assert row is not None
+        row.status = "taken_down"
+        db.commit()
+    finally:
+        db.close()
+    owner.patch(f"/api/skills/{skill['id']}", json={"body": "v2."})
+    refused = publish(owner, skill["id"], slug="seized", changelog="v2")
+    assert refused.status_code == 409
+    assert "not available" in refused.text
+
+
 def test_a_whitespace_title_update_is_refused(owner: TestClient) -> None:
     skill = create_skill(owner, name="titled", title="Titled", body="Body.")
     listing = publish(owner, skill["id"], slug="titled").json()
@@ -717,3 +740,205 @@ def test_lint_passes_ordinary_prose() -> None:
         )
         == []
     )
+
+
+# --------------------------------------------------------------------------
+# Lineage: updates, divergence, pins (Phase 4)
+
+
+def apply_update(client: TestClient, listing_id: str, **body: Any) -> Any:
+    return client.post(
+        f"/api/marketplace/listings/{listing_id}/update",
+        json=body,
+        headers=_key("update"),
+    )
+
+
+def pin(client: TestClient, listing_id: str, pinned: bool) -> Any:
+    return client.post(
+        f"/api/marketplace/listings/{listing_id}/pin", json={"pinned": pinned}
+    )
+
+
+def _state_of(client: TestClient, listing_id: str) -> str:
+    detail = client.get(f"/api/marketplace/listings/{listing_id}").json()
+    return detail["install_state"]  # type: ignore[no-any-return]
+
+
+def test_install_records_one_lineage_row_and_reinstall_repoints(
+    owner: TestClient,
+) -> None:
+    skill = create_skill(owner, name="lineal", title="Lineal", body="v1.")
+    listing = publish(owner, skill["id"], slug="lineal").json()
+    install(owner, listing["id"])
+    second = install(owner, listing["id"]).json()
+    db = SessionLocal()
+    try:
+        rows = db.query(ListingInstall).filter_by(listing_id=listing["id"]).all()
+        # One row per workspace per listing: the re-install re-pointed it.
+        assert len(rows) == 1
+        assert rows[0].target_id == second["resource_id"]
+    finally:
+        db.close()
+    assert _state_of(owner, listing["id"]) == "installed"
+
+
+def test_a_new_version_offers_an_update_and_applying_takes_it(
+    owner: TestClient,
+) -> None:
+    skill = create_skill(owner, name="fresh", title="Fresh", body="v1.")
+    listing = publish(owner, skill["id"], slug="fresh").json()
+    copy = install(owner, listing["id"]).json()
+    assert _state_of(owner, listing["id"]) == "installed"
+    # Nothing newer yet: there is no update to apply.
+    assert apply_update(owner, listing["id"]).status_code == 409
+
+    owner.patch(f"/api/skills/{skill['id']}", json={"body": "v2."})
+    publish(owner, skill["id"], slug="fresh", changelog="v2")
+    assert _state_of(owner, listing["id"]) == "update_available"
+
+    applied = apply_update(owner, listing["id"])
+    assert applied.status_code == 200, applied.text
+    assert owner.get(f"/api/skills/{copy['resource_id']}").json()["body"] == "v2."
+    assert _state_of(owner, listing["id"]) == "installed"
+    # Applying appended an ordinary skill version: the pre-update copy is
+    # restorable through the same history any local edit would be.
+    versions = owner.get(f"/api/skills/{copy['resource_id']}/versions").json()
+    assert len(versions) >= 2
+
+
+def test_a_locally_edited_copy_diverges_and_refuses_silent_overwrite(
+    owner: TestClient,
+) -> None:
+    skill = create_skill(owner, name="edited", title="Edited", body="v1.")
+    listing = publish(owner, skill["id"], slug="edited").json()
+    copy = install(owner, listing["id"]).json()
+    owner.patch(f"/api/skills/{copy['resource_id']}", json={"body": "My local take."})
+    assert _state_of(owner, listing["id"]) == "diverged"
+
+    owner.patch(f"/api/skills/{skill['id']}", json={"body": "v2."})
+    publish(owner, skill["id"], slug="edited", changelog="v2")
+    # Divergence outranks the newer version: the state is about the copy.
+    assert _state_of(owner, listing["id"]) == "diverged"
+
+    refused = apply_update(owner, listing["id"])
+    assert refused.status_code == 409
+    assert "local edits" in refused.text
+    assert (
+        owner.get(f"/api/skills/{copy['resource_id']}").json()["body"]
+        == "My local take."
+    )
+    forced = apply_update(owner, listing["id"], confirm_overwrite=True)
+    assert forced.status_code == 200, forced.text
+    assert owner.get(f"/api/skills/{copy['resource_id']}").json()["body"] == "v2."
+
+
+def test_a_pin_suppresses_update_offers_until_lifted(owner: TestClient) -> None:
+    skill = create_skill(owner, name="steady", title="Steady", body="v1.")
+    listing = publish(owner, skill["id"], slug="steady").json()
+    install(owner, listing["id"])
+    pinned = pin(owner, listing["id"], True)
+    assert pinned.status_code == 200
+    assert pinned.json()["pinned"] is True
+
+    owner.patch(f"/api/skills/{skill['id']}", json={"body": "v2."})
+    publish(owner, skill["id"], slug="steady", changelog="v2")
+    # Suppressed at the source, not in the UI: the API itself stops offering.
+    assert _state_of(owner, listing["id"]) == "installed"
+
+    lifted = pin(owner, listing["id"], False)
+    assert lifted.json()["install_state"] == "update_available"
+
+
+def test_a_deleted_copy_reads_as_not_installed_and_update_says_reinstall(
+    owner: TestClient,
+) -> None:
+    skill = create_skill(owner, name="gone", title="Gone", body="v1.")
+    listing = publish(owner, skill["id"], slug="gone").json()
+    copy = install(owner, listing["id"]).json()
+    owner.delete(f"/api/skills/{copy['resource_id']}")
+    assert _state_of(owner, listing["id"]) == ""
+    owner.patch(f"/api/skills/{skill['id']}", json={"body": "v2."})
+    publish(owner, skill["id"], slug="gone", changelog="v2")
+    answer = apply_update(owner, listing["id"])
+    assert answer.status_code == 409
+    assert "install it again" in answer.text
+
+
+def test_an_agent_update_brings_words_never_reach(owner: TestClient) -> None:
+    agent_id = _plant_agent(owner, allowed_tools_json=json.dumps(["search_sources"]))
+    listing = publish(owner, agent_id, kind="agent", slug="growing-analyst").json()
+    installed = owner.post(
+        f"/api/marketplace/listings/{listing['id']}/install",
+        json={"allowed_tools": ["search_sources"]},
+        headers=_key("install"),
+    ).json()
+
+    # v2 rewrites the instructions and asks for one more (portable) tool.
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, agent_id)
+        assert agent is not None
+        agent.instructions = "Cite everything; recall context first."
+        agent.allowed_tools_json = json.dumps(["recall_memory", "search_sources"])
+        db.commit()
+    finally:
+        db.close()
+    republished = publish(
+        owner, agent_id, kind="agent", slug="growing-analyst", changelog="wants memory"
+    )
+    assert republished.status_code == 201, republished.text
+
+    applied = apply_update(owner, listing["id"])
+    assert applied.status_code == 200, applied.text
+    # The widened request travels as a warning, never as a grant.
+    assert any("recall_memory" in warning for warning in applied.json()["warnings"])
+    rows = {row["id"]: row for row in owner.get("/api/agents").json()}
+    copy = rows[installed["resource_id"]]
+    assert copy["enabled"] is False
+    assert copy["allowed_tools"] == ["search_sources"]
+    assert "recall context" in copy["instructions"]
+
+
+def test_a_workflow_update_replaces_the_program_and_bumps_the_version(
+    owner: TestClient,
+) -> None:
+    workflow = create_workflow(
+        owner, {"kind": "manual", "cron": "", "timezone": "UTC"}
+    )
+    listing = publish(
+        owner, workflow["id"], kind="workflow", slug="sweep-updated"
+    ).json()
+    copy = install(owner, listing["id"]).json()
+
+    db = SessionLocal()
+    try:
+        row = db.get(Workflow, workflow["id"])
+        assert row is not None
+        row.description = "Gather the passages, and the tables."
+        db.commit()
+    finally:
+        db.close()
+    republished = publish(
+        owner,
+        workflow["id"],
+        kind="workflow",
+        slug="sweep-updated",
+        changelog="tables too",
+    )
+    assert republished.status_code == 201, republished.text
+
+    applied = apply_update(owner, listing["id"])
+    assert applied.status_code == 200, applied.text
+    db = SessionLocal()
+    try:
+        updated = db.get(Workflow, copy["resource_id"])
+        assert updated is not None
+        assert updated.description == "Gather the passages, and the tables."
+        assert updated.version == 2
+        # The installer's operational state survives the update.
+        assert updated.status == "draft"
+        assert updated.trigger_kind == "manual"
+    finally:
+        db.close()
+    assert _state_of(owner, listing["id"]) == "installed"

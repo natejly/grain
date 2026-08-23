@@ -323,6 +323,13 @@ class ListingOut(ApiModel):
     mine: bool = False
     #: True when the caller may edit or delist it (publisher-or-owner).
     can_manage: bool = False
+    #: The caller's workspace's relationship to this listing: "" (never
+    #: installed, or the copy was deleted), "installed", "update_available",
+    #: or "diverged" (the copy was edited locally since install). A pinned
+    #: install reports "installed" even when newer versions exist — the pin's
+    #: whole meaning is "stop offering".
+    install_state: str = ""
+    pinned: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -389,6 +396,18 @@ class ListingInstallBody(BaseModel):
     workspace's live registry."""
 
     allowed_tools: Optional[List[str]] = Field(default=None, max_length=200)
+
+
+class ListingUpdateApply(BaseModel):
+    """Body of POST /listings/{id}/update. `confirm_overwrite` is the consent
+    an update needs when the local copy diverged: without it, a copy with local
+    edits refuses to be replaced (409 names the conflict)."""
+
+    confirm_overwrite: bool = False
+
+
+class ListingPinBody(BaseModel):
+    pinned: bool
 
 
 class InstallOut(ApiModel):

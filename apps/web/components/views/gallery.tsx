@@ -6,7 +6,7 @@ import type {
   ToolInfo,
   WorkflowGraph,
 } from "@workspace/api-client";
-import { Download, Search, Store, Users, X } from "lucide-react";
+import { Download, Pin, RefreshCw, Search, Store, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { describeError, formatRelative } from "./shared";
@@ -135,6 +135,16 @@ export function GalleryView({ setError }: GalleryViewProps) {
                     </span>
                   )}
                   {listing.mine && <span className="status-pill">yours</span>}
+                  {listing.install_state === "installed" && (
+                    <span className="status-pill">installed</span>
+                  )}
+                  {listing.install_state === "update_available" && (
+                    <span className="status-pill">update available</span>
+                  )}
+                  {listing.install_state === "diverged" && (
+                    <span className="status-pill">edited locally</span>
+                  )}
+                  {listing.pinned && <span className="status-pill">pinned</span>}
                 </div>
                 <div className="mcp-card-actions">
                   <button
@@ -225,6 +235,13 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
   );
   /** The scope sheet's state: tool name -> confirmed. Agents only. */
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
+  const [updating, setUpdating] = useState(false);
+  const [updated, setUpdated] = useState<{ name: string; warnings: string[] } | null>(
+    null,
+  );
+  /** Consent for replacing a diverged (locally edited) copy. */
+  const [overwrite, setOverwrite] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -279,6 +296,38 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
     }
   };
 
+  const applyUpdate = async () => {
+    if (detail === null) return;
+    setUpdating(true);
+    try {
+      const result = await api.updateListingInstall(
+        listingId,
+        overwrite ? { confirm_overwrite: true } : undefined,
+      );
+      setUpdated({ name: result.name, warnings: result.warnings });
+      setDetail(await api.getListing(listingId));
+      onInstalled();
+    } catch (caught) {
+      setError(describeError(caught, "Could not update your copy"));
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const togglePin = async () => {
+    if (detail === null) return;
+    setPinBusy(true);
+    try {
+      const row = await api.pinListing(listingId, !detail.pinned);
+      setDetail({ ...detail, pinned: row.pinned, install_state: row.install_state });
+      onInstalled();
+    } catch (caught) {
+      setError(describeError(caught, "Could not change the pin"));
+    } finally {
+      setPinBusy(false);
+    }
+  };
+
   const localNames = useMemo(() => new Set(tools.map((tool) => tool.name)), [tools]);
   const graph = detail?.kind === "workflow" ? workflowGraph(detail) : null;
   const workflowNeeds = useMemo(() => {
@@ -320,6 +369,12 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
                 {" · "}
                 {detail.install_count}{" "}
                 {detail.install_count === 1 ? "install" : "installs"}
+                {detail.install_state === "installed" && <> · installed</>}
+                {detail.install_state === "update_available" && (
+                  <> · update available</>
+                )}
+                {detail.install_state === "diverged" && <> · edited locally</>}
+                {detail.pinned && <> · pinned</>}
               </div>
               {payloadString(detail, "description") && (
                 <p>{payloadString(detail, "description")}</p>
@@ -464,21 +519,85 @@ function ListingDrawer({ listingId, setError, onClose, onInstalled }: ListingDra
                     </p>
                   ))}
                 </div>
-              ) : (
-                <div className="agent-editor-actions">
-                  <button className="ghost-button" onClick={onClose}>
-                    Close
-                  </button>
-                  <button
-                    className="primary-button"
-                    onClick={() => void install()}
-                    // Enabled only once the full payload above is on screen.
-                    disabled={detail === null || installing}
-                  >
-                    <Download size={14} />
-                    {installing ? "Installing…" : "Install a copy"}
-                  </button>
+              ) : updated !== null ? (
+                <div role="status">
+                  <p className="mcp-card-meta">
+                    Updated your copy{" "}
+                    <code className="skill-slug">{updated.name}</code> to v
+                    {detail.latest_version}. Your settings — sharing, enablement,
+                    tool grants, triggers — were left as you had them.
+                  </p>
+                  {updated.warnings.map((warning) => (
+                    <p key={warning} className="mcp-card-meta">
+                      ⚠ {warning}
+                    </p>
+                  ))}
                 </div>
+              ) : (
+                <>
+                  {detail.install_state === "diverged" && (
+                    <label className="mcp-tool">
+                      <input
+                        type="checkbox"
+                        checked={overwrite}
+                        onChange={(event) => setOverwrite(event.target.checked)}
+                      />
+                      <span>
+                        Replace my locally edited copy with the published version
+                      </span>
+                    </label>
+                  )}
+                  <div className="agent-editor-actions">
+                    <button className="ghost-button" onClick={onClose}>
+                      Close
+                    </button>
+                    {detail.install_state !== "" && (
+                      <button
+                        className="ghost-button"
+                        onClick={() => void togglePin()}
+                        disabled={pinBusy}
+                      >
+                        <Pin size={14} />
+                        {detail.pinned ? "Unpin" : "Pin at this version"}
+                      </button>
+                    )}
+                    {(detail.install_state === "update_available" ||
+                      detail.install_state === "diverged") && (
+                      <button
+                        className="primary-button"
+                        onClick={() => void applyUpdate()}
+                        // A diverged copy is only replaceable once the
+                        // overwrite consent above is checked.
+                        disabled={
+                          updating ||
+                          (detail.install_state === "diverged" && !overwrite)
+                        }
+                      >
+                        <RefreshCw size={14} />
+                        {updating
+                          ? "Updating…"
+                          : `Update to v${detail.latest_version}`}
+                      </button>
+                    )}
+                    <button
+                      className={
+                        detail.install_state === ""
+                          ? "primary-button"
+                          : "ghost-button"
+                      }
+                      onClick={() => void install()}
+                      // Enabled only once the full payload above is on screen.
+                      disabled={installing}
+                    >
+                      <Download size={14} />
+                      {installing
+                        ? "Installing…"
+                        : detail.install_state === ""
+                          ? "Install a copy"
+                          : "Reinstall a fresh copy"}
+                    </button>
+                  </div>
+                </>
               )}
             </>
           )}

@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Agent, Listing, ListingVersion, Skill, Workflow
+from ..models import Agent, Listing, ListingInstall, ListingVersion, Skill, Workflow
 from .llm_tools import ToolContext, registry_families
 
 #: What installing may not silently collide with forever: cap the suffix probe.
@@ -357,3 +357,105 @@ def payload_strings(payload: BaseModel) -> List[str]:
 
     _walk(payload.model_dump())
     return out
+
+
+# ---------------------------------------------------------------------------
+# Lineage: what a workspace installed, and whether it moved since
+
+
+def local_content_hash(
+    db: Session, *, kind: str, target_id: str, workspace_id: str
+) -> Optional[str]:
+    """The identity of the installed copy's content, per kind; None when the
+    copy no longer exists. Divergence is "this function's answer changed since
+    install" — the same function runs at install time and at check time, so it
+    only ever compares a copy to itself, never one kind to another.
+
+    For agents the local tool grant is part of the identity on purpose: the
+    grant is the part of an agent an installer most deliberately shapes, and an
+    update must not be able to silently overwrite a reshaped one.
+    """
+    if kind == "skill":
+        skill = db.scalar(
+            select(Skill).where(
+                Skill.id == target_id, Skill.workspace_id == workspace_id
+            )
+        )
+        return skill.content_hash if skill is not None else None
+    if kind == "agent":
+        agent = db.scalar(
+            select(Agent).where(
+                Agent.id == target_id, Agent.workspace_id == workspace_id
+            )
+        )
+        if agent is None:
+            return None
+        return _hash_fields(
+            agent.name, agent.description, agent.instructions, agent.allowed_tools_json
+        )
+    workflow = db.scalar(
+        select(Workflow).where(
+            Workflow.id == target_id, Workflow.workspace_id == workspace_id
+        )
+    )
+    if workflow is None:
+        return None
+    return _hash_fields(
+        workflow.name, workflow.description, workflow.source_prompt, workflow.graph_json
+    )
+
+
+def _hash_fields(*fields: str) -> str:
+    return hashlib.sha256("\x00".join(fields).encode("utf-8")).hexdigest()
+
+
+def find_install(
+    db: Session, *, workspace_id: str, listing_id: str
+) -> Optional[ListingInstall]:
+    return db.scalar(
+        select(ListingInstall).where(
+            ListingInstall.workspace_id == workspace_id,
+            ListingInstall.listing_id == listing_id,
+        )
+    )
+
+
+def install_state(
+    db: Session, *, listing: Listing, workspace_id: str
+) -> tuple[str, bool]:
+    """(state, pinned) for the caller's workspace, one of:
+
+    - ``""`` — never installed, or the copy was deleted (installable again);
+    - ``"installed"`` — the copy is intact and there is nothing newer to offer
+      (including when there IS something newer but the install is pinned: a pin
+      means "stop offering", so the suppression happens here, not in the UI);
+    - ``"update_available"`` — a newer version exists and the copy is unedited;
+    - ``"diverged"`` — the copy was edited locally since install. Reported even
+      when no newer version exists: it is a statement about the copy, and the
+      update flow uses it to refuse silent overwrites.
+    """
+    install = find_install(db, workspace_id=workspace_id, listing_id=listing.id)
+    if install is None:
+        return "", False
+    local = local_content_hash(
+        db,
+        kind=install.target_kind,
+        target_id=install.target_id,
+        workspace_id=workspace_id,
+    )
+    if local is None:
+        return "", install.pinned
+    if local != install.content_hash_at_install:
+        return "diverged", install.pinned
+    installed_version = db.scalar(
+        select(ListingVersion.version).where(
+            ListingVersion.id == install.listing_version_id
+        )
+    )
+    if (
+        not install.pinned
+        and installed_version is not None
+        and installed_version < listing.latest_version
+    ):
+        return "update_available", install.pinned
+    return "installed", install.pinned

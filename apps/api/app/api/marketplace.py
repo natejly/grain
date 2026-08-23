@@ -29,14 +29,24 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..config import get_settings
 from ..database import get_db
-from ..models import Agent, Listing, ListingVersion, Skill, Workflow, Workspace
+from ..models import (
+    Agent,
+    Listing,
+    ListingInstall,
+    ListingVersion,
+    Skill,
+    Workflow,
+    Workspace,
+)
 from ..schemas import (
     InstallOut,
     ListingCreate,
     ListingDetailOut,
     ListingInstallBody,
     ListingOut,
+    ListingPinBody,
     ListingUpdate,
+    ListingUpdateApply,
     ListingVersionOut,
 )
 from ..services import marketplace as marketplace_service
@@ -63,8 +73,13 @@ def _can_manage(actor: Actor, listing: Listing) -> bool:
     return listing.created_by == actor.user_id or actor.role == "owner"
 
 
-def _out(listing: Listing, actor: Actor) -> ListingOut:
+def _out(db: Session, listing: Listing, actor: Actor) -> ListingOut:
+    state, pinned = marketplace_service.install_state(
+        db, listing=listing, workspace_id=actor.workspace_id
+    )
     return ListingOut(
+        install_state=state,
+        pinned=pinned,
         id=listing.id,
         kind=listing.kind,
         slug=listing.slug,
@@ -89,7 +104,7 @@ def _detail(db: Session, listing: Listing, actor: Actor) -> ListingDetailOut:
     except ValueError:
         payload = {}
     versions = marketplace_service.list_versions(db, listing=listing)
-    base = _out(listing, actor)
+    base = _out(db, listing, actor)
     publisher = db.scalar(
         select(Workspace.name).where(Workspace.id == listing.workspace_id)
     )
@@ -172,7 +187,7 @@ def list_listings(
     rows = marketplace_service.list_visible(
         db, workspace_id=actor.workspace_id, organization_id=actor.organization_id
     )
-    return [_out(row, actor) for row in rows]
+    return [_out(db, row, actor) for row in rows]
 
 
 @router.get("/listings/{listing_id}", response_model=ListingDetailOut)
@@ -259,6 +274,14 @@ def publish_listing(
         # Republishing a slug appends a version — but only for the listing's
         # own manager, with the same kind, and with something to say about what
         # changed. Anyone else reusing the slug has picked a taken name: 409.
+        # A taken-down slug is not reachable by republish any more than by
+        # PATCH — the takedown flow, when it exists, is the only door back.
+        # Same non-confirming wording as the plain conflict below.
+        if existing.status == "taken_down":
+            raise HTTPException(
+                status_code=409,
+                detail=f"The slug “{payload.slug}” is not available",
+            )
         head = marketplace_service.latest_version(db, listing=existing)
         if (
             not _can_manage(actor, existing)
@@ -449,6 +472,33 @@ def install_listing(
         result = _install_workflow(db, actor, listing, head)
 
     listing.install_count += 1
+    # Lineage: one row per (workspace, listing). A re-install re-points the
+    # row at the fresh copy rather than growing a second history, and clears
+    # any pin — the pin froze the *previous* copy, and taking a fresh install
+    # is exactly the "I want the head now" act the pin existed to prevent
+    # happening silently.
+    local_hash = marketplace_service.local_content_hash(
+        db,
+        kind=listing.kind,
+        target_id=result.resource_id,
+        workspace_id=actor.workspace_id,
+    )
+    lineage = marketplace_service.find_install(
+        db, workspace_id=actor.workspace_id, listing_id=listing.id
+    )
+    if lineage is None:
+        lineage = ListingInstall(
+            workspace_id=actor.workspace_id,
+            listing_id=listing.id,
+            created_by=actor.user_id,
+        )
+        db.add(lineage)
+    lineage.listing_version_id = head.id
+    lineage.target_kind = listing.kind
+    lineage.target_id = result.resource_id
+    lineage.content_hash_at_install = local_hash or ""
+    lineage.pinned = False
+    db.flush()
     record_key(
         db,
         workspace_id=actor.workspace_id,
@@ -582,25 +632,12 @@ def _install_agent(
     )
 
 
-def _install_workflow(
-    db: Session, actor: Actor, listing: Listing, head: ListingVersion
-) -> InstallOut:
-    try:
-        snapshot = marketplace_service.WorkflowPayload.model_validate_json(
-            head.payload_json
-        )
-        document = json.loads(snapshot.graph_json)
-    except ValueError:
-        raise _payload_unreadable() from None
-    graph, parse_errors = parse_graph(document)
-    if graph is None or parse_errors:
-        raise _payload_unreadable()
-
-    # Revalidate against the INSTALLING workspace's registry. What the
-    # publisher's workspace offered is irrelevant here; what matters is
-    # whether each node's tool resolves where the copy will run. Failures are
-    # warnings, not refusals — the workflow lands as a draft either way, and a
-    # draft with a named hole beats a refusal with no artifact to fix.
+def _workflow_landing_warnings(db: Session, actor: Actor, graph) -> list[str]:
+    """Revalidate against the RECEIVING workspace's registry. What the
+    publisher's workspace offered is irrelevant here; what matters is whether
+    each node's tool resolves where the copy will run. Failures are warnings,
+    not refusals — the copy lands either way, and a named hole beats a refusal
+    with no artifact to fix."""
     context = ToolContext(
         workspace_id=actor.workspace_id, user_id=actor.user_id, conversation_id=""
     )
@@ -626,6 +663,24 @@ def _install_workflow(
             "These steps name an agent this workspace does not have and need "
             "re-pointing here: " + ", ".join(foreign_agents)
         )
+    return warnings
+
+
+def _install_workflow(
+    db: Session, actor: Actor, listing: Listing, head: ListingVersion
+) -> InstallOut:
+    try:
+        snapshot = marketplace_service.WorkflowPayload.model_validate_json(
+            head.payload_json
+        )
+        document = json.loads(snapshot.graph_json)
+    except ValueError:
+        raise _payload_unreadable() from None
+    graph, parse_errors = parse_graph(document)
+    if graph is None or parse_errors:
+        raise _payload_unreadable()
+
+    warnings = _workflow_landing_warnings(db, actor, graph)
 
     workflow = Workflow(
         workspace_id=actor.workspace_id,
@@ -684,3 +739,264 @@ def _replayed_install(db: Session, actor: Actor, resource_id: str) -> InstallOut
             title=workflow.name,
         )
     raise replayed_resource_gone()
+
+
+@router.post("/listings/{listing_id}/update", response_model=InstallOut)
+def update_install(
+    listing_id: str,
+    payload: Optional[ListingUpdateApply] = None,
+    key: str = Depends(idempotency_key),
+    _: None = Depends(require_marketplace),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> InstallOut:
+    """Bring this workspace's installed copy up to the listing's head version.
+
+    Content fields only. The installer's operational choices — a skill's
+    `shared`, an agent's `enabled` and local tool grant, a workflow's status
+    and trigger — survive untouched: an update can bring new words, never a
+    wider reach, and it is the person clicking Update (with the changelog in
+    front of them) who consents to the new content, so nothing is re-inerted.
+
+    A diverged copy (edited locally since install) refuses to be replaced
+    unless `confirm_overwrite` says so; for skills even the overwrite is
+    recoverable, because applying it appends an ordinary skill version.
+    """
+    replay = find_replay(
+        db, workspace_id=actor.workspace_id, operation="listing.update", key=key
+    )
+    if replay:
+        return _replayed_install(db, actor, replay.resource_id)
+
+    listing = _load_visible(db, actor, listing_id)
+    lineage = marketplace_service.find_install(
+        db, workspace_id=actor.workspace_id, listing_id=listing.id
+    )
+    if lineage is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Nothing installed from this listing in this workspace",
+        )
+    head = marketplace_service.latest_version(db, listing=listing)
+    if head is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    local = marketplace_service.local_content_hash(
+        db,
+        kind=lineage.target_kind,
+        target_id=lineage.target_id,
+        workspace_id=actor.workspace_id,
+    )
+    if local is None:
+        raise HTTPException(
+            status_code=409,
+            detail="The installed copy no longer exists — install it again instead",
+        )
+    if lineage.listing_version_id == head.id:
+        raise HTTPException(status_code=409, detail="Already on the latest version")
+    if local != lineage.content_hash_at_install and not (
+        payload is not None and payload.confirm_overwrite
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Your copy has local edits; updating would overwrite them. "
+                "Pass confirm_overwrite to replace the copy anyway."
+            ),
+        )
+
+    if listing.kind == "skill":
+        result = _update_skill_copy(db, actor, lineage, head)
+    elif listing.kind == "agent":
+        result = _update_agent_copy(db, actor, lineage, head)
+    else:
+        result = _update_workflow_copy(db, actor, lineage, head)
+
+    lineage.listing_version_id = head.id
+    lineage.content_hash_at_install = (
+        marketplace_service.local_content_hash(
+            db,
+            kind=lineage.target_kind,
+            target_id=lineage.target_id,
+            workspace_id=actor.workspace_id,
+        )
+        or ""
+    )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="listing.update",
+        key=key,
+        resource_id=result.resource_id,
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="listing.install_updated",
+        resource_type="listing",
+        resource_id=listing.id,
+        detail={
+            "slug": listing.slug,
+            "kind": listing.kind,
+            "resource_id": result.resource_id,
+            "version": head.version,
+        },
+    )
+    db.commit()
+    return result
+
+
+def _update_skill_copy(
+    db: Session, actor: Actor, lineage: ListingInstall, head: ListingVersion
+) -> InstallOut:
+    try:
+        snapshot = marketplace_service.SkillPayload.model_validate_json(
+            head.payload_json
+        )
+    except ValueError:
+        raise _payload_unreadable() from None
+    skill = db.scalar(
+        select(Skill).where(
+            Skill.id == lineage.target_id, Skill.workspace_id == actor.workspace_id
+        )
+    )
+    assert skill is not None  # the local hash check above proved it exists
+    # The local `name` and `shared` stay: the name is this workspace's handle
+    # (possibly suffixed at install), and visibility is the installer's call.
+    skills_service.update_skill(
+        db,
+        skill=skill,
+        user_id=actor.user_id,
+        title=snapshot.title,
+        description=snapshot.description,
+        body=snapshot.body,
+        args=skills_service.parse_args(snapshot.args_json),
+    )
+    return InstallOut(
+        kind="skill", resource_id=skill.id, name=skill.name, title=skill.title
+    )
+
+
+def _update_agent_copy(
+    db: Session, actor: Actor, lineage: ListingInstall, head: ListingVersion
+) -> InstallOut:
+    try:
+        snapshot = marketplace_service.AgentPayload.model_validate_json(
+            head.payload_json
+        )
+    except ValueError:
+        raise _payload_unreadable() from None
+    agent = db.scalar(
+        select(Agent).where(
+            Agent.id == lineage.target_id, Agent.workspace_id == actor.workspace_id
+        )
+    )
+    assert agent is not None  # the local hash check above proved it exists
+
+    warnings: list[str] = []
+    if snapshot.unresolved_tools:
+        warnings.append(
+            "Not published with the listing (workspace-specific in the "
+            "publisher's workspace): " + ", ".join(snapshot.unresolved_tools)
+        )
+    # The local grant survives — a new version can request more tools but never
+    # receive them silently. Name the gap so granting stays a visible act.
+    if snapshot.allowed_tools_json and agent.allowed_tools_json:
+        try:
+            requested = set(json.loads(snapshot.allowed_tools_json))
+            granted = set(json.loads(agent.allowed_tools_json))
+        except ValueError:
+            requested, granted = set(), set()
+        ungranted = sorted(requested - granted)
+        if ungranted:
+            warnings.append(
+                "The new version asks for tools your copy does not grant "
+                "(grant them in the agent editor if wanted): "
+                + ", ".join(ungranted)
+            )
+
+    agent.name = snapshot.name
+    agent.description = snapshot.description
+    agent.instructions = snapshot.instructions
+    db.flush()
+    return InstallOut(
+        kind="agent",
+        resource_id=agent.id,
+        name=agent.name,
+        title=agent.name,
+        warnings=warnings,
+    )
+
+
+def _update_workflow_copy(
+    db: Session, actor: Actor, lineage: ListingInstall, head: ListingVersion
+) -> InstallOut:
+    try:
+        snapshot = marketplace_service.WorkflowPayload.model_validate_json(
+            head.payload_json
+        )
+        document = json.loads(snapshot.graph_json)
+    except ValueError:
+        raise _payload_unreadable() from None
+    graph, parse_errors = parse_graph(document)
+    if graph is None or parse_errors:
+        raise _payload_unreadable()
+    warnings = _workflow_landing_warnings(db, actor, graph)
+
+    workflow = db.scalar(
+        select(Workflow).where(
+            Workflow.id == lineage.target_id,
+            Workflow.workspace_id == actor.workspace_id,
+        )
+    )
+    assert workflow is not None  # the local hash check above proved it exists
+    workflow.name = snapshot.name
+    workflow.description = snapshot.description
+    workflow.source_prompt = snapshot.source_prompt
+    workflow.graph_json = snapshot.graph_json
+    workflow.version += 1
+    db.flush()
+    return InstallOut(
+        kind="workflow",
+        resource_id=workflow.id,
+        name=workflow.name,
+        title=workflow.name,
+        warnings=warnings,
+    )
+
+
+@router.post("/listings/{listing_id}/pin", response_model=ListingOut)
+def pin_install(
+    listing_id: str,
+    payload: ListingPinBody,
+    _: None = Depends(require_marketplace),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ListingOut:
+    """Freeze (or unfreeze) this workspace's install at its current version.
+
+    A pin is a statement about the *install*, not the listing: newer versions
+    stop being offered (`install_state` reports "installed") until unpinned.
+    Naturally idempotent — it sets a flag — so no Idempotency-Key dance.
+    """
+    listing = _load_visible(db, actor, listing_id)
+    lineage = marketplace_service.find_install(
+        db, workspace_id=actor.workspace_id, listing_id=listing.id
+    )
+    if lineage is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Nothing installed from this listing in this workspace",
+        )
+    lineage.pinned = payload.pinned
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="listing.pinned" if payload.pinned else "listing.unpinned",
+        resource_type="listing",
+        resource_id=listing.id,
+        detail={"slug": listing.slug},
+    )
+    db.commit()
+    return _out(db, listing, actor)
