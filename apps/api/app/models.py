@@ -2033,6 +2033,100 @@ class WorkspaceBudget(Base):
     )
 
 
+class Comment(Base):
+    """A remark a member leaves on a thing: a thread, a document, a dashboard.
+
+    The subject is the established polymorphic pair (`subject_kind` +
+    `subject_id`), exactly as `Conversation` uses it and for the same reason:
+    the visibility gate, the list query and the delete are the SAME rule for
+    all three kinds, and three foreign keys would be three places to forget
+    one. `mentions_json` records which members were @-named, as plain ids —
+    the notification each mention produced is its own row and the comment must
+    not need one to render.
+
+    Soft-deleted (`deleted_at`) rather than removed: a comment sits in the
+    middle of a discussion, and the replies after it stop making sense if the
+    row vanishes. The list simply filters deleted rows out.
+    """
+
+    __tablename__ = "comments"
+    __table_args__ = (
+        Index(
+            "ix_comments_workspace_subject_created",
+            "workspace_id",
+            "subject_kind",
+            "subject_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    # conversation | document | dashboard
+    subject_kind: Mapped[str] = mapped_column(String(16))
+    subject_id: Mapped[str] = mapped_column(String(36))
+    body: Mapped[str] = mapped_column(Text)
+    #: Workspace member user ids this comment @-mentions, as a JSON list. Only
+    #: ids that were valid members at write time are ever stored — a foreign id
+    #: is dropped before it gets here, so the column can never confirm one.
+    mentions_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class Notification(Base):
+    """One thing a person should look at: a mention today; a monitor alert or a
+    spend anomaly tomorrow.
+
+    Deliberately generic — `kind` plus a fan of '' -unset deep-link columns —
+    because the Inbox needs every "look at this" row to obey one contract:
+    workspace-scoped, `status='open'` is the unbounded waiting set,
+    `target_user_id` is '' for "every member" or one member's id for a personal
+    row (a mention is personal; an alert is not), and resolving flips `status`
+    so the feed simply stops listing it. A new notifying feature adds a `kind`
+    and picks its deep links; it does not add a table.
+
+    The deep-link ids are plain columns, never ForeignKeys: a notification is a
+    historical record and must outlive the comment or conversation it points
+    at, per the house convention for references that outlive their target.
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        # The Inbox's unbounded open-set scan, per the 0043 rationale.
+        Index(
+            "ix_notifications_workspace_status_created",
+            "workspace_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: "" means every member of the workspace; otherwise exactly one member's
+    #: user id. Plain column — "" cannot satisfy a foreign key.
+    target_user_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    # mention | monitor_alert | spend_anomaly | ...
+    kind: Mapped[str] = mapped_column(String(32))
+    # open | resolved
+    status: Mapped[str] = mapped_column(String(16), default="open", server_default="open")
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text, default="", server_default="")
+    conversation_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    document_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    dashboard_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    comment_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    monitor_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    agent_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+
+
 # ---------------------------------------------------------------------------
 # A human decision on a tool call is written once.
 #

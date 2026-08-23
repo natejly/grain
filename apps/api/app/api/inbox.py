@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import AgentToolCall, Conversation, Run, Workflow, WorkflowRun
+from ..models import AgentToolCall, Conversation, Notification, Run, Workflow, WorkflowRun
 from ..schemas import ApiModel
 from ..services import conversations
 from ..services.agent_loop import PAUSED_FOR_BUDGET
@@ -90,6 +90,23 @@ class InboxBudgetHoldOut(ApiModel):
     created_at: datetime
 
 
+class InboxMentionOut(ApiModel):
+    """One open @mention of the caller. Personal by definition — the query
+    below filters on `target_user_id == actor.user_id`, never '' — so one
+    member's mentions are invisible to their roommate."""
+
+    id: str
+    title: str
+    body: str
+    #: Deep-link columns, '' when the subject is of another kind.
+    conversation_id: str
+    document_id: str
+    dashboard_id: str
+    comment_id: str
+    created_by: str
+    created_at: datetime
+
+
 class InboxRunOut(ApiModel):
     """One finished workflow run — the Inbox's history shelf, not its work."""
 
@@ -104,6 +121,7 @@ class InboxRunOut(ApiModel):
 class InboxOut(ApiModel):
     approvals: List[InboxApprovalOut]
     budget_holds: List[InboxBudgetHoldOut]
+    mentions: List[InboxMentionOut]
     recent_runs: List[InboxRunOut]
 
 
@@ -254,6 +272,38 @@ def read_inbox(
     )
     budget_holds.sort(key=lambda hold: hold.created_at)
 
+    # Mentions are the third waiting set, and the first personal one: an open
+    # `kind='mention'` notification is work for exactly the member it names —
+    # `target_user_id` is never '' for a mention — which is why the filter is
+    # the actor's own id rather than the `('', actor)` pair the ''-targeted
+    # kinds (monitor alerts, spend anomalies) will use. Same contract as the
+    # sets above: unbounded, oldest first, over the composite
+    # (workspace_id, status, created_at) index.
+    open_mentions = db.scalars(
+        select(Notification)
+        .where(
+            Notification.workspace_id == actor.workspace_id,
+            Notification.kind == "mention",
+            Notification.status == "open",
+            Notification.target_user_id == actor.user_id,
+        )
+        .order_by(Notification.created_at.asc())
+    ).all()
+    mentions = [
+        InboxMentionOut(
+            id=row.id,
+            title=row.title,
+            body=row.body,
+            conversation_id=row.conversation_id,
+            document_id=row.document_id,
+            dashboard_id=row.dashboard_id,
+            comment_id=row.comment_id,
+            created_by=row.created_by,
+            created_at=row.created_at,
+        )
+        for row in open_mentions
+    ]
+
     outcomes = db.execute(
         select(WorkflowRun, Workflow.name)
         .join(Workflow, Workflow.id == WorkflowRun.workflow_id)
@@ -276,4 +326,9 @@ def read_inbox(
         for run, name in outcomes
     ]
 
-    return InboxOut(approvals=approvals, budget_holds=budget_holds, recent_runs=recent_runs)
+    return InboxOut(
+        approvals=approvals,
+        budget_holds=budget_holds,
+        mentions=mentions,
+        recent_runs=recent_runs,
+    )

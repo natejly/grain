@@ -9672,3 +9672,140 @@ select:focus-visible {
   max-width: 72px;
   flex-shrink: 1;
 }
+
+/* --- Comments drawer -------------------------------------------------------
+   One right-hand drawer for every comment subject (thread, document,
+   dashboard), riding the same scrim as the provenance drawer. The column is
+   messages-over-composer like the subject chat panels, but read-first: the
+   scroll area owns the height and the composer keeps to the bottom. */
+
+.thread-comments {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.thread-comments:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.comments-drawer {
+  width: min(420px, 92vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.comments-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px;
+}
+
+.comment-row {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.comment-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.comment-row-head strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.comment-row-head span {
+  flex: 1;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.comment-body {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-mention {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.comment-composer {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.comment-composer textarea {
+  flex: 1;
+  resize: none;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+}
+
+/* The @-completion list floats above the composer, like the slash picker:
+   the top option is what Enter takes. */
+.comment-mention-picker {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 18px;
+  right: 18px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px var(--tint);
+  z-index: 5;
+}
+
+.mention-option {
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mention-option:hover,
+.mention-option.first {
+  background: var(--surface-hover);
+}

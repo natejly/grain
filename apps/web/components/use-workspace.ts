@@ -49,6 +49,7 @@ import {
 export type { ChatPane } from "./chat-panes";
 import { createBoardHandlers } from "./handlers/boards";
 import { createChatHandlers } from "./handlers/chat";
+import { createCommentHandlers } from "./handlers/comments";
 import { createDashboardHandlers } from "./handlers/dashboards";
 import { createDocumentHandlers } from "./handlers/documents";
 import { createFolderHandlers } from "./handlers/folders";
@@ -831,6 +832,11 @@ export function useWorkspace() {
     refreshExpansion,
   });
 
+  const commentHandlers = createCommentHandlers({
+    setError,
+    refreshFeed: refreshSecondary,
+  });
+
   return {
     bootstrap,
     conversations,
@@ -942,5 +948,6 @@ export function useWorkspace() {
     ...graphHandlers,
     ...dashboardHandlers,
     ...integrationHandlers,
+    ...commentHandlers,
   };
 }

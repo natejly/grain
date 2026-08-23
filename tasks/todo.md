@@ -9,7 +9,7 @@ cases, unit tests, and its own commit.
 
 - [x] 1. Templates: space templates + duplicate dashboard + workflow templates
 - [x] 2. Thread forking: branch a conversation from any message
-- [ ] 3. Comments & @mentions on documents/dashboards/threads → Inbox
+- [x] 3. Comments & @mentions on documents/dashboards/threads → Inbox
 - [ ] 4. Assignable approvals: route an approval to a member; Inbox "assigned"
 - [ ] 5. Metric monitors: dataset/typed-query threshold trips → Inbox alerts
 - [ ] 6. Run undo: revert a run's write-tool effects from recorded state

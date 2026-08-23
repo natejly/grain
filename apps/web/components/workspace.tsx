@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, Columns2, LogOut, Menu, Pencil, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
+import { BarChart3, CircleDot, Columns2, LogOut, Menu, MessageSquareText, Pencil, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner } from "./api-health-banner";
@@ -21,6 +21,7 @@ import { AppsView } from "./views/apps";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
 import { ChatSplit } from "./views/chat-split";
+import { CommentsPanel, type CommentSubject } from "./views/comments";
 import { DashboardEditor } from "./views/dashboard-editor";
 import { DashboardsView } from "./views/dashboards";
 import { DataView } from "./views/data";
@@ -210,6 +211,11 @@ export function Workspace() {
     connectGarminAccount,
     disconnectIntegration,
     syncIntegration,
+    loadComments,
+    addComment,
+    removeComment,
+    loadMembers,
+    resolveMention,
   } = useWorkspace();
   // Always present: this component only renders inside the authenticated gate.
   const { session, signOut } = useSession();
@@ -235,6 +241,11 @@ export function Workspace() {
   // row state) so exactly one rename can be open at a time.
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+
+  // What the comments drawer is about, or null when closed. One subject state
+  // for all three surfaces (thread, document, dashboard) because one drawer
+  // serves them all — the subject pair is the server's own shape.
+  const [commentSubject, setCommentSubject] = useState<CommentSubject | null>(null);
 
   // ⌘K / Ctrl+K, from anywhere — inputs included, which is why this handler
   // exists at the window and preventDefaults: the browser wants the shortcut
@@ -340,6 +351,25 @@ export function Workspace() {
       >
         <Columns2 size={13} />
       </button>
+      {/* Comments ride only the OPEN thread, like rename and share: the drawer
+          is about the thread you are looking at, not any row you can reach. */}
+      {activeConversation === conversation.id && (
+        <button
+          className="thread-comments"
+          title="Comments on this thread"
+          aria-label={`Comments on ${conversation.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setCommentSubject({
+              kind: "conversation",
+              id: conversation.id,
+              label: conversation.title,
+            });
+          }}
+        >
+          <MessageSquareText size={13} />
+        </button>
+      )}
       <button
         className="thread-delete"
         title="Delete chat"
@@ -439,7 +469,7 @@ export function Workspace() {
   // zero over a real backlog. Until the feed's first read lands, the window
   // count stands in rather than showing a zero not yet known to be true.
   const inboxBadge = inbox
-    ? inbox.approvals.length + inbox.budget_holds.length
+    ? inbox.approvals.length + inbox.budget_holds.length + inbox.mentions.length
     : pendingApprovals.length;
 
   /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
@@ -938,6 +968,13 @@ export function Workspace() {
             removeDashboard={removeDashboard}
             focused={focusedDashboard}
             setFocused={setFocusedDashboard}
+            openComments={(dashboard) =>
+              setCommentSubject({
+                kind: "dashboard",
+                id: dashboard.id,
+                label: dashboard.name,
+              })
+            }
             chat={{
               agentId: bootstrap?.default_agent_id,
               sources,
@@ -983,6 +1020,13 @@ export function Workspace() {
             saveDocument={saveDocument}
             restoreVersion={restoreDocumentVersion}
             removeDocument={removeDocument}
+            openComments={(document) =>
+              setCommentSubject({
+                kind: "document",
+                id: document.id,
+                label: document.title,
+              })
+            }
             pendingEdits={pendingEdits}
             decidePendingEdit={decidePendingEdit}
             chat={{
@@ -1113,6 +1157,25 @@ export function Workspace() {
             decide={decideAgentCall}
             activeRun={activeRun}
             openConversation={(id) => void selectConversation(id)}
+            resolveMention={resolveMention}
+            openMention={(mention) => {
+              // The deep link in precedence order: the thread the comment sits
+              // on, else the document, else the dashboard (revealed the way the
+              // rail reveals a pin).
+              if (mention.conversation_id) {
+                void selectConversation(mention.conversation_id);
+                return;
+              }
+              if (mention.document_id) {
+                void openDocument(mention.document_id);
+                setView("documents");
+                return;
+              }
+              if (mention.dashboard_id) {
+                setFocusedDashboard(mention.dashboard_id);
+                setView("dashboards");
+              }
+            }}
           />
         )}
 
@@ -1131,6 +1194,21 @@ export function Workspace() {
           onCreated={setEditing}
           onClose={() => setEditing(null)}
           setError={setError}
+        />
+      )}
+
+      {commentSubject && (
+        <CommentsPanel
+          subject={commentSubject}
+          close={() => setCommentSubject(null)}
+          ops={{
+            load: loadComments,
+            add: addComment,
+            remove: removeComment,
+            loadMembers,
+          }}
+          currentUserId={session?.user_id ?? ""}
+          isOwner={bootstrap?.identity.role === "owner"}
         />
       )}
 

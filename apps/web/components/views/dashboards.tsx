@@ -60,6 +60,8 @@ export type DashboardsViewProps = {
   /** Which pinned tile to reveal, set by the rail. Cleared once revealed. */
   focused: string | null;
   setFocused: (dashboardId: string | null) => void;
+  /** Open the shell's comments drawer about this dashboard. */
+  openComments?: (dashboard: Dashboard) => void;
   /**
    * The honest create path, as a button: dashboards are written by the agent,
    * so "new dashboard" means asking for a chart — this prefills the composer
@@ -104,6 +106,7 @@ export function DashboardsView({
   removeDashboard,
   focused,
   setFocused,
+  openComments,
   askForChart,
   chat,
 }: DashboardsViewProps) {
@@ -182,6 +185,7 @@ export function DashboardsView({
         unpin={unpinDashboard}
         duplicate={duplicateDashboard}
         remove={removeDashboard}
+        comment={openComments}
         // Launching *is* pinning: there is no single-dashboard page to
         // send someone to, and a chart you opened once is a chart you
         // wanted on your screen. Already pinned, it is merely revealed.

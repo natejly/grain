@@ -2344,6 +2344,99 @@
         "title": "ColumnRequest",
         "type": "object"
       },
+      "CommentCreate": {
+        "properties": {
+          "body": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "mentions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Mentions",
+            "type": "array"
+          },
+          "subject_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_kind": {
+            "enum": [
+              "conversation",
+              "document",
+              "dashboard"
+            ],
+            "title": "Subject Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject_kind",
+          "subject_id",
+          "body"
+        ],
+        "title": "CommentCreate",
+        "type": "object"
+      },
+      "CommentOut": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mentions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Mentions",
+            "type": "array"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_kind": {
+            "title": "Subject Kind",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "subject_kind",
+          "subject_id",
+          "body",
+          "mentions",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CommentOut",
+        "type": "object"
+      },
       "CompileRequest": {
         "properties": {
           "engine": {
@@ -4626,6 +4719,61 @@
         "title": "InboxBudgetHoldOut",
         "type": "object"
       },
+      "InboxMentionOut": {
+        "description": "One open @mention of the caller. Personal by definition \u2014 the query\nbelow filters on `target_user_id == actor.user_id`, never '' \u2014 so one\nmember's mentions are invisible to their roommate.",
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "comment_id": {
+            "title": "Comment Id",
+            "type": "string"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "dashboard_id": {
+            "title": "Dashboard Id",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body",
+          "conversation_id",
+          "document_id",
+          "dashboard_id",
+          "comment_id",
+          "created_by",
+          "created_at"
+        ],
+        "title": "InboxMentionOut",
+        "type": "object"
+      },
       "InboxOut": {
         "properties": {
           "approvals": {
@@ -4642,6 +4790,13 @@
             "title": "Budget Holds",
             "type": "array"
           },
+          "mentions": {
+            "items": {
+              "$ref": "#/components/schemas/InboxMentionOut"
+            },
+            "title": "Mentions",
+            "type": "array"
+          },
           "recent_runs": {
             "items": {
               "$ref": "#/components/schemas/InboxRunOut"
@@ -4653,6 +4808,7 @@
         "required": [
           "approvals",
           "budget_holds",
+          "mentions",
           "recent_runs"
         ],
         "title": "InboxOut",
@@ -5141,6 +5297,30 @@
         "title": "McpToolOut",
         "type": "object"
       },
+      "MemberOut": {
+        "description": "One workspace colleague, as the @-picker needs them: an id to mention\nand a name to show. Deliberately not the admin surface \u2014 no email, no\njoin date \u2014 because every member may see who they can mention.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "name",
+          "role"
+        ],
+        "title": "MemberOut",
+        "type": "object"
+      },
       "MemoryItemOut": {
         "properties": {
           "content": {
@@ -5328,6 +5508,93 @@
           "model"
         ],
         "title": "ModelProviderStatus",
+        "type": "object"
+      },
+      "NotificationOut": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "comment_id": {
+            "title": "Comment Id",
+            "type": "string"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "dashboard_id": {
+            "title": "Dashboard Id",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resolved_by": {
+            "title": "Resolved By",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "target_user_id": {
+            "title": "Target User Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "target_user_id",
+          "title",
+          "body",
+          "conversation_id",
+          "document_id",
+          "dashboard_id",
+          "comment_id",
+          "created_by",
+          "created_at",
+          "resolved_at",
+          "resolved_by"
+        ],
+        "title": "NotificationOut",
         "type": "object"
       },
       "OrgConfigIn": {
@@ -12040,6 +12307,201 @@
         ]
       }
     },
+    "/api/comments": {
+      "get": {
+        "operationId": "list_comments_api_comments_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subject_kind",
+            "required": true,
+            "schema": {
+              "maxLength": 16,
+              "minLength": 1,
+              "title": "Subject Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Subject Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CommentOut"
+                  },
+                  "title": "Response List Comments Api Comments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Comments",
+        "tags": [
+          "comments"
+        ]
+      },
+      "post": {
+        "operationId": "create_comment_api_comments_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Comment",
+        "tags": [
+          "comments"
+        ]
+      }
+    },
+    "/api/comments/{comment_id}": {
+      "delete": {
+        "description": "Soft-delete. Resolved under the workspace first so a foreign comment is\na 404; only then does the author/owner gate answer 403. Naturally\nidempotent \u2014 deleting a deleted comment changes nothing \u2014 so no key.",
+        "operationId": "delete_comment_api_comments__comment_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "title": "Comment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Comment",
+        "tags": [
+          "comments"
+        ]
+      }
+    },
     "/api/conversations": {
       "get": {
         "operationId": "list_conversations_api_conversations_get",
@@ -16546,6 +17008,60 @@
         ]
       }
     },
+    "/api/members": {
+      "get": {
+        "description": "Who can be @-mentioned here: every member of the caller's workspace.\n\nThe admin member list (`/api/admin/members`) is owner-only because it\ncarries emails and standing; this one exists so a plain member's composer\ncan complete a colleague's name, and carries nothing an invite email did\nnot already reveal to the whole workspace.",
+        "operationId": "list_members_api_members_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MemberOut"
+                  },
+                  "title": "Response List Members Api Members Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Members",
+        "tags": [
+          "comments"
+        ]
+      }
+    },
     "/api/memory": {
       "get": {
         "description": "The workspace's memories and the caller's own \u2014 never another member's.\n\nWhich means nobody, owner included, has a complete view of what the workspace\nknows. ADR 0010 records that as a real cost rather than an oversight: it is\nthe same trade `Conversation.shared` already made, and the audit trail still\nrecords every write.",
@@ -16659,6 +17175,65 @@
         "summary": "Forget Memory",
         "tags": [
           "memory"
+        ]
+      }
+    },
+    "/api/notifications/{notification_id}/resolve": {
+      "post": {
+        "description": "Flip one notification out of the waiting set.\n\nA row targeted at another member is answered exactly like a missing one:\nsomeone else's mention is not this caller's to resolve, and a 403 would\nconfirm it exists.",
+        "operationId": "resolve_notification_api_notifications__notification_id__resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "title": "Notification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Notification",
+        "tags": [
+          "comments"
         ]
       }
     },

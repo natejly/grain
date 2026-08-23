@@ -5,7 +5,7 @@ import type {
   DashboardTemplate,
   Dataset,
 } from "@workspace/api-client";
-import { Copy, Pin, PinOff, Trash2 } from "lucide-react";
+import { Copy, MessageSquareText, Pin, PinOff, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { describeDashboard, refusalLines } from "./dashboard-format";
 
@@ -28,6 +28,8 @@ export type DashboardCatalogProps = {
   duplicate: (dashboard: Dashboard) => Promise<void>;
   remove: (dashboard: Dashboard) => Promise<void>;
   open: (dashboardId: string) => void;
+  /** Open the shell's comments drawer about this dashboard. */
+  comment?: (dashboard: Dashboard) => void;
 };
 
 /**
@@ -46,6 +48,7 @@ export function DashboardCatalog({
   duplicate,
   remove,
   open,
+  comment,
 }: DashboardCatalogProps) {
   return (
     <section className="dashboard-catalog" aria-label="All dashboards">
@@ -87,6 +90,17 @@ export function DashboardCatalog({
                 >
                   <Copy size={14} />
                 </button>
+                {comment && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Comments on ${dashboard.name}`}
+                    title="Comments on this dashboard"
+                    onClick={() => comment(dashboard)}
+                  >
+                    <MessageSquareText size={14} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="icon-button"

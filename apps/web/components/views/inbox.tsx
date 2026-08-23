@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AtSign,
   Check,
   CircleDollarSign,
   Clock,
@@ -15,6 +16,7 @@ import type {
   AuditEvent,
   InboxApproval,
   InboxFeed,
+  InboxMention,
 } from "@workspace/api-client";
 import type { ToolDecision } from "./chat";
 import { ProposalDiff } from "./proposal-diff";
@@ -51,9 +53,13 @@ export type InboxViewProps = {
   activeRun: string | null;
   /** Jump to the thread a parked item came from. */
   openConversation: (conversationId: string) => void;
+  /** Flip a mention out of the waiting set; the caller re-reads the feed. */
+  resolveMention: (notificationId: string) => Promise<void>;
+  /** Jump to whatever a mention deep-links: its thread, document or dashboard. */
+  openMention: (mention: InboxMention) => void;
 };
 
-type Section = "approvals" | "holds" | "runs" | "history";
+type Section = "approvals" | "holds" | "mentions" | "runs" | "history";
 
 const ORIGIN_LABELS: Record<string, string> = {
   chat: "Chat",
@@ -198,12 +204,15 @@ export function InboxView({
   decide,
   activeRun,
   openConversation,
+  resolveMention,
+  openMention,
 }: InboxViewProps) {
   const [section, setSection] = useState<Section>("approvals");
   const [focusIndex, setFocusIndex] = useState(0);
 
   const approvals = feed?.approvals ?? [];
   const holds = feed?.budget_holds ?? [];
+  const mentions = feed?.mentions ?? [];
   const runs = feed?.recent_runs ?? [];
 
   // J/K walk the queue, A/D decide the focused row — triage without a mouse.
@@ -237,6 +246,7 @@ export function InboxView({
   const tabs: Array<{ id: Section; label: string; count?: number }> = [
     { id: "approvals", label: "Needs approval", count: approvals.length },
     { id: "holds", label: "Budget holds", count: holds.length },
+    { id: "mentions", label: "Mentions", count: mentions.length },
     { id: "runs", label: "Runs" },
     { id: "history", label: "History" },
   ];
@@ -351,6 +361,68 @@ export function InboxView({
                 </p>
               </article>
             ))
+          )}
+        </div>
+      )}
+
+      {section === "mentions" && (
+        <div className="approval-panel inbox-queue">
+          {mentions.length === 0 ? (
+            <div className="approval-empty">
+              <div>
+                <Check size={18} />
+              </div>
+              <strong>Nobody needs your eyes</strong>
+              <p>Comments that @-mention you appear here until you resolve them.</p>
+            </div>
+          ) : (
+            mentions.map((mention) => {
+              const destination = mention.conversation_id
+                ? "thread"
+                : mention.document_id
+                  ? "document"
+                  : mention.dashboard_id
+                    ? "dashboard"
+                    : "";
+              return (
+                <article key={mention.id} className="approval-card">
+                  <div className="approval-card-top">
+                    <div className="tool-glyph">
+                      <AtSign size={17} />
+                    </div>
+                    <div>
+                      <span>
+                        Mention · waiting{" "}
+                        {formatRelative(mention.created_at).replace(" ago", "")}
+                      </span>
+                      <strong>{mention.title}</strong>
+                    </div>
+                    {destination && (
+                      <button
+                        type="button"
+                        className="ghost-button approval-open"
+                        onClick={() => openMention(mention)}
+                      >
+                        <ExternalLink size={13} />
+                        Open {destination}
+                      </button>
+                    )}
+                  </div>
+                  {mention.body && <p className="inbox-hold-note">{mention.body}</p>}
+                  <div className="decision-buttons">
+                    <button
+                      className="approve"
+                      onClick={() =>
+                        void resolveMention(mention.id).then(refreshFeed)
+                      }
+                    >
+                      <Check size={15} />
+                      Resolve
+                    </button>
+                  </div>
+                </article>
+              );
+            })
           )}
         </div>
       )}

@@ -61,6 +61,7 @@ from app.models import (
     BoardCard,
     BoardColumn,
     Chunk,
+    Comment,
     Conversation,
     Cron,
     Dashboard,
@@ -82,6 +83,7 @@ from app.models import (
     MemoryItem,
     Message,
     ModelUsage,
+    Notification,
     OAuthState,
     OrgMembership,
     OrgToolPolicy,
@@ -384,6 +386,37 @@ def build_tenant(label: str) -> Tenant:
         db.add(version)
         db.flush()
         ids["document_version"] = version.id
+
+        # A remark on the document, and the mention it produced. The comment's
+        # body carries the marker so a foreign list leaks content, not just an
+        # id; the notification targets this tenant's owner so a foreign resolve
+        # or a leaked feed has a personal row to be wrong about.
+        comment = Comment(
+            workspace_id=workspace_id,
+            subject_kind="document",
+            subject_id=document.id,
+            body=f"{label} secret comment",
+            mentions_json=json.dumps([user_id]),
+            created_by=user_id,
+        )
+        db.add(comment)
+        db.flush()
+        ids["comment"] = comment.id
+
+        notification = Notification(
+            workspace_id=workspace_id,
+            target_user_id=user_id,
+            kind="mention",
+            status="open",
+            title=f"{label} secret mention",
+            body=f"{label} secret comment",
+            document_id=document.id,
+            comment_id=comment.id,
+            created_by=user_id,
+        )
+        db.add(notification)
+        db.flush()
+        ids["notification"] = notification.id
 
         board = Board(
             workspace_id=workspace_id, name=f"{label} board", created_by=user_id
@@ -1030,7 +1063,27 @@ def _plant_roommate(*, label: str, workspace_id: str) -> tuple[Identity, Dict[st
         )
         db.add(policy)
         db.flush()
-        ids = {"memory": memory.id, "tool_policy": policy.id, "conversation": conversation.id}
+        # An open mention of the roommate. Mentions are the first *personal*
+        # notification kind, so the owner's feed showing this row would be the
+        # roommate-axis leak the target_user_id filter exists to prevent.
+        mention = Notification(
+            workspace_id=workspace_id,
+            target_user_id=user.id,
+            kind="mention",
+            status="open",
+            title=f"{marker} mention",
+            body=f"{marker} mention body",
+            conversation_id=conversation.id,
+            created_by=user.id,
+        )
+        db.add(mention)
+        db.flush()
+        ids = {
+            "memory": memory.id,
+            "tool_policy": policy.id,
+            "conversation": conversation.id,
+            "notification": mention.id,
+        }
         user_id = user.id
         db.commit()
     finally:
@@ -1309,6 +1362,52 @@ ROUTE_CASES: List[RouteCase] = [
     # the same one the agent tool reads; the sweep proves tenant A's query
     # never quotes tenant B's words.
     RouteCase("GET", "/api/conversations/search", SCOPED, query={"q": "secret"}),
+    # -- comments & notifications ------------------------------------------
+    # The @-picker's member list: id-less, workspace-scoped, so the sweep's
+    # job is proving A's picker never offers B's colleagues.
+    RouteCase("GET", "/api/members", SCOPED),
+    # The foreign id rides in the body: commenting on another tenant's
+    # document would let the caller list the comment back — and a mention on
+    # it would deep-link a stranger into the subject.
+    RouteCase(
+        "POST",
+        "/api/comments",
+        DENY,
+        body={"subject_kind": "document", "subject_id": "", "body": "probe"},
+        body_ids={"subject_id": "document"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/comments",
+        DENY,
+        body={"subject_kind": "conversation", "subject_id": "", "body": "probe"},
+        body_ids={"subject_id": "conversation"},
+        note="conversation subjects pass resolve_visible, so a foreign "
+        "thread must be indistinguishable from a missing one",
+    ),
+    # Listing rides the same subject resolution, so a foreign subject id in
+    # the query is a 404 before any comment row is read.
+    RouteCase(
+        "GET",
+        "/api/comments",
+        DENY,
+        query={"subject_kind": "document"},
+        query_ids={"subject_id": "document"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/comments/{comment_id}",
+        DENY,
+        path_ids={"comment_id": "comment"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/notifications/{notification_id}/resolve",
+        DENY,
+        path_ids={"notification_id": "notification"},
+        note="resolving another tenant's mention would silently empty their "
+        "inbox; the workspace filter must answer before the target gate",
+    ),
     # -- spaces ------------------------------------------------------------
     RouteCase("GET", "/api/spaces", SCOPED),
     RouteCase("POST", "/api/spaces", SCOPED, body={"name": "mine"}),

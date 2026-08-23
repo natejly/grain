@@ -895,6 +895,21 @@ export type InboxBudgetHold = {
   created_at: string;
 };
 
+/** One open @mention of the caller. Personal by definition — the server only
+ * lists rows targeted at the signed-in member. */
+export type InboxMention = {
+  id: string;
+  title: string;
+  body: string;
+  /** Deep-link ids, "" when the mention's subject is of another kind. */
+  conversation_id: string;
+  document_id: string;
+  dashboard_id: string;
+  comment_id: string;
+  created_by: string;
+  created_at: string;
+};
+
 /** One finished workflow run — the Inbox's history shelf, not its work. */
 export type InboxRun = {
   id: string;
@@ -913,7 +928,57 @@ export type InboxRun = {
 export type InboxFeed = {
   approvals: InboxApproval[];
   budget_holds: InboxBudgetHold[];
+  mentions: InboxMention[];
   recent_runs: InboxRun[];
+};
+
+/** One workspace colleague, as the @-picker needs them: an id to mention and
+ * a name to show. Not the admin surface — every member may see this list. */
+export type WorkspaceMember = {
+  user_id: string;
+  name: string;
+  role: string;
+};
+
+/** A remark on a thread, document or dashboard. `mentions` holds the member
+ * ids that were actually kept — the server silently drops anything that is
+ * not a member of the workspace (or cannot see a private thread subject). */
+export type Comment = {
+  id: string;
+  subject_kind: "conversation" | "document" | "dashboard";
+  subject_id: string;
+  body: string;
+  mentions: string[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CommentCreateInput = {
+  subject_kind: "conversation" | "document" | "dashboard";
+  subject_id: string;
+  body: string;
+  mentions?: string[];
+};
+
+/** One generic "a person should look at this" row — a mention today, monitor
+ * alerts and spend anomalies tomorrow. Resolving flips `status` and the Inbox
+ * stops listing it. */
+export type Notification = {
+  id: string;
+  kind: string;
+  status: string;
+  target_user_id: string;
+  title: string;
+  body: string;
+  conversation_id: string;
+  document_id: string;
+  dashboard_id: string;
+  comment_id: string;
+  created_by: string;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: string;
 };
 
 export type GraphEntity = {
@@ -2311,6 +2376,45 @@ export class WorkspaceApi {
   /** The unified attention feed: everything waiting on a person, unbounded. */
   getInbox(): Promise<InboxFeed> {
     return this.request("/api/inbox");
+  }
+
+  // --- Comments & mentions ---
+
+  /** Who can be @-mentioned here: every member of the caller's workspace. */
+  listMembers(): Promise<WorkspaceMember[]> {
+    return this.request("/api/members");
+  }
+
+  createComment(input: CommentCreateInput): Promise<Comment> {
+    return this.request(
+      "/api/comments",
+      { method: "POST", body: JSON.stringify(input) },
+      true,
+    );
+  }
+
+  listComments(
+    subjectKind: Comment["subject_kind"],
+    subjectId: string,
+  ): Promise<Comment[]> {
+    const params = new URLSearchParams({
+      subject_kind: subjectKind,
+      subject_id: subjectId,
+    });
+    return this.request(`/api/comments?${params.toString()}`);
+  }
+
+  deleteComment(commentId: string): Promise<void> {
+    return this.request(`/api/comments/${commentId}`, { method: "DELETE" }, true);
+  }
+
+  /** Flip one notification out of the waiting set; the feed stops listing it. */
+  resolveNotification(notificationId: string): Promise<Notification> {
+    return this.request(
+      `/api/notifications/${notificationId}/resolve`,
+      { method: "POST" },
+      true,
+    );
   }
 
   /**

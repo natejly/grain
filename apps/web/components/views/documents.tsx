@@ -4,6 +4,7 @@ import {
   FileText,
   History,
   MessageSquare,
+  MessageSquareText,
   Plus,
   RotateCcw,
   Save,
@@ -47,6 +48,8 @@ export type DocumentsViewProps = {
   saveDocument: (documentId: string, content: string) => Promise<void>;
   restoreVersion: (documentId: string, versionId: string) => Promise<void>;
   removeDocument: (document: DocumentSummary) => Promise<void>;
+  /** Open the shell's comments drawer about this document. */
+  openComments?: (document: WorkspaceDocument) => void;
   /** Agent writes awaiting approval; optional until the workspace wires them. */
   pendingEdits?: PendingDocumentEdit[];
   decidePendingEdit?: HunkDecision & PendingDecision;
@@ -119,6 +122,7 @@ export function DocumentsView({
   saveDocument,
   restoreVersion,
   removeDocument,
+  openComments,
   pendingEdits,
   decidePendingEdit,
   chat,
@@ -324,6 +328,14 @@ export function DocumentsView({
                   onClick={() => setShowChat((value) => !value)}
                 >
                   <MessageSquare size={14} /> Chat
+                </button>
+              )}
+              {openComments && (
+                <button
+                  className="ghost-button"
+                  onClick={() => openComments(active)}
+                >
+                  <MessageSquareText size={14} /> Comments
                 </button>
               )}
               <button

@@ -17,6 +17,7 @@ from .api import (
     bibliography,
     board_ops,
     chat,
+    comments,
     crons,
     dashboards,
     dbconnect,
@@ -119,6 +120,7 @@ app.include_router(board_ops.router)
 app.include_router(todos.router)
 app.include_router(doc_pending.router)
 app.include_router(inbox.router)
+app.include_router(comments.router)
 app.include_router(folders.router)
 app.include_router(projects.router)
 app.include_router(latex.router)
