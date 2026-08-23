@@ -856,13 +856,79 @@ def test_a_deleted_copy_reads_as_not_installed_and_update_says_reinstall(
     skill = create_skill(owner, name="gone", title="Gone", body="v1.")
     listing = publish(owner, skill["id"], slug="gone").json()
     copy = install(owner, listing["id"]).json()
+    assert pin(owner, listing["id"], True).status_code == 200
     owner.delete(f"/api/skills/{copy['resource_id']}")
-    assert _state_of(owner, listing["id"]) == ""
+    detail = owner.get(f"/api/marketplace/listings/{listing['id']}").json()
+    # The whole install contract resets with the copy: no state, no stale pin,
+    # and the pin toggle answers like nothing was ever installed.
+    assert detail["install_state"] == ""
+    assert detail["pinned"] is False
+    assert pin(owner, listing["id"], False).status_code == 404
     owner.patch(f"/api/skills/{skill['id']}", json={"body": "v2."})
     publish(owner, skill["id"], slug="gone", changelog="v2")
     answer = apply_update(owner, listing["id"])
     assert answer.status_code == 409
     assert "install it again" in answer.text
+
+
+def test_a_pin_needs_an_install_and_a_reinstall_clears_it(owner: TestClient) -> None:
+    skill = create_skill(owner, name="pinless", title="Pinless", body="v1.")
+    listing = publish(owner, skill["id"], slug="pinless").json()
+    # Nothing installed yet: nothing to pin.
+    assert pin(owner, listing["id"], True).status_code == 404
+
+    install(owner, listing["id"])
+    assert pin(owner, listing["id"], True).json()["pinned"] is True
+    # A fresh install is exactly the "I want the head now" act the pin
+    # existed to prevent happening silently — so it lifts the pin.
+    install(owner, listing["id"])
+    assert (
+        owner.get(f"/api/marketplace/listings/{listing['id']}").json()["pinned"]
+        is False
+    )
+
+
+def test_a_diverged_copy_at_head_can_resync_with_consent(owner: TestClient) -> None:
+    """Divergence with no newer version is not a dead end: a confirmed update
+    re-syncs the copy to the published content."""
+    skill = create_skill(owner, name="strayed", title="Strayed", body="v1.")
+    listing = publish(owner, skill["id"], slug="strayed").json()
+    copy = install(owner, listing["id"]).json()
+    owner.patch(f"/api/skills/{copy['resource_id']}", json={"body": "Strayed away."})
+    assert _state_of(owner, listing["id"]) == "diverged"
+
+    refused = apply_update(owner, listing["id"])
+    assert refused.status_code == 409
+    assert "local edits" in refused.text
+    resynced = apply_update(owner, listing["id"], confirm_overwrite=True)
+    assert resynced.status_code == 200, resynced.text
+    assert owner.get(f"/api/skills/{copy['resource_id']}").json()["body"] == "v1."
+    assert _state_of(owner, listing["id"]) == "installed"
+
+
+def test_an_agents_local_grant_edit_counts_as_divergence(owner: TestClient) -> None:
+    """The marquee claim of local_content_hash: the grant is part of the copy's
+    identity, so reshaping it makes updates ask before overwriting anything."""
+    agent_id = _plant_agent(
+        owner, allowed_tools_json=json.dumps(["recall_memory", "search_sources"])
+    )
+    listing = publish(owner, agent_id, kind="agent", slug="regrant-analyst").json()
+    installed = owner.post(
+        f"/api/marketplace/listings/{listing['id']}/install",
+        json={"allowed_tools": ["recall_memory", "search_sources"]},
+        headers=_key("install"),
+    ).json()
+    assert _state_of(owner, listing["id"]) == "installed"
+
+    db = SessionLocal()
+    try:
+        copy = db.get(Agent, installed["resource_id"])
+        assert copy is not None
+        copy.allowed_tools_json = json.dumps(["search_sources"])
+        db.commit()
+    finally:
+        db.close()
+    assert _state_of(owner, listing["id"]) == "diverged"
 
 
 def test_an_agent_update_brings_words_never_reach(owner: TestClient) -> None:
@@ -939,6 +1005,66 @@ def test_a_workflow_update_replaces_the_program_and_bumps_the_version(
         # The installer's operational state survives the update.
         assert updated.status == "draft"
         assert updated.trigger_kind == "manual"
+    finally:
+        db.close()
+    assert _state_of(owner, listing["id"]) == "installed"
+
+
+def test_a_workflow_update_keeps_an_armed_schedule(owner: TestClient) -> None:
+    """Arming a copy is a graph edit (the trigger lives in the graph and the
+    columns derive from it), so it reads as divergence; a confirmed update
+    replaces the program but splices the local trigger back into the stored
+    graph, keeping the schedule armed AND the graph agreeing with the columns.
+    """
+    workflow = create_workflow(
+        owner, {"kind": "manual", "cron": "", "timezone": "UTC"}
+    )
+    listing = publish(
+        owner, workflow["id"], kind="workflow", slug="sweep-armed"
+    ).json()
+    copy = install(owner, listing["id"]).json()
+
+    # The installer arms their copy the way the product does: trigger in the
+    # graph, columns derived from it.
+    db = SessionLocal()
+    try:
+        armed = db.get(Workflow, copy["resource_id"])
+        assert armed is not None
+        graph = json.loads(armed.graph_json)
+        graph["trigger"] = {"kind": "schedule", "cron": "0 9 * * 1", "timezone": "UTC"}
+        armed.graph_json = json.dumps(graph, separators=(",", ":"), sort_keys=True)
+        armed.trigger_kind = "schedule"
+        armed.schedule_cron = "0 9 * * 1"
+        db.commit()
+    finally:
+        db.close()
+    assert _state_of(owner, listing["id"]) == "diverged"
+
+    db = SessionLocal()
+    try:
+        source = db.get(Workflow, workflow["id"])
+        assert source is not None
+        source.description = "Sharper sweep."
+        db.commit()
+    finally:
+        db.close()
+    republished = publish(
+        owner, workflow["id"], kind="workflow", slug="sweep-armed", changelog="v2"
+    )
+    assert republished.status_code == 201, republished.text
+
+    applied = apply_update(owner, listing["id"], confirm_overwrite=True)
+    assert applied.status_code == 200, applied.text
+    db = SessionLocal()
+    try:
+        updated = db.get(Workflow, copy["resource_id"])
+        assert updated is not None
+        assert updated.description == "Sharper sweep."
+        assert updated.trigger_kind == "schedule"
+        assert updated.schedule_cron == "0 9 * * 1"
+        stored = json.loads(updated.graph_json)
+        assert stored["trigger"]["kind"] == "schedule"
+        assert stored["trigger"]["cron"] == "0 9 * * 1"
     finally:
         db.close()
     assert _state_of(owner, listing["id"]) == "installed"

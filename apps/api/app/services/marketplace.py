@@ -420,42 +420,110 @@ def find_install(
     )
 
 
-def install_state(
-    db: Session, *, listing: Listing, workspace_id: str
-) -> tuple[str, bool]:
-    """(state, pinned) for the caller's workspace, one of:
+def install_states(
+    db: Session, *, listings: List[Listing], workspace_id: str
+) -> dict[str, tuple[str, bool]]:
+    """listing_id -> (state, pinned) for the caller's workspace. State is:
 
-    - ``""`` — never installed, or the copy was deleted (installable again);
+    - ``""`` — never installed, or the copy was deleted (installable again).
+      A deleted copy also reports ``pinned=False``: the pin froze a copy that
+      no longer exists, so every surface treats the listing as not installed.
     - ``"installed"`` — the copy is intact and there is nothing newer to offer
       (including when there IS something newer but the install is pinned: a pin
       means "stop offering", so the suppression happens here, not in the UI);
     - ``"update_available"`` — a newer version exists and the copy is unedited;
     - ``"diverged"`` — the copy was edited locally since install. Reported even
       when no newer version exists: it is a statement about the copy, and the
-      update flow uses it to refuse silent overwrites.
+      update flow uses it to gate overwrites (a confirmed update re-syncs).
+
+    Batched — a constant number of queries however long the gallery grows:
+    one for the lineage rows, one per kind for the copies, one for versions.
     """
-    install = find_install(db, workspace_id=workspace_id, listing_id=listing.id)
-    if install is None:
-        return "", False
-    local = local_content_hash(
-        db,
-        kind=install.target_kind,
-        target_id=install.target_id,
-        workspace_id=workspace_id,
-    )
-    if local is None:
-        return "", install.pinned
-    if local != install.content_hash_at_install:
-        return "diverged", install.pinned
-    installed_version = db.scalar(
-        select(ListingVersion.version).where(
-            ListingVersion.id == install.listing_version_id
+    states: dict[str, tuple[str, bool]] = {row.id: ("", False) for row in listings}
+    if not listings:
+        return states
+    listing_by_id = {row.id: row for row in listings}
+    installs = list(
+        db.scalars(
+            select(ListingInstall).where(
+                ListingInstall.workspace_id == workspace_id,
+                ListingInstall.listing_id.in_(list(listing_by_id)),
+            )
         )
     )
-    if (
-        not install.pinned
-        and installed_version is not None
-        and installed_version < listing.latest_version
-    ):
-        return "update_available", install.pinned
-    return "installed", install.pinned
+    if not installs:
+        return states
+
+    targets_by_kind: dict[str, List[str]] = {}
+    for install in installs:
+        targets_by_kind.setdefault(install.target_kind, []).append(install.target_id)
+    local: dict[tuple[str, str], str] = {}
+    if "skill" in targets_by_kind:
+        for skill in db.scalars(
+            select(Skill).where(
+                Skill.workspace_id == workspace_id,
+                Skill.id.in_(targets_by_kind["skill"]),
+            )
+        ):
+            local[("skill", skill.id)] = skill.content_hash
+    if "agent" in targets_by_kind:
+        for agent in db.scalars(
+            select(Agent).where(
+                Agent.workspace_id == workspace_id,
+                Agent.id.in_(targets_by_kind["agent"]),
+            )
+        ):
+            local[("agent", agent.id)] = _hash_fields(
+                agent.name, agent.description, agent.instructions,
+                agent.allowed_tools_json,
+            )
+    if "workflow" in targets_by_kind:
+        for workflow in db.scalars(
+            select(Workflow).where(
+                Workflow.workspace_id == workspace_id,
+                Workflow.id.in_(targets_by_kind["workflow"]),
+            )
+        ):
+            local[("workflow", workflow.id)] = _hash_fields(
+                workflow.name, workflow.description, workflow.source_prompt,
+                workflow.graph_json,
+            )
+
+    versions = {
+        row.id: row.version
+        for row in db.scalars(
+            select(ListingVersion).where(
+                ListingVersion.id.in_(
+                    [install.listing_version_id for install in installs]
+                )
+            )
+        )
+    }
+
+    for install in installs:
+        listing = listing_by_id[install.listing_id]
+        copy_hash = local.get((install.target_kind, install.target_id))
+        if copy_hash is None:
+            continue  # deleted copy: keep ("", False)
+        if copy_hash != install.content_hash_at_install:
+            states[listing.id] = ("diverged", install.pinned)
+            continue
+        installed_version = versions.get(install.listing_version_id)
+        if (
+            not install.pinned
+            and installed_version is not None
+            and installed_version < listing.latest_version
+        ):
+            states[listing.id] = ("update_available", install.pinned)
+        else:
+            states[listing.id] = ("installed", install.pinned)
+    return states
+
+
+def install_state(
+    db: Session, *, listing: Listing, workspace_id: str
+) -> tuple[str, bool]:
+    """The single-listing view of `install_states` — same contract, one row."""
+    return install_states(db, listings=[listing], workspace_id=workspace_id)[
+        listing.id
+    ]

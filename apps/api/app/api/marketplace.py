@@ -73,9 +73,18 @@ def _can_manage(actor: Actor, listing: Listing) -> bool:
     return listing.created_by == actor.user_id or actor.role == "owner"
 
 
-def _out(db: Session, listing: Listing, actor: Actor) -> ListingOut:
-    state, pinned = marketplace_service.install_state(
-        db, listing=listing, workspace_id=actor.workspace_id
+def _out(
+    db: Session,
+    listing: Listing,
+    actor: Actor,
+    state_pinned: Optional[tuple[str, bool]] = None,
+) -> ListingOut:
+    state, pinned = (
+        state_pinned
+        if state_pinned is not None
+        else marketplace_service.install_state(
+            db, listing=listing, workspace_id=actor.workspace_id
+        )
     )
     return ListingOut(
         install_state=state,
@@ -187,7 +196,10 @@ def list_listings(
     rows = marketplace_service.list_visible(
         db, workspace_id=actor.workspace_id, organization_id=actor.organization_id
     )
-    return [_out(db, row, actor) for row in rows]
+    states = marketplace_service.install_states(
+        db, listings=rows, workspace_id=actor.workspace_id
+    )
+    return [_out(db, row, actor, states[row.id]) for row in rows]
 
 
 @router.get("/listings/{listing_id}", response_model=ListingDetailOut)
@@ -527,6 +539,13 @@ def _payload_unreadable() -> HTTPException:
     return HTTPException(status_code=422, detail="This listing's payload is unreadable")
 
 
+def _copy_gone() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="The installed copy no longer exists — install it again instead",
+    )
+
+
 def _install_skill(
     db: Session, actor: Actor, listing: Listing, head: ListingVersion
 ) -> InstallOut:
@@ -787,22 +806,21 @@ def update_install(
         workspace_id=actor.workspace_id,
     )
     if local is None:
-        raise HTTPException(
-            status_code=409,
-            detail="The installed copy no longer exists — install it again instead",
-        )
-    if lineage.listing_version_id == head.id:
+        raise _copy_gone()
+    # Divergence is checked before "already current": a copy edited while at
+    # the head version can still be re-synced to the published content with
+    # confirm_overwrite — otherwise the diverged state would be a dead end.
+    if local != lineage.content_hash_at_install:
+        if not (payload is not None and payload.confirm_overwrite):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Your copy has local edits; updating would overwrite them. "
+                    "Pass confirm_overwrite to replace the copy anyway."
+                ),
+            )
+    elif lineage.listing_version_id == head.id:
         raise HTTPException(status_code=409, detail="Already on the latest version")
-    if local != lineage.content_hash_at_install and not (
-        payload is not None and payload.confirm_overwrite
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Your copy has local edits; updating would overwrite them. "
-                "Pass confirm_overwrite to replace the copy anyway."
-            ),
-        )
 
     if listing.kind == "skill":
         result = _update_skill_copy(db, actor, lineage, head)
@@ -860,7 +878,10 @@ def _update_skill_copy(
             Skill.id == lineage.target_id, Skill.workspace_id == actor.workspace_id
         )
     )
-    assert skill is not None  # the local hash check above proved it exists
+    if skill is None:
+        # The route's hash check saw it, but a concurrent delete can land
+        # between the two reads — same answer as a copy that was never there.
+        raise _copy_gone()
     # The local `name` and `shared` stay: the name is this workspace's handle
     # (possibly suffixed at install), and visibility is the installer's call.
     skills_service.update_skill(
@@ -891,7 +912,8 @@ def _update_agent_copy(
             Agent.id == lineage.target_id, Agent.workspace_id == actor.workspace_id
         )
     )
-    assert agent is not None  # the local hash check above proved it exists
+    if agent is None:
+        raise _copy_gone()
 
     warnings: list[str] = []
     if snapshot.unresolved_tools:
@@ -949,11 +971,23 @@ def _update_workflow_copy(
             Workflow.workspace_id == actor.workspace_id,
         )
     )
-    assert workflow is not None  # the local hash check above proved it exists
+    if workflow is None:
+        raise _copy_gone()
     workflow.name = snapshot.name
     workflow.description = snapshot.description
     workflow.source_prompt = snapshot.source_prompt
-    workflow.graph_json = snapshot.graph_json
+    # The payload's graph carries the published (manual) trigger; the copy's
+    # trigger is the installer's operational choice. Splice the local trigger
+    # into the stored graph so the two places the product reads it from — the
+    # graph (editor, recompile) and the columns (scheduler) — keep agreeing,
+    # and an armed schedule survives the update instead of being disarmed by
+    # the next graph save.
+    document["trigger"] = {
+        "kind": workflow.trigger_kind,
+        "cron": workflow.schedule_cron,
+        "timezone": workflow.schedule_timezone,
+    }
+    workflow.graph_json = json.dumps(document, separators=(",", ":"), sort_keys=True)
     workflow.version += 1
     db.flush()
     return InstallOut(
@@ -983,7 +1017,17 @@ def pin_install(
     lineage = marketplace_service.find_install(
         db, workspace_id=actor.workspace_id, listing_id=listing.id
     )
-    if lineage is None:
+    if lineage is None or (
+        marketplace_service.local_content_hash(
+            db,
+            kind=lineage.target_kind,
+            target_id=lineage.target_id,
+            workspace_id=actor.workspace_id,
+        )
+        is None
+    ):
+        # A lineage row whose copy was deleted reads as "not installed"
+        # everywhere else, so it is not pinnable either — the surfaces agree.
         raise HTTPException(
             status_code=404,
             detail="Nothing installed from this listing in this workspace",
