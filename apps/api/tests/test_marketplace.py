@@ -417,6 +417,71 @@ def test_org_visibility_is_owner_gated_at_publish_and_at_widen(
     ]
 
 
+def test_republishing_an_org_listing_is_owner_gated_too(owner: TestClient) -> None:
+    """New versions of an org listing ship org-wide instantly, so the author
+    alone cannot append them: the gate that guards widening guards republish."""
+    member = member_of(owner)
+    skill = create_skill(member, name="escalate", title="Escalate", body="v1 body.")
+    listing = publish(member, skill["id"], slug="escalate").json()
+    assert (
+        owner.patch(
+            f"/api/marketplace/listings/{listing['id']}", json={"visibility": "org"}
+        ).status_code
+        == 200
+    )
+
+    # The authoring member edits the source and tries to push v2 org-wide.
+    member.patch(f"/api/skills/{skill['id']}", json={"body": "v2 body."})
+    refused = publish(member, skill["id"], slug="escalate", changelog="v2")
+    assert refused.status_code == 403
+    # The published head is still v1 — nothing shipped.
+    detail = owner.get(f"/api/marketplace/listings/{listing['id']}").json()
+    assert detail["latest_version"] == 1
+
+    # An owner republishing their *own* org listing passes the same gate.
+    owned = create_skill(owner, name="sanctioned", title="Sanctioned", body="v1.")
+    org_listing = publish(
+        owner, owned["id"], slug="sanctioned", visibility="org"
+    ).json()
+    owner.patch(f"/api/skills/{owned['id']}", json={"body": "v2."})
+    approved = publish(owner, owned["id"], slug="sanctioned", changelog="v2")
+    assert approved.status_code == 201
+    assert approved.json()["id"] == org_listing["id"]
+    assert approved.json()["latest_version"] == 2
+
+
+def test_republish_with_org_visibility_widens_the_listing(owner: TestClient) -> None:
+    skill = create_skill(owner, name="wider", title="Wider", body="v1 body.")
+    listing = publish(owner, skill["id"], slug="wider").json()
+    assert listing["visibility"] == "workspace"
+
+    owner.patch(f"/api/skills/{skill['id']}", json={"body": "v2 body."})
+    widened = publish(
+        owner, skill["id"], slug="wider", changelog="v2", visibility="org"
+    )
+    assert widened.status_code == 201
+    assert widened.json()["visibility"] == "org"
+
+    # And the default (workspace) on a later republish never narrows it back.
+    owner.patch(f"/api/skills/{skill['id']}", json={"body": "v3 body."})
+    again = publish(owner, skill["id"], slug="wider", changelog="v3")
+    assert again.status_code == 201
+    assert again.json()["visibility"] == "org"
+
+
+def test_a_whitespace_title_update_is_refused(owner: TestClient) -> None:
+    skill = create_skill(owner, name="titled", title="Titled", body="Body.")
+    listing = publish(owner, skill["id"], slug="titled").json()
+    refused = owner.patch(
+        f"/api/marketplace/listings/{listing['id']}", json={"title": " "}
+    )
+    assert refused.status_code == 422
+    assert (
+        owner.get(f"/api/marketplace/listings/{listing['id']}").json()["title"]
+        == "Titled"
+    )
+
+
 def test_delist_withdraws_everywhere_and_restore_returns(owner: TestClient) -> None:
     skill = create_skill(owner, name="seasonal", title="Seasonal", body="Sometimes.")
     listing = publish(owner, skill["id"], slug="seasonal", visibility="org").json()

@@ -267,9 +267,21 @@ def publish_listing(
         ):
             # Including a *different* source under the same slug, even by the
             # same publisher: a slug names one thing's lineage, not a name pool.
+            # "Not available" rather than "already exists" — the conflicting row
+            # may be invisible to this caller (delisted, or workspace-tier in a
+            # sibling workspace), and its existence is not theirs to confirm.
             raise HTTPException(
                 status_code=409,
-                detail=f"A listing with the slug “{payload.slug}” already exists",
+                detail=f"The slug “{payload.slug}” is not available",
+            )
+        # New versions of an org-tier listing ship straight to the whole
+        # organization, so republishing is gated exactly like widening is:
+        # the owner approved what crossed the workspace boundary, and the
+        # author alone cannot swap that content out from under them.
+        if existing.visibility == "org" and actor.role != "owner":
+            raise HTTPException(
+                status_code=403,
+                detail="Republishing an organization listing requires the workspace owner",
             )
         if head is not None and head.content_hash == digest:
             raise HTTPException(
@@ -282,6 +294,11 @@ def publish_listing(
                 detail="A changelog is required when republishing an existing listing",
             )
         listing = existing
+        # Republish-and-widen in one step: honored, never the reverse — the
+        # body's default visibility is "workspace" and must not silently
+        # narrow an org listing. (The owner gate above already vetted "org".)
+        if payload.visibility == "org":
+            listing.visibility = "org"
         listing.title = title
         if payload.description.strip():
             listing.description = payload.description.strip()
@@ -376,6 +393,8 @@ def update_listing(
             detail="Publishing to the organization requires the workspace owner",
         )
     if payload.title is not None:
+        if not payload.title.strip():
+            raise HTTPException(status_code=422, detail="Title cannot be blank")
         listing.title = payload.title.strip()
     if payload.description is not None:
         listing.description = payload.description.strip()
