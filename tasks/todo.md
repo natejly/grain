@@ -492,10 +492,14 @@ visibility="org" and never silently narrows; duplicate-slug/taken-down
 conflicts answer non-confirming "not available"; whitespace-only titles
 422.
 
-⚠ Cross-branch migration hazard: this branch adds 0045_marketplace (on
-0044_conversation_index) and 0046_listing_installs (on 0045_marketplace).
-0045_templates (worktree-feature-sweep) and 0045_conversation_defaults
-(feat/agentic-workspace, which stacks 0046/0047 on top) claim the same
-numbers off the same 0044 parent. Whichever branch merges second needs
-re-parenting or an alembic merge revision — both the 0045 and 0046
-prefixes collide.
+⚠ Cross-branch migration coordination (convention agreed between the
+marketplace, feature-sweep, and agentic-workspace sessions 2026-08-23):
+0044_conversation_index is the last revision common to all branches, and
+each in-flight branch keeps its own internal numbering while it moves —
+this branch has 0045_marketplace → 0046_listing_installs, and the other
+two branches use overlapping 0045+ numbers of their own. Resolution is
+merge-order re-parenting, not slot reservation: whichever branch merges
+second (and third) renumbers its whole chain onto the then-current head
+and retargets the down_revisions. If this branch is not first in, re-parent
+0045_marketplace/0046_listing_installs onto the merge-time head; do not
+pre-claim numbers.
