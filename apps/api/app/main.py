@@ -19,6 +19,7 @@ from .api import (
     chat,
     comments,
     crons,
+    dashboard_subscriptions,
     dashboards,
     dbconnect,
     doc_pending,
@@ -131,6 +132,7 @@ app.include_router(sandbox.router)
 app.include_router(sandbox_tools.router)
 app.include_router(analytics.router)
 app.include_router(dashboards.router)
+app.include_router(dashboard_subscriptions.router)
 app.include_router(share_links.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)

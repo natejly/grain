@@ -33,7 +33,15 @@ cases, unit tests, and its own commit.
       fail-closed 404 for unknown/revoked/expired/deleted, dashboards
       re-queried LIVE server-side; web page app/share/[token], modal on
       Dashboards + Documents)
-- [ ] 10. Dashboard subscriptions: scheduled snapshot delivery
+- [x] 10. Dashboard subscriptions: scheduled snapshot delivery
+      (0052_dashboard_subscriptions; per-member recipient validated as a
+      workspace member — subscribing someone else needs the owner role, and
+      the membership is re-checked at send so a departed member stops
+      receiving; the tick only CLAIMS (day-wide "not yet fired in this
+      period" window, so a late ticker still delivers today's mail once) and
+      the live query + HTML render (mail_render) + SMTP run on a background
+      task per the F5 QA note; skips audit dashboard.subscription_skipped;
+      subscribe modal on Dashboards rows + read-only list on Schedules)
 - [ ] 11. Outbound webhooks + API tokens (trigger workflow / post to thread;
       event push)
 - [ ] 12. Inbound email → thread (provider-webhook endpoint, pairs with Rules)

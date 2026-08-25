@@ -2081,6 +2081,54 @@ class Monitor(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class DashboardSubscription(Base):
+    """A standing order to mail one member one dashboard on a schedule.
+
+    The Cron's shape once more: the same 5-field `schedule_cron` + IANA zone
+    pair validated by the same functions, and a `last_dispatched_at` claim
+    advanced by the same conditional UPDATE from the same tick. What a fire
+    does is a *read and a mail*: the dashboard's stored query re-runs live
+    against its dataset and the answer goes to the recipient's inbox as HTML —
+    no run, no agent, no policy question, because nothing here can act.
+
+    `dashboard_id` and `recipient_user_id` are plain columns per the house
+    convention for references that outlive their target: both are validated at
+    create time (the dashboard under the workspace, the recipient as a member),
+    and a target that has since gone makes the fire a skip-with-audit, never an
+    error out of the shared ticker — and never a mail to someone who left.
+    """
+
+    __tablename__ = "dashboard_subscriptions"
+    __table_args__ = (
+        # The sweep's scan: every enabled subscription, once a minute.
+        Index(
+            "ix_dashboard_subscriptions_workspace_enabled", "workspace_id", "enabled"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: Resolved under the subscription's own workspace at every fire — a purged
+    #: dashboard makes the fire a skip, never a stale mail.
+    dashboard_id: Mapped[str] = mapped_column(String(36), default="")
+    #: Whose inbox the snapshot lands in. The email is resolved at send time
+    #: through the Membership join, so a member who left stops receiving mail
+    #: the moment their membership row goes.
+    recipient_user_id: Mapped[str] = mapped_column(String(36), default="")
+    schedule_cron: Mapped[str] = mapped_column(String(120), default="")
+    schedule_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: The atomic claim column, exactly as Cron carries it — but read with a
+    #: day-wide catch-up window (services/dashboard_subscriptions.CATCHUP): a
+    #: subscription is typically daily, and a ticker that was down at 9:00
+    #: should still deliver today's mail at 9:37, not silently skip the day.
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ModelUsage(Base):
     """One billable model call: what it spent, who caused it, and at what rate.
 

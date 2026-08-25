@@ -66,6 +66,7 @@ from app.models import (
     Cron,
     Dashboard,
     DashboardPin,
+    DashboardSubscription,
     DashboardTemplate,
     Dataset,
     DbConnection,
@@ -675,6 +676,23 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["share_link"] = share_link.id
         ids["share_link_token"] = share_token
+
+        # A scheduled mail of that dashboard to this tenant's owner. The table
+        # carries no free text for the leak grep, but the workspace_id column
+        # enrols it in the tamper digest, and the DELETE DENY below proves a
+        # foreign tenant cannot silence (or discover) someone's morning mail.
+        dashboard_subscription = DashboardSubscription(
+            workspace_id=workspace_id,
+            dashboard_id=dashboard.id,
+            recipient_user_id=user_id,
+            schedule_cron="0 9 * * *",
+            schedule_timezone="UTC",
+            enabled=True,
+            created_by=user_id,
+        )
+        db.add(dashboard_subscription)
+        db.flush()
+        ids["dashboard_subscription"] = dashboard_subscription.id
 
         # A template whose declared shape the tenant's own dataset satisfies, so
         # a cross-tenant bind fails for the reason under test (the template is
@@ -2087,6 +2105,31 @@ ROUTE_CASES: List[RouteCase] = [
         "/shared/{token}",
         PUBLIC,
         path_ids={"token": "share_link_token"},
+    ),
+    # -- dashboard subscriptions -------------------------------------------
+    # The cron posture again: create names a *dashboard* in the body, and
+    # planting another tenant's dashboard id must 404 before any validation
+    # detail could confirm it — a subscription is a standing mail of that
+    # dashboard's data, so subscribing to foreign data is the whole attack.
+    RouteCase("GET", "/api/dashboard-subscriptions", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/dashboard-subscriptions",
+        DENY,
+        body={
+            "dashboard_id": "",
+            "schedule_cron": "0 9 * * *",
+            "schedule_timezone": "UTC",
+        },
+        body_ids={"dashboard_id": "dashboard"},
+        note="stands up recurring mail of another tenant's dashboard",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/dashboard-subscriptions/{subscription_id}",
+        DENY,
+        path_ids={"subscription_id": "dashboard_subscription"},
+        note="silences (and confirms) another tenant's scheduled mail",
     ),
     # -- database connections ---------------------------------------------
     RouteCase("GET", "/api/db/connections", SCOPED),

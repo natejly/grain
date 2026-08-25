@@ -40,6 +40,7 @@ from ..database import get_db
 from ..models import Agent, Workflow, WorkflowNodeRun, WorkflowRun
 from ..schemas import ApiModel
 from ..services import crons as cron_service
+from ..services import dashboard_subscriptions as subscription_service
 from ..services import monitors as monitor_service
 from ..services import spend_watch
 from ..services.audit import record_audit
@@ -156,6 +157,11 @@ class WorkflowTickOut(ApiModel):
     #: (services/spend_watch.py). Usually empty — the watch claims at most once
     #: an hour and speaks only on a 3× deviation.
     anomalies_flagged: List[str]
+    #: Dashboard subscriptions this tick claimed for delivery
+    #: (services/dashboard_subscriptions.py). The id names a subscription whose
+    #: mail was handed to a background task — a claim, not a delivery receipt:
+    #: a purged dashboard or departed recipient becomes a skip-with-audit there.
+    subscriptions_dispatched: List[str]
     moment: datetime
 
 
@@ -720,17 +726,27 @@ def tick(
     # rather than rows of its own, and at most hourly — comparing a day
     # against a week is not a per-minute question.
     anomaly_ids = spend_watch.sweep(db)
+    # Dashboard subscriptions claim here and mail on a background task: the
+    # claim is a handful of conditional UPDATEs, and the slow parts — the live
+    # dataset query and the SMTP conversation — must not delay the dispatches
+    # above (the F5 QA note: no more heavy inline work in the shared tick).
+    subscription_ids = subscription_service.dispatch_due(db)
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
     for workflow_run_id in recovered:
         background_tasks.add_task(executor.process_workflow_run, workflow_run_id)
     for cron_run_id in cron_run_ids:
         background_tasks.add_task(process_run, cron_run_id)
+    for subscription_id in subscription_ids:
+        background_tasks.add_task(
+            subscription_service.send_subscription, subscription_id
+        )
     return WorkflowTickOut(
         dispatched=[workflow_run.id for workflow_run in started],
         recovered=recovered,
         crons_dispatched=cron_run_ids,
         monitors_evaluated=monitor_ids,
         anomalies_flagged=anomaly_ids,
+        subscriptions_dispatched=subscription_ids,
         moment=schedule.floor_minute(utcnow()),
     )

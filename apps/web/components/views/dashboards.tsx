@@ -12,6 +12,7 @@ import type {
 import { Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ShareLinksModal } from "../share-links-modal";
+import { SubscribeModal } from "../subscribe-modal";
 import { useSubjectThread } from "../use-subject-thread";
 import { SubjectChatPanel } from "./subject-chat";
 import { DashboardCatalog, DashboardTemplates } from "./dashboard-catalog";
@@ -121,6 +122,9 @@ export function DashboardsView({
   // The dashboard whose share-links modal is open. Local on purpose: the modal
   // is self-contained (it talks to the API itself) and no other view cares.
   const [sharing, setSharing] = useState<Dashboard | null>(null);
+  // The dashboard whose subscribe modal is open — the same shape of surface,
+  // held the same way and for the same reason.
+  const [subscribing, setSubscribing] = useState<Dashboard | null>(null);
 
   const onRunSettled = useCallback(async () => {
     await chat?.reloadDashboards().catch(() => undefined);
@@ -191,6 +195,7 @@ export function DashboardsView({
         remove={removeDashboard}
         comment={openComments}
         share={setSharing}
+        subscribe={setSubscribing}
         // Launching *is* pinning: there is no single-dashboard page to
         // send someone to, and a chart you opened once is a chart you
         // wanted on your screen. Already pinned, it is merely revealed.
@@ -213,6 +218,14 @@ export function DashboardsView({
         resourceId={sharing.id}
         resourceName={sharing.name}
         close={() => setSharing(null)}
+      />
+    )}
+
+    {subscribing && (
+      <SubscribeModal
+        dashboardId={subscribing.id}
+        dashboardName={subscribing.name}
+        close={() => setSubscribing(null)}
       />
     )}
 

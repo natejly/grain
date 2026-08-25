@@ -5,7 +5,15 @@ import type {
   DashboardTemplate,
   Dataset,
 } from "@workspace/api-client";
-import { Copy, Link2, MessageSquareText, Pin, PinOff, Trash2 } from "lucide-react";
+import {
+  Copy,
+  Link2,
+  Mail,
+  MessageSquareText,
+  Pin,
+  PinOff,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { describeDashboard, refusalLines } from "./dashboard-format";
 
@@ -32,6 +40,8 @@ export type DashboardCatalogProps = {
   comment?: (dashboard: Dashboard) => void;
   /** Open the share-links modal: public read-only URLs for this dashboard. */
   share?: (dashboard: Dashboard) => void;
+  /** Open the subscribe modal: scheduled snapshot mail of this dashboard. */
+  subscribe?: (dashboard: Dashboard) => void;
 };
 
 /**
@@ -52,6 +62,7 @@ export function DashboardCatalog({
   open,
   comment,
   share,
+  subscribe,
 }: DashboardCatalogProps) {
   return (
     <section className="dashboard-catalog" aria-label="All dashboards">
@@ -113,6 +124,17 @@ export function DashboardCatalog({
                     onClick={() => share(dashboard)}
                   >
                     <Link2 size={14} />
+                  </button>
+                )}
+                {subscribe && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Subscribe to ${dashboard.name}`}
+                    title="Email this dashboard on a schedule"
+                    onClick={() => subscribe(dashboard)}
+                  >
+                    <Mail size={14} />
                   </button>
                 )}
                 <button

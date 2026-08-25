@@ -3273,6 +3273,107 @@
         "title": "DashboardSpec",
         "type": "object"
       },
+      "DashboardSubscriptionCreateRequest": {
+        "properties": {
+          "dashboard_id": {
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Dashboard Id",
+            "type": "string"
+          },
+          "recipient_user_id": {
+            "default": "",
+            "maxLength": 36,
+            "title": "Recipient User Id",
+            "type": "string"
+          },
+          "schedule_cron": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "default": "UTC",
+            "maxLength": 64,
+            "title": "Schedule Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dashboard_id",
+          "schedule_cron"
+        ],
+        "title": "DashboardSubscriptionCreateRequest",
+        "type": "object"
+      },
+      "DashboardSubscriptionOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "dashboard_id": {
+            "title": "Dashboard Id",
+            "type": "string"
+          },
+          "dashboard_name": {
+            "title": "Dashboard Name",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Dispatched At"
+          },
+          "recipient_user_id": {
+            "title": "Recipient User Id",
+            "type": "string"
+          },
+          "schedule_cron": {
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "title": "Schedule Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dashboard_id",
+          "dashboard_name",
+          "recipient_user_id",
+          "schedule_cron",
+          "schedule_timezone",
+          "enabled",
+          "last_dispatched_at",
+          "created_by",
+          "created_at"
+        ],
+        "title": "DashboardSubscriptionOut",
+        "type": "object"
+      },
       "DashboardTemplateBind": {
         "description": "Point a template at real data.\n\n`column_bindings` maps a name the template *declared* to a column the dataset\nactually has. A declared name absent from the map binds to the identical name\nin the dataset, so the common case \u2014 a dataset that already speaks the\ntemplate's vocabulary \u2014 needs no map at all.",
         "properties": {
@@ -9230,6 +9331,13 @@
             },
             "title": "Recovered",
             "type": "array"
+          },
+          "subscriptions_dispatched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Subscriptions Dispatched",
+            "type": "array"
           }
         },
         "required": [
@@ -9238,6 +9346,7 @@
           "crons_dispatched",
           "monitors_evaluated",
           "anomalies_flagged",
+          "subscriptions_dispatched",
           "moment"
         ],
         "title": "WorkflowTickOut",
@@ -14368,6 +14477,178 @@
         "summary": "Save Dashboard Layout",
         "tags": [
           "dashboards"
+        ]
+      }
+    },
+    "/api/dashboard-subscriptions": {
+      "get": {
+        "operationId": "list_dashboard_subscriptions_api_dashboard_subscriptions_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DashboardSubscriptionOut"
+                  },
+                  "title": "Response List Dashboard Subscriptions Api Dashboard Subscriptions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Dashboard Subscriptions",
+        "tags": [
+          "dashboard-subscriptions"
+        ]
+      },
+      "post": {
+        "operationId": "create_dashboard_subscription_api_dashboard_subscriptions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardSubscriptionCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardSubscriptionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Dashboard Subscription",
+        "tags": [
+          "dashboard-subscriptions"
+        ]
+      }
+    },
+    "/api/dashboard-subscriptions/{subscription_id}": {
+      "delete": {
+        "operationId": "delete_dashboard_subscription_api_dashboard_subscriptions__subscription_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Dashboard Subscription",
+        "tags": [
+          "dashboard-subscriptions"
         ]
       }
     },

@@ -1260,6 +1260,34 @@ export type SharedResource = {
   updated_at: string | null;
 };
 
+/**
+ * A standing order to mail one member one dashboard on a schedule. The
+ * schedule pair is the Cron's (5-field cron + IANA zone), the fire re-runs the
+ * dashboard's query live, and `last_dispatched_at` is the ticker's claim — a
+ * fact about dispatch, not a delivery receipt.
+ */
+export type DashboardSubscription = {
+  id: string;
+  dashboard_id: string;
+  /** Joined at read time; '' when the dashboard has since been deleted. */
+  dashboard_name: string;
+  recipient_user_id: string;
+  schedule_cron: string;
+  schedule_timezone: string;
+  enabled: boolean;
+  last_dispatched_at: string | null;
+  created_by: string;
+  created_at: string;
+};
+
+export type DashboardSubscriptionCreateInput = {
+  dashboard_id: string;
+  schedule_cron: string;
+  schedule_timezone?: string;
+  /** Omit (or "") to subscribe yourself; naming another member is an owner's move. */
+  recipient_user_id?: string;
+};
+
 export type AppRelease = {
   id: string;
   version: number;
@@ -3308,6 +3336,34 @@ export class WorkspaceApi {
     return this.request(
       `/api/share-links/${linkId}/revoke`,
       { method: "POST" },
+      true,
+    );
+  }
+
+  // --- Dashboard subscriptions ----------------------------------------------
+  // Scheduled snapshot mail, dispatched by the same tick that fires crons. The
+  // list is already visibility-filtered by the server: a member sees their own
+  // rows (created by or addressed to them), an owner every row.
+
+  listDashboardSubscriptions(): Promise<DashboardSubscription[]> {
+    return this.request("/api/dashboard-subscriptions");
+  }
+
+  createDashboardSubscription(
+    payload: DashboardSubscriptionCreateInput,
+  ): Promise<DashboardSubscription> {
+    return this.request(
+      "/api/dashboard-subscriptions",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  /** Stop the mail. 404 for a row the caller may not see — nothing confirmed. */
+  deleteDashboardSubscription(subscriptionId: string): Promise<void> {
+    return this.request(
+      `/api/dashboard-subscriptions/${subscriptionId}`,
+      { method: "DELETE" },
       true,
     );
   }
