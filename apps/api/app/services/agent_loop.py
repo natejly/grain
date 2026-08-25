@@ -1112,7 +1112,7 @@ def _amended(raw_arguments: str, amendment: Optional[Any]) -> str:
     return json.dumps({**parsed, **amendment})
 
 
-def _absorb_steering(db: Session, run: Run, state: LoopState) -> None:
+def _absorb_steering(db: Session, run: Run, state: LoopState) -> int:
     """Fold user guidance sent mid-run into the model's next call.
 
     Steering arrives as `run.steer` events; the per-run `sequence` is the
@@ -1130,6 +1130,7 @@ def _absorb_steering(db: Session, run: Run, state: LoopState) -> None:
         )
         .order_by(RunEvent.sequence)
     ).all()
+    absorbed = 0
     for event in rows:
         try:
             content = str(json.loads(event.payload_json).get("content") or "")
@@ -1137,7 +1138,9 @@ def _absorb_steering(db: Session, run: Run, state: LoopState) -> None:
             content = ""
         if content.strip():
             state.input_items.append({"role": "user", "content": content})
+            absorbed += 1
         state.steered_sequence = event.sequence
+    return absorbed
 
 
 def _drain_pending(
@@ -1526,9 +1529,13 @@ def _advance(
                 if reason == "max_output_tokens"
                 else "the model stopped early"
             )
+            # No "say continue" advice on purpose: the next turn's transcript
+            # truncates long messages, so a continue could not reliably see
+            # what it was continuing — advertising it would promise more than
+            # the product keeps. The note itself stays: the reader must know
+            # the answer is not the whole answer.
             return Done(
-                answer=answer
-                + f"\n\n*(The answer was cut short — {note}. Say “continue” for the rest.)*",
+                answer=answer + f"\n\n*(The answer was cut short — {note}.)*",
                 evidence=state.evidence,
             )
 
@@ -1538,6 +1545,23 @@ def _advance(
             if getattr(item, "type", None) == "function_call"
         ]
         if not calls:
+            # The finish-time steering check: a note typed during the FINAL
+            # model call passed the route's 409 gate (the run was still
+            # running) but arrived after the last absorb checkpoint. Without
+            # this, that note would be silently ignored for the turn it aimed
+            # at — accepted with a 202, folded into nothing. Absorbing here
+            # and looping once more answers it in this turn; the answer so far
+            # is kept as context, exactly as a tool round would keep it.
+            if (
+                state.iteration < MAX_ITERATIONS
+                and _absorb_steering(db, run, state) > 0
+            ):
+                state.input_items.extend(
+                    _serialize_item(item) for item in response.output or []
+                )
+                if state.text_so_far:
+                    state.text_so_far += "\n\n"
+                continue
             answer = (state.text_so_far or response.output_text or "").strip()
             if not answer:
                 raise RuntimeError("Model returned an empty response")

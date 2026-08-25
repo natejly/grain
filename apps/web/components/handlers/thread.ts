@@ -471,7 +471,10 @@ export function createThreadHandlers({
     if (aside === "") return;
     // A live run makes the same box a steering wheel: the note joins the
     // running turn instead of queueing a new one. Asides fall through — they
-    // never belonged to a run in the first place.
+    // never belonged to a run in the first place. Per-turn composer state (an
+    // attached skill, the model override) deliberately does NOT ride a steer
+    // and is NOT cleared by one: those controls configure the next full turn,
+    // and the chip staying visible is what says so.
     if (activeRun && aside === null) {
       setDraft("");
       setError("");
