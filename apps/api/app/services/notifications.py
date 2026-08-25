@@ -100,3 +100,26 @@ def resolve_for_comment(
         row.body = ""
         resolve(db, notification=row, resolved_by=resolved_by)
     return list(rows)
+
+
+def resolve_for_monitor(
+    db: Session, *, workspace_id: str, monitor_id: str, resolved_by: str
+) -> List[Notification]:
+    """Resolve every open notification deep-linking `monitor_id`.
+
+    A deleted monitor's open alerts would otherwise badge every member's Inbox
+    forever, deep-linking a Monitors row that no longer exists. Unlike a
+    deleted comment nothing here needs redacting — the alert's text states a
+    workspace fact, not a snapshot of removed content. Does not commit — rides
+    in the monitor-delete transaction.
+    """
+    rows = db.scalars(
+        select(Notification).where(
+            Notification.workspace_id == workspace_id,
+            Notification.monitor_id == monitor_id,
+            Notification.status == "open",
+        )
+    ).all()
+    for row in rows:
+        resolve(db, notification=row, resolved_by=resolved_by)
+    return list(rows)

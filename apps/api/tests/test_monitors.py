@@ -370,10 +370,75 @@ def test_the_edge_realerts_only_after_a_recovery(
     assert client.post(f"/api/monitors/{monitor_id}/run-now").json()["state"] == "ok"
     assert len(alerts_for(db, monitor_id)) == 1
 
+    # ...and the room acknowledges the first alert — one OPEN row per monitor
+    # is the contract, so an unacked alert deliberately suppresses a re-alert.
+    (alert,) = alerts_for(db, monitor_id)
+    assert client.post(f"/api/notifications/{alert.id}/resolve").status_code == 200
+
     # ...so the next crossing is news again.
     _set_threshold(db, monitor_id, 50.0)
     assert client.post(f"/api/monitors/{monitor_id}/run-now").json()["state"] == "tripped"
     assert len(alerts_for(db, monitor_id)) == 2
+
+
+def test_one_open_alert_per_monitor_even_when_evaluations_race(
+    db: Any, identity_client: Callable[..., Any]
+) -> None:
+    """The notify is deduped against the OPEN alert, not just the stored edge
+    state. Two halves: a recover-and-recross while the first alert sits unacked
+    writes no second row (the room is already alerted), and a racing evaluator
+    holding a stale `last_state` — run-now is claim-free, so it can see the
+    crossing concurrently with the tick — is caught by the same read."""
+    client = identity_client(name="Dedup owner", workspace_name="Dedup workspace")
+    dataset = make_dataset(client)
+    monitor_id = create_monitor(client, dataset["id"], threshold=50.0)["id"]
+
+    assert client.post(f"/api/monitors/{monitor_id}/run-now").json()["state"] == "tripped"
+    assert len(alerts_for(db, monitor_id)) == 1
+
+    # Recover, then re-cross with the first alert still open: edge re-armed,
+    # but no duplicate open row for the same monitor.
+    _set_threshold(db, monitor_id, 1000.0)
+    assert client.post(f"/api/monitors/{monitor_id}/run-now").json()["state"] == "ok"
+    _set_threshold(db, monitor_id, 50.0)
+    assert client.post(f"/api/monitors/{monitor_id}/run-now").json()["state"] == "tripped"
+    alerts = alerts_for(db, monitor_id)
+    assert len(alerts) == 1 and alerts[0].status == "open"
+
+    # The race shape: an evaluator that read `last_state` before the alert
+    # landed would pass the edge check — the open-alert read still stops it.
+    monitor = db.scalar(select(Monitor).where(Monitor.id == monitor_id))
+    monitor.last_state = ""
+    db.commit()
+    assert monitor_service.evaluate(db, monitor).state == "tripped"
+    assert len(alerts_for(db, monitor_id)) == 1
+
+
+def test_a_nan_metric_is_a_skip_not_an_alert_or_an_invalid_json_write(
+    db: Any, identity_client: Callable[..., Any], monkeypatch: Any
+) -> None:
+    """NaN is a float, so it passes the numeric check; every comparator answers
+    False, and `json.dumps` would write the invalid-JSON literal `NaN` into
+    `last_value_json`. It must be a skip — reasoned, audited, edge untouched."""
+    client = identity_client(name="NaN owner", workspace_name="NaN workspace")
+    dataset = make_dataset(client)
+    monitor_id = create_monitor(
+        client, dataset["id"], comparator="lt", threshold=100.0
+    )["id"]
+
+    class _Result:
+        rows = [{"total": float("nan")}]
+
+    monkeypatch.setattr(
+        monitor_service, "execute_dataset_query", lambda *args, **kwargs: _Result()
+    )
+    monitor = db.scalar(select(Monitor).where(Monitor.id == monitor_id))
+    outcome = monitor_service.evaluate(db, monitor)
+    assert outcome.state == "skipped"
+    assert "finite" in outcome.reason
+    assert alerts_for(db, monitor_id) == []
+    db.refresh(monitor)
+    assert monitor.last_state == "" and monitor.last_value_json == ""
 
 
 def test_a_disabled_monitor_never_evaluates(
@@ -507,3 +572,25 @@ def test_a_trip_lands_in_every_members_inbox_and_resolve_clears_it(
     assert resolved.status_code == 200, resolved.text
     for viewer in (owner, member):
         assert viewer.get("/api/inbox").json()["alerts"] == []
+
+
+def test_deleting_a_monitor_resolves_its_open_alerts(
+    db: Any, identity_client: Callable[..., Any]
+) -> None:
+    """An open alert outliving its monitor would badge every Inbox forever,
+    deep-linking a Monitors row that no longer exists — the delete resolves it
+    in the same transaction."""
+    client = identity_client(name="Sweep-away owner", workspace_name="Sweep-away workspace")
+    dataset = make_dataset(client)
+    monitor_id = create_monitor(client, dataset["id"], threshold=10.0)["id"]
+
+    assert client.post(f"/api/monitors/{monitor_id}/run-now").json()["state"] == "tripped"
+    (alert,) = alerts_for(db, monitor_id)
+    assert alert.status == "open"
+    assert [row["id"] for row in client.get("/api/inbox").json()["alerts"]] == [alert.id]
+
+    assert client.delete(f"/api/monitors/{monitor_id}").status_code == 204
+    db.expire_all()
+    (alert,) = alerts_for(db, monitor_id)
+    assert alert.status == "resolved"
+    assert client.get("/api/inbox").json()["alerts"] == []

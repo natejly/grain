@@ -38,11 +38,12 @@ from __future__ import annotations
 import json
 import math
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from pydantic import Field
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from ..auth import Actor, require_owner
@@ -248,6 +249,23 @@ def remove_member(
     ):
         raise HTTPException(status_code=409, detail=LAST_OWNER_DETAIL)
     db.delete(membership)
+    # Any approval still routed to them goes back to "anyone", in the same
+    # transaction: a parked call assigned to a departed member would otherwise
+    # 409 every remaining reviewer while listing in nobody's actionable queue —
+    # parked forever. Only *proposed* rows are touched; decided rows keep the
+    # assignment as history.
+    released = cast(
+        "CursorResult[Any]",
+        db.execute(
+            update(AgentToolCall)
+            .where(
+                AgentToolCall.workspace_id == actor.workspace_id,
+                AgentToolCall.assigned_to == user.id,
+                AgentToolCall.status == "proposed",
+            )
+            .values(assigned_to="")
+        ),
+    ).rowcount
     record_audit(
         db,
         workspace_id=actor.workspace_id,
@@ -255,7 +273,11 @@ def remove_member(
         action="membership.removed",
         resource_type="membership",
         resource_id=membership.id,
-        detail={"user_id": user.id, "role": membership.role},
+        detail={
+            "user_id": user.id,
+            "role": membership.role,
+            "assignments_released": int(released),
+        },
     )
     db.commit()
     return Response(status_code=204)

@@ -105,6 +105,7 @@ def _claim_decision(
     workspace_id: str,
     decision: str,
     actor_id: str,
+    assignee_gate: bool = False,
 ) -> bool:
     """Move one *proposed* call to its decision, and say whether we moved it.
 
@@ -120,18 +121,29 @@ def _claim_decision(
     Returning a bool rather than raising keeps the two routes free to describe
     the conflict in their own words, and keeps the caller honest about the fact
     that losing is an ordinary outcome.
+
+    `assignee_gate` folds the assignment check into the same CAS — only
+    meaningful for `AgentToolCall`, the one decidable table with `assigned_to`.
+    The route's plain `if` on the assignee gives the friendly 409, but an
+    assign racing a decide can move `assigned_to` between that read and this
+    write; putting the predicate in the WHERE means a decider who was raced by
+    an assignment-to-someone-else loses here instead of deciding a call that
+    now names another member.
     """
+    criteria = [
+        model.id == call_id,
+        model.workspace_id == workspace_id,
+        model.status == "proposed",
+    ]
+    if assignee_gate:
+        criteria.append(AgentToolCall.assigned_to.in_(("", actor_id)))
     # The cast is only about typing: an ORM-enabled UPDATE really does return a
     # CursorResult, but Session.execute is annotated as the generic Result.
     claimed = cast(
         "CursorResult[Any]",
         db.execute(
             update(model)
-            .where(
-                model.id == call_id,
-                model.workspace_id == workspace_id,
-                model.status == "proposed",
-            )
+            .where(*criteria)
             .values(status=decision, decided_by=actor_id, decided_at=utcnow())
         ),
     ).rowcount
@@ -634,7 +646,45 @@ def assign_agent_tool_call(
             # 404, indistinguishable from a user that does not exist — the
             # refusal must not confirm a foreign workspace's user id.
             raise HTTPException(status_code=404, detail="Member not found")
-    call.assigned_to = payload.user_id
+        # The assignee must pass the same run-visibility gate the assigner did:
+        # routing a private thread's park to a member who cannot see the run
+        # would create an approval only the assigner can act on — the assignee's
+        # inbox never lists it, their decide 404s, and everyone else 409s. A
+        # 409 rather than 404: the member exists and the assigner can already
+        # see the whole run, so nothing is disclosed by saying why.
+        if not conversations.run_activity_visible(
+            db,
+            actor_workspace_id=actor.workspace_id,
+            actor_user_id=payload.user_id,
+            run=run,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="That member cannot view this thread",
+            )
+    # No Notification row for the assignee, deliberately: the assignment
+    # already surfaces through their approvals badge (`waitingOnMe` counts
+    # rows assigned to them), so a notification would double-count the same
+    # actionable item in the same Inbox.
+    #
+    # The write is a compare-and-set on `status = 'proposed'`, not the plain
+    # attribute write the 409 above pre-checked: assign racing decide would
+    # otherwise re-park an already-decided row's `assigned_to`. Same shape as
+    # `_claim_decision`, settled by the database while the row is held.
+    claimed = cast(
+        "CursorResult[Any]",
+        db.execute(
+            update(AgentToolCall)
+            .where(
+                AgentToolCall.id == call.id,
+                AgentToolCall.workspace_id == actor.workspace_id,
+                AgentToolCall.status == "proposed",
+            )
+            .values(assigned_to=payload.user_id)
+        ),
+    ).rowcount
+    if not claimed:
+        raise HTTPException(status_code=409, detail="Tool call already decided")
     append_event(
         db,
         workspace_id=actor.workspace_id,
@@ -720,6 +770,7 @@ def decide_agent_tool_call(
         workspace_id=actor.workspace_id,
         decision="approved" if payload.decision == "approved" else "denied",
         actor_id=actor.user_id,
+        assignee_gate=True,
     ):
         # Losing here is the whole point: the reviewer who was raced must not
         # also schedule `resume_run`, or the tool the other reviewer denied is

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -35,7 +36,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..clock import utcnow
-from ..models import Monitor
+from ..models import Monitor, Notification
 from ..schemas import DatasetQuery
 from .analytics import AnalyticsValidationError, execute_dataset_query
 from .audit import record_audit
@@ -189,13 +190,23 @@ def evaluate(db: Session, monitor: Monitor, *, actor_id: str = "") -> EvalOutcom
             return _skip(
                 db, monitor, actor_id=who, reason="metric value is not a number"
             )
+        # NaN passes the isinstance check but answers False to every comparator,
+        # and json.dumps would write the invalid-JSON literal `NaN` into
+        # last_value_json. Infinities dump the same way. Neither is a value a
+        # threshold can honestly judge — skip, exactly like a non-number.
+        if isinstance(value, float) and not math.isfinite(value):
+            return _skip(
+                db, monitor, actor_id=who, reason="metric value is not a finite number"
+            )
         compare = COMPARATORS.get(monitor.comparator)
         if compare is None:
             return _skip(db, monitor, actor_id=who, reason="unknown comparator")
         tripped = compare(float(value), monitor.threshold)
         value_json = json.dumps(value)
         state = "tripped" if tripped else "ok"
-        if tripped and monitor.last_state != "tripped":
+        if tripped and monitor.last_state != "tripped" and not _open_alert_exists(
+            db, monitor
+        ):
             notify(
                 db,
                 workspace_id=monitor.workspace_id,
@@ -236,6 +247,31 @@ def evaluate(db: Session, monitor: Monitor, *, actor_id: str = "") -> EvalOutcom
         if not isinstance(exc, (AnalyticsValidationError, ValueError)):
             logger.exception("monitor %s evaluation failed", monitor.id)
         return _skip(db, monitor, actor_id=who, reason=str(exc) or "query failed")
+
+
+def _open_alert_exists(db: Session, monitor: Monitor) -> bool:
+    """Is an unresolved alert for this monitor already in the Inbox?
+
+    Two dedups in one read. First, the race: run-now is claim-free, so it can
+    evaluate the same crossing concurrently with the tick — both see a stale
+    `last_state`, and without this check both would notify. Second, the unacked
+    edge: while an alert nobody has resolved still badges every Inbox, a
+    recovery-and-recross has nothing new to tell the room — one open row per
+    monitor is the whole contract. The re-alert in
+    `test_the_edge_realerts_only_after_a_recovery` therefore requires the
+    earlier alert to have been acknowledged.
+    """
+    return (
+        db.scalar(
+            select(Notification.id).where(
+                Notification.workspace_id == monitor.workspace_id,
+                Notification.kind == "monitor_alert",
+                Notification.monitor_id == monitor.id,
+                Notification.status == "open",
+            )
+        )
+        is not None
+    )
 
 
 def _skip(db: Session, monitor: Monitor, *, actor_id: str, reason: str) -> EvalOutcome:

@@ -30,6 +30,7 @@ from ..database import get_db
 from ..models import Dataset, Monitor
 from ..schemas import ApiModel, DatasetQuery
 from ..services import monitors as monitor_service
+from ..services import notifications as notification_service
 from ..services.audit import record_audit
 from ..services.workflows.validate import cron_error
 from .dependencies import idempotency_key
@@ -291,6 +292,14 @@ def delete_monitor(
     db: Session = Depends(get_db),
 ) -> None:
     monitor = _load(db, actor, monitor_id)
+    # The monitor's open alerts go with it: left open they would badge every
+    # member's Inbox forever, deep-linking a Monitors row that no longer exists.
+    cleared = notification_service.resolve_for_monitor(
+        db,
+        workspace_id=actor.workspace_id,
+        monitor_id=monitor.id,
+        resolved_by=actor.user_id,
+    )
     record_audit(
         db,
         workspace_id=actor.workspace_id,
@@ -298,7 +307,7 @@ def delete_monitor(
         action="monitor.deleted",
         resource_type="monitor",
         resource_id=monitor.id,
-        detail={"name": monitor.name},
+        detail={"name": monitor.name, "alerts_resolved": len(cleared)},
     )
     db.delete(monitor)
     db.commit()

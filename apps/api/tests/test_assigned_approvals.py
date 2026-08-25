@@ -169,6 +169,52 @@ def test_another_members_personal_thread_park_cannot_be_routed(client, _no_resum
     assert refused.status_code == 404
 
 
+def test_assignment_refuses_an_assignee_who_cannot_see_the_thread(client, _no_resume):
+    """Routing must respect the ASSIGNEE'S run visibility too: a private
+    thread's park assigned to a non-viewer would be an approval only the
+    assigner can act on — the assignee's inbox never lists it, their decide
+    404s, everyone else 409s. A 409, not a 404: the member exists and the
+    assigner already sees the whole run."""
+    _run_id, call_id = _park_run(client)  # owner's personal thread, not shared
+    workspace_id = _identity(client)["workspace_id"]
+    _client_b, user_b = _member(workspace_id, name="Blind assignee")
+
+    refused = _assign(client, call_id, user_b)
+    assert refused.status_code == 409
+
+    # The refusal changed nothing: the call still waits on anyone, and the
+    # owner can still decide it.
+    inbox = client.get("/api/inbox").json()
+    row = next(row for row in inbox["approvals"] if row["id"] == call_id)
+    assert row["assigned_to"] == ""
+    assert _decide(client, call_id).status_code == 200
+
+
+def test_removing_a_member_releases_their_parked_assignments(client, _no_resume):
+    """A parked call routed to a member who is then removed must fall back to
+    'anyone' in the same transaction — otherwise every remaining reviewer 409s
+    on it, it lists in nobody's actionable queue, and it is parked forever."""
+    run_id, call_id = _park_run(client)
+    _share_thread(run_id)
+    workspace_id = _identity(client)["workspace_id"]
+    _client_b, user_b = _member(workspace_id, name="Departing assignee")
+    assert _assign(client, call_id, user_b).status_code == 200
+
+    members = client.get("/api/admin/members").json()
+    membership_id = next(
+        row["membership_id"] for row in members if row["user_id"] == user_b
+    )
+    assert client.delete(f"/api/admin/members/{membership_id}").status_code == 204
+
+    inbox = client.get("/api/inbox").json()
+    row = next(row for row in inbox["approvals"] if row["id"] == call_id)
+    assert row["assigned_to"] == "", "the removal must hand the call back to anyone"
+
+    decided = _decide(client, call_id)
+    assert decided.status_code == 200
+    assert _no_resume, "a released approval must be decidable again"
+
+
 def test_a_decided_call_refuses_routing(client, _no_resume):
     _run_id, call_id = _park_run(client)
     assert _decide(client, call_id, "denied").status_code == 200

@@ -330,3 +330,12 @@ Known follow-ups deferred from the F3 QA review:
   — revisit if mention fan-out grows.
 - QA #10: mention chips in comment-format.ts re-derive from current member
   names, so a rename leaves stale chip text — cosmetic only.
+
+Design consideration from the F5 QA review, for the F13 digests agent:
+
+- F5 QA #10: monitor evaluation (workflows.py tick, monitors step) runs inline
+  DuckDB inside the shared tick request — slow monitors delay workflow/cron
+  dispatch behind them. F13 must not add more heavy inline work to the tick:
+  digests should render/send via the background-enqueue path (or keep per-tick
+  work strictly bounded), and a future fix could move monitor evaluation there
+  too.

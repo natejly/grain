@@ -255,14 +255,21 @@ function ApprovalRow({
             )}
         </select>
       </label>
+      {/* An assigned-away row's decision belongs to its assignee — the server
+          would 409 either button, so neither is offered as pressable. */}
       <div className="decision-buttons">
-        <button disabled={busy} onClick={() => void choose("denied")}>
+        <button
+          disabled={busy || dimmed}
+          title={dimmed ? "Waiting on its assignee" : undefined}
+          onClick={() => void choose("denied")}
+        >
           <X size={15} />
           Deny
         </button>
         <button
           className="approve"
-          disabled={busy}
+          disabled={busy || dimmed}
+          title={dimmed ? "Waiting on its assignee" : undefined}
           onClick={() => void choose("approved")}
         >
           <Check size={15} />
@@ -320,6 +327,11 @@ export function InboxView({
     () => [...buckets.mine, ...buckets.unassigned, ...buckets.others],
     [buckets],
   );
+  // Rows a colleague is waiting on sit at the end of the flat array; only the
+  // prefix is this reader's to act on — deciding an assigned-away row is a
+  // guaranteed 409, so the keyboard walk stops before them and their buttons
+  // are disabled.
+  const actionableCount = buckets.mine.length + buckets.unassigned.length;
   const holds = feed?.budget_holds ?? [];
   const mentions = feed?.mentions ?? [];
   const alerts = feed?.alerts ?? [];
@@ -336,23 +348,23 @@ export function InboxView({
       if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "j" || event.key === "J") {
-        setFocusIndex((index) => Math.min(index + 1, Math.max(approvals.length - 1, 0)));
+        setFocusIndex((index) => Math.min(index + 1, Math.max(actionableCount - 1, 0)));
       } else if (event.key === "k" || event.key === "K") {
         setFocusIndex((index) => Math.max(index - 1, 0));
       } else if (event.key === "a" || event.key === "A" || event.key === "d" || event.key === "D") {
         const row = approvals[focusIndex];
-        if (!row) return;
+        if (!row || focusIndex >= actionableCount) return;
         const decision = event.key.toLowerCase() === "a" ? "approved" : "denied";
         void decide(asCall(row), decision, false).then(refreshFeed);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [section, approvals, focusIndex, decide, refreshFeed]);
+  }, [section, approvals, actionableCount, focusIndex, decide, refreshFeed]);
 
   useEffect(() => {
-    setFocusIndex((index) => Math.min(index, Math.max(approvals.length - 1, 0)));
-  }, [approvals.length]);
+    setFocusIndex((index) => Math.min(index, Math.max(actionableCount - 1, 0)));
+  }, [actionableCount]);
 
   const tabs: Array<{ id: Section; label: string; count?: number }> = [
     { id: "approvals", label: "Needs approval", count: approvals.length },
