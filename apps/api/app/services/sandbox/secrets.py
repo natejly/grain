@@ -1,9 +1,13 @@
 """Workspace secrets the sandbox can read as environment variables.
 
 The "connect stuff" seam. A user registers a credential once; generated code
-reads it from the environment (`os.environ["STRIPE_API_KEY"]`) and the value
-never touches a prompt, a tool argument, or the transcript. Three rules make
-that safe enough to offer:
+reads it from the environment (`os.environ["STRIPE_API_KEY"]`). The value is
+never *injected* into a prompt, a tool argument, or the transcript — the model
+is told the name a run can read, never the value. What the sandbox does with it
+is a different question: code that prints the value (`print(os.environ[...])`)
+sends it to stdout like any other byte, and stdout is rendered, persisted, and
+streamed. The environment hides the secret from the model; it does not stop code
+the model wrote from choosing to reveal it. Three rules bound the rest:
 
 *Encrypted at rest, decrypted only to inject.* Values are Fernet ciphertext
 under the same key the OAuth connectors use. `list_secrets` returns names and
@@ -25,10 +29,12 @@ the approver weighs both at once.
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Dict, List
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...clock import utcnow
@@ -37,11 +43,37 @@ from ...models import SandboxSecret, new_id
 from ..crypto import EncryptionNotConfiguredError, decrypt_secret, encrypt_secret
 from .policy import sandbox_env
 
+logger = logging.getLogger(__name__)
+
 #: An environment variable name: uppercase, starts with a letter, no surprises.
 #: Deliberately stricter than POSIX (which allows lowercase) because a secret is
 #: a human-typed constant and a predictable shape is easier to reason about than
 #: a permissive one.
 NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+
+#: Env names that steer *how* a process runs rather than what a service call
+#: carries. None of these is a policy key, so `_reserved_names()` would let them
+#: through — but a run's env is `{**base, **secrets}`, so a secret named `PATH`
+#: or `LD_PRELOAD` *wins* the merge and can redirect which binary or shared
+#: object the interpreter loads. That is code execution dressed as a credential,
+#: so the name is refused outright, independent of the network policy.
+DANGEROUS_NAMES = frozenset(
+    {
+        "PATH",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "LD_AUDIT",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "IFS",
+        "BASH_ENV",
+        "ENV",
+        "SHELLOPTS",
+    }
+)
 
 
 class SecretError(ValueError):
@@ -77,7 +109,11 @@ def validate_name(name: str) -> str:
             "A secret name must be UPPERCASE letters, digits and underscores, "
             "starting with a letter — e.g. STRIPE_API_KEY."
         )
-    if cleaned in _reserved_names() or cleaned.startswith("GRAIN_"):
+    if (
+        cleaned in _reserved_names()
+        or cleaned in DANGEROUS_NAMES
+        or cleaned.startswith("GRAIN_")
+    ):
         raise SecretError(f"“{cleaned}” is reserved by the sandbox and cannot be used.")
     return cleaned
 
@@ -104,11 +140,7 @@ def set_secret(
             "encrypted. Set it (see .env.example) and try again."
         ) from exc
 
-    row = db.scalars(
-        select(SandboxSecret)
-        .where(SandboxSecret.workspace_id == workspace_id)
-        .where(SandboxSecret.name == clean)
-    ).first()
+    row = _find(db, workspace_id=workspace_id, name=clean)
     if row is None:
         row = SandboxSecret(
             id=new_id(),
@@ -118,12 +150,34 @@ def set_secret(
             created_by=user_id,
         )
         db.add(row)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Two PUTs for the same new name raced; the other won the unique
+            # (workspace_id, name) row. Roll back our failed insert and fall
+            # through to updating the row that now exists, so the last writer
+            # wins rather than one caller getting a 500.
+            db.rollback()
+            row = _find(db, workspace_id=workspace_id, name=clean)
+            if row is None:  # pragma: no cover — the row must exist post-conflict
+                raise
+            row.value_enc = ciphertext
+            row.updated_at = utcnow()
+            db.commit()
     else:
         row.value_enc = ciphertext
         row.updated_at = utcnow()
-    db.commit()
+        db.commit()
     db.refresh(row)
     return row
+
+
+def _find(db: Session, *, workspace_id: str, name: str) -> SandboxSecret | None:
+    return db.scalars(
+        select(SandboxSecret)
+        .where(SandboxSecret.workspace_id == workspace_id)
+        .where(SandboxSecret.name == name)
+    ).first()
 
 
 def list_secrets(db: Session, *, workspace_id: str) -> List[SandboxSecret]:
@@ -176,6 +230,25 @@ def secret_env(db: Session, *, workspace_id: str, settings: Settings) -> Dict[st
     for row in list_secrets(db, workspace_id=workspace_id):
         try:
             env[row.name] = decrypt_secret(row.value_enc, settings)
-        except Exception:  # noqa: BLE001 — a bad row must not sink the session
+        except EncryptionNotConfiguredError:
+            # The key that stored these is gone entirely: every row will fail, so
+            # the whole workspace's secrets silently vanish from the session. That
+            # is a configuration problem, not a per-row one — surface it once, by
+            # name, so it is diagnosable rather than a mystery empty environment.
+            logger.warning(
+                "sandbox secret %r for workspace %s skipped: encryption key not "
+                "configured",
+                row.name,
+                workspace_id,
+            )
+            continue
+        except Exception:  # noqa: BLE001 — a single bad row must not sink the session
+            # One row will not decrypt (key rotated after it was stored). Log the
+            # name, never the ciphertext, so the user can re-enter that one secret.
+            logger.warning(
+                "sandbox secret %r for workspace %s skipped: value did not decrypt",
+                row.name,
+                workspace_id,
+            )
             continue
     return env

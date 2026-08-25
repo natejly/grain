@@ -176,11 +176,21 @@ under an open network; reaching a named service needed a place to put the key.
 
 Three rules keep it from being a new hole rather than a new arm:
 
-- **The value never enters the model's world.** No read path returns it: `list_secrets`
-  answers with names and metadata only, and `SecretOut` has no value field to
-  blank. The one decryption is `secret_env`, called by `ensure_session` on the way
-  to `provider.create`, folding the plaintext straight into the machine's
-  environment. It is never a prompt, a tool argument, or a line in the transcript.
+- **The value is never *injected* into the model's world.** No read path returns it:
+  `list_secrets` answers with names and metadata only, and `SecretOut` has no value
+  field to blank. The one decryption is `secret_env`, called by `ensure_session` on
+  the way to `provider.create`, folding the plaintext straight into the machine's
+  environment. The model is told a run's secret *names* (the approval card), never a
+  value; nothing on any REST path, prompt, or tool argument carries one.
+  This is a containment boundary, **not** a redaction boundary. It hides the value
+  from the model — it does not stop code the model wrote from *revealing* it. A
+  script that runs `print(os.environ["STRIPE_API_KEY"])` sends the value to stdout,
+  and stdout is captured, rendered to the user, persisted with the run, and streamed
+  back into the next turn like any other output. There is no output scrubber: the
+  value can only be read back by code that already had it in its environment, so the
+  real control is the one below — that code can only *send* it outward when egress
+  allows. Treat "the sandbox can read this secret" as "this secret may appear in a
+  run's output", because a prompt-injected script will make it so.
 - **A secret cannot shadow the policy environment.** The sandbox env is *built*,
   not filtered, and its keys (`GRAIN_SANDBOX`, `NO_NETWORK`, …) are load-bearing —
   they are how the code is told where it is running. `validate_name` refuses those
@@ -202,6 +212,20 @@ secret because they share the machine, but adding or removing one is an owner ac
 The tenant boundary is the `workspace_id` on the actor, applied to every query —
 no route here accepts or returns a provider-side id.
 
+The role gate is on **CRUD, not use.** An owner registers the key; any member can
+then write sandbox code that prints it (see the readback note above) and read the
+value from that run's output. This is deliberate — the secret exists so shared code
+can reach a shared service — but it means "member" is the true blast radius of a
+registered credential, not "owner". Do not register a key here that the whole
+member set should not effectively hold.
+
+Deletion stops *new* sessions from receiving the value; it does not reach into
+**live** ones. A secret is decrypted once at `ensure_session` and persisted to that
+session's env sidecar for the life of the session, so a `DELETE` while a session is
+running leaves the value in that session's environment until it is killed. Rotating
+a compromised credential therefore means deleting it *and* ending the sessions that
+saw it, not the delete alone.
+
 ## Consequences
 
 - **Secrets inherit the egress risk; they do not create a new one.** A registered
@@ -219,6 +243,18 @@ no route here accepts or returns a provider-side id.
   writes code that honours them, and the code then has both the data and a
   socket. No sandbox escape is required for that, and none of the container flags
   below prevent it.
+- **Decrypted secrets touch local disk in exactly one place, and the process table
+  briefly.** For the local drivers there is no live machine to hold an environment,
+  so `secret_env`'s plaintext is written to a per-session **sidecar** (`.{id}.env.json`,
+  mode `0600`, beside — not inside — the session directory, so it is never harvested,
+  listed, or bind-mounted into the box) and re-read per execution. `kill()` deletes
+  the sidecar with the session, so a killed session's plaintext does not outlive it.
+  The container driver additionally passes each secret as a `docker run -e NAME=VALUE`
+  argument, which is visible in the host process table (`ps -e`) for the run's
+  lifetime. `--env-file` would avoid that, but Docker's env-file format cannot carry
+  the multi-line values (PEM keys) this feature explicitly supports, so `-e` is the
+  deliberate trade: the exposure is host-local, to whoever can already read the API
+  host's process list, for seconds. It is documented, not eliminated.
 - **A pre-baked image means a missing import is a dead end.** With no network,
   "I need seaborn" is an image rebuild and a redeploy rather than a `pip install`
   the agent can run itself. That is the honest cost of the trade, and it argues

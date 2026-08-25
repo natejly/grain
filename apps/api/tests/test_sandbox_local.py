@@ -227,6 +227,38 @@ def test_kill_removes_the_session_and_is_idempotent(
     local.kill(handle)  # the reaper races an explicit delete
 
 
+def test_kill_deletes_the_plaintext_secret_sidecar(
+    local: SubprocessProvider, workdir: Path
+) -> None:
+    """The sidecar is the one place a decrypted secret touches local disk. If
+    kill() removed only the session directory, the plaintext credential would
+    survive teardown (and outlive deletion of the secret itself). Kill must take
+    the sidecar with it."""
+    handle = local.create(
+        SandboxSpec(workspace_id="w1", env={"STRIPE_API_KEY": "sk_live_9"})
+    )
+    sidecar = workdir / f".{handle.external_id}.env.json"
+    assert sidecar.exists(), "a session created with a secret writes its sidecar"
+
+    local.kill(handle)
+    assert not sidecar.exists(), "kill must delete the plaintext secret sidecar"
+    local.kill(handle)  # idempotent even with the sidecar already gone
+
+
+def test_the_secret_sidecar_is_written_0600(
+    local: SubprocessProvider, workdir: Path
+) -> None:
+    """Decrypted secrets must not sit world-readable on the host, and must be
+    tight from the first byte rather than after a write-then-chmod window."""
+    import stat
+
+    handle = local.create(
+        SandboxSpec(workspace_id="w1", env={"STRIPE_API_KEY": "sk_live_9"})
+    )
+    sidecar = workdir / f".{handle.external_id}.env.json"
+    assert stat.S_IMODE(sidecar.stat().st_mode) == 0o600
+
+
 # --- container driver ---------------------------------------------------
 
 

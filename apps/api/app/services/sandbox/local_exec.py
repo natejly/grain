@@ -122,12 +122,40 @@ def write_session_env(base: Path, external_id: str, env: Mapping[str, str]) -> N
     import json
 
     path = _session_sidecar(base, external_id, ".env.json")
-    path.write_text(json.dumps(dict(env)), encoding="utf-8")
+    payload = json.dumps(dict(env)).encode("utf-8")
+    # Create 0600 from the first byte rather than write-then-chmod: the latter
+    # leaves a window where the file exists under the umask's mode (typically
+    # world-readable) with decrypted secrets already in it. O_CREAT's mode only
+    # applies when the file is new, so an existing sidecar (a rotation overwrite)
+    # is re-tightened with fchmod to be sure.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.chmod(path, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            # A platform that refuses the chmod (rare) still gets the file; the
+            # secret is no more exposed than the SQLite database beside it.
+            pass
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+
+
+def remove_session_env(base: Path, external_id: str) -> None:
+    """Delete a session's env sidecar. Called on teardown so the one place
+    decrypted secrets touch local disk does not outlive the session that needed
+    them — without this, a killed session's plaintext credentials would survive
+    both rotation and deletion of the secret itself. Best-effort and idempotent:
+    a missing file means the job is already done."""
+    try:
+        path = _session_sidecar(base, external_id, ".env.json")
+    except SandboxError:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
     except OSError:
-        # A platform that refuses the chmod (rare) still gets the file; the
-        # secret is no more exposed than the SQLite database beside it.
         pass
 
 
@@ -417,9 +445,13 @@ class LocalProvider:
 
         `self._env` is the scrubbed base every session shares; the per-session
         sidecar carries the workspace's decrypted secrets (`spec.env`), which the
-        local drivers cannot keep in a live machine because there isn't one. The
-        base loses on a key collision, but the create route refuses secret names
-        that collide with policy keys, so in practice these two never overlap.
+        local drivers cannot keep in a live machine because there isn't one.
+
+        The secret wins on a key collision (it is spread last), which would let a
+        secret named `PATH` or `LD_PRELOAD` redirect the interpreter — so the
+        create route refuses both policy keys and those process-steering names
+        (`secrets.validate_name`). The precedence here is safe only because that
+        validation holds; it is not a second line of defence.
         """
         return {**self._env, **read_session_env(self._workdir, handle.external_id)}
 
@@ -487,10 +519,17 @@ class LocalProvider:
         """No-op. A session is a directory; there is no process to snapshot."""
 
     def kill(self, handle: SandboxHandle) -> None:
-        """Delete the session directory. Idempotent — the reaper races an
-        explicit delete, and a missing directory means the job is already done."""
+        """Delete the session directory *and* its env sidecar. Idempotent — the
+        reaper races an explicit delete, and a missing target means the job is
+        already done.
+
+        The sidecar is the one place decrypted secrets touch local disk; deleting
+        it here is what keeps a killed session's plaintext credentials from
+        outliving the session. It is removed unconditionally, even when the id is
+        too malformed to name a session root, so a bad id can never strand it."""
         import shutil
 
+        remove_session_env(self._workdir, handle.external_id)
         try:
             root = session_root(self._workdir, handle.external_id)
         except SandboxError:

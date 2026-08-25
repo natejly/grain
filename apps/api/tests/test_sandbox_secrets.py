@@ -85,6 +85,19 @@ def test_no_network_is_reserved_even_though_it_only_exists_under_none() -> None:
         secrets_service.validate_name("NO_NETWORK")
 
 
+@pytest.mark.parametrize(
+    "dangerous", ["PATH", "PYTHONPATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES"]
+)
+def test_validate_name_refuses_process_steering_env_names(dangerous: str) -> None:
+    """These are not policy keys, so the policy-derived reserved set would let them
+    through — but a run's env is `{**base, **secrets}`, so a secret named `PATH` or
+    `LD_PRELOAD` *wins* the merge and can redirect which binary or shared object the
+    interpreter loads. That is code execution wearing a credential's clothes, so the
+    name is refused outright."""
+    with pytest.raises(SecretError, match="reserved"):
+        secrets_service.validate_name(dangerous)
+
+
 # --- service layer: storage requires encryption -------------------------
 
 
@@ -163,11 +176,12 @@ def test_set_secret_is_idempotent_by_name_and_rotates_the_value(
 
 
 def test_secret_env_skips_a_row_it_cannot_decrypt(
-    db: SessionLocal, encryption_settings
+    db: SessionLocal, encryption_settings, caplog
 ) -> None:
     """A key rotated after a secret was stored must degrade to "that one
     credential is missing", not "no session can be created". The bad row is
-    skipped; the good one still arrives."""
+    skipped; the good one still arrives — and the skip is logged by name (never
+    by ciphertext) so a silently-absent credential is diagnosable."""
     ws = f"ws-{uuid.uuid4().hex}"
     secrets_service.set_secret(
         db, workspace_id=ws, user_id="u1", name="GOOD", value="still-good",
@@ -183,8 +197,48 @@ def test_secret_env_skips_a_row_it_cannot_decrypt(
     bad_row.value_enc = "not-valid-fernet-ciphertext"
     db.commit()
 
-    env = secrets_service.secret_env(db, workspace_id=ws, settings=encryption_settings)
+    with caplog.at_level("WARNING"):
+        env = secrets_service.secret_env(db, workspace_id=ws, settings=encryption_settings)
     assert env == {"GOOD": "still-good"}
+    assert "BAD" in caplog.text and "did not decrypt" in caplog.text
+    assert "not-valid-fernet-ciphertext" not in caplog.text  # never the value
+
+
+def test_set_secret_survives_a_concurrent_first_write_of_the_same_name(
+    db: SessionLocal, encryption_settings, monkeypatch
+) -> None:
+    """Two PUTs for a brand-new name can both see "no row yet" and both try to
+    insert; the unique (workspace_id, name) constraint makes the second insert
+    raise IntegrityError. The loser must recover to an update (last writer wins)
+    rather than surfacing a 500. Simulated by hiding the row from the pre-insert
+    lookup once, so the insert path runs against a row that already exists."""
+    ws = f"ws-{uuid.uuid4().hex}"
+    secrets_service.set_secret(
+        db, workspace_id=ws, user_id="u1", name="TOKEN", value="v1",
+        settings=encryption_settings,
+    )
+
+    real_find = secrets_service._find
+    calls = {"n": 0}
+
+    def blind_once(*args, **kwargs):
+        # First lookup pretends the row is absent (the racing insert's view);
+        # later lookups (the recovery re-select) tell the truth.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return real_find(*args, **kwargs)
+
+    monkeypatch.setattr(secrets_service, "_find", blind_once)
+    row = secrets_service.set_secret(
+        db, workspace_id=ws, user_id="u2", name="TOKEN", value="v2",
+        settings=encryption_settings,
+    )
+    assert row.name == "TOKEN"
+    rows = secrets_service.list_secrets(db, workspace_id=ws)
+    assert [r.name for r in rows] == ["TOKEN"]  # no duplicate row
+    env = secrets_service.secret_env(db, workspace_id=ws, settings=encryption_settings)
+    assert env["TOKEN"] == "v2"  # the racing writer's value won, no 500
 
 
 def test_delete_secret_reports_whether_one_was_there(

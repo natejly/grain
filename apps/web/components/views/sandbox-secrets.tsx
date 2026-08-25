@@ -86,6 +86,15 @@ function AddSecretForm({
           onChange={(event) => setValue(event.target.value)}
           rows={3}
           placeholder="The credential the sandbox code will read."
+          // A credential: keep it out of the browser's saved form data and
+          // off password-manager radar. A textarea holds it (not a masked
+          // input) because multi-line values like PEM keys are a supported case.
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          data-1p-ignore
+          data-lpignore="true"
           required
         />
       </label>

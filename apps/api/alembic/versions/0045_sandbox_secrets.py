@@ -56,4 +56,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Guarded like the upgrade (and 0044/0043): these databases have been built
+    # by both create_all and alembic, so the table may already be absent when a
+    # downgrade runs. Dropping it unconditionally would raise on that path.
+    bind = op.get_bind()
+    if not sa.inspect(bind).has_table("sandbox_secrets"):
+        return
+    live = {index["name"] for index in sa.inspect(bind).get_indexes("sandbox_secrets")}
+    if "ix_sandbox_secrets_workspace_id" in live:
+        op.drop_index("ix_sandbox_secrets_workspace_id", table_name="sandbox_secrets")
     op.drop_table("sandbox_secrets")
