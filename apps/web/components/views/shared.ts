@@ -24,6 +24,7 @@ export type View =
   | "projects"
   | "mcp"
   | "sandbox-tools"
+  | "webhooks"
   | "activity"
   | "admin"
   | "workflows"
@@ -111,6 +112,10 @@ export const PAGE_TITLES: Record<View, string> = {
   // "sandbox" destination the docstring above refuses — nobody operates a
   // machine here, they configure a capability.
   "sandbox-tools": "Sandbox tools",
+  // The machine surface: bearer tokens external systems call in with, and
+  // the webhook endpoints workspace events are pushed out to. Configuration
+  // through and through, so it lives with Connections behind settings.
+  webhooks: "API & Webhooks",
   // The approval queue. "Activity" described the audit half of the page; the
   // half a user actually comes for is the requests waiting on them.
   activity: "Inbox",

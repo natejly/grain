@@ -42,8 +42,12 @@ cases, unit tests, and its own commit.
       the live query + HTML render (mail_render) + SMTP run on a background
       task per the F5 QA note; skips audit dashboard.subscription_skipped;
       subscribe modal on Dashboards rows + read-only list on Schedules)
-- [ ] 11. Outbound webhooks + API tokens (trigger workflow / post to thread;
-      event push)
+- [x] 11. Outbound webhooks + API tokens (trigger workflow / post to thread;
+      event push) — DONE 2026-08-25 (api_tokens mirrors upstream ed7195b for
+      the merge, revoke is upstream's DELETE; get_token_actor beside
+      get_actor; /api/hooks trigger runs at WORKFLOW scope; deliveries
+      claimed in tick, sent signed on background tasks, 3 attempts;
+      "API & Webhooks" settings view)
 - [ ] 12. Inbound email → thread (provider-webhook endpoint, pairs with Rules)
 - [ ] 13. Notification digests: daily pending-approvals email per member
 - [ ] Full gate: make lint, pytest, pnpm test, pnpm build, e2e

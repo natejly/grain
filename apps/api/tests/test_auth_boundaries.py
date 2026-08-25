@@ -58,6 +58,16 @@ PUBLIC_UNSAFE_ROUTES = {
     # workflow id, no timestamp — so it can only fire what a workspace's own cron
     # expression already said to fire. Unset secret means 503, not open.
     "/api/workflows/tick",
+    # The token-authenticated machine hooks. They resolve identity through
+    # `get_token_actor` — an `Authorization: Bearer` workspace API token,
+    # sha256-at-rest, acting as the member who minted it — not through
+    # `get_actor`, which is cookie+CSRF and is what this tripwire looks for. A
+    # bearer header cannot be attached by an attacker's page, so there is no
+    # CSRF to enforce; a missing or dead token is a uniform 401. Targeted
+    # tests in test_api_tokens.py pin that a token reaches exactly its own
+    # workspace, and the isolation sweep pins the 401 for cookie callers.
+    "/api/hooks/workflows/{workflow_id}/trigger",
+    "/api/hooks/conversations/{conversation_id}/messages",
 }
 
 

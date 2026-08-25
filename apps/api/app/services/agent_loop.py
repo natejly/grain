@@ -23,7 +23,7 @@ from ..models import (
     ToolPolicy,
     WorkflowRun,
 )
-from . import budget, checkpoints, orgs, screen, skills, spaces, subjects, usage
+from . import budget, checkpoints, orgs, screen, skills, spaces, subjects, usage, webhooks
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .harness import ModelStep, resolve_harness
@@ -910,6 +910,18 @@ def _park_for_approval(
         resource_type="agent_tool_call",
         resource_id=record.id,
         detail={"tool": record.name},
+    )
+    # The outbound-webhook chokepoint for parks: ids and the tool's name only
+    # — never arguments or the preview, which are workspace content.
+    webhooks.emit(
+        db,
+        workspace_id=run.workspace_id,
+        event="approval.requested",
+        payload={
+            "tool_call_id": record.id,
+            "run_id": run.id,
+            "tool_name": record.name,
+        },
     )
     db.commit()
     return Paused(tool_call_id=record.id)

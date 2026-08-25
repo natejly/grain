@@ -12,6 +12,7 @@ from .api import (
     admin,
     agents,
     analytics,
+    api_tokens,
     artifacts,
     audit,
     bibliography,
@@ -26,6 +27,7 @@ from .api import (
     folders,
     generated_apps,
     graph,
+    hooks,
     inbox,
     integrations,
     latex,
@@ -44,6 +46,7 @@ from .api import (
     templates,
     todos,
     tools,
+    webhooks,
     workflows,
 )
 from .api.auth import router as auth_router
@@ -134,6 +137,9 @@ app.include_router(analytics.router)
 app.include_router(dashboards.router)
 app.include_router(dashboard_subscriptions.router)
 app.include_router(share_links.router)
+app.include_router(api_tokens.router)
+app.include_router(webhooks.router)
+app.include_router(hooks.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)
 app.include_router(templates.router)

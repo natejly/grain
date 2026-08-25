@@ -55,6 +55,7 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.models import (
     AgentToolCall,
+    ApiToken,
     AppRelease,
     AuditEvent,
     Board,
@@ -109,6 +110,8 @@ from app.models import (
     ToolGrant,
     ToolPolicy,
     User,
+    WebhookDelivery,
+    WebhookEndpoint,
     Workflow,
     WorkflowNodeRun,
     WorkflowRun,
@@ -118,6 +121,8 @@ from app.models import (
     new_id,
 )
 from app.services.analytics import create_dataset_version
+from app.services.api_tokens import SECRET_PREFIX
+from app.services.api_tokens import _digest as api_token_digest
 from app.services.auth.invites import hash_token as invite_hash
 from app.services.crypto import encrypt_secret
 from app.services.ingestion import object_path
@@ -693,6 +698,54 @@ def build_tenant(label: str) -> Tenant:
         db.add(dashboard_subscription)
         db.flush()
         ids["dashboard_subscription"] = dashboard_subscription.id
+
+        # A live API token, its raw secret kept beside the row's id exactly as
+        # the invite's and share link's are: the secret is the whole credential
+        # for /api/hooks, so storing it under an id kind makes the leak scan
+        # prove no response — the token list above all — ever echoes it back.
+        api_token_secret = f"{SECRET_PREFIX}{label.lower()}-isolation-api-token"
+        api_token = ApiToken(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            name=f"{label} secret token",
+            token_hash=api_token_digest(api_token_secret),
+        )
+        db.add(api_token)
+        db.flush()
+        ids["api_token"] = api_token.id
+        ids["api_token_secret"] = api_token_secret
+
+        # An outbound webhook endpoint and one delivery on its trail. The URL
+        # is owner-chosen data, so the marker lives in the *name*; the
+        # delivery's payload carries a marker title because payloads are what
+        # a leaked read would surface. Both rows join the tamper digest via
+        # workspace_id.
+        webhook_endpoint = WebhookEndpoint(
+            workspace_id=workspace_id,
+            name=f"{label} secret webhook",
+            url=f"https://hooks.{label.lower()}.example.com/sink",
+            secret_encrypted=encrypt_secret(
+                f"{label.lower()}-webhook-signing-secret", settings
+            ),
+            events_json=json.dumps(["run.completed", "monitor.tripped"]),
+            enabled=True,
+            created_by=user_id,
+        )
+        db.add(webhook_endpoint)
+        db.flush()
+        ids["webhook_endpoint"] = webhook_endpoint.id
+
+        webhook_delivery = WebhookDelivery(
+            workspace_id=workspace_id,
+            endpoint_id=webhook_endpoint.id,
+            event="run.completed",
+            payload_json=json.dumps({"title": f"{label} secret delivery"}),
+            status="pending",
+            attempts=0,
+        )
+        db.add(webhook_delivery)
+        db.flush()
+        ids["webhook_delivery"] = webhook_delivery.id
 
         # A template whose declared shape the tenant's own dataset satisfies, so
         # a cross-tenant bind fails for the reason under test (the template is
@@ -2130,6 +2183,75 @@ ROUTE_CASES: List[RouteCase] = [
         DENY,
         path_ids={"subscription_id": "dashboard_subscription"},
         note="silences (and confirms) another tenant's scheduled mail",
+    ),
+    # -- API tokens ---------------------------------------------------------
+    # The list and the mint are id-less (SCOPED); the revoke names a token, and
+    # revoking another tenant's credential must confirm nothing. The raw secret
+    # is planted as an id kind, so the leak grep also proves the list never
+    # echoes a token back.
+    RouteCase("GET", "/api/api-tokens", SCOPED),
+    RouteCase("POST", "/api/api-tokens", SCOPED, body={"name": "isolation probe"}),
+    RouteCase(
+        "DELETE",
+        "/api/api-tokens/{token_id}",
+        DENY,
+        path_ids={"token_id": "api_token"},
+        note="kills (and confirms) another tenant's machine credential",
+    ),
+    # -- token-authed hooks -------------------------------------------------
+    # These two authenticate with `Authorization: Bearer <api token>`, never a
+    # cookie, so the sweep's cookie-authenticated client is refused at the door
+    # — 401, before the path ids are even read. That the *right* token reaches
+    # only its own workspace is pinned by the targeted tests in
+    # test_api_tokens.py (the sweep cannot exercise bearer auth).
+    RouteCase(
+        "POST",
+        "/api/hooks/workflows/{workflow_id}/trigger",
+        DENY,
+        expect=401,
+        path_ids={"workflow_id": "workflow"},
+        body={"payload": {}},
+        note="cookie-only caller holds no bearer token",
+    ),
+    RouteCase(
+        "POST",
+        "/api/hooks/conversations/{conversation_id}/messages",
+        DENY,
+        expect=401,
+        path_ids={"conversation_id": "conversation"},
+        body={"content": "external note"},
+        note="cookie-only caller holds no bearer token",
+    ),
+    # -- outbound webhooks --------------------------------------------------
+    # Create takes no foreign id (the URL is the owner's own choice — a DNS
+    # failure in a hermetic run answers 422, never 500); update/delete name an
+    # endpoint and must 404 on another tenant's, or one workspace could
+    # redirect (or silence) another's event stream.
+    RouteCase("GET", "/api/webhooks", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/webhooks",
+        SCOPED,
+        body={
+            "name": "isolation probe",
+            "url": "https://api.github.com/probe-sink",
+            "events": ["run.completed"],
+        },
+    ),
+    RouteCase("GET", "/api/webhooks/deliveries", SCOPED),
+    RouteCase(
+        "PUT",
+        "/api/webhooks/{endpoint_id}",
+        DENY,
+        path_ids={"endpoint_id": "webhook_endpoint"},
+        body={"enabled": False},
+        note="redirects or silences another tenant's event stream",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/webhooks/{endpoint_id}",
+        DENY,
+        path_ids={"endpoint_id": "webhook_endpoint"},
     ),
     # -- database connections ---------------------------------------------
     RouteCase("GET", "/api/db/connections", SCOPED),

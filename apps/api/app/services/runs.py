@@ -12,7 +12,7 @@ from ..clock import utcnow
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import Message, Run, Tool, ToolCall, ToolGrant
-from . import spaces
+from . import spaces, webhooks
 from .agent_loop import (
     PAUSED_FOR_BUDGET,
     resume_after_budget,
@@ -163,6 +163,19 @@ def _complete_with_message(
             run_id=current.id,
             event_type="run.completed",
             payload={"status": "completed"},
+        )
+        # The outbound-webhook chokepoint for chat runs: ids only, no content
+        # — the receiver learns a run finished, never what it said. Flushed
+        # into this same transaction, committed with the completion.
+        webhooks.emit(
+            db,
+            workspace_id=current.workspace_id,
+            event="run.completed",
+            payload={
+                "run_id": current.id,
+                "conversation_id": current.conversation_id,
+                "status": "completed",
+            },
         )
         db.commit()
     finally:

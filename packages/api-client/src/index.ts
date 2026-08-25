@@ -1288,6 +1288,84 @@ export type DashboardSubscriptionCreateInput = {
   recipient_user_id?: string;
 };
 
+/**
+ * A workspace API token — the bearer credential for the machine hooks
+ * (`/api/hooks/...`). No secret appears here in any form: the server stores
+ * only a hash, and the raw value exists in exactly one response —
+ * `ApiTokenMinted`, at mint time.
+ */
+export type ApiTokenRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+/**
+ * The 201 body, and the only time the raw secret is ever available. Show it,
+ * let the person copy it, do not persist it; an idempotent replay answers
+ * with `secret` blank because the raw value cannot be re-derived from its
+ * hash.
+ */
+export type ApiTokenMinted = ApiTokenRow & {
+  secret: string;
+};
+
+/** The events an outbound webhook endpoint may subscribe to. */
+export type WebhookEvent =
+  | "run.completed"
+  | "workflow_run.completed"
+  | "approval.requested"
+  | "monitor.tripped";
+
+/**
+ * One owner-configured URL workspace events are pushed to. The signing
+ * secret is write-only: `has_secret` says one is stored, and nothing ever
+ * echoes it back.
+ */
+export type WebhookEndpoint = {
+  id: string;
+  name: string;
+  url: string;
+  events: WebhookEvent[];
+  enabled: boolean;
+  has_secret: boolean;
+  created_by: string;
+  created_at: string;
+};
+
+/**
+ * One event on its way to (or through) one endpoint — the health trail, not
+ * the payload: `status` is pending | sent | failed, and a failed row's
+ * `last_error` says why the endpoint never answered 2xx.
+ */
+export type WebhookDelivery = {
+  id: string;
+  endpoint_id: string;
+  event: string;
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  last_error: string;
+  created_at: string;
+  sent_at: string | null;
+};
+
+export type WebhookCreateInput = {
+  name?: string;
+  url: string;
+  events: WebhookEvent[];
+  /** Optional HMAC signing secret; write-only, encrypted at rest. */
+  secret?: string;
+};
+
+export type WebhookUpdateInput = {
+  name?: string;
+  url?: string;
+  events?: WebhookEvent[];
+  enabled?: boolean;
+};
+
 export type AppRelease = {
   id: string;
   version: number;
@@ -3366,6 +3444,76 @@ export class WorkspaceApi {
       { method: "DELETE" },
       true,
     );
+  }
+
+  // --- API tokens -----------------------------------------------------------
+  // The machine door's credentials. Owner-gated end to end, like the spend
+  // ceiling: standing machine access to the workspace is an owner decision.
+
+  /** Every token the workspace has minted, live and revoked. Never a secret. */
+  listApiTokens(): Promise<ApiTokenRow[]> {
+    return this.request("/api/api-tokens");
+  }
+
+  /**
+   * Mint a bearer token. The response is the only place the raw secret ever
+   * appears — see `ApiTokenMinted`.
+   */
+  createApiToken(name: string): Promise<ApiTokenMinted> {
+    return this.request(
+      "/api/api-tokens",
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
+  }
+
+  /** Stop a token working, now. Revocation is a stamp, not a delete. */
+  revokeApiToken(tokenId: string): Promise<void> {
+    return this.request(
+      `/api/api-tokens/${tokenId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  // --- Outbound webhooks ----------------------------------------------------
+  // Owner-configured URLs workspace events are pushed to, signed with the
+  // endpoint's stored secret. The delivery list is the health trail.
+
+  listWebhooks(): Promise<WebhookEndpoint[]> {
+    return this.request("/api/webhooks");
+  }
+
+  createWebhook(payload: WebhookCreateInput): Promise<WebhookEndpoint> {
+    return this.request(
+      "/api/webhooks",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  updateWebhook(
+    endpointId: string,
+    payload: WebhookUpdateInput,
+  ): Promise<WebhookEndpoint> {
+    return this.request(
+      `/api/webhooks/${endpointId}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  deleteWebhook(endpointId: string): Promise<void> {
+    return this.request(
+      `/api/webhooks/${endpointId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /** The recent delivery trail, newest first — status chips, not payloads. */
+  listWebhookDeliveries(): Promise<WebhookDelivery[]> {
+    return this.request("/api/webhooks/deliveries");
   }
 
   // --- Dashboard templates --------------------------------------------------

@@ -803,6 +803,10 @@ DB_GET_ALLOWLIST = {
     # holder of that token is entitled to. There is no workspace filter that
     # would apply: this is the row that would do the filtering.
     ("app/services/auth/invites.py", "Workspace"): "id comes from the invite row",
+    # Copied verbatim from the base branch's api_tokens router (commit
+    # ed7195b) so the merge stays clean; both call sites compare the row's
+    # workspace_id to the actor's on the very next line and 404/409 on a miss.
+    ("app/api/api_tokens.py", "ApiToken"): "workspace re-checked on the next line",
     ("app/api/chat.py", "Conversation"): "workspace re-checked on the next line",
     ("app/api/spaces.py", "Space"): "id from a scoped replay row; workspace re-checked",
     ("app/api/generated_apps.py", "AppRelease"): "workspace re-checked on the next line",

@@ -1261,6 +1261,30 @@ class SandboxTool(Base):
     )
 
 
+class ApiToken(Base):
+    """A bearer credential for the workspace's own MCP server surface.
+
+    The secret is shown once at mint time and only its sha256 lands here —
+    the table can authenticate a presented secret (hash it, look it up) and
+    can never leak one. `user_id` is the member the token acts AS: every call
+    made with it resolves tools and policy as that person, so revoking their
+    membership revokes what their tokens could reach. Revocation is a stamp,
+    not a delete — a dead token's row is the audit answer to "what was this
+    credential, and when did it stop working".
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(80), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class McpServer(Base):
     """A configured MCP server: a stdio subprocess or a streamable HTTP endpoint."""
 
@@ -2347,6 +2371,66 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     resolved_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+
+
+class WebhookEndpoint(Base):
+    """One owner-configured URL that wants to hear about workspace events.
+
+    The signing secret is Fernet-encrypted (`services/crypto`), not hashed:
+    unlike an ApiToken's secret it must be *read back* at every delivery to
+    compute the HMAC signature. `events_json` is the subset of the small event
+    vocabulary (`services/webhooks.EVENTS`) this endpoint subscribed to.
+    Disabling is `enabled=False` — revoked-at-style semantics without losing
+    the row the delivery history points at.
+    """
+
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: What the list shows; the URL is the owner's data, the name is ours.
+    name: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    url: Mapped[str] = mapped_column(String(600), default="")
+    secret_encrypted: Mapped[str] = mapped_column(Text, default="", server_default="")
+    events_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WebhookDelivery(Base):
+    """One event on its way to (or through) one endpoint.
+
+    `endpoint_id` is a plain column per the house convention for references
+    that outlive their target: the delivery trail must survive the endpoint's
+    deletion, and a pending row whose endpoint has gone becomes a `failed`
+    skip at send time. `attempts` counts claims by the tick sweep; three
+    without a 2xx and the row is `failed`, never retried again.
+    """
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        # The tick sweep's scan (status='pending' oldest first) and the UI's
+        # recent-deliveries list share this shape.
+        Index(
+            "ix_webhook_deliveries_workspace_status_created",
+            "workspace_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    endpoint_id: Mapped[str] = mapped_column(String(36), default="")
+    event: Mapped[str] = mapped_column(String(40), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    # pending | sent | failed
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 # ---------------------------------------------------------------------------

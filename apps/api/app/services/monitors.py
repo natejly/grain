@@ -41,6 +41,7 @@ from ..schemas import DatasetQuery
 from .analytics import AnalyticsValidationError, execute_dataset_query
 from .audit import record_audit
 from .notifications import notify
+from .webhooks import emit as emit_webhook
 from .workflows import schedule
 from .workflows.validate import cron_matches
 
@@ -233,6 +234,20 @@ def evaluate(db: Session, monitor: Monitor, *, actor_id: str = "") -> EvalOutcom
                 resource_type="monitor",
                 resource_id=monitor.id,
                 detail={
+                    "value": value,
+                    "threshold": monitor.threshold,
+                    "comparator": monitor.comparator,
+                },
+            )
+            # The outbound-webhook chokepoint for trips, edge-triggered with
+            # the alert above: the monitor's name and numbers, no dataset rows.
+            emit_webhook(
+                db,
+                workspace_id=monitor.workspace_id,
+                event="monitor.tripped",
+                payload={
+                    "monitor_id": monitor.id,
+                    "name": monitor.name,
                     "value": value,
                     "threshold": monitor.threshold,
                     "comparator": monitor.comparator,

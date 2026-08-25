@@ -30,6 +30,7 @@ import { DocumentsView } from "./views/documents";
 import { GraphView } from "./views/graph";
 import { IntegrationsView } from "./views/integrations";
 import { McpView } from "./views/mcp";
+import { WebhooksView } from "./views/webhooks";
 import { MemoryView } from "./views/memory";
 import {
   DEFAULT_GROUP_VIEW,
@@ -1174,6 +1175,11 @@ export function Workspace() {
             removeTool={removeSandboxTool}
           />
         )}
+
+        {/* Self-contained like CronsView: tokens and endpoints are owner
+            configuration, fetched when the settings page opens and never at
+            page load. */}
+        {view === "webhooks" && <WebhooksView setError={setError} />}
 
         {view === "activity" && (
           <InboxView

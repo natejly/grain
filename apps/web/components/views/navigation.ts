@@ -22,6 +22,7 @@ import {
   Sparkles,
   Table2,
   Terminal,
+  Webhook,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -259,6 +260,11 @@ const GROUP_SPECS: NavGroupSpec[] = [
           // where the datasets they feed live.
           { view: "sandbox-tools", label: "Sandbox tools", icon: Terminal },
           { view: "integrations", label: "Integrations", icon: Plug },
+          // The machine door and the event push, one surface: mint the token
+          // an external system calls in with, and register the URLs workspace
+          // events go out to. Beside MCP because it is the same kind of thing
+          // — wiring the workspace to software, not to a person.
+          { view: "webhooks", label: "API & Webhooks", icon: Webhook },
         ],
       },
     ],

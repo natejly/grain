@@ -43,6 +43,7 @@ from ..services import crons as cron_service
 from ..services import dashboard_subscriptions as subscription_service
 from ..services import monitors as monitor_service
 from ..services import spend_watch
+from ..services import webhooks as webhook_service
 from ..services.audit import record_audit
 from ..services.llm_tools import ToolContext, build_registry
 from ..services.runs import process_run
@@ -162,6 +163,11 @@ class WorkflowTickOut(ApiModel):
     #: mail was handed to a background task — a claim, not a delivery receipt:
     #: a purged dashboard or departed recipient becomes a skip-with-audit there.
     subscriptions_dispatched: List[str]
+    #: Pending webhook deliveries this tick claimed one send attempt for
+    #: (services/webhooks.py). Same contract as subscriptions: a claim, not a
+    #: receipt — the HTTP conversation happens on a background task, and a
+    #: failed attempt stays pending for a later tick until the attempt cap.
+    webhook_deliveries_dispatched: List[str]
     moment: datetime
 
 
@@ -731,6 +737,11 @@ def tick(
     # dataset query and the SMTP conversation — must not delay the dispatches
     # above (the F5 QA note: no more heavy inline work in the shared tick).
     subscription_ids = subscription_service.dispatch_due(db)
+    # Webhook deliveries follow the subscription split exactly: the claim (a
+    # few conditional UPDATEs bumping `attempts`) happens here, the HTTP POSTs
+    # run on background tasks, and a delivery that fails stays pending for the
+    # next tick until services/webhooks.MAX_ATTEMPTS closes it out.
+    webhook_delivery_ids = webhook_service.claim_due(db)
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
     for workflow_run_id in recovered:
@@ -741,6 +752,8 @@ def tick(
         background_tasks.add_task(
             subscription_service.send_subscription, subscription_id
         )
+    for delivery_id in webhook_delivery_ids:
+        background_tasks.add_task(webhook_service.send_delivery, delivery_id)
     return WorkflowTickOut(
         dispatched=[workflow_run.id for workflow_run in started],
         recovered=recovered,
@@ -748,5 +761,6 @@ def tick(
         monitors_evaluated=monitor_ids,
         anomalies_flagged=anomaly_ids,
         subscriptions_dispatched=subscription_ids,
+        webhook_deliveries_dispatched=webhook_delivery_ids,
         moment=schedule.floor_minute(utcnow()),
     )

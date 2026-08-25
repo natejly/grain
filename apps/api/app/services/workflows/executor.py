@@ -95,6 +95,7 @@ from ..agent_loop import (
 from ..audit import record_audit
 from ..events import append_event
 from ..llm_tools import ToolContext, ToolSpec, build_registry
+from ..webhooks import emit as emit_webhook
 from . import inputs, refs
 from .dag import InputSpec, NodeSpec, WorkflowGraph
 from .guards import evaluate_guard
@@ -1384,6 +1385,16 @@ def _succeed(db: Session, workflow_run: WorkflowRun, state: _State) -> None:
         event_type="run.completed",
         payload={"status": "completed", "workflow_run_id": workflow_run.id},
     )
+    emit_webhook(
+        db,
+        workspace_id=workflow_run.workspace_id,
+        event="workflow_run.completed",
+        payload={
+            "workflow_run_id": workflow_run.id,
+            "workflow_id": workflow_run.workflow_id,
+            "status": "succeeded",
+        },
+    )
     db.commit()
 
 
@@ -1412,6 +1423,19 @@ def _terminate(db: Session, workflow_run: WorkflowRun, halt: _Halt) -> None:
         resource_type="workflow_run",
         resource_id=current.id,
         detail={"code": halt.code, "node": halt.node},
+    )
+    # "Completed" means "reached a terminal state": the receiver watching an
+    # unattended automation cares about the 3am failure at least as much as
+    # the success, and `status` in the payload says which this was.
+    emit_webhook(
+        db,
+        workspace_id=current.workspace_id,
+        event="workflow_run.completed",
+        payload={
+            "workflow_run_id": current.id,
+            "workflow_id": current.workflow_id,
+            "status": halt.status,
+        },
     )
     db.commit()
 
