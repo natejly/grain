@@ -1131,6 +1131,13 @@
       },
       "AdminUsageOut": {
         "properties": {
+          "by_agent": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUsageGroupOut"
+            },
+            "title": "By Agent",
+            "type": "array"
+          },
           "by_model": {
             "items": {
               "$ref": "#/components/schemas/AdminUsageGroupOut"
@@ -1190,6 +1197,7 @@
           "by_model",
           "by_user",
           "by_operation",
+          "by_agent",
           "top_runs",
           "unpriced_models",
           "pricing_configured"
@@ -4661,6 +4669,41 @@
         "title": "InboxAlertOut",
         "type": "object"
       },
+      "InboxAnomalyOut": {
+        "description": "One open spend anomaly: an agent running well over its usual spend.\n\nBroadcast like a monitor alert \u2014 the sweep writes only '' -targeted rows,\nevery member sees the same list, one resolve clears it for the room. Its\nown list rather than a fifth kind folded into `alerts`, because the two\nmean different things: an alert says a number you chose crossed a line you\ndrew; an anomaly says spending drifted from its own history, unasked.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body",
+          "agent_id",
+          "created_at"
+        ],
+        "title": "InboxAnomalyOut",
+        "type": "object"
+      },
       "InboxApprovalOut": {
         "description": "One proposed tool call whose run is parked on the decision.",
         "properties": {
@@ -4840,6 +4883,13 @@
             "title": "Alerts",
             "type": "array"
           },
+          "anomalies": {
+            "items": {
+              "$ref": "#/components/schemas/InboxAnomalyOut"
+            },
+            "title": "Anomalies",
+            "type": "array"
+          },
           "approvals": {
             "items": {
               "$ref": "#/components/schemas/InboxApprovalOut"
@@ -4874,6 +4924,7 @@
           "budget_holds",
           "mentions",
           "alerts",
+          "anomalies",
           "recent_runs"
         ],
         "title": "InboxOut",
@@ -8958,6 +9009,13 @@
       },
       "WorkflowTickOut": {
         "properties": {
+          "anomalies_flagged": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Anomalies Flagged",
+            "type": "array"
+          },
           "crons_dispatched": {
             "items": {
               "type": "string"
@@ -8997,6 +9055,7 @@
           "recovered",
           "crons_dispatched",
           "monitors_evaluated",
+          "anomalies_flagged",
           "moment"
         ],
         "title": "WorkflowTickOut",

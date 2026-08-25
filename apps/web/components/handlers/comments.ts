@@ -88,6 +88,18 @@ export function createCommentHandlers({ setError, refreshFeed }: CommentHandlerD
     }
   }
 
+  /** A spend anomaly is the other broadcast kind: same store, same room-wide
+   * resolve, its own copy so the error names what actually failed. */
+  async function resolveAnomaly(notificationId: string): Promise<void> {
+    setError("");
+    try {
+      await api.resolveNotification(notificationId);
+      await refreshFeed();
+    } catch (caught) {
+      setError(describeError(caught, "Could not resolve the spend anomaly"));
+    }
+  }
+
   return {
     loadComments,
     addComment,
@@ -95,5 +107,6 @@ export function createCommentHandlers({ setError, refreshFeed }: CommentHandlerD
     loadMembers,
     resolveMention,
     resolveAlert,
+    resolveAnomaly,
   };
 }

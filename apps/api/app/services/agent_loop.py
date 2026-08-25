@@ -1562,13 +1562,14 @@ def run_agent_turn(
         evidence=list(evidence),
     )
     # Bound here rather than in the caller because this is the innermost frame
-    # that knows all four ids, and because both callers — the chat worker and the
+    # that knows all five ids, and because both callers — the chat worker and the
     # workflow executor — reach the model through it.
     with usage_scope(
         workspace_id=run.workspace_id,
         run_id=run.id,
         conversation_id=run.conversation_id,
         user_id=run.created_by,
+        agent_id=run.agent_id,
         operation=_billing_operation(scope),
     ):
         # The turn-start injection points: the retrieved passages, the open
@@ -1768,6 +1769,7 @@ def _continue(
         run_id=run.id,
         conversation_id=run.conversation_id,
         user_id=run.created_by,
+        agent_id=run.agent_id,
         operation=_billing_operation(scope),
     ):
         # Re-checked on resume, not just at turn start: a parked run comes back

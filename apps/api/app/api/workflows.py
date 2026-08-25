@@ -41,6 +41,7 @@ from ..models import Agent, Workflow, WorkflowNodeRun, WorkflowRun
 from ..schemas import ApiModel
 from ..services import crons as cron_service
 from ..services import monitors as monitor_service
+from ..services import spend_watch
 from ..services.audit import record_audit
 from ..services.llm_tools import ToolContext, build_registry
 from ..services.runs import process_run
@@ -151,6 +152,10 @@ class WorkflowTickOut(ApiModel):
     #: evaluation is a bounded read done inline — nothing is enqueued — and the
     #: id names the monitor the tick spent time on, not a verdict.
     monitors_evaluated: List[str]
+    #: Spend-anomaly notifications the hourly watch wrote this tick
+    #: (services/spend_watch.py). Usually empty — the watch claims at most once
+    #: an hour and speaks only on a 3× deviation.
+    anomalies_flagged: List[str]
     moment: datetime
 
 
@@ -711,6 +716,10 @@ def tick(
     # evaluation is a bounded dataset read, so it runs inline rather than on a
     # background task, and a bad monitor skips-with-audit instead of raising.
     monitor_ids = monitor_service.dispatch_due(db)
+    # The spend watch shares the tick too, but claims through `sweep_claims`
+    # rather than rows of its own, and at most hourly — comparing a day
+    # against a week is not a per-minute question.
+    anomaly_ids = spend_watch.sweep(db)
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
     for workflow_run_id in recovered:
@@ -722,5 +731,6 @@ def tick(
         recovered=recovered,
         crons_dispatched=cron_run_ids,
         monitors_evaluated=monitor_ids,
+        anomalies_flagged=anomaly_ids,
         moment=schedule.floor_minute(utcnow()),
     )

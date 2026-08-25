@@ -13,7 +13,11 @@ cases, unit tests, and its own commit.
 - [x] 4. Assignable approvals: route an approval to a member; Inbox "assigned"
 - [x] 5. Metric monitors: dataset/typed-query threshold trips → Inbox alerts
 - [x] 6. Run undo: revert a run's write-tool effects from recorded state
-- [ ] 7. Per-agent cost attribution + spend anomaly flags → Inbox
+- [x] 7. Per-agent cost attribution + spend anomaly flags → Inbox
+      (model_usage.agent_id bound in the agent-loop usage scope; admin usage
+      by_agent axis; hourly spend watch on the tick claiming via the new
+      shared sweep_claims table — reused by F13; anomalies are their own
+      Inbox list + badge term, resolved via the shared notification route)
 - [ ] 8. Mail service abstraction (console/dev fallback, SMTP config) — infra
       for 9/11/12
 - [ ] 9. Share links: revocable read-only public URLs (dashboard/document/

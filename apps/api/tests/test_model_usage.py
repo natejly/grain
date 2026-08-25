@@ -567,6 +567,9 @@ def test_the_ledger_has_no_column_that_could_hold_a_prompt():
         "run_id",
         "conversation_id",
         "user_id",
+        # An identifier like run_id, added for per-agent attribution — still
+        # not a character of content.
+        "agent_id",
         "operation",
         "provider",
         "model",

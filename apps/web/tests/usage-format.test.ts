@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AdminUsage, AdminUsageGroup } from "@workspace/api-client";
 import {
+  agentLabel,
   barMetric,
   barShare,
   describePricing,
@@ -54,6 +55,7 @@ function usage(over: Partial<AdminUsage> = {}): AdminUsage {
     by_model: [],
     by_user: [],
     by_operation: [],
+    by_agent: [],
     top_runs: [],
     unpriced_models: [],
     pricing_configured: false,
@@ -280,5 +282,28 @@ describe("shortId", () => {
     expect(shortId("run-runaway-0001")).toBe("run-runaway");
     expect(shortId("plain")).toBe("plain");
     expect(shortId("")).toBe("");
+  });
+});
+
+describe("agentLabel", () => {
+  it("wears a live agent's name as-is", () => {
+    expect(agentLabel({ key: "9f3c7d21-0000-4a11", label: "Scribe" })).toBe("Scribe");
+  });
+
+  it("dresses a deleted agent's id — the API echoes the key as the label", () => {
+    // A row whose spend outlived its agent arrives with label === key; a bare
+    // uuid is a poor row title, so it reads as "Agent <short id>".
+    expect(
+      agentLabel({ key: "9f3c7d21-0000-4a11", label: "9f3c7d21-0000-4a11" }),
+    ).toBe("Agent 9f3c7d21");
+    expect(agentLabel({ key: "9f3c7d21-0000-4a11", label: "" })).toBe(
+      "Agent 9f3c7d21",
+    );
+  });
+
+  it("names the no-agent bucket in words", () => {
+    // Embeddings, ingest and compiles bill no agent; an empty row head would
+    // read as a rendering bug rather than a category.
+    expect(agentLabel({ key: "", label: "" })).toBe("Background work");
   });
 });

@@ -952,6 +952,18 @@ export type InboxAlert = {
   created_at: string;
 };
 
+/** One open spend anomaly: an agent running well over its usual spend.
+ * Broadcast like an alert — every member sees the same row, one resolve
+ * clears it for the room. */
+export type InboxAnomaly = {
+  id: string;
+  title: string;
+  body: string;
+  /** The agent whose spend drifted; may since have been deleted. */
+  agent_id: string;
+  created_at: string;
+};
+
 /** One finished workflow run — the Inbox's history shelf, not its work. */
 export type InboxRun = {
   id: string;
@@ -972,6 +984,7 @@ export type InboxFeed = {
   budget_holds: InboxBudgetHold[];
   mentions: InboxMention[];
   alerts: InboxAlert[];
+  anomalies: InboxAnomaly[];
   recent_runs: InboxRun[];
 };
 
@@ -1631,6 +1644,9 @@ export type AdminUsage = {
   by_model: AdminUsageGroup[];
   by_user: AdminUsageGroup[];
   by_operation: AdminUsageGroup[];
+  /** Which agent's turns spent it. Key "" is background work with no agent;
+   * a deleted agent keeps its id as key and label. */
+  by_agent: AdminUsageGroup[];
   /** Ordered by cost, then tokens, so an unpriced run still surfaces. */
   top_runs: AdminUsageRun[];
   /** Models seen in this window with no configured rate. */

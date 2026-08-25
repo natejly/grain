@@ -931,6 +931,7 @@ def build_tenant(label: str) -> Tenant:
             run_id=run.id,
             conversation_id=conversation.id,
             user_id=user_id,
+            agent_id=agent_id,
             operation="chat",
             model=f"{label}-secret-model",
             input_tokens=100,
@@ -946,6 +947,23 @@ def build_tenant(label: str) -> Tenant:
         db.add(model_usage)
         db.flush()
         ids["model_usage"] = model_usage.id
+
+        # An open spend anomaly on this tenant's agent — the broadcast
+        # ('' -targeted) notification kind, so the anomalies feed and the
+        # shared resolve route have a row whose *content* would leak, not
+        # just an id.
+        anomaly = Notification(
+            workspace_id=workspace_id,
+            target_user_id="",
+            kind="spend_anomaly",
+            status="open",
+            title=f"{label} secret anomaly",
+            body=f"{label} secret spend detail",
+            agent_id=agent_id,
+        )
+        db.add(anomaly)
+        db.flush()
+        ids["anomaly"] = anomaly.id
 
         # A *private* skill, so the DENY cases bite on the workspace filter: a
         # foreign workspace's skill must 404 whether or not it is shared, and a

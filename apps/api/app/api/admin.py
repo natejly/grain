@@ -50,6 +50,7 @@ from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import (
+    Agent,
     AgentToolCall,
     AuditEvent,
     Chunk,
@@ -984,6 +985,10 @@ class AdminUsageOut(ApiModel):
     by_model: List[AdminUsageGroupOut]
     by_user: List[AdminUsageGroupOut]
     by_operation: List[AdminUsageGroupOut]
+    # Which agent's turns spent it. A row keyed "" is the background work no
+    # agent ran (embeddings, ingest, compiles); a deleted agent keeps its id as
+    # the key with no label, because its spend already happened.
+    by_agent: List[AdminUsageGroupOut]
     # Ordered by cost, then tokens — so a run that burned tokens on an unpriced
     # model still surfaces rather than sorting to the bottom on a null cost.
     top_runs: List[AdminUsageRunOut]
@@ -1120,6 +1125,24 @@ def get_usage(
         _group_out(key, names.get(key, ""), sums) for key, sums in user_groups
     ]
 
+    agent_groups = _usage_groups(db, ModelUsage.agent_id, *window)
+    # Same one-lookup shape as the user names, and scoped the same way: only
+    # this workspace's agents can label a row, so a stale or foreign agent id
+    # stays an id. A deleted agent's spend still happened — the panel shows
+    # the id rather than dropping the row.
+    agent_names: Dict[str, str] = {
+        str(agent_id): name
+        for agent_id, name in db.execute(
+            select(Agent.id, Agent.name).where(
+                Agent.workspace_id == actor.workspace_id,
+                Agent.id.in_([key for key, _ in agent_groups] or [""]),
+            )
+        ).all()
+    }
+    by_agent = [
+        _group_out(key, agent_names.get(key, ""), sums) for key, sums in agent_groups
+    ]
+
     run_rows = db.execute(
         select(
             ModelUsage.run_id,
@@ -1169,6 +1192,7 @@ def get_usage(
         by_model=by_model,
         by_user=by_user,
         by_operation=by_operation,
+        by_agent=by_agent,
         top_runs=top_runs,
         unpriced_models=[str(model) for model in unpriced],
         pricing_configured=bool(settings.model_prices),

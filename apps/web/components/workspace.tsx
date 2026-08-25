@@ -220,6 +220,7 @@ export function Workspace() {
     loadMembers,
     resolveMention,
     resolveAlert,
+    resolveAnomaly,
     assignApproval,
   } = useWorkspace();
   // Always present: this component only renders inside the authenticated gate.
@@ -483,7 +484,11 @@ export function Workspace() {
       inbox.mentions.length +
       // Monitor alerts wait on a human too — '' -targeted, so they wait on
       // every member until one resolves them for the room.
-      inbox.alerts.length
+      inbox.alerts.length +
+      // Spend anomalies are the same broadcast shape: a workspace fact
+      // waiting for anyone to acknowledge it. Left out of this sum they
+      // would be invisible on the rail — the founding bug of this badge.
+      inbox.anomalies.length
     : pendingApprovals.length;
 
   /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
@@ -1181,6 +1186,15 @@ export function Workspace() {
             resolveMention={resolveMention}
             resolveAlert={resolveAlert}
             openMonitors={() => setView("monitors")}
+            resolveAnomaly={resolveAnomaly}
+            // Where this reader can act on spend: owners get the usage panel
+            // on Admin; a member cannot see that page, so they land on the
+            // Agents view the anomaly is about.
+            openSpending={() =>
+              setView(
+                bootstrap?.identity.role === "owner" ? "admin" : "agents",
+              )
+            }
             identityId={selfId}
             loadMembers={loadMembers}
             assignApproval={assignApproval}

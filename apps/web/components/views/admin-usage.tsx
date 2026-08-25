@@ -5,6 +5,7 @@ import { Info, TriangleAlert } from "lucide-react";
 import { formatRelative } from "./shared";
 import {
   USAGE_WINDOWS,
+  agentLabel,
   barMetric,
   barShare,
   describePricing,
@@ -259,6 +260,16 @@ export function UsagePanel({ usage, days, onDaysChange, prompts }: UsagePanelPro
               metric={metric}
               pricingConfigured={usage.pricing_configured}
               empty="No operation recorded."
+            />
+            <Breakdown
+              title="By agent"
+              // The label is decided by the pure helper (name → "Agent 1a2b…"
+              // for a deleted one → "Background work" for no agent at all), so
+              // the generic row renderer needs no agent-specific branch.
+              rows={usage.by_agent.map((row) => ({ ...row, label: agentLabel(row) }))}
+              metric={metric}
+              pricingConfigured={usage.pricing_configured}
+              empty="No call in this window was made by an agent's turn."
             />
           </div>
           <p className="usage-caption">

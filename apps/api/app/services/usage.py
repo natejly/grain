@@ -86,6 +86,10 @@ class Attribution:
     run_id: str = ""
     conversation_id: str = ""
     user_id: str = ""
+    # Which agent's turn is spending — the run's agent, bound where the run is
+    # bound. Blank for calls with no agent behind them (embeddings, ingest,
+    # compiles), which is most of the background ledger.
+    agent_id: str = ""
     # How an *agent turn* under this scope is billed. The one operation the
     # chokepoint cannot name for itself: `stream_agent_response` is the same call
     # whether a person is typing or a scheduled workflow is executing, and which
@@ -110,6 +114,7 @@ def usage_scope(
     run_id: str = "",
     conversation_id: str = "",
     user_id: str = "",
+    agent_id: str = "",
     operation: str = "",
 ) -> Iterator[Attribution]:
     """Bind what this frame knows about who is paying, for the calls beneath it.
@@ -139,6 +144,7 @@ def usage_scope(
         run_id=run_id or current.run_id,
         conversation_id=conversation_id or current.conversation_id,
         user_id=user_id or current.user_id,
+        agent_id=agent_id or current.agent_id,
         operation=operation or current.operation,
     )
     token = _ATTRIBUTION.set(merged)
@@ -307,6 +313,7 @@ def record_model_usage(
             run_id=attribution.run_id,
             conversation_id=attribution.conversation_id,
             user_id=attribution.user_id,
+            agent_id=attribution.agent_id,
             operation=operation,
             provider=provider,
             model=model[:120],

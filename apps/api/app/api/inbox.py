@@ -125,6 +125,25 @@ class InboxAlertOut(ApiModel):
     created_at: datetime
 
 
+class InboxAnomalyOut(ApiModel):
+    """One open spend anomaly: an agent running well over its usual spend.
+
+    Broadcast like a monitor alert — the sweep writes only '' -targeted rows,
+    every member sees the same list, one resolve clears it for the room. Its
+    own list rather than a fifth kind folded into `alerts`, because the two
+    mean different things: an alert says a number you chose crossed a line you
+    drew; an anomaly says spending drifted from its own history, unasked."""
+
+    id: str
+    title: str
+    body: str
+    #: The agent whose spend drifted — the deep link's subject. Historical id:
+    #: the agent may since have been deleted, and the row still means what it
+    #: meant.
+    agent_id: str
+    created_at: datetime
+
+
 class InboxRunOut(ApiModel):
     """One finished workflow run — the Inbox's history shelf, not its work."""
 
@@ -141,6 +160,7 @@ class InboxOut(ApiModel):
     budget_holds: List[InboxBudgetHoldOut]
     mentions: List[InboxMentionOut]
     alerts: List[InboxAlertOut]
+    anomalies: List[InboxAnomalyOut]
     recent_runs: List[InboxRunOut]
 
 
@@ -356,6 +376,32 @@ def read_inbox(
         for row in open_alerts
     ]
 
+    # Spend anomalies are the fifth waiting set — broadcast automation exactly
+    # like monitor alerts (same '' pin, same index story, same unbounded
+    # oldest-first contract), listed separately because "a line you drew was
+    # crossed" and "spending drifted from its own history" are different facts
+    # asking for different next steps.
+    open_anomalies = db.scalars(
+        select(Notification)
+        .where(
+            Notification.workspace_id == actor.workspace_id,
+            Notification.kind == "spend_anomaly",
+            Notification.status == "open",
+            Notification.target_user_id == "",
+        )
+        .order_by(Notification.created_at.asc())
+    ).all()
+    anomalies = [
+        InboxAnomalyOut(
+            id=row.id,
+            title=row.title,
+            body=row.body,
+            agent_id=row.agent_id,
+            created_at=row.created_at,
+        )
+        for row in open_anomalies
+    ]
+
     outcomes = db.execute(
         select(WorkflowRun, Workflow.name)
         .join(Workflow, Workflow.id == WorkflowRun.workflow_id)
@@ -383,5 +429,6 @@ def read_inbox(
         budget_holds=budget_holds,
         mentions=mentions,
         alerts=alerts,
+        anomalies=anomalies,
         recent_runs=recent_runs,
     )

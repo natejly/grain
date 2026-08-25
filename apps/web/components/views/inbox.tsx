@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Inbox as InboxIcon,
   RefreshCw,
+  TrendingUp,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -65,6 +66,11 @@ export type InboxViewProps = {
   resolveAlert: (notificationId: string) => Promise<void>;
   /** Jump to the Monitors view, where the tripped monitor is defined. */
   openMonitors: () => void;
+  /** Flip a spend anomaly out of the waiting set — broadcast, like alerts. */
+  resolveAnomaly: (notificationId: string) => Promise<void>;
+  /** Jump to where this reader can act on spend: the admin usage panel for an
+   * owner, the Agents view for everyone else. */
+  openSpending: () => void;
   /** The signed-in member's user id — what splits the queue into "assigned to
    * you" vs the rest. "" until bootstrap's first read lands. */
   identityId: string;
@@ -75,7 +81,14 @@ export type InboxViewProps = {
   assignApproval: (callId: string, userId: string) => Promise<boolean>;
 };
 
-type Section = "approvals" | "holds" | "mentions" | "alerts" | "runs" | "history";
+type Section =
+  | "approvals"
+  | "holds"
+  | "mentions"
+  | "alerts"
+  | "anomalies"
+  | "runs"
+  | "history";
 
 const ORIGIN_LABELS: Record<string, string> = {
   chat: "Chat",
@@ -271,6 +284,8 @@ export function InboxView({
   openMention,
   resolveAlert,
   openMonitors,
+  resolveAnomaly,
+  openSpending,
   identityId,
   loadMembers,
   assignApproval,
@@ -308,6 +323,7 @@ export function InboxView({
   const holds = feed?.budget_holds ?? [];
   const mentions = feed?.mentions ?? [];
   const alerts = feed?.alerts ?? [];
+  const anomalies = feed?.anomalies ?? [];
   const runs = feed?.recent_runs ?? [];
 
   // J/K walk the queue, A/D decide the focused row — triage without a mouse.
@@ -343,6 +359,7 @@ export function InboxView({
     { id: "holds", label: "Budget holds", count: holds.length },
     { id: "mentions", label: "Mentions", count: mentions.length },
     { id: "alerts", label: "Alerts", count: alerts.length },
+    { id: "anomalies", label: "Spend", count: anomalies.length },
     { id: "runs", label: "Runs" },
     { id: "history", label: "History" },
   ];
@@ -605,6 +622,58 @@ export function InboxView({
                   <button
                     className="approve"
                     onClick={() => void resolveAlert(alert.id)}
+                  >
+                    <Check size={15} />
+                    Resolve
+                  </button>
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      )}
+
+      {section === "anomalies" && (
+        <div className="approval-panel inbox-queue">
+          {anomalies.length === 0 ? (
+            <div className="approval-empty">
+              <div>
+                <Check size={18} />
+              </div>
+              <strong>Spending looks usual</strong>
+              <p>
+                When an agent runs at several times its own typical spend, the
+                hourly watch flags it here for every member.
+              </p>
+            </div>
+          ) : (
+            anomalies.map((anomaly) => (
+              <article key={anomaly.id} className="approval-card">
+                <div className="approval-card-top">
+                  <div className="tool-glyph">
+                    <TrendingUp size={17} />
+                  </div>
+                  <div>
+                    <span>
+                      Spend anomaly · flagged{" "}
+                      {formatRelative(anomaly.created_at).replace(" ago", "")}
+                    </span>
+                    <strong>{anomaly.title}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-button approval-open"
+                    onClick={openSpending}
+                  >
+                    <ExternalLink size={13} />
+                    Review spending
+                  </button>
+                </div>
+                {anomaly.body && <p className="inbox-hold-note">{anomaly.body}</p>}
+                <div className="decision-buttons">
+                  <button
+                    className="approve"
+                    onClick={() => void resolveAnomaly(anomaly.id)}
                   >
                     <Check size={15} />
                     Resolve

@@ -2079,6 +2079,11 @@ class ModelUsage(Base):
     run_id: Mapped[str] = mapped_column(String(36), default="")
     conversation_id: Mapped[str] = mapped_column(String(36), default="")
     user_id: Mapped[str] = mapped_column(String(36), default="")
+    #: Which agent's turn spent this — the run's `agent_id`, frozen at write
+    #: time like every other reference here: plain string, '' for calls with no
+    #: agent behind them (embeddings, ingest, compiles), never a ForeignKey, so
+    #: the ledger outlives the agent it bills.
+    agent_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
     # What caused the call: chat | workflow_node | embedding | codegen |
     # context_blurb | memory_extraction | graph_extraction | workflow_compile.
     # Free text rather than an enum so a new caller records something honest
@@ -2104,6 +2109,29 @@ class ModelUsage(Base):
         Float, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class SweepClaim(Base):
+    """One named system sweep's claim marker — at-most-once per period.
+
+    Workflows, crons and monitors each carry a `last_dispatched_at` claim
+    column on their own rows; a sweep with no row of its own (the hourly spend
+    watch today, the daily digest tomorrow) claims here instead: one row per
+    sweep name, advanced by the same conditional UPDATE, so replayed or racing
+    ticks fire the sweep at most once per period.
+
+    Deliberately the one table in this schema with no `workspace_id`: it is
+    infrastructure about the *ticker*, like `alembic_version`, and holds no
+    tenant data — only a name and a timestamp. Nothing here can leak because
+    nothing here is anyone's.
+    """
+
+    __tablename__ = "sweep_claims"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
 
 
 class WorkspaceBudget(Base):

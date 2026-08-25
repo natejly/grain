@@ -236,7 +236,51 @@ def test_the_feed_is_workspace_scoped(client, identity_client):
     body = response.json()
     assert call_id not in [row["id"] for row in body["approvals"]]
     assert body["budget_holds"] == []
-    # The mentions and alerts sets ride the same workspace filter — a fresh
-    # tenant's feed carries none of the dev workspace's notifications.
+    # The mentions, alerts and anomalies sets ride the same workspace filter —
+    # a fresh tenant's feed carries none of the dev workspace's notifications.
     assert body["mentions"] == []
     assert body["alerts"] == []
+    assert body["anomalies"] == []
+
+
+def test_a_spend_anomaly_lists_for_every_member_until_resolved(client, identity_client):
+    """The fifth waiting set: broadcast like an alert ('' -target, so every
+    member sees it), carrying the agent id the deep link needs, gone from the
+    feed the moment anyone resolves it — and invisible to a foreign tenant."""
+    from app.models import Notification
+
+    workspace_id = _identity(client)["workspace_id"]
+    db = SessionLocal()
+    try:
+        row = Notification(
+            workspace_id=workspace_id,
+            target_user_id="",
+            kind="spend_anomaly",
+            status="open",
+            title="Scribe is at 3× its usual spend",
+            body="About $6.00 in the last 24 hours, against a usual $1.50.",
+            agent_id="agent-under-watch",
+        )
+        db.add(row)
+        db.commit()
+        anomaly_id = row.id
+    finally:
+        db.close()
+
+    listed = client.get("/api/inbox").json()["anomalies"]
+    mine = [row for row in listed if row["id"] == anomaly_id]
+    assert len(mine) == 1
+    assert mine[0]["agent_id"] == "agent-under-watch"
+    assert "3×" in mine[0]["title"]
+
+    # Another workspace's feed never carries it.
+    other = identity_client()
+    assert anomaly_id not in [row["id"] for row in other.get("/api/inbox").json()["anomalies"]]
+
+    # One resolve clears it for the room, through the shared notification
+    # resolve route — anomalies own no endpoint of their own.
+    resolved = client.post(f"/api/notifications/{anomaly_id}/resolve")
+    assert resolved.status_code == 200
+    assert anomaly_id not in [
+        row["id"] for row in client.get("/api/inbox").json()["anomalies"]
+    ]
