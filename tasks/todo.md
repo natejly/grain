@@ -500,3 +500,18 @@ Gate: ruff ✓ mypy ✓ alembic 0048 up/down/up ✓ vitest 663/663 ✓ web lint 
 errors ✓ next build ✓ full pytest exit 0 except the one pre-existing
 password-timing flake (a constant-time-ratio assertion, load-sensitive, passes
 1/1 in isolation — not this build's code).
+
+## Share the knowledge graph over MCP (2026-08-25)
+
+- [x] `graph_export` tool in services/graph_tools.py: whole-graph snapshot
+      (projection status/version/built_at, entities by mention_count, edges
+      named by entity — never rebuild-volatile ids per ADR 0002 — with
+      truncated flags; no provenance id lists, `graph_path` is the citation
+      path). read_only=True, so the existing POST /api/mcp offer filter
+      exposes it with zero MCP wiring.
+- [x] Tests: 3 export tests in test_graph_depth.py + an end-to-end MCP test
+      (`test_the_knowledge_graph_is_shared_over_mcp`) asserting graph_export/
+      graph_neighbors/graph_path are offered and callable over the bearer
+      channel. Updated test_walk_tools_are_read_only's exact-set assertion.
+- [x] Gates: ruff ✓ mypy ✓ full pytest (worktree PYTHONPATH override —
+      the repo venv's editable install otherwise imports the main checkout).

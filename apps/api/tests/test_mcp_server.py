@@ -113,6 +113,31 @@ def test_tools_call_runs_a_read_only_tool(client):
         _cleanup_tokens()
 
 
+def test_the_knowledge_graph_is_shared_over_mcp(client):
+    """`graph_export` rides the read-only registry onto the MCP surface, so an
+    external client can pull the workspace's knowledge graph in one call."""
+    import json
+
+    secret = _mint(client)
+    try:
+        listed = _rpc(client, secret, "tools/list")
+        names = {tool["name"] for tool in listed.json()["result"]["tools"]}
+        assert {"graph_export", "graph_neighbors", "graph_path"} <= names
+        response = _rpc(
+            client,
+            secret,
+            "tools/call",
+            {"name": "graph_export", "arguments": {"limit": 5}},
+        )
+        assert response.status_code == 200
+        result = response.json()["result"]
+        assert result["isError"] is False
+        snapshot = json.loads(result["content"][0]["text"])
+        assert {"status", "entities", "edges"} <= set(snapshot)
+    finally:
+        _cleanup_tokens()
+
+
 def test_an_unknown_tool_is_an_rpc_tool_error_not_a_crash(client):
     secret = _mint(client)
     try:

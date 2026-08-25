@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..models import GraphEdge, GraphEntity, GraphProjection
 from .graph import (
     DEFAULT_NEIGHBOR_HOPS,
     DEFAULT_NEIGHBOR_RESULTS,
@@ -29,6 +31,11 @@ from .llm_tools import ToolContext, ToolResult, ToolSpec
 # Enough provenance for the model to cite a connection without pasting the whole
 # id list a hub edge can accumulate.
 MAX_PROVENANCE_PER_STEP = 3
+
+# `graph_export` bounds. The entity cap matches GET /api/graph's ceiling; edges
+# are capped at four per entity, same as that route.
+DEFAULT_EXPORT_ENTITIES = 50
+MAX_EXPORT_ENTITIES = 200
 
 
 def _int_arg(args: Dict[str, Any], key: str, default: int) -> int:
@@ -146,6 +153,88 @@ def _graph_path(db: Session, context: ToolContext, args: Dict[str, Any]) -> Tool
     )
 
 
+def _graph_export(
+    db: Session, context: ToolContext, args: Dict[str, Any]
+) -> ToolResult:
+    """A shareable snapshot of the whole graph, not a walk from one entity.
+
+    Edges name their endpoints instead of carrying entity ids: ids are not
+    stable across rebuilds (ADR 0002), names are. Provenance id lists stay out
+    on purpose — an export is for reading the shape of what the workspace
+    knows; a caller who wants the passages behind one link asks `graph_path`.
+    """
+    limit = min(
+        max(_int_arg(args, "limit", DEFAULT_EXPORT_ENTITIES), 1), MAX_EXPORT_ENTITIES
+    )
+    projection = db.scalar(
+        select(GraphProjection).where(
+            GraphProjection.workspace_id == context.workspace_id
+        )
+    )
+    entities = list(
+        db.scalars(
+            select(GraphEntity)
+            .where(GraphEntity.workspace_id == context.workspace_id)
+            .order_by(GraphEntity.mention_count.desc(), GraphEntity.name.asc())
+            .limit(limit + 1)
+        )
+    )
+    entities_truncated = len(entities) > limit
+    entities = entities[:limit]
+    names = {entity.id: entity.name for entity in entities}
+    edges: List[GraphEdge] = []
+    edges_truncated = False
+    if names:
+        edge_cap = limit * 4
+        edges = list(
+            db.scalars(
+                select(GraphEdge)
+                .where(
+                    GraphEdge.workspace_id == context.workspace_id,
+                    GraphEdge.from_entity_id.in_(names),
+                    GraphEdge.to_entity_id.in_(names),
+                )
+                .order_by(GraphEdge.weight.desc())
+                .limit(edge_cap + 1)
+            )
+        )
+        edges_truncated = len(edges) > edge_cap
+        edges = edges[:edge_cap]
+    return ToolResult(
+        content=json.dumps(
+            {
+                "status": projection.status if projection else "empty",
+                "version": projection.version if projection else "",
+                "built_at": (
+                    projection.built_at.isoformat()
+                    if projection and projection.built_at
+                    else None
+                ),
+                "entities_truncated": entities_truncated,
+                "edges_truncated": edges_truncated,
+                "entities": [
+                    {
+                        "name": entity.name,
+                        "type": entity.entity_type,
+                        "mentions": entity.mention_count,
+                    }
+                    for entity in entities
+                ],
+                "edges": [
+                    {
+                        "from": names[edge.from_entity_id],
+                        "to": names[edge.to_entity_id],
+                        "relation": edge.relation,
+                        "weight": edge.weight,
+                        "confidence": round(edge.confidence, 2),
+                    }
+                    for edge in edges
+                ],
+            }
+        )
+    )
+
+
 def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
     return {
         "graph_neighbors": ToolSpec(
@@ -191,5 +280,27 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "required": ["from_entity", "to_entity"],
             },
             executor=_graph_path,
+        ),
+        "graph_export": ToolSpec(
+            name="graph_export",
+            description=(
+                "The whole knowledge graph as one shareable snapshot: the most-"
+                "mentioned entities (limit defaults to "
+                f"{DEFAULT_EXPORT_ENTITIES}, max {MAX_EXPORT_ENTITIES}) and the "
+                "relations among them, named by entity rather than id. Sets "
+                "entities_truncated/edges_truncated when the graph holds more."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_EXPORT_ENTITIES,
+                    },
+                },
+                "required": [],
+            },
+            executor=_graph_export,
         ),
     }

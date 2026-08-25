@@ -714,7 +714,7 @@ def test_shortest_path_ignores_edge_direction(workspace, db):
 def test_walk_tools_are_read_only(workspace, db):
     workspace_id, user_id = workspace
     tools = registry_tools(db, _context(workspace_id, user_id))
-    assert set(tools) == {"graph_neighbors", "graph_path"}
+    assert set(tools) == {"graph_neighbors", "graph_path", "graph_export"}
     assert all(spec.read_only and spec.preview is None for spec in tools.values())
 
 
@@ -1217,3 +1217,66 @@ def test_memory_derived_entities_stay_inside_their_workspace(workspace, db):
             session.commit()
         finally:
             session.close()
+
+
+# --------------------------------------------------------------------------
+# Export
+
+
+def _export(db, workspace_id: str, user_id: str, args: dict) -> dict:
+    spec = registry_tools(db, _context(workspace_id, user_id))["graph_export"]
+    return json.loads(spec.executor(db, _context(workspace_id, user_id), args).content)
+
+
+def test_export_names_edges_by_entity_and_reports_the_projection(workspace, db):
+    workspace_id, user_id = workspace
+    _chain(db, workspace_id, ["Maya Chen", "Project Northstar", "Atlas Labs"])
+    db.add(
+        GraphProjection(
+            workspace_id=workspace_id, status="ready", version="v7", entity_count=3
+        )
+    )
+    db.commit()
+
+    snapshot = _export(db, workspace_id, user_id, {})
+    assert snapshot["status"] == "ready" and snapshot["version"] == "v7"
+    assert snapshot["entities_truncated"] is False
+    assert snapshot["edges_truncated"] is False
+    assert {e["name"] for e in snapshot["entities"]} == {
+        "Maya Chen",
+        "Project Northstar",
+        "Atlas Labs",
+    }
+    # Edges carry names, never rebuild-volatile entity ids or provenance lists.
+    edge = snapshot["edges"][0]
+    assert set(edge) == {"from", "to", "relation", "weight", "confidence"}
+    assert {(e["from"], e["to"]) for e in snapshot["edges"]} == {
+        ("Maya Chen", "Project Northstar"),
+        ("Project Northstar", "Atlas Labs"),
+    }
+
+
+def test_export_of_an_unbuilt_graph_is_empty_not_an_error(workspace, db):
+    workspace_id, user_id = workspace
+    snapshot = _export(db, workspace_id, user_id, {})
+    assert snapshot["status"] == "empty"
+    assert snapshot["entities"] == [] and snapshot["edges"] == []
+
+
+def test_export_truncates_to_the_limit_and_says_so(workspace, db):
+    workspace_id, user_id = workspace
+    entities = _chain(db, workspace_id, ["Alpha", "Beta", "Gamma"])
+    entities["Alpha"].mention_count = 9
+    entities["Beta"].mention_count = 5
+    db.commit()
+
+    snapshot = _export(db, workspace_id, user_id, {"limit": 2})
+    assert snapshot["entities_truncated"] is True
+    # Most-mentioned first, and only edges among the included entities survive.
+    assert [e["name"] for e in snapshot["entities"]] == ["Alpha", "Beta"]
+    assert {(e["from"], e["to"]) for e in snapshot["edges"]} == {("Alpha", "Beta")}
+    # A malformed limit falls back to the default instead of erroring.
+    assert (
+        _export(db, workspace_id, user_id, {"limit": "wide"})["entities_truncated"]
+        is False
+    )
