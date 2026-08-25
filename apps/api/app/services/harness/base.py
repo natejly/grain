@@ -52,6 +52,7 @@ class Harness(Protocol):
         evidence: List[Evidence],
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        thinking: bool = False,
     ) -> ModelStep:
         """Return the `ModelStep` for one turn.
 

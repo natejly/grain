@@ -158,6 +158,13 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
   await expect(
     page.getByText("Drafted the Launch Runbook with three steps."),
   ).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
+  // The composer stays live during a run now (typing steers the active
+  // turn), so the disabled textarea no longer synchronizes consecutive
+  // sends. Wait for the turn to settle — Regenerate only renders between
+  // runs — so the next Enter starts a fresh turn rather than steering.
+  await expect(page.getByRole("button", { name: "Regenerate" })).toBeVisible({
+    timeout: AGENT_WRITE_TIMEOUT,
+  });
 
   await composer.fill("Tighten step two of the runbook.");
   await composer.press("Enter");
@@ -208,6 +215,11 @@ test("a parked write is decidable from the Files view", async ({ page }) => {
   await expect(createCard).toBeVisible({ timeout: AGENT_WRITE_TIMEOUT });
   await createCard.getByRole("button", { name: "Approve" }).click();
   await expect(page.getByText("Drafted the Rollback Playbook.")).toBeVisible({
+    timeout: AGENT_WRITE_TIMEOUT,
+  });
+  // Same settle-wait as the runbook spec above: the live composer means a
+  // send during the closing run would steer it instead of starting this turn.
+  await expect(page.getByRole("button", { name: "Regenerate" })).toBeVisible({
     timeout: AGENT_WRITE_TIMEOUT,
   });
 
@@ -340,6 +352,11 @@ test("a fabricated citation is flagged under the answer that made it", async ({
 
   // And the clean verdict is a different thing to look at, so "checked and
   // clean" cannot be confused with "never checked".
+  // Settle-wait first: the live composer steers an active run, and the badge
+  // above renders before the run closes (same wait as the runbook spec).
+  await expect(page.getByRole("button", { name: "Regenerate" })).toBeVisible({
+    timeout: AGENT_WRITE_TIMEOUT,
+  });
   await composer.fill("What does the rollout reduce?");
   await composer.press("Enter");
   const clean = page.locator(".citation-check.clean");

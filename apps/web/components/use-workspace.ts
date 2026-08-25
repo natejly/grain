@@ -78,6 +78,9 @@ function readStoredPanes(): ChatPane[] {
   }
 }
 
+/** localStorage key for the composer's Thinking toggle, `grain.*` convention. */
+const THINKING_TRAILS_KEY = "grain.thinking-trails";
+
 /**
  * Every piece of workspace state and the actions over it. The shell renders the
  * result; the hooks below run in the order they always have.
@@ -131,6 +134,28 @@ export function useWorkspace() {
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedEffort, setSelectedEffort] = useState("");
   const [fast, setFast] = useState(false);
+  // The Thinking toggle is a *setting*, not per-turn session state: someone
+  // who wants to watch the model think wants that every turn, so it persists
+  // under the `grain.*` localStorage convention. Seeded in an effect rather
+  // than the initializer so the server render and first client render agree.
+  const [thinking, setThinkingState] = useState(false);
+  useEffect(() => {
+    try {
+      setThinkingState(window.localStorage.getItem(THINKING_TRAILS_KEY) === "on");
+    } catch {
+      // Storage denied: the toggle still works, it just forgets on reload.
+    }
+  }, []);
+  const setThinking = useCallback((value: boolean) => {
+    setThinkingState(value);
+    try {
+      window.localStorage.setItem(THINKING_TRAILS_KEY, value ? "on" : "off");
+    } catch {
+      // Same degradation as the read: a session-only toggle.
+    }
+  }, []);
+  //: The live reasoning trail streamed by the current run; "" between runs.
+  const [runThinking, setRunThinking] = useState("");
   // The skill attached to the next turn and the values for its declared args.
   // Per-turn session state like the controls above: the composer's slash picker
   // sets it, the send consumes it, and it never becomes part of the conversation.
@@ -753,6 +778,7 @@ export function useWorkspace() {
     selectedModel,
     selectedEffort,
     fast,
+    thinking,
     attachedSkill,
     skillArgs,
     clearAttachedSkill: detachSkill,
@@ -765,6 +791,7 @@ export function useWorkspace() {
     setAgentCalls,
     setActiveRun,
     setRunStatus,
+    setRunThinking,
     setBudgetPark,
     onScreenFlag: recordScreenFlag,
     setDraft,
@@ -868,6 +895,9 @@ export function useWorkspace() {
     setSelectedEffort,
     fast,
     setFast,
+    thinking,
+    setThinking,
+    runThinking,
     attachedSkill,
     skillArgs,
     attachSkill,

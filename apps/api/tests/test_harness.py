@@ -154,6 +154,7 @@ def test_openai_harness_forwards_the_turn_arguments_to_the_stream(monkeypatch):
         instructions,
         model=None,
         effort=None,
+        thinking=False,
         operation="",
     ):
         captured.update(

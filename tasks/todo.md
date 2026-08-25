@@ -503,3 +503,63 @@ second (and third) renumbers its whole chain onto the then-current head
 and retargets the down_revisions. If this branch is not first in, re-parent
 0045_marketplace/0046_listing_installs onto the merge-time head; do not
 pre-claim numbers.
+
+# Steering + graceful incomplete streams (planned 2026-08-23)
+
+The composer disables its textarea while a run is active; steering should
+work in the same text box. Separately, `response.incomplete` (output-token
+limit) raises "Model stream ended early", discarding everything streamed.
+
+- [x] 1. Backend steer channel: POST /api/runs/{run_id}/steer (content,
+      1..8000). Same auth as cancel (workspace + run_activity_visible),
+      409 on TERMINAL_RUN_STATES / cancel_requested so the client can fall
+      back to a fresh send. Writes a Message (run_id, role user) for the
+      transcript and a `run.steer` RunEvent carrying the content — the
+      event's per-run `sequence` is the consumption cursor.
+- [x] 2. Loop absorption: LoopState gains `steered_sequence` (serialized,
+      defaults 0 on old snapshots). `_absorb_steering` folds any newer
+      run.steer events into `input_items` as plain user messages at the
+      outer-loop checkpoint (after the cancel check, before the model
+      call) — never inside _drain_pending, where a user item would split
+      a function_call from its output. Parked runs absorb on resume.
+- [x] 3. Incomplete streams: `stream_agent_response` records usage and
+      yields ("incomplete", response) instead of raising; the loop
+      finishes the turn with the streamed text plus a cut-short note
+      (steering/"continue" now works for the rest), raising only when
+      nothing at all streamed. response.failed still raises.
+- [x] 4. Web: textarea always enabled (placeholder says it steers while a
+      run is live); Enter/Send during a run calls api.steerRun and appends
+      the message; Stop button stays; per-turn controls (skills, model)
+      stay disabled — they configure the *next* turn.
+- [x] 5. Tests: steer route (message+event, 409 terminal, isolation DENY),
+      absorption unit tests via model_step fakes (pre-planted event lands
+      in the first call's input; cursor is idempotent; park/resume keeps
+      it), incomplete unit tests (partial text survives with note; empty
+      still errors). Web: api-client steerRun contract test.
+- [x] 6. Verify: ruff, mypy, full pytest, tsc, vitest, eslint, build, e2e.
+      Note: the live composer removed the disabled-textarea sync the specs
+      leaned on — every double-send spec now waits for Regenerate (turn
+      settled) before its second send, or it would steer the closing run.
+
+# Thinking trails (built 2026-08-25)
+
+"Show thinking trails, as a setting that can be enabled." Design mirrors
+the per-turn model/effort controls end to end:
+
+- [x] 1. `Run.show_thinking` (migration 0047_run_thinking, guarded incl.
+      no-runs-table case) — persisted per turn so a park/resume keeps the
+      choice; `SendMessageRequest.thinking` (default False) rides the send.
+- [x] 2. Harness protocol gains `thinking: bool`; OpenAI harness asks the
+      provider for reasoning summaries (`reasoning.summary = "auto"`, only
+      when on — the default request stays byte-identical) and yields
+      ("thinking", text) events; scripted double accepts and ignores it.
+- [x] 3. Loop streams the trail through a second DeltaBuffer as
+      `thinking.delta` run events — its own lane, never part of the
+      transcript or the answer.
+- [x] 4. Web: Thinking toggle beside Fast in the composer (a *setting*:
+      persists in localStorage under grain.thinking-trails); thread
+      handler accumulates thinking.delta into a live collapsible
+      "Thinking" panel above the run status, cleared when the run settles.
+- [x] 5. Tests: thinking lane events land as thinking.delta with the
+      answer untouched; the toggle rides the send onto the run row; both
+      harness-forwarding spies extended to pin the new argument.

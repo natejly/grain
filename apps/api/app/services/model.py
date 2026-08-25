@@ -321,8 +321,14 @@ def stream_agent_response(
     operation: str = "",
     model: Optional[str] = None,
     effort: Optional[str] = None,
+    thinking: bool = False,
 ) -> Iterator[Tuple[str, object]]:
     """Stream one agent turn as ("delta", text) events then ("completed", response).
+
+    With `thinking` on, the provider is asked for reasoning summaries and each
+    summary fragment is yielded as ("thinking", text) ahead of the answer
+    deltas — the composer's Thinking toggle, off by default so an unchanged
+    caller's request is byte-identical to before the feature.
 
     The terminal response carries the full `.output`, including any function
     calls and any hosted `web_search` call with its `url_citation` annotations,
@@ -364,12 +370,18 @@ def stream_agent_response(
     chosen_effort: ReasoningEffort = cast(
         ReasoningEffort, effort or settings.openai_reasoning_effort
     )
+    reasoning: Dict[str, Any] = {"effort": chosen_effort}
+    if thinking:
+        # "auto" lets the provider pick the summary detail the model supports;
+        # requesting it only when the trail will be shown keeps the default
+        # request byte-identical to before the toggle existed.
+        reasoning["summary"] = "auto"
     stream = client.responses.create(
         model=chosen_model,
         instructions=instructions,
         input=cast(Any, input_items),
         tools=cast(Any, tools),
-        reasoning={"effort": chosen_effort},
+        reasoning=cast(Any, reasoning),
         text={"verbosity": "low"},
         max_output_tokens=settings.openai_max_output_tokens,
         safety_identifier=privacy_safe_identifier(user_id),
@@ -380,6 +392,11 @@ def stream_agent_response(
         event_type = getattr(event, "type", "")
         if event_type == "response.output_text.delta":
             yield "delta", getattr(event, "delta", "") or ""
+        elif thinking and event_type == "response.reasoning_summary_text.delta":
+            yield "thinking", getattr(event, "delta", "") or ""
+        elif thinking and event_type == "response.reasoning_summary_part.done":
+            # Summaries arrive as parts; a boundary reads as a paragraph break.
+            yield "thinking", "\n\n"
         elif event_type == "response.completed":
             completed = getattr(event, "response", None)
             usage.record_model_usage(
@@ -391,7 +408,23 @@ def stream_agent_response(
                 settings=settings,
             )
             yield "completed", completed
-        elif event_type in {"response.failed", "response.incomplete"}:
+        elif event_type == "response.incomplete":
+            # The stream ended early — usually `max_output_tokens` — but the
+            # terminal event still carries the partial response and its usage.
+            # Bill the tokens that were spent and hand the partial back; the
+            # loop decides whether what streamed can stand as an answer.
+            # Raising here (the old behavior) threw away everything streamed.
+            partial = getattr(event, "response", None)
+            usage.record_model_usage(
+                model=chosen_model,
+                operation=(
+                    operation or usage.current_attribution().operation or usage.CHAT
+                ),
+                usage=getattr(partial, "usage", None),
+                settings=settings,
+            )
+            yield "incomplete", partial
+        elif event_type == "response.failed":
             response = getattr(event, "response", None)
             error = getattr(response, "error", None)
             detail = getattr(error, "message", None) or event_type

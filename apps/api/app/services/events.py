@@ -47,10 +47,20 @@ class DeltaBuffer:
     seen so the caller can use it as the final message body.
     """
 
-    def __init__(self, db: Session, *, workspace_id: str, run_id: str) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        workspace_id: str,
+        run_id: str,
+        event_type: str = "message.delta",
+    ) -> None:
         self._db = db
         self._workspace_id = workspace_id
         self._run_id = run_id
+        #: The answer streams as `message.delta`; a thinking trail streams the
+        #: same way under `thinking.delta` — same buffering, different lane.
+        self._event_type = event_type
         self._pending = ""
         self._last_flush = time.monotonic()
         self.text = ""
@@ -74,7 +84,7 @@ class DeltaBuffer:
             self._db,
             workspace_id=self._workspace_id,
             run_id=self._run_id,
-            event_type="message.delta",
+            event_type=self._event_type,
             payload={"delta": self._pending},
         )
         self._db.commit()

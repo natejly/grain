@@ -38,6 +38,7 @@ from ..schemas import (
     RunOut,
     SendMessageRequest,
     SendMessageResponse,
+    SteerRequest,
 )
 from ..services import conversation_index, conversations, orgs, subjects
 from ..services import skills as skills_service
@@ -767,6 +768,7 @@ def send_message(
         skill_id=skill_id,
         skill_args_json=skill_args_json,
         skill_version=skill_version,
+        show_thinking=payload.thinking,
         # What was on screen when this was typed — the file the project editor
         # had open. Stored, not acted on: `subjects.resolve` reads it back on
         # every entry into the loop, so a turn that parks for an approval comes
@@ -879,6 +881,97 @@ def cancel_run(
     )
     db.commit()
     return run
+
+
+@router.post(
+    "/runs/{run_id}/steer", response_model=SendMessageResponse, status_code=202
+)
+def steer_run(
+    run_id: str,
+    payload: SteerRequest,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> SendMessageResponse:
+    """Fold mid-run guidance into a live turn — same text box, no new run.
+
+    The note lands twice on purpose: as an ordinary user Message under this
+    run (the transcript record, attributed to whoever typed it) and as a
+    `run.steer` RunEvent — the channel the loop actually consumes, keyed by
+    the event's per-run `sequence` so a park/resume neither replays a note
+    nor drops one sent while parked. A finished run answers 409 rather than
+    404, so the composer can tell "too late, send it as a fresh turn" apart
+    from "not yours to steer".
+    """
+    run = db.scalar(
+        select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    # Same gate as cancel and the event stream: a member must not steer a run
+    # on another member's personal thread.
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
+    ):
+        raise HTTPException(status_code=404, detail="Run not found")
+    replay = find_replay(
+        db, workspace_id=actor.workspace_id, operation="run.steer", key=key
+    )
+    if replay:
+        message = db.scalar(
+            select(Message).where(
+                Message.id == replay.resource_id,
+                Message.workspace_id == actor.workspace_id,
+            )
+        )
+        if message is None:
+            raise replayed_resource_gone()
+        return SendMessageResponse(
+            message=_message_out(message, actor.user_name), run=None, replayed=True
+        )
+    if run.status in TERMINAL_RUN_STATES or run.cancel_requested:
+        raise HTTPException(
+            status_code=409,
+            detail="This run has finished — send the note as a new message",
+        )
+    message = Message(
+        id=new_id(),
+        workspace_id=actor.workspace_id,
+        conversation_id=run.conversation_id,
+        run_id=run.id,
+        role="user",
+        created_by=actor.user_id,
+        content=payload.content,
+    )
+    db.add(message)
+    append_event(
+        db,
+        workspace_id=actor.workspace_id,
+        run_id=run.id,
+        event_type="run.steer",
+        payload={"content": payload.content, "message_id": message.id},
+    )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="run.steer",
+        key=key,
+        resource_id=message.id,
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="run.steered",
+        resource_type="run",
+        resource_id=run.id,
+        detail={"conversation_id": run.conversation_id},
+    )
+    db.commit()
+    return SendMessageResponse(message=_message_out(message, actor.user_name), run=None)
 
 
 async def _event_stream(

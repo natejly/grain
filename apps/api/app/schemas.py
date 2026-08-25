@@ -564,6 +564,14 @@ class MessageOut(ApiModel):
     created_at: datetime
 
 
+class SteerRequest(BaseModel):
+    """Mid-run guidance typed into the same composer while a turn is live.
+    Becomes an ordinary user message under the run plus a `run.steer` event
+    the loop folds into its next model call — no new run starts."""
+
+    content: str = Field(min_length=1, max_length=8000)
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     agent_id: Optional[str] = None
@@ -580,6 +588,10 @@ class SendMessageRequest(BaseModel):
     #: "fast" must not promise a setting some models cannot honour. An explicit
     #: `effort` always wins over `fast`.
     fast: bool = False
+    #: Stream the model's reasoning summaries as a live "thinking trail"
+    #: (`thinking.delta` run events). The composer's Thinking toggle; off by
+    #: default so an unchanged client sends exactly what it always did.
+    thinking: bool = False
     #: Invoke this skill for this turn only. Must be visible to the caller (own or
     #: shared). Absent = today's behaviour exactly; the skill's body is spliced
     #: into the turn's instructions and does not change the conversation.

@@ -103,6 +103,9 @@ export function Workspace() {
     setSelectedEffort,
     fast,
     setFast,
+    thinking,
+    setThinking,
+    runThinking,
     attachedSkill,
     skillArgs,
     attachSkill,
@@ -851,7 +854,10 @@ export function Workspace() {
                   setEffort: setSelectedEffort,
                   fast,
                   setFast,
+                  thinking,
+                  setThinking,
                 }}
+                thinking={runThinking}
                 skills={{
                   attached: attachedSkill,
                   argValues: skillArgs,

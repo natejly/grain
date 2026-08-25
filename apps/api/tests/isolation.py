@@ -1341,6 +1341,14 @@ ROUTE_CASES: List[RouteCase] = [
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
     ),
     RouteCase(
+        "POST",
+        "/api/runs/{run_id}/steer",
+        DENY,
+        path_ids={"run_id": "run"},
+        body={"content": "steered by A"},
+        note="Steering another workspace's run injects a prompt into it: 404.",
+    ),
+    RouteCase(
         "GET", "/api/runs/{run_id}/events", DENY, path_ids={"run_id": "run"}
     ),
     # The Inbox's attention feed: a pure workspace-scoped list with no id in

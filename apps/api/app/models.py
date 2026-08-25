@@ -438,6 +438,11 @@ class Run(Base):
     # budget park use the same model and effort the user originally chose.
     requested_model: Mapped[str] = mapped_column(String(80), default="")
     requested_effort: Mapped[str] = mapped_column(String(16), default="")
+    # Whether this turn streams its reasoning summaries as `thinking.delta`
+    # events (the composer's "Thinking" toggle). Persisted beside the other
+    # per-turn choices for the same reason they are: a park/resume in another
+    # process must keep showing the trail the user asked for.
+    show_thinking: Mapped[bool] = mapped_column(Boolean, default=False)
     # The skill invoked for this one turn, or "" for none. Deliberately not a
     # ForeignKey: a run is a historical record and must survive the skill's
     # deletion, exactly as `requested_model` outlives a renamed deployment. The

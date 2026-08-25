@@ -132,6 +132,10 @@ class LoopState:
     iteration: int = 0
     text_so_far: str = ""
     evidence: List[Evidence] = field(default_factory=list)
+    #: Highest `run.steer` event sequence already folded into `input_items`.
+    #: Persisted with the state so a park/resume neither replays a steering
+    #: note nor drops one sent while the run was parked.
+    steered_sequence: int = 0
 
     def to_json(self) -> str:
         return json.dumps(
@@ -141,6 +145,7 @@ class LoopState:
                 "iteration": self.iteration,
                 "text_so_far": self.text_so_far,
                 "evidence": [asdict(item) for item in self.evidence],
+                "steered_sequence": self.steered_sequence,
             },
             default=str,
         )
@@ -154,6 +159,7 @@ class LoopState:
             iteration=int(data.get("iteration") or 0),
             text_so_far=data.get("text_so_far") or "",
             evidence=[revive_evidence(item) for item in data.get("evidence") or []],
+            steered_sequence=int(data.get("steered_sequence") or 0),
         )
 
 
@@ -199,6 +205,7 @@ def _default_model_step(
         # deployment defaults, so a run with no override is identical to today.
         model=run.requested_model or None,
         effort=run.requested_effort or None,
+        thinking=run.show_thinking,
     )
 
 
@@ -1105,6 +1112,34 @@ def _amended(raw_arguments: str, amendment: Optional[Any]) -> str:
     return json.dumps({**parsed, **amendment})
 
 
+def _absorb_steering(db: Session, run: Run, state: LoopState) -> None:
+    """Fold user guidance sent mid-run into the model's next call.
+
+    Steering arrives as `run.steer` events; the per-run `sequence` is the
+    cursor (persisted in LoopState), so a park/resume neither replays a note
+    nor drops one sent while parked. Only called at the outer-loop checkpoint
+    beside the cancel check — never inside `_drain_pending`, where a user item
+    would split a function_call from the output the API requires adjacent.
+    """
+    rows = db.scalars(
+        select(RunEvent)
+        .where(
+            RunEvent.run_id == run.id,
+            RunEvent.event_type == "run.steer",
+            RunEvent.sequence > state.steered_sequence,
+        )
+        .order_by(RunEvent.sequence)
+    ).all()
+    for event in rows:
+        try:
+            content = str(json.loads(event.payload_json).get("content") or "")
+        except ValueError:
+            content = ""
+        if content.strip():
+            state.input_items.append({"role": "user", "content": content})
+        state.steered_sequence = event.sequence
+
+
 def _drain_pending(
     db: Session,
     run: Run,
@@ -1415,6 +1450,10 @@ def _advance(
         db.refresh(run)
         if run.cancel_requested:
             return _cancelled(db, run, state)
+        # The steering checkpoint sits beside the cancel check: both are "the
+        # user said something while I worked", read at the last moment before
+        # the next model call so the note shapes this call, not the next turn.
+        _absorb_steering(db, run, state)
 
         # The ceiling, checked here and nowhere else on this path: the last
         # statement before the expensive call. Every iteration, not once per
@@ -1431,14 +1470,31 @@ def _advance(
 
         final_round = state.iteration == MAX_ITERATIONS - 1
         buffer = DeltaBuffer(db, workspace_id=run.workspace_id, run_id=run.id)
+        # The thinking trail's own lane: same buffering, distinct event type,
+        # so the client can render it apart from the answer. Streamed live and
+        # deliberately not persisted anywhere else — the trail is working
+        # narration for the person watching, not part of the transcript.
+        thinking_buffer = DeltaBuffer(
+            db,
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            event_type="thinking.delta",
+        )
         response: Any = None
+        incomplete = False
         for kind, value in step(
             state.input_items, [] if final_round else tools, instructions
         ):
             if kind == "delta":
                 buffer.add(str(value))
+            elif kind == "thinking":
+                thinking_buffer.add(str(value))
             elif kind == "completed":
                 response = value
+            elif kind == "incomplete":
+                response = value
+                incomplete = True
+        thinking_buffer.flush()
         buffer.flush()
         state.iteration += 1
         if response is None:
@@ -1446,6 +1502,35 @@ def _advance(
         state.text_so_far += _apply_web_search(
             db, run, state, response=response, text=buffer.text, settings=settings
         )
+        if incomplete:
+            # The provider ended the stream early (usually the output-token
+            # ceiling) but everything streamed so far is real. Discarding it
+            # for an error was the old behavior and the worse trade: finish
+            # the turn honestly with what exists. Any function calls on the
+            # truncated response are dropped — a cut-off argument list is not
+            # a call worth executing. Only a stream that produced nothing at
+            # all is still an error.
+            reason = str(
+                getattr(
+                    getattr(response, "incomplete_details", None), "reason", ""
+                )
+                or ""
+            )
+            answer = state.text_so_far.strip()
+            if not answer:
+                raise RuntimeError(
+                    "Model stream ended early: " + (reason or "response.incomplete")
+                )
+            note = (
+                "it hit the output limit"
+                if reason == "max_output_tokens"
+                else "the model stopped early"
+            )
+            return Done(
+                answer=answer
+                + f"\n\n*(The answer was cut short — {note}. Say “continue” for the rest.)*",
+                evidence=state.evidence,
+            )
 
         calls = [
             item

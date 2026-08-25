@@ -136,6 +136,11 @@ export type MessageControls = {
   effort?: string;
   fast?: boolean;
   /**
+   * Stream the model's reasoning summaries for this turn as `thinking.delta`
+   * events — the composer's Thinking toggle. Absent means off.
+   */
+  thinking?: boolean;
+  /**
    * A skill to inject into this one turn, and the values for its declared args.
    * Per-turn like the model/effort above: absent means today's behaviour, and
    * the skill never becomes part of the conversation. `skillArgs` only rides the
@@ -2228,6 +2233,7 @@ export class WorkspaceApi {
           ...(controls?.model ? { model: controls.model } : {}),
           ...(controls?.effort ? { effort: controls.effort } : {}),
           ...(controls?.fast ? { fast: true } : {}),
+          ...(controls?.thinking ? { thinking: true } : {}),
           // A skill is injected for this turn only, so it rides the send like the
           // other per-turn controls. `skill_args` only travels with a skill.
           ...(controls?.skillId ? { skill_id: controls.skillId } : {}),
@@ -2264,6 +2270,19 @@ export class WorkspaceApi {
 
   cancelRun(runId: string): Promise<Run> {
     return this.request(`/api/runs/${runId}/cancel`, { method: "POST" }, true);
+  }
+
+  /**
+   * Fold guidance into a live run — the same composer, no new turn. The note
+   * lands in the transcript under the run and the loop reads it before its
+   * next model call. A finished run answers 409; send a fresh message instead.
+   */
+  steerRun(runId: string, content: string): Promise<SendMessageResponse> {
+    return this.request(
+      `/api/runs/${runId}/steer`,
+      { method: "POST", body: JSON.stringify({ content }) },
+      true,
+    );
   }
 
   listSources(): Promise<Source[]> {

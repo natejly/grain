@@ -27,6 +27,7 @@ class OpenAIHarness:
         evidence: List[Evidence],
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        thinking: bool = False,
     ) -> ModelStep:
         client = _openai_client(settings)
 
@@ -42,6 +43,7 @@ class OpenAIHarness:
                 instructions=instructions,
                 model=model,
                 effort=effort,
+                thinking=thinking,
             )
 
         return step
