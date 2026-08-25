@@ -548,3 +548,11 @@
   smaller (fewer agents, medium effort, no verify fan-out) AND self-verify the
   highest-risk surfaces by hand in parallel; the lighter re-run then found the
   real NaN-500 the stall had hidden.
+- "Make this more like <harness X>" names a capability bar, not a coat of
+  paint. A plan scoped to rendering (thinking blocks, tool cards, timelines)
+  was rejected because the intent was to ENCAPSULATE what Claude-Code-class
+  harnesses can DO — the tool surface, orchestration, permissions, and
+  extensibility — with the visuals as its presentation layer. Before planning
+  against a named product, enumerate its functionality and diff that against
+  ours; ask "what can it do that we can't" before "what does it show that we
+  don't".
