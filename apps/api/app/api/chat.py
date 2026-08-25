@@ -21,6 +21,7 @@ from ..models import (
     Dashboard,
     Message,
     Run,
+    RunCheckpoint,
     RunEvent,
     User,
     new_id,
@@ -40,7 +41,7 @@ from ..schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from ..services import conversation_index, conversations, orgs, subjects
+from ..services import checkpoints, conversation_index, conversations, orgs, subjects
 from ..services import skills as skills_service
 from ..services import spaces as spaces_service
 from ..services.artifacts import documents
@@ -1009,6 +1010,100 @@ def cancel_run(
     )
     db.commit()
     return run
+
+
+class RunUndoRevertedOut(ApiModel):
+    tool_name: str
+    kind: str
+
+
+class RunUndoSkippedOut(ApiModel):
+    tool_name: str
+    reason: str
+
+
+class RunUndoOut(ApiModel):
+    run_id: str
+    reverted: List[RunUndoRevertedOut]
+    skipped: List[RunUndoSkippedOut]
+
+
+@router.post("/runs/{run_id}/undo", response_model=RunUndoOut)
+def undo_run(
+    run_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> RunUndoOut:
+    """Revert the writes a finished run recorded checkpoints for.
+
+    Gated exactly as the stream and cancel are: resolve under the workspace,
+    then `run_activity_visible`, so a foreign or invisible run is uniformly a
+    404 before any state question is answered. Only terminal runs can be
+    undone (409 otherwise — a live run is still writing), and only once: the
+    first undo stamps every checkpoint's `reverted_at`, so a second answers
+    409 instead of double-applying. No Idempotency-Key: the consumed marker
+    *is* the natural guard, the same shape as the assign endpoint's upsert.
+
+    Checkpoints apply newest-first, so a resource created and then written to
+    is unwound in the only order that works. Irreversible rows — external
+    effects, clipped captures — come back in `skipped` with a reason rather
+    than pretending.
+    """
+    run = db.scalar(
+        select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
+    ):
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status not in TERMINAL_RUN_STATES:
+        raise HTTPException(
+            status_code=409, detail="The run is still active; undo it once it ends"
+        )
+    rows = list(
+        db.scalars(
+            select(RunCheckpoint)
+            .where(
+                RunCheckpoint.workspace_id == actor.workspace_id,
+                RunCheckpoint.run_id == run.id,
+            )
+            .order_by(RunCheckpoint.created_at.desc(), RunCheckpoint.id.desc())
+        )
+    )
+    if any(row.reverted_at is not None for row in rows):
+        raise HTTPException(
+            status_code=409, detail="This run's changes were already undone"
+        )
+    reverted, skipped = checkpoints.revert_run(
+        db, run=run, actor_id=actor.user_id, rows=rows
+    )
+    append_event(
+        db,
+        workspace_id=actor.workspace_id,
+        run_id=run.id,
+        event_type="run.reverted",
+        payload={"reverted": reverted, "skipped": skipped},
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="run.reverted",
+        resource_type="run",
+        resource_id=run.id,
+        detail={"reverted": len(reverted), "skipped": len(skipped)},
+    )
+    db.commit()
+    return RunUndoOut(
+        run_id=run.id,
+        reverted=[RunUndoRevertedOut(**item) for item in reverted],
+        skipped=[RunUndoSkippedOut(**item) for item in skipped],
+    )
 
 
 async def _event_stream(

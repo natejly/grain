@@ -91,6 +91,7 @@ from app.models import (
     Project,
     ProjectFile,
     Run,
+    RunCheckpoint,
     RunEvent,
     SandboxExecution,
     SandboxSession,
@@ -247,6 +248,30 @@ def build_tenant(label: str) -> Tenant:
         db.add(event)
         db.flush()
         ids["run_event"] = event.id
+
+        # The undo trail: naming another tenant's run must not revert (or even
+        # acknowledge) it, and the before-state carries content, so the marker
+        # rides in `before_json` where a leaked checkpoint would quote it.
+        checkpoint = RunCheckpoint(
+            workspace_id=workspace_id,
+            run_id=run.id,
+            tool_call_id="",
+            tool_name="edit_document",
+            kind="document",
+            reversible=True,
+            before_json=json.dumps(
+                {
+                    "existed": True,
+                    "document_id": "",
+                    "title": f"{label} brief",
+                    "kind": "markdown",
+                    "content": f"{label} secret checkpoint body",
+                }
+            ),
+        )
+        db.add(checkpoint)
+        db.flush()
+        ids["run_checkpoint"] = checkpoint.id
 
         csv = dataset_csv(label)
         source = Source(
@@ -1379,6 +1404,15 @@ ROUTE_CASES: List[RouteCase] = [
     ),
     RouteCase(
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
+    ),
+    RouteCase(
+        "POST",
+        "/api/runs/{run_id}/undo",
+        DENY,
+        path_ids={"run_id": "run"},
+        note="Undoing another tenant's run would rewrite their documents and "
+        "boards from checkpoints the caller cannot see; the workspace filter "
+        "must 404 before the visibility gate is even reached.",
     ),
     RouteCase(
         "GET", "/api/runs/{run_id}/events", DENY, path_ids={"run_id": "run"}

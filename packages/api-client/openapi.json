@@ -6621,6 +6621,71 @@
         "title": "RunRequest",
         "type": "object"
       },
+      "RunUndoOut": {
+        "properties": {
+          "reverted": {
+            "items": {
+              "$ref": "#/components/schemas/RunUndoRevertedOut"
+            },
+            "title": "Reverted",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/RunUndoSkippedOut"
+            },
+            "title": "Skipped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "reverted",
+          "skipped"
+        ],
+        "title": "RunUndoOut",
+        "type": "object"
+      },
+      "RunUndoRevertedOut": {
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "kind"
+        ],
+        "title": "RunUndoRevertedOut",
+        "type": "object"
+      },
+      "RunUndoSkippedOut": {
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "reason"
+        ],
+        "title": "RunUndoSkippedOut",
+        "type": "object"
+      },
       "SandboxExecutionOut": {
         "properties": {
           "artifact_count": {
@@ -12866,7 +12931,7 @@
     },
     "/api/comments/{comment_id}": {
       "delete": {
-        "description": "Soft-delete. Resolved under the workspace first so a foreign comment is\na 404; only then does the author/owner gate answer 403. Naturally\nidempotent \u2014 deleting a deleted comment changes nothing \u2014 so no key.",
+        "description": "Soft-delete. Resolved under the workspace first so a foreign comment is\na 404, then through the same subject-visibility gate as create/list \u2014 a\ncomment on a conversation the caller cannot see answers 404 exactly like a\nmissing one, even for the workspace owner. Only then does the author/owner\ngate answer 403. Naturally idempotent \u2014 deleting a deleted comment changes\nnothing \u2014 so no key.",
         "operationId": "delete_comment_api_comments__comment_id__delete",
         "parameters": [
           {
@@ -17891,7 +17956,7 @@
     },
     "/api/notifications/{notification_id}/resolve": {
       "post": {
-        "description": "Flip one notification out of the waiting set.\n\nA row targeted at another member is answered exactly like a missing one:\nsomeone else's mention is not this caller's to resolve, and a 403 would\nconfirm it exists.",
+        "description": "Flip one notification out of the waiting set.\n\nA row targeted at another member is answered exactly like a missing one:\nsomeone else's mention is not this caller's to resolve, and a 403 would\nconfirm it exists.\n\nA ''-targeted (broadcast) row is any member's to resolve, and resolving it\nclears it workspace-wide \u2014 deliberately. Broadcast kinds (monitor alerts,\nspend anomalies) announce workspace facts, and acknowledgement is\nPagerDuty-style: the first member to ack has acked for the room. There is\nno per-member read state by design; who acted is recorded on the row\n(`resolved_by`) and audited below in the same transaction.",
         "operationId": "resolve_notification_api_notifications__notification_id__resolve_post",
         "parameters": [
           {
@@ -18961,6 +19026,65 @@
           }
         },
         "summary": "Stream Run Events",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/undo": {
+      "post": {
+        "description": "Revert the writes a finished run recorded checkpoints for.\n\nGated exactly as the stream and cancel are: resolve under the workspace,\nthen `run_activity_visible`, so a foreign or invisible run is uniformly a\n404 before any state question is answered. Only terminal runs can be\nundone (409 otherwise \u2014 a live run is still writing), and only once: the\nfirst undo stamps every checkpoint's `reverted_at`, so a second answers\n409 instead of double-applying. No Idempotency-Key: the consumed marker\n*is* the natural guard, the same shape as the assign endpoint's upsert.\n\nCheckpoints apply newest-first, so a resource created and then written to\nis unwound in the only order that works. Irreversible rows \u2014 external\neffects, clipped captures \u2014 come back in `skipped` with a reason rather\nthan pretending.",
+        "operationId": "undo_run_api_runs__run_id__undo_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunUndoOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Undo Run",
         "tags": [
           "chat"
         ]

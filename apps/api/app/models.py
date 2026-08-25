@@ -753,6 +753,54 @@ class AgentToolCall(Base):
         return value[len(MODE_DECIDER_PREFIX) :]
 
 
+class RunCheckpoint(Base):
+    """The before-state of one write a run performed, captured for undo.
+
+    Written in `agent_loop.execute_agent_tool_call` just before a write-capable
+    tool executes, via the per-family capture helpers in `services/checkpoints`.
+    `before_json` holds enough typed state to put the resource back — a
+    document's prior content, a board's full snapshot, a project file's bytes —
+    and is deliberately NOT built on `arguments_json`, whose 4000-character
+    truncation makes it an incomplete record of exactly the large writes an
+    undo matters most for.
+
+    `run_id`/`tool_call_id` are plain strings in the house convention for
+    historical references: a checkpoint is a record and must outlive whatever
+    it points at. `reversible=False` marks writes whose effects left the
+    workspace (MCP, sandbox execution, SQL against a connected database) or
+    whose capture was clipped — the undo endpoint reports these as skipped
+    rather than pretending. `reverted_at` is the consumed marker: an undo
+    stamps every one of the run's checkpoints, so a second undo answers 409
+    instead of double-applying.
+    """
+
+    __tablename__ = "run_checkpoints"
+    __table_args__ = (
+        # The undo endpoint's scan: one run's checkpoints, newest first.
+        Index(
+            "ix_run_checkpoints_workspace_run_created",
+            "workspace_id",
+            "run_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(36), default="")
+    tool_call_id: Mapped[str] = mapped_column(String(36), default="")
+    tool_name: Mapped[str] = mapped_column(String(80), default="")
+    # document | board | todo | project_file | dashboard | memory | source |
+    # external — which restore family knows how to read `before_json`.
+    kind: Mapped[str] = mapped_column(String(32), default="external")
+    reversible: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The typed capture; "" when irreversible (nothing to restore from).
+    before_json: Mapped[str] = mapped_column(Text, default="")
+    # When an undo consumed this checkpoint. NULL until then.
+    reverted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Space(Base):
     """A grouping of chat threads with standing context of its own.
 

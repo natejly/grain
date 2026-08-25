@@ -287,6 +287,30 @@ export type SendMessageResponse = {
   replayed: boolean;
 };
 
+export type RunUndoReverted = {
+  tool_name: string;
+  /** Which restore family put it back: document | board | todo | project_file
+   * | dashboard | memory | source. */
+  kind: string;
+};
+
+export type RunUndoSkipped = {
+  tool_name: string;
+  /** Why it could not be restored — external effects, or no recorded state. */
+  reason: string;
+};
+
+/**
+ * What one run's undo actually did. `skipped` is the honest half: writes whose
+ * effects left the workspace (sandbox execution, MCP, SQL against a connected
+ * database) are reported here rather than silently ignored.
+ */
+export type RunUndoResult = {
+  run_id: string;
+  reverted: RunUndoReverted[];
+  skipped: RunUndoSkipped[];
+};
+
 export type Source = {
   id: string;
   filename: string;
@@ -2318,6 +2342,17 @@ export class WorkspaceApi {
 
   cancelRun(runId: string): Promise<Run> {
     return this.request(`/api/runs/${runId}/cancel`, { method: "POST" }, true);
+  }
+
+  /**
+   * Revert the writes a finished run recorded checkpoints for, newest first.
+   *
+   * Only terminal runs, and only once: the server consumes the checkpoints on
+   * the first undo and answers 409 to a second. No Idempotency-Key — the
+   * consumed marker is the natural guard, like `assignAgentCall`'s upsert.
+   */
+  revertRun(runId: string): Promise<RunUndoResult> {
+    return this.request(`/api/runs/${runId}/undo`, { method: "POST" });
   }
 
   listSources(): Promise<Source[]> {

@@ -15,6 +15,7 @@ import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
 import { api } from "../api";
 import type { BudgetPark } from "../views/budget-format";
 import { describeError, type View } from "../views/shared";
+import { UNDO_CONFIRM, summarizeUndo } from "../views/undo-format";
 import { createThreadHandlers } from "./thread";
 
 /**
@@ -231,6 +232,35 @@ export function createChatHandlers({
     }
   }
 
+  /**
+   * Revert a finished run's writes from its recorded checkpoints.
+   *
+   * Confirmed first — this rewrites documents and boards — and honest after:
+   * the error banner carries the summary only when something could NOT be
+   * reverted, because "it worked" needs no banner and "it half-worked" is
+   * exactly what must not pass silently. The same off-screen-work refreshes a
+   * settled run triggers run afterwards, since an undo changes the same
+   * surfaces a run does.
+   */
+  async function undoRun(runId: string) {
+    if (!window.confirm(UNDO_CONFIRM)) return;
+    setError("");
+    try {
+      const result = await api.revertRun(runId);
+      setError(summarizeUndo(result));
+      await refreshSecondary();
+      await refreshArtifacts().catch(() => undefined);
+      await refreshPendingEdits().catch(() => undefined);
+      const open = activeDocumentRef.current;
+      if (open) {
+        setActiveDocument(await api.getDocument(open).catch(() => null));
+        setDocumentVersions(await api.listDocumentVersions(open).catch(() => []));
+      }
+    } catch (caught) {
+      setError(describeError(caught, "Could not undo the run"));
+    }
+  }
+
   async function removeConversation(
     conversation: Conversation,
     event?: MouseEvent,
@@ -293,6 +323,7 @@ export function createChatHandlers({
     selectConversation,
     newConversation,
     forkThread,
+    undoRun,
     removeConversation,
     setApprovalMode,
     decideAgentCall: thread.decideAgentCall,

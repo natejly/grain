@@ -12,7 +12,7 @@ cases, unit tests, and its own commit.
 - [x] 3. Comments & @mentions on documents/dashboards/threads → Inbox
 - [x] 4. Assignable approvals: route an approval to a member; Inbox "assigned"
 - [x] 5. Metric monitors: dataset/typed-query threshold trips → Inbox alerts
-- [ ] 6. Run undo: revert a run's write-tool effects from recorded state
+- [x] 6. Run undo: revert a run's write-tool effects from recorded state
 - [ ] 7. Per-agent cost attribution + spend anomaly flags → Inbox
 - [ ] 8. Mail service abstraction (console/dev fallback, SMTP config) — infra
       for 9/11/12

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
@@ -22,7 +23,7 @@ from ..models import (
     ToolPolicy,
     WorkflowRun,
 )
-from . import budget, orgs, screen, skills, spaces, subjects, usage
+from . import budget, checkpoints, orgs, screen, skills, spaces, subjects, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .harness import ModelStep, resolve_harness
@@ -44,6 +45,8 @@ from .web_search import (
     web_numbers,
     web_search_tool,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 6
 
@@ -1032,6 +1035,18 @@ def execute_agent_tool_call(
             record.status = "failed"
             record.error = "invalid arguments"
         else:
+            # The undo trail's capture point: read the before-state of what a
+            # write is about to change, then record it once the write lands.
+            # Both halves are swallow-and-log — a checkpoint is a convenience
+            # the tool call must never pay for with a failure.
+            pending = None
+            if not spec.read_only:
+                try:
+                    pending = checkpoints.capture_before(db, context, name, arguments)
+                except Exception:
+                    logger.warning(
+                        "checkpoint capture failed for %s", name, exc_info=True
+                    )
             try:
                 result = spec.executor(db, context, arguments)
                 record.status = "succeeded"
@@ -1041,6 +1056,20 @@ def execute_agent_tool_call(
                 result = ToolResult(content=f"Error: tool failed: {str(exc)[:300]}")
                 record.status = "failed"
                 record.error = str(exc)[:1000]
+            else:
+                if pending is not None:
+                    try:
+                        checkpoints.record_checkpoint(
+                            db,
+                            run=run,
+                            tool_call_id=record.id,
+                            name=name,
+                            pending=pending,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "checkpoint record failed for %s", name, exc_info=True
+                        )
     record.latency_ms = int((time.monotonic() - started) * 1000)
     record.result_preview = (result.content or "")[:500]
     # Carried beside the preview, not inside it: `result_preview` is prose for

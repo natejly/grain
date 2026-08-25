@@ -186,6 +186,7 @@ export function Workspace() {
     selectConversation,
     newConversation,
     forkThread,
+    undoRun,
     removeConversation,
     decideAgentCall,
     setApprovalMode,
@@ -905,6 +906,7 @@ export function Workspace() {
                   setArg: setSkillArg,
                 }}
                 fork={forkThread}
+                undo={undoRun}
               />
             }
           />
