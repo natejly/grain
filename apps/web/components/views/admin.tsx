@@ -21,7 +21,6 @@ import { ObservabilityPanel } from "./admin-observability";
 import { UsagePanel } from "./admin-usage";
 import { BudgetPanel } from "./budget";
 import { InvitesPanel, MembersPanel } from "./members";
-import { OrganizationPanel } from "./organization";
 import { describeError, formatBytes, formatRelative } from "./shared";
 
 /**
@@ -293,12 +292,10 @@ export function AdminView({ setError }: AdminViewProps) {
           onHoursChange={setObsHours}
         />
 
-        {/* Above the roster, because it is the answer to the question the roster
-            raises next: these are the people you can promote, and this is the
-            authority you cannot promote them past. It owns its own fetch — an
-            org read is not owner-gated, so folding it into the load above would
-            make its failure look like the owner-only refusal, which it is not. */}
-        <OrganizationPanel setError={setError} />
+        {/* The organization panel moved to Rules & policies (views/policies.tsx):
+            its reads were never owner-gated, but mounting it here put it behind
+            this view's owner-only Promise.all — 403-walling the posture for
+            exactly the members it governs. */}
 
         {/* The roster and the queue feeding it, side by side: an owner opens
             this view to answer "who is here and who is arriving", and reading
@@ -363,26 +360,19 @@ export function AdminView({ setError }: AdminViewProps) {
           </ul>
         </Panel>
 
-        <Panel title="Awaiting approval" count={activity.pending_approvals.length}>
+        {/* The read-only "Awaiting approval" panel is gone on purpose: the
+            Inbox lists the same parked calls for every member AND decides
+            them. A second copy an owner could look at but not act on taught
+            people to check two places and trust neither. Tool-call counts stay
+            — they are operations telemetry, not a queue. */}
+        <Panel title="Tool calls" count={0}>
           <CountRow
             counts={activity.tool_call_status_counts}
             empty="No tool calls yet."
           />
-          {activity.pending_approvals.length === 0 ? (
-            <p className="admin-empty">Nothing is parked on a decision.</p>
-          ) : (
-            <ul className="admin-list">
-              {activity.pending_approvals.map((approval) => (
-                <li key={approval.id}>
-                  <div>
-                    <strong>{approval.name}</strong>
-                    <span>{formatRelative(approval.created_at)}</span>
-                    <small>{approval.proposal_preview}</small>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+          <p className="admin-empty">
+            Parked approvals are decided in the Inbox, not here.
+          </p>
         </Panel>
 
         <Panel title="Sandbox sessions" count={live.length}>

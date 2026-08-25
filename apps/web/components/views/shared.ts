@@ -14,18 +14,21 @@ export type View =
   | "memory"
   | "graph"
   | "dashboards"
+  | "apps"
+  | "datasets"
   | "integrations"
   | "documents"
   | "boards"
-  | "todos"
   | "data"
   | "projects"
   | "mcp"
   | "sandbox-tools"
   | "activity"
+  | "policies"
   | "admin"
   | "workflows"
-  | "crons";
+  | "crons"
+  | "spaces";
 
 /**
  * An unreachable API already has a dedicated banner with a retry, so it returns
@@ -78,15 +81,27 @@ export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
  */
 export const PAGE_TITLES: Record<View, string> = {
   chat: "Chat",
+  // A group of threads with standing context — instructions, knowledge files,
+  // its own memory shelf. Beside Chat because that is what it groups.
+  spaces: "Spaces",
   agents: "Agents",
   skills: "Skills",
   sources: "Sources",
   memory: "Memory",
   graph: "Graph",
   dashboards: "Dashboards",
-  documents: "Files",
-  boards: "Boards",
-  todos: "Lists",
+  // Programs the sandbox builds and publishes — releases, visibility, their
+  // own frame. Split from Dashboards so neither word has to mean two things.
+  apps: "Apps",
+  // The immutable table versions dashboards bind to. They existed since ADR
+  // 0003 with no page — created as an upload side effect, visible only inside
+  // the app editor's binding chips.
+  datasets: "Datasets",
+  documents: "Documents",
+  // One destination for boards and lists both: a list is a board with one
+  // column, and splitting them into "Boards"/"Lists" pages made an object
+  // teleport between them when its column count crossed 1.
+  boards: "Boards & todos",
   data: "Databases",
   projects: "Projects",
   integrations: "Integrations",
@@ -97,10 +112,16 @@ export const PAGE_TITLES: Record<View, string> = {
   // "sandbox" destination the docstring above refuses — nobody operates a
   // machine here, they configure a capability.
   "sandbox-tools": "Sandbox tools",
-  activity: "Activity",
+  // The approval queue. "Activity" described the audit half of the page; the
+  // half a user actually comes for is the requests waiting on them.
+  activity: "Inbox",
+  // The standing-grant ledger, with the org posture under it. Member-readable
+  // on purpose: a rule you cannot see is indistinguishable from a bug.
+  policies: "Rules & policies",
   admin: "Admin",
   workflows: "Workflows",
-  crons: "Automations",
+  // A cron is a schedule. Its old title, "Automations", is the *group* now.
+  crons: "Schedules",
 };
 
 export function formatBytes(bytes: number): string {
@@ -204,6 +225,27 @@ export function senderInitial(message: Message, sharedThread: boolean): string {
   if (message.role !== "user") return "A";
   const source = sharedThread && message.sender_name ? message.sender_name : "U";
   return source.slice(0, 1).toUpperCase();
+}
+
+/**
+ * Whether a message is the viewer's own to edit.
+ *
+ * On a personal thread every user message is the caller's — including rows
+ * written before the sender column existed (`sender_id === ""`) — so all of
+ * them are editable. On a shared thread only an exact attribution match will
+ * do: an edit truncates everything after the message, and rewriting a
+ * teammate's prompt would delete their turn out from under them (the server
+ * 409s that case; this keeps the pencil off it in the first place). A legacy
+ * ""-sender on a shared thread is unattributable, so nobody gets its pencil.
+ */
+export function senderIsViewer(
+  message: Message,
+  sharedThread: boolean,
+  viewerId: string,
+): boolean {
+  if (message.role !== "user") return false;
+  if (!sharedThread) return true;
+  return viewerId !== "" && message.sender_id === viewerId;
 }
 
 export function statusLabel(status: Source["status"]): string {

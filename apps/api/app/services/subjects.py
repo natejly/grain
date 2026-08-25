@@ -307,13 +307,20 @@ def resolve(db: Session, run: Run) -> Optional[Subject]:
     return Subject(kind=kind, id="", title="", context="")
 
 
-def tool_context(run: Run, subject: Optional[Subject]) -> ToolContext:
+def tool_context(
+    run: Run, subject: Optional[Subject], *, space_id: str = ""
+) -> ToolContext:
     """The turn's `ToolContext`, with the subject's id on the matching field.
 
     Three named fields rather than one polymorphic pair, because the *tools* are
     not polymorphic: `edit_document` wants a document id and `fs_write` wants a
     project id, and a tool that had to check a kind before trusting an id would
     be one `if` away from acting on the wrong table.
+
+    `space_id` is the chat thread's space, resolved by the caller through
+    `spaces.space_id_for_conversation` — already workspace-proved there, and ""
+    for every other kind of run. A subject thread never has one: subject
+    creation paths never stamp `Conversation.space_id`.
     """
     kind = subject.kind if subject else ""
     return ToolContext(
@@ -323,4 +330,6 @@ def tool_context(run: Run, subject: Optional[Subject]) -> ToolContext:
         document_id=subject.id if subject and kind == DOCUMENT else "",
         project_id=subject.id if subject and kind == PROJECT else "",
         dashboard_id=subject.id if subject and kind == DASHBOARD else "",
+        space_id=space_id,
+        run_id=run.id,
     )

@@ -32,11 +32,16 @@ from ..schemas import (
     ToolPolicyRequest,
 )
 from ..services import conversations
-from ..services.agent_loop import policy_scope_for_run
+from ..services.agent_loop import ASK_WRITES, PLAN, policy_scope_for_run
 from ..services.artifacts import documents, proposals
 from ..services.audit import record_audit
 from ..services.events import append_event
-from ..services.llm_tools import ToolContext, registry_families
+from ..services.llm_tools import (
+    ASK_USER,
+    EXIT_PLAN_MODE,
+    ToolContext,
+    registry_families,
+)
 from ..services.runs import deny_tool_call, execute_tool_call, resume_run
 from ..services.subjects import open_document_id
 from ..services.workflows import executor as workflow_executor
@@ -351,6 +356,7 @@ def _policy_out(row: ToolPolicy) -> ToolPolicyOut:
         shared=row.owner_id == SHARED_OWNER,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        created_by=row.created_by,
     )
 
 
@@ -620,6 +626,14 @@ def decide_agent_tool_call(
         raise HTTPException(status_code=409, detail="Run is not awaiting this approval")
     amendment = _hunk_amendment(db, call=call, run=run, payload=payload, actor=actor)
     _validate_manual_submission(db, call=call, run=run, payload=payload, actor=actor)
+    if call.name == ASK_USER and payload.decision == "approved" and payload.inputs:
+        # The typed answer rides the same channel a reviewer's accepted hunks
+        # do: merged into the arguments on the way to the executor, never
+        # written over `arguments_json` — the model's question stays the record
+        # of what was asked, the audit row records that it was answered.
+        answer = str(payload.inputs.get("answer") or "").strip()
+        if answer:
+            amendment = {"answer": answer[:4000]}
 
     if not _claim_decision(
         db,
@@ -633,7 +647,44 @@ def decide_agent_tool_call(
         # also schedule `resume_run`, or the tool the other reviewer denied is
         # executed by the loser's background task.
         raise HTTPException(status_code=409, detail="Tool call already decided")
-    if payload.remember and call.name != workflow_executor.MANUAL_TOOL_NAME:
+    if call.name == EXIT_PLAN_MODE and payload.decision == "approved":
+        # Approving the plan IS leaving plan mode, and it happens HERE — before
+        # the resume is scheduled — so `_continue` re-enters the loop under the
+        # restored mode: full registry, no plan instructions, and the rest of
+        # this same turn can implement what was just approved. (The executor of
+        # the parked call writes nothing; a denial changes nothing, so the model
+        # revises the plan still inside plan mode.) Restores `ask_writes`, the
+        # default, rather than whatever mode preceded plan: re-arming a bypass
+        # nobody re-asked for is exactly the surprise the modes exist to avoid.
+        conversation = db.scalar(
+            select(Conversation).where(
+                Conversation.id == run.conversation_id,
+                Conversation.workspace_id == actor.workspace_id,
+            )
+        )
+        if conversation is not None and conversation.approval_mode == PLAN:
+            conversation.approval_mode = ASK_WRITES
+            record_audit(
+                db,
+                workspace_id=actor.workspace_id,
+                actor_id=actor.user_id,
+                action="conversation.approval_mode_set",
+                resource_type="conversation",
+                resource_id=conversation.id,
+                detail={"from": PLAN, "to": ASK_WRITES, "via": EXIT_PLAN_MODE},
+            )
+    if payload.remember and call.name not in (
+        workflow_executor.MANUAL_TOOL_NAME,
+        # `exit_plan_mode` always parks by construction (`evaluate_policy`'s
+        # plan branch never consults standing rows for it), so a remembered
+        # allow would gate nothing and only litter the policy list — the same
+        # reasoning as the manual sentinel below.
+        EXIT_PLAN_MODE,
+        # `ask_user` parks by construction too (`force_ask` clamps every allow
+        # back to ask): a standing allow could never pre-answer a question
+        # addressed to a person, so remembering one would gate nothing.
+        ASK_USER,
+    ):
         # "Always allow" answers the question the card asked, and no other. A
         # card raised by a workflow node is asking about unattended execution, so
         # remembering it grants at workflow scope; a chat card grants at chat
@@ -687,7 +738,12 @@ def decide_agent_tool_call(
             # The audit row, not `arguments_json`, is where a partial approval
             # is recorded. The arguments column stays the model's request; this
             # is the human's answer to it, and the two must not be confused.
-            **({"accepted_hunks": payload.accepted_hunks} if amendment else {}),
+            **(
+                {"accepted_hunks": payload.accepted_hunks}
+                if amendment and payload.accepted_hunks
+                else {}
+            ),
+            **({"answered": True} if amendment and "answer" in amendment else {}),
         },
     )
     db.commit()

@@ -83,7 +83,7 @@ def sandbox_env(settings: Settings) -> Dict[str, str]:
     env: Dict[str, str] = {
         # So code can tell it is sandboxed — some libraries behave better when
         # they know they are headless, and it makes support conversations short.
-        "JASMINE_SANDBOX": "1",
+        "GRAIN_SANDBOX": "1",
         "MPLBACKEND": "Agg",
         "PYTHONUNBUFFERED": "1",
         "PIP_DISABLE_PIP_VERSION_CHECK": "1",
@@ -96,4 +96,4 @@ def sandbox_env(settings: Settings) -> Dict[str, str]:
 def session_metadata(*, workspace_id: str, user_id: str) -> Mapping[str, str]:
     """Provider-side labels, so a runaway sandbox is attributable during an
     incident without a database round-trip."""
-    return {"workspace_id": workspace_id, "user_id": user_id, "app": "jasmine"}
+    return {"workspace_id": workspace_id, "user_id": user_id, "app": "grain"}

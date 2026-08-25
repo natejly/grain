@@ -39,9 +39,14 @@ function call(id: string, name: string, approvedByMode: string, conversationId =
 }
 
 describe("approval modes", () => {
-  it("offers exactly one mode that lets a write through unreviewed", () => {
+  it("marks exactly the modes that let a write through unreviewed", () => {
+    // Two bypasses, both deliberate: auto_writes skips review entirely, and
+    // guardian delegates it to a reviewer model. Both mean a write can run
+    // without a person seeing it first, which is what the bypass banner and
+    // the auto-approved trail exist to surface — so both must carry the flag.
     expect(APPROVAL_MODES.filter((mode) => mode.bypass).map((mode) => mode.mode)).toEqual([
       "auto_writes",
+      "guardian",
     ]);
   });
 

@@ -3,16 +3,19 @@
 import {
   ArrowUp,
   Ban,
+  Bot,
   Check,
   ChevronRight,
   Copy,
   FileText,
   Paperclip,
+  Pencil,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
   Square,
+  Terminal,
   Wrench,
   X,
   Zap,
@@ -38,6 +41,11 @@ import { ChatDashboardEmbeds } from "../chat-dashboard-embed";
 import { ArtifactImages } from "../source-image";
 import { autoApprovedCalls, isBypass } from "./approval-format";
 import {
+  commandDescription,
+  matchCommands,
+  type BuiltinCommand,
+} from "./commands";
+import {
   ApprovalModeControl,
   BypassIndicator,
   UnrestrictedIndicator,
@@ -46,7 +54,9 @@ import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
 import { ProposalDiff } from "./proposal-diff";
-import { senderInitial, senderLabel } from "./shared";
+import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
+import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel } from "./shared";
+import { steerStripVisible } from "./steer-format";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
 
@@ -54,6 +64,13 @@ export type ToolDecision = (
   call: AgentToolCall,
   decision: "approved" | "denied",
   remember: boolean,
+  /**
+   * The human's typed contribution to the approval, when the card collects
+   * one — today the `ask_user` card's answer, `{ answer: string }`. Rides the
+   * decision's amendment channel; the server merges it into the executor's
+   * arguments without rewriting the model's own `arguments_json`.
+   */
+  inputs?: Record<string, unknown>,
 ) => Promise<void>;
 
 export type ChatViewProps = {
@@ -93,15 +110,52 @@ export type ChatViewProps = {
   sharedThread?: boolean;
   submitPrompt: (event?: FormEvent) => Promise<void>;
   cancelActiveRun: () => Promise<void>;
+  /**
+   * Add a mid-turn note to the run that is streaming right now. Resolves true
+   * when the note was delivered — the strip keeps the draft on failure, since
+   * an error banner far from the input is not a place to lose a sentence to.
+   * Optional: panels that mount ChatView without it show no steer strip, and
+   * the strip hides while the run is parked in ANY way — on an approval, on
+   * the spend ceiling, or with its card decided elsewhere — because a parked
+   * run wants a decision, not more words, and the server refuses with a 409.
+   */
+  steer?: (content: string) => Promise<boolean>;
   regenerate: () => Promise<void>;
+  /**
+   * Rewrite one of the viewer's own prompts and re-run the thread from there.
+   * The edit is a truncation — everything after the message is deleted server-
+   * side — so the pencil rides only messages `senderIsViewer` allows. Resolves
+   * true when the edit was accepted; false keeps the editor open, because the
+   * rewritten words are not the error banner's to lose. Optional: the subject
+   * panels mount ChatView without it and show no pencil.
+   */
+  editMessage?: (messageId: string, content: string) => Promise<boolean>;
+  /**
+   * The signed-in member's id, matched against `message.sender_id` so a shared
+   * thread offers the pencil only on the viewer's own prompts. Optional with
+   * `editMessage`; absent means no shared-thread message is editable.
+   */
+  viewerId?: string;
   decideAgentCall: ToolDecision;
   openCitation: (citation: Citation) => Promise<void>;
   /**
-   * Add a source. Omitted where there is nowhere to go: the panel beside a
-   * document would have to leave the document to reach the Knowledge view, so
-   * it shows no paperclip rather than one that discards what you were doing.
+   * Add a source without leaving the conversation. The paperclip used to
+   * navigate to the Sources page — an attach button that teleported you away
+   * from the thread you were attaching *for* — so it is a popover now: the
+   * file uploads in place, lands in workspace knowledge, and the thread can
+   * cite it as soon as it is indexed. Omitted on the panels beside a document
+   * or dashboard, which show no paperclip at all.
    */
-  onAttach?: () => void;
+  attach?: {
+    upload: (files: FileList | File[]) => Promise<Source | null>;
+    uploading: boolean;
+    /**
+     * Turn the uploaded file into a dataset too. Offered — and preselected —
+     * only for tabular files, because a CSV attached to a chart question that
+     * lands as prose chunks answers retrieval and not the chart.
+     */
+    createDataset?: (name: string, sourceId: string) => Promise<void>;
+  };
   /**
    * This thread's approval mode, and the way to change it.
    *
@@ -116,6 +170,14 @@ export type ChatViewProps = {
     conversationId: string | null;
     conversationTitle: string;
   };
+  /**
+   * Whether an empty transcript teaches with starter cards. Defaults to
+   * following `approval` (the rail chat and extra panes teach); the subject
+   * panels pass false — they now carry the approval control too, but an empty
+   * panel beside a document is scoped to that document and the product-verbs
+   * lesson would be the wrong lesson there.
+   */
+  showStarter?: boolean;
   /**
    * The deployment is running with `DEV_UNRESTRICTED_AGENT`: nothing parks and
    * the per-subject tool scoping is off. Carries the thread's conversation id
@@ -133,6 +195,14 @@ export type ChatViewProps = {
    * checkboxes here instead of sending the reader to another page.
    */
   todos?: { lists: Board[]; ops: TodoOps };
+  /**
+   * The finish-the-job bar on a chart-shaped tool card: pin the dashboard the
+   * turn authored without leaving the thread, or — for a chart that is only a
+   * picture — ask the agent for the pinnable version. Optional like `todos`:
+   * the panels beside a document or dashboard mount ChatView without it and
+   * show no bar.
+   */
+  pinning?: DashboardPinning;
   endRef: React.RefObject<HTMLDivElement | null>;
   /** "" means the workspace default agent; otherwise an authored agent's id. */
   // Optional: the document panel mounts ChatView without an agent picker,
@@ -197,21 +267,38 @@ function AgentSelect({
       cancelled = true;
     };
   }, []);
+  // A remembered agent that no longer exists (deleted, disabled) must not
+  // stick: the select would render blank while every send still carried the
+  // dead id into "Agent is not available". Clearing through onSelectAgent
+  // also clears the THREAD's remembered default, so the thread self-heals
+  // rather than resurrecting the ghost on every reopen. Skipped while the
+  // list is empty — a failed fetch is not evidence the agent is gone.
+  useEffect(() => {
+    if (agents.length === 0 || !selectedAgentId) return;
+    if (!agents.some((agent) => agent.id === selectedAgentId)) onSelectAgent("");
+  }, [agents, selectedAgentId, onSelectAgent]);
   if (agents.length < 2) return null;
   return (
-    <select
-      className="agent-select"
-      value={selectedAgentId}
-      onChange={(event) => onSelectAgent(event.target.value)}
-      aria-label="Agent"
-    >
-      <option value="">Default agent</option>
-      {agents.map((agent) => (
-        <option key={agent.id} value={agent.id}>
-          {agent.name}
-        </option>
-      ))}
-    </select>
+    <label className="composer-chip agent-chip">
+      <Bot size={14} aria-hidden="true" />
+      {/* The scope is part of the name: the pick is remembered on this thread
+          (Conversation.default_agent_id), not on the session or the account,
+          and a menu that names its scope is the Foyer trust rule. */}
+      <select
+        className="agent-select"
+        value={selectedAgentId}
+        onChange={(event) => onSelectAgent(event.target.value)}
+        aria-label="Agent · this thread"
+        title="Remembered on this thread"
+      >
+        <option value="">Default agent</option>
+        {agents.map((agent) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -241,7 +328,8 @@ function TurnControls({
           value={model}
           onChange={(event) => setModel(event.target.value)}
           disabled={disabled}
-          aria-label="Model"
+          aria-label="Model · this thread"
+          title="Remembered on this thread"
         >
           <option value="">Default model</option>
           {models.map((name) => (
@@ -258,7 +346,8 @@ function TurnControls({
             value={effort}
             onChange={(event) => setEffort(event.target.value)}
             disabled={disabled || fast}
-            aria-label="Reasoning effort"
+            aria-label="Reasoning effort · this thread"
+            title="Remembered on this thread"
           >
             {efforts.map((name) => (
               <option key={name} value={name}>
@@ -340,14 +429,41 @@ export function stripSlashToken(draft: string): string {
  * under the cursor mid-type.
  */
 function SkillPicker({
+  commands,
+  commandMode,
+  onPickCommand,
   skills,
   onPick,
 }: {
+  /** Built-in commands matching the query, listed above the skills with their
+   *  own mark so a fixed verb of the product is distinguishable from something
+   *  a teammate authored last week. */
+  commands: BuiltinCommand[];
+  /** The thread's approval mode, for the /plan toggle's two-way description. */
+  commandMode: string | null;
+  onPickCommand: (command: BuiltinCommand) => void;
   skills: Skill[];
   onPick: (skill: Skill) => void;
 }) {
   return (
-    <ul className="skill-picker" role="listbox" aria-label="Skills">
+    <ul className="skill-picker" role="listbox" aria-label="Commands and skills">
+      {commands.map((command) => (
+        <li key={`command-${command.name}`}>
+          <button
+            type="button"
+            onClick={() => onPickCommand(command)}
+            role="option"
+            aria-selected={false}
+          >
+            <span className="skill-picker-name">
+              <Terminal size={13} aria-hidden /> /{command.name}
+            </span>
+            <span className="skill-picker-desc">
+              {commandDescription(command, commandMode)}
+            </span>
+          </button>
+        </li>
+      ))}
       {skills.map((skill) => (
         <li key={skill.id}>
           <button type="button" onClick={() => onPick(skill)} role="option" aria-selected={false}>
@@ -450,6 +566,147 @@ function SkillBar({
           </label>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * The composer's attach popover: pick a file, it uploads where you stand.
+ *
+ * Floats above the composer like the skill picker so the textarea does not
+ * jump, closes itself once the upload settles, and says where the file went —
+ * the one thing the old teleport communicated that staying put must not lose.
+ */
+function AttachMenu({
+  attach,
+  close,
+}: {
+  attach: NonNullable<ChatViewProps["attach"]>;
+  close: () => void;
+}) {
+  const inputRef = { current: null as HTMLInputElement | null };
+  // Two steps on purpose: the file is held here so its NAME can decide the
+  // dataset offer before anything uploads. A CSV preselects "also make a
+  // dataset" — the shape a chart question needs — and prose files never see
+  // the checkbox at all.
+  const [file, setFile] = useState<File | null>(null);
+  const [makeDataset, setMakeDataset] = useState(false);
+  const datasetOffered = Boolean(attach.createDataset) && file !== null && isTabular(file.name);
+
+  async function add() {
+    if (!file) return;
+    const uploaded = await attach.upload([file]);
+    if (uploaded && datasetOffered && makeDataset) {
+      await attach.createDataset?.(baseName(uploaded.filename), uploaded.id);
+    }
+    close();
+  }
+
+  return (
+    <div className="attach-menu" role="group" aria-label="Attach a file">
+      <input
+        ref={(node) => {
+          inputRef.current = node;
+        }}
+        type="file"
+        hidden
+        onChange={(event) => {
+          const picked = event.target.files?.[0] ?? null;
+          setFile(picked);
+          setMakeDataset(Boolean(picked && isTabular(picked.name)));
+        }}
+      />
+      {file === null ? (
+        <>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={attach.uploading}
+            onClick={() => inputRef.current?.click()}
+          >
+            <Paperclip size={14} />
+            Choose a file
+          </button>
+          <p>
+            Added to workspace knowledge, so this thread can cite it. Manage
+            files under Knowledge › Sources.
+          </p>
+        </>
+      ) : (
+        <>
+          <span className="attach-menu-file">{file.name}</span>
+          {datasetOffered && (
+            <label className="attach-menu-dataset">
+              <input
+                type="checkbox"
+                checked={makeDataset}
+                onChange={(event) => setMakeDataset(event.target.checked)}
+              />
+              Also create a dataset, so the agent can chart it
+            </label>
+          )}
+          <button
+            type="button"
+            className="primary-button"
+            disabled={attach.uploading}
+            onClick={() => void add()}
+          >
+            <Paperclip size={14} />
+            {attach.uploading ? "Uploading…" : "Add to workspace"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What an empty conversation says the product is.
+ *
+ * A bare composer framed the product as retrieval-only — nothing taught the
+ * verbs (attach, delegate, act-with-approval) that make it a workspace. Three
+ * starter cards each prefill the composer with one of them, and the quiet line
+ * underneath says the one thing a first-time user most needs to trust: nothing
+ * happens to their stuff without their say-so.
+ */
+const STARTERS = [
+  {
+    title: "Summarize a file",
+    detail: "Attach a document, then ask for the short version",
+    draft: "Summarize the key points of the file I just attached.",
+  },
+  {
+    title: "Build a chart from a CSV",
+    detail: "Attach a spreadsheet and describe the chart",
+    draft: "Build a chart from the CSV I attached: ",
+  },
+  {
+    title: "Track a todo list",
+    detail: "The agent keeps it, you tick it",
+    draft: "Start a todo list called ",
+  },
+];
+
+function ChatStarter({ setDraft }: { setDraft: (value: string) => void }) {
+  return (
+    <div className="chat-starter">
+      <h2>Ask, and approve what the agent does</h2>
+      <div className="chat-starter-cards">
+        {STARTERS.map((starter) => (
+          <button
+            key={starter.title}
+            type="button"
+            onClick={() => setDraft(starter.draft)}
+          >
+            <strong>{starter.title}</strong>
+            <span>{starter.detail}</span>
+          </button>
+        ))}
+      </div>
+      <p className="chat-starter-note">
+        The agent asks before changing anything. You’ll approve its first action
+        right here in the conversation.
+      </p>
     </div>
   );
 }
@@ -615,18 +872,76 @@ function ToolStatus({ call }: { call: AgentToolCall }) {
   );
 }
 
+/**
+ * The mid-turn steering strip: a one-line note into the run as it works.
+ *
+ * Its own component so the draft's state mounts and unmounts with the strip —
+ * the same rule the attach popover follows: state that only makes sense while
+ * the surface is visible lives inside it, and the unmount is the reset.
+ */
+function SteerStrip({ steer }: { steer: (content: string) => Promise<boolean> }) {
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function send() {
+    const content = note.trim();
+    if (!content || sending) return;
+    setSending(true);
+    try {
+      // Only a delivered note clears the box: a 409 (the run parked or
+      // finished in the race) or a network failure keeps the user's sentence
+      // where they can resend or copy it into the composer.
+      if (await steer(content)) setNote("");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="steer-strip">
+      <input
+        type="text"
+        aria-label="Add a note to the running turn"
+        placeholder="Add a note mid-task — it reaches the assistant before its next step"
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void send();
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="ghost-button"
+        disabled={sending || !note.trim()}
+        onClick={() => void send()}
+      >
+        Steer
+      </button>
+    </div>
+  );
+}
+
 function ToolCallCard({
   call,
   decide,
   todos,
+  pinning,
 }: {
   call: AgentToolCall;
   decide: ToolDecision;
   todos?: { lists: Board[]; ops: TodoOps };
+  pinning?: DashboardPinning;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The ask_user card's answer box. Local to the card like `expanded`: the
+  // draft belongs to this one question and dies with it.
+  const [answer, setAnswer] = useState("");
+  const asking = call.name === "ask_user";
   const pending = call.status === "proposed";
   const args = prettyArguments(call.arguments_json);
   // A pending write shows what it will do; the raw arguments stay one click away.
@@ -645,14 +960,22 @@ function ToolCallCard({
   async function choose(decision: "approved" | "denied") {
     setBusy(true);
     try {
-      await decide(call, decision, remember);
+      const typed = answer.trim();
+      await decide(
+        call,
+        decision,
+        remember,
+        asking && decision === "approved" && typed ? { answer: typed } : undefined,
+      );
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className={`tool-card ${call.status}`}>
+    // data-call-id is the waiting banner's jump target — the strip above the
+    // composer scrolls the transcript back to the card that is asking.
+    <div className={`tool-card ${call.status}`} data-call-id={call.id}>
       <button
         type="button"
         className="tool-card-head"
@@ -664,7 +987,16 @@ function ToolCallCard({
         <span className="tool-name">{call.name}</span>
         <ToolStatus call={call} />
       </button>
-      {preview && <ProposalDiff preview={preview} />}
+      {/* The plan-review card's preview IS the plan, written as markdown for a
+          person to read — a diff renderer would strip its structure. */}
+      {preview &&
+        (call.name === "exit_plan_mode" ? (
+          <div className="plan-proposal">
+            <MarkdownBody content={preview} />
+          </div>
+        ) : (
+          <ProposalDiff preview={preview} />
+        ))}
       {touchedList && todos && (
         <TodoChecklist
           list={touchedList}
@@ -677,6 +1009,10 @@ function ToolCallCard({
           }
         />
       )}
+      {/* Above the figure, so the offer is read before the scroll past it.
+          Renders nothing for calls that are not chart-shaped, and nothing at
+          all on the panels that mount ChatView without a `pinning` bundle. */}
+      <DashboardPinBar call={call} pinning={pinning} />
       {/* Outside the disclosure, deliberately. A chart behind a closed triangle
           is as invisible as a chart that was never rendered — which is the bug
           this is fixing, arriving one click later. */}
@@ -700,14 +1036,34 @@ function ToolCallCard({
       )}
       {pending && (
         <div className="tool-card-approval">
-          <label className="remember">
-            <input
-              type="checkbox"
-              checked={remember}
-              onChange={(event) => setRemember(event.target.checked)}
+          {asking && (
+            <textarea
+              className="ask-user-answer"
+              aria-label="Answer the assistant's question"
+              placeholder="Type your answer (optional — Approve sends it)"
+              value={answer}
+              rows={2}
+              onChange={(event) => setAnswer(event.target.value)}
             />
-            Always allow {call.name}
-          </label>
+          )}
+          {/* No "always allow" on the plan-review card: the server never
+              consults a standing grant for it (approving the card IS approving
+              this plan), so the checkbox would promise a skip that cannot
+              happen. Same for ask_user, which parks by construction — a
+              standing allow could never pre-answer a question to a person. */}
+          {call.name !== "exit_plan_mode" && !asking && (
+            <label className="remember">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(event) => setRemember(event.target.checked)}
+              />
+              {/* "For me", because that is the grant's true width: it writes a
+                  caller-personal, chat-scope rule — never the workspace's. */}
+              Always allow {call.name} for me
+              <span className="field-hint">Manage in Inbox → Rules</span>
+            </label>
+          )}
           <div className="tool-card-actions">
             <button
               type="button"
@@ -723,7 +1079,7 @@ function ToolCallCard({
               disabled={busy}
               onClick={() => void choose("approved")}
             >
-              <Check size={14} /> Approve
+              <Check size={14} /> {asking && answer.trim() ? "Answer" : "Approve"}
             </button>
           </div>
         </div>
@@ -746,13 +1102,18 @@ export function ChatView({
   sharedThread,
   submitPrompt,
   cancelActiveRun,
+  steer,
   regenerate,
+  editMessage,
+  viewerId,
   decideAgentCall,
   openCitation,
-  onAttach,
+  attach,
   approval,
+  showStarter,
   unrestricted,
   todos,
+  pinning,
   endRef,
   selectedAgentId,
   onSelectAgent,
@@ -767,13 +1128,51 @@ export function ChatView({
   // and the draft leads with "/". The matches drive both the dropdown and the
   // Enter-to-attach shortcut, so they are computed once here.
   const skillList = useVisibleSkills(Boolean(skills));
+  // The attach popover, open or not. Local state like `expanded` on a tool
+  // card: nothing outside the composer cares, and closing must not re-render
+  // the transcript.
+  const [attachOpen, setAttachOpen] = useState(false);
+  // Which message is an editor right now, and what it says. View state (not
+  // row state) so exactly one edit can be open at a time — the rail's rename
+  // pattern. Deliberately no on-blur submit anywhere below: an edit deletes
+  // everything after the message, and a destructive act must never ride a
+  // stray click.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const submitEdit = async (messageId: string) => {
+    if (!editMessage || !editDraft.trim()) return;
+    const accepted = await editMessage(messageId, editDraft.trim());
+    // Success closes the editor; failure keeps the rewritten words on screen.
+    if (accepted) setEditingId(null);
+  };
   const slashQuery =
     skills && !skills.attached && draft.startsWith("/") ? draft.slice(1) : null;
   const skillMatches = slashQuery === null ? [] : matchSkills(skillList, slashQuery);
-  const pickerOpen = slashQuery !== null && skillMatches.length > 0;
+  // Built-in commands share the picker. /plan needs the approval control (a
+  // subject panel has none, and a mode it cannot show must not be settable
+  // from it); /btw works wherever the composer does.
+  const commandMatches = (slashQuery === null ? [] : matchCommands(slashQuery)).filter(
+    (command) => command.name !== "plan" || Boolean(approval),
+  );
+  const pickerOpen =
+    slashQuery !== null && skillMatches.length + commandMatches.length > 0;
   const attachSkill = (skill: Skill) => {
     skills?.attach(skill);
     setDraft(stripSlashToken(draft));
+  };
+  const pickCommand = (command: BuiltinCommand) => {
+    if (command.name === "plan" && approval) {
+      // A toggle, resolved immediately — nothing rides the next send. Leaving
+      // plan mode by hand restores the default, the same landing the approved
+      // exit uses: re-arming a bypass nobody re-asked for is the surprise the
+      // modes exist to avoid.
+      approval.setMode(approval.mode === "plan" ? "ask_writes" : "plan");
+      setDraft(stripSlashToken(draft));
+      return;
+    }
+    // /btw: complete the token and let the note be typed after it; the send
+    // path recognises the finished draft and records it as an aside.
+    setDraft(`/btw ${stripSlashToken(draft)}`);
   };
   // A turn cannot be sent with a required arg left blank; the button says so
   // rather than letting the server 422 a click the composer could have refused.
@@ -810,10 +1209,29 @@ export function ChatView({
   return (
     <section className="chat-layout">
       <div className={`message-scroll ${messages.length === 0 ? "empty" : ""}`}>
+        {/* Only the primary chat teaches; the panels beside a document or
+            dashboard are scoped to a subject and have no `approval` prop, so
+            they keep their quiet empty state. */}
+        {messages.length === 0 && approval && showStarter !== false && (
+          <ChatStarter setDraft={setDraft} />
+        )}
         {messages.length > 0 && (
           <div className="message-column">
-            {messages.map((message) => (
-              <article key={message.id} className={`message ${message.role}`}>
+            {messages.map((message) => {
+              // An aside ("/btw") is a user message with no run — a note the
+              // agent will read later, not a prompt it answered — so it wears
+              // a quieter treatment than a turn, and it never grows a pencil:
+              // there is no turn after it to re-run.
+              const aside = message.role === "user" && message.run_id === "";
+              const editable =
+                Boolean(editMessage) &&
+                !aside &&
+                senderIsViewer(message, Boolean(sharedThread), viewerId ?? "");
+              return (
+              <article
+                key={message.id}
+                className={`message ${message.role}${aside ? " aside" : ""}`}
+              >
                 {message.role === "assistant" &&
                   (() => {
                     const calls = callsForRun(message.run_id);
@@ -824,6 +1242,7 @@ export function ChatView({
                         call={call}
                         decide={decideAgentCall}
                         todos={call.id === showChecklist ? todos : undefined}
+                        pinning={pinning}
                       />
                     ));
                   })()}
@@ -842,10 +1261,68 @@ export function ChatView({
                   {message.role === "assistant" && message.content && (
                     <CopyButton value={message.content} label="Copy message" />
                   )}
+                  {/* Disabled rather than hidden while a run streams: the
+                      server would 409 an edit over a live turn, and a control
+                      that vanishes and reappears reads as a bug. The name
+                      quotes the prompt so each row's pencil is distinct to a
+                      screen reader. */}
+                  {editable && (
+                    <button
+                      type="button"
+                      className="copy-button"
+                      aria-label={`Edit: ${message.content.slice(0, 40)}`}
+                      disabled={Boolean(activeRun)}
+                      onClick={() => {
+                        setEditingId(message.id);
+                        setEditDraft(message.content);
+                      }}
+                    >
+                      <Pencil size={13} /> Edit
+                    </button>
+                  )}
                 </div>
                 <div className="message-body">
                   {message.role === "assistant" ? (
                     <MarkdownBody content={message.content} />
+                  ) : editingId === message.id ? (
+                    <div className="message-edit">
+                      <textarea
+                        value={editDraft}
+                        onChange={(event) => setEditDraft(event.target.value)}
+                        aria-label="Edit message"
+                        rows={3}
+                        autoFocus
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            void submitEdit(message.id);
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            setEditingId(null);
+                          }
+                        }}
+                      />
+                      <div className="message-edit-actions">
+                        {/* Save is the truncation: the old turn and everything
+                            after it go, and the fresh turn streams in. */}
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => setEditingId(null)}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="primary-button"
+                          disabled={!editDraft.trim() || Boolean(activeRun)}
+                          onClick={() => void submitEdit(message.id)}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <p>{message.content}</p>
                   )}
@@ -874,13 +1351,15 @@ export function ChatView({
                   </div>
                 )}
               </article>
-            ))}
+              );
+            })}
             {liveCalls.map((call) => (
               <ToolCallCard
                 key={call.id}
                 call={call}
                 decide={decideAgentCall}
                 todos={call.id === checklistCallId(liveCalls) ? todos : undefined}
+                pinning={pinning}
               />
             ))}
             {/* The flagged turn's mark while it is still live: a run that parked
@@ -909,6 +1388,14 @@ export function ChatView({
                 {runStatus}
               </div>
             )}
+            {steer &&
+              steerStripVisible({
+                activeRun,
+                hasSteer: true,
+                budgetPark,
+                runStatus,
+                agentCalls,
+              }) && <SteerStrip steer={steer} />}
             {!activeRun && lastAssistant && (
               <div className="turn-actions">
                 <button type="button" className="ghost-button" onClick={() => void regenerate()}>
@@ -922,6 +1409,35 @@ export function ChatView({
       </div>
 
       <div className={bypassed ? "composer-zone bypassed" : "composer-zone"}>
+        {/* Blocked-on-you, in the non-scrolling zone. "Working…" and "waiting
+            for your approval" are opposite states — one needs patience, the
+            other needs a decision — and a card in a transcript can be scrolled
+            past. This strip cannot, and it stays until the decision is made. */}
+        {activeRun &&
+          (() => {
+            const parked = agentCalls.find(
+              (call) => call.run_id === activeRun && call.status === "proposed",
+            );
+            if (!parked) return null;
+            return (
+              <div className="waiting-banner" role="status">
+                <span>
+                  ⏸ Waiting for your approval — <strong>{parked.name}</strong>
+                </span>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() =>
+                    document
+                      .querySelector(`[data-call-id="${parked.id}"]`)
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" })
+                  }
+                >
+                  Jump to request
+                </button>
+              </div>
+            );
+          })()}
         {/* In the composer zone rather than in the transcript, and that is the
             whole design: a transcript scrolls, so a warning placed in one is a
             warning you can leave behind above the fold. This cannot be
@@ -946,7 +1462,16 @@ export function ChatView({
         )}
         <div className="composer-shell">
           {pickerOpen && (
-            <SkillPicker skills={skillMatches} onPick={attachSkill} />
+            <SkillPicker
+              commands={commandMatches}
+              commandMode={approval?.mode ?? null}
+              onPickCommand={pickCommand}
+              skills={skillMatches}
+              onPick={attachSkill}
+            />
+          )}
+          {attach && attachOpen && (
+            <AttachMenu attach={attach} close={() => setAttachOpen(false)} />
           )}
           <form className="composer" onSubmit={(event) => void submitPrompt(event)}>
           <textarea
@@ -955,10 +1480,12 @@ export function ChatView({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                // With the slash picker open, Enter attaches the top match
-                // rather than sending a message that is only a "/query".
+                // With the slash picker open, Enter picks the top match —
+                // command first, then skill — rather than sending a message
+                // that is only a "/query".
                 if (pickerOpen) {
-                  attachSkill(skillMatches[0]);
+                  if (commandMatches.length > 0) pickCommand(commandMatches[0]);
+                  else attachSkill(skillMatches[0]);
                   return;
                 }
                 void submitPrompt();
@@ -986,14 +1513,20 @@ export function ChatView({
             />
           )}
           <div className="composer-tools">
-            {onAttach && (
+            {/* The three entry points that used to be invisible — a bare
+                paperclip, a dropdown that hid below two agents, and a "/"
+                incantation nothing advertised — are labelled chips now. The
+                composer is the product's front door; its verbs say their names. */}
+            {attach && (
               <button
                 type="button"
-                onClick={onAttach}
-                title="Add a source"
-                aria-label="Add a source"
+                className={attachOpen ? "composer-chip on" : "composer-chip"}
+                onClick={() => setAttachOpen((value) => !value)}
+                aria-expanded={attachOpen}
+                aria-label="Attach a file"
               >
-                <Paperclip size={17} />
+                <Paperclip size={14} />
+                Attach
               </button>
             )}
             {onSelectAgent && (
@@ -1001,6 +1534,23 @@ export function ChatView({
                 selectedAgentId={selectedAgentId ?? ""}
                 onSelectAgent={onSelectAgent}
               />
+            )}
+            {skills && !skills.attached && (
+              <button
+                type="button"
+                className="composer-chip"
+                // "/" in an empty draft opens the picker the same way typing it
+                // does — the chip is the discoverable name for the incantation,
+                // not a second mechanism.
+                onClick={() => {
+                  if (!draft.startsWith("/")) setDraft(`/${draft}`);
+                }}
+                disabled={Boolean(activeRun)}
+                aria-label="Use a skill"
+              >
+                <Sparkles size={14} />
+                Skills
+              </button>
             )}
             {turnControls && (
               <TurnControls {...turnControls} disabled={Boolean(activeRun)} />

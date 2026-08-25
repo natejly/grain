@@ -116,8 +116,10 @@ def _forget_targets(
         workspace_id=context.workspace_id,
         memory_id=_text(args, "memory_id") or None,
         content=_text(args, "content") or None,
-        # You can forget what you can recall: the workspace's, and your own.
+        # You can forget what you can recall: the workspace's, and your own —
+        # and, from a space's thread, that space's shelf.
         viewer_id=context.user_id,
+        space_id=context.space_id,
     )
 
 

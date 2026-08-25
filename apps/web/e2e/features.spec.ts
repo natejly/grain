@@ -24,7 +24,7 @@ function watchForErrors(page: Page): string[] {
 test("documents: create, edit, live preview, and version history", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Files", /^Files/);
+  await openView(page, "Library", /^Documents/);
 
   await page.getByRole("button", { name: "New document" }).click();
   await page.getByRole("textbox", { name: "Title" }).fill("Feature Sweep Notes");
@@ -58,7 +58,7 @@ test("documents: create, edit, live preview, and version history", async ({ page
 test("boards: create a board, add cards, and manage columns", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Files", /^Boards/);
+  await openView(page, "Library", /^Boards/);
 
   await page.getByRole("textbox", { name: "Board name" }).fill("Sweep Board");
   await page.locator(".board-new").getByRole("button", { name: /Create/ }).click();
@@ -77,10 +77,8 @@ test("boards: create a board, add cards, and manage columns", async ({ page }) =
     path: "test-results/feature-boards.png",
   });
 
-  // No arm: deleting a board is not confirm()-gated. A `once` handler for a
-  // dialog that never arrives stays live and accepts the *next* one, which is
-  // then handled twice — once by the leftover and once by its own arm — and the
-  // second `accept()` throws into the page. Arm only where a dialog appears.
+  // A board takes its cards with it, so deleting one is confirm()-gated now.
+  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete Sweep Board" }).click();
   await expect(page.getByRole("heading", { name: "Sweep Board" })).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -89,7 +87,7 @@ test("boards: create a board, add cards, and manage columns", async ({ page }) =
 test("projects: a web project seeds files and bundles a live preview", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openView(page, "Files", /^Projects/);
+  await openView(page, "Library", /^Projects/);
 
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByRole("textbox", { name: "Project name" }).fill("Sweep App");
@@ -123,7 +121,9 @@ test("projects: a web project seeds files and bundles a live preview", async ({ 
 test("databases: add a sqlite connection and browse its schema", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("/");
-  await openSettings(page, "Connections", /Databases/);
+  // Databases moved from the Settings menu to Library → Data, beside the
+  // datasets they feed.
+  await openView(page, "Library", /^Databases/);
 
   await page.getByRole("button", { name: /Add connection|Add database|Add/ }).first().click();
   await page.locator(".content-page").screenshot({
@@ -161,7 +161,7 @@ test("integrations and activity views render", async ({ page }) => {
     path: "test-results/feature-integrations.png",
   });
 
-  await openSettings(page, "Activity");
+  await openView(page, "Inbox");
   await expect(page.locator(".content-page")).toBeVisible();
 
   expect(errors).toEqual([]);

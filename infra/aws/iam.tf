@@ -134,7 +134,7 @@ resource "aws_iam_role_policy" "ecs_instance_backup" {
     Version = "2012-10-17"
     Statement = [
       {
-        // The nightly `aws s3 sync` of /var/lib/fieldnote/objects. Listing is
+        // The nightly `aws s3 sync` of /var/lib/grain/objects. Listing is
         // bucket-level and cannot be narrowed below the bucket ARN, so it is
         // narrowed by prefix condition instead.
         Sid      = "ListBackupPrefix"

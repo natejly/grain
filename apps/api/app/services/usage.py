@@ -55,11 +55,16 @@ EMBEDDING = "embedding"
 CODEGEN = "codegen"
 CONTEXT_BLURB = "context_blurb"
 MEMORY_EXTRACTION = "memory_extraction"
+CONVERSATION_SUMMARY = "conversation_summary"
 GRAPH_EXTRACTION = "graph_extraction"
 WORKFLOW_COMPILE = "workflow_compile"
+SCHEDULE_COMPILE = "schedule_compile"
 # The prompt-injection screen's builtin classifier. Billed like every other
 # small-model call so an operator sees what screening the ingested content costs.
 SCREEN = "screen"
+# The guardian approval reviewer (services/guardian.py) — the cheap-model triage
+# a `guardian`-mode conversation runs before a write parks.
+GUARDIAN = "guardian"
 
 OPERATIONS = (
     CHAT,
@@ -68,9 +73,12 @@ OPERATIONS = (
     CODEGEN,
     CONTEXT_BLURB,
     MEMORY_EXTRACTION,
+    CONVERSATION_SUMMARY,
     GRAPH_EXTRACTION,
     WORKFLOW_COMPILE,
+    SCHEDULE_COMPILE,
     SCREEN,
+    GUARDIAN,
 )
 
 TOKENS_PER_MILLION = 1_000_000
@@ -84,6 +92,9 @@ class Attribution:
     run_id: str = ""
     conversation_id: str = ""
     user_id: str = ""
+    # Which authored agent's turn this is, when it is one. Blank for calls that
+    # have no agent — embeddings, compiles, memory extraction outside a turn.
+    agent_id: str = ""
     # How an *agent turn* under this scope is billed. The one operation the
     # chokepoint cannot name for itself: `stream_agent_response` is the same call
     # whether a person is typing or a scheduled workflow is executing, and which
@@ -108,6 +119,7 @@ def usage_scope(
     run_id: str = "",
     conversation_id: str = "",
     user_id: str = "",
+    agent_id: str = "",
     operation: str = "",
 ) -> Iterator[Attribution]:
     """Bind what this frame knows about who is paying, for the calls beneath it.
@@ -137,6 +149,7 @@ def usage_scope(
         run_id=run_id or current.run_id,
         conversation_id=conversation_id or current.conversation_id,
         user_id=user_id or current.user_id,
+        agent_id=agent_id or current.agent_id,
         operation=operation or current.operation,
     )
     token = _ATTRIBUTION.set(merged)
@@ -305,6 +318,7 @@ def record_model_usage(
             run_id=attribution.run_id,
             conversation_id=attribution.conversation_id,
             user_id=attribution.user_id,
+            agent_id=attribution.agent_id,
             operation=operation,
             provider=provider,
             model=model[:120],

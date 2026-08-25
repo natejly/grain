@@ -319,7 +319,7 @@ class Conversation(Base):
         String(36), default="", server_default="", index=True
     )
     #: How much this thread asks before acting: ask_writes | ask_all |
-    #: auto_writes. See `agent_loop.ApprovalMode`.
+    #: auto_writes | plan. See `agent_loop.ApprovalMode`.
     #:
     #: Per conversation and not per workspace, because the mode is an answer to
     #: what is being done *right now*. A bypass switched on to get through one
@@ -339,6 +339,39 @@ class Conversation(Base):
     #: and a personal thread is never visible to another member.
     shared: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false()
+    )
+    #: The space this thread lives in; "" for an ordinary thread. A space is a
+    #: grouping *within* the rail — many threads per space, personal/shared
+    #: semantics untouched — which is why this is its own column and not a
+    #: fourth `subject_kind`: a subject thread is one-per-subject, hidden from
+    #: the rail, exempt from the personal/shared gate, and tool-narrowed, and a
+    #: space thread is none of those. A thread has a subject or a space, never
+    #: both (only ordinary conversation creation sets this).
+    #:
+    #: Not a FK: "" is the common value and cannot satisfy one, and the space's
+    #: delete cascades over its threads explicitly rather than through the
+    #: schema, like every other cascade here.
+    space_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
+    )
+    #: The composer's remembered choices for this thread — which authored agent
+    #: answers, and the model/effort overrides — with "" meaning "the
+    #: deployment's own default", same convention as `Run.requested_model`.
+    #:
+    #: Deliberately NOT consulted by the run path: every turn still carries its
+    #: controls explicitly (`MessageControls`), so what reached the provider
+    #: stays answerable from the Run row alone and a thread default can never
+    #: silently steer a turn the client did not ask it to. These columns exist
+    #: so the composer can seed its pickers when the thread reopens — per-pane
+    #: session state used to evaporate — not to add a fourth resolution layer.
+    default_agent_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    default_model: Mapped[str] = mapped_column(
+        String(120), default="", server_default=""
+    )
+    default_effort: Mapped[str] = mapped_column(
+        String(24), default="", server_default=""
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -498,6 +531,14 @@ class Source(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued")
     error: Mapped[str] = mapped_column(Text, default="")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    #: The space whose threads this source informs; "" means the workspace
+    #: library. A thread in space S retrieves from `IN ("", S)` and an ordinary
+    #: thread from `== ""` alone, so a space's files never surface in general
+    #: chat. Retrieval filters on the Source row (every ranking arm already
+    #: joins it for liveness), so `Chunk` needs no copy of this.
+    space_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
+    )
     deleted_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -550,6 +591,66 @@ class ChunkTerm(Base):
     chunk_id: Mapped[str] = mapped_column(ForeignKey("chunks.id"))
     term: Mapped[str] = mapped_column(String(64))
     tf: Mapped[int] = mapped_column(Integer)
+
+
+class ConversationChunk(Base):
+    """One retrievable window of a conversation's transcript — or its summary.
+
+    What makes cross-thread history quotable: `Message` rows persist every word
+    but nothing could search them, so the only channel between threads was the
+    handful of extracted MemoryItems. A chunk packs consecutive messages of one
+    conversation into a window sized for retrieval; `kind="summary"` marks the
+    thread's single rolling summary row, kept in the same table so one hybrid
+    search ranks both tiers at once.
+
+    Deliberately no `owner_id` and no `space_id`: a chunk is exactly as visible
+    as its conversation, and the Conversation row already answers that (shared,
+    created_by, subject_id — and space_id when Spaces lands). Copying the answer
+    here would be a second visibility rule that could disagree with the first;
+    every search joins Conversation instead, the way document retrieval joins
+    Source for liveness.
+
+    Chunks are derived data. `content` is rebuildable from Message rows at any
+    time (scripts/backfill_conversation_index.py does exactly that), so nothing
+    here needs the supersession machinery memory has — a stale index is healed
+    by reindexing, not versioned.
+    """
+
+    __tablename__ = "conversation_chunks"
+    __table_args__ = (
+        Index(
+            "ix_conversation_chunks_ws_conversation",
+            "workspace_id",
+            "conversation_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id"), index=True
+    )
+    #: "chunk" for a transcript window, "summary" for the thread's one rolling
+    #: summary row (ordinal 0, refreshed in place as the thread grows).
+    kind: Mapped[str] = mapped_column(String(16), default="chunk")
+    ordinal: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    #: The Message rows this window quotes — provenance, and the incremental
+    #: watermark: indexing covers only messages no chunk has claimed yet.
+    message_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    #: How many messages this row covers. On the summary row it is the thread's
+    #: message count at the last refresh, which is what decides staleness.
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    #: created_at of the newest message covered — what a search renders as the
+    #: quote's date, and what reconcile compares against Message.created_at.
+    last_message_at: Mapped[datetime] = mapped_column(DateTime)
+    # Dense half of hybrid search. Nullable for the same reason Chunk.embedding
+    # is: a chunk must be lexically searchable in the window before the
+    # embedding call runs, and if it never succeeds.
+    embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    embedding_model: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class Tool(Base):
@@ -611,6 +712,18 @@ class AgentToolCall(Base):
     """
 
     __tablename__ = "agent_tool_calls"
+    __table_args__ = (
+        # The Inbox's unbounded waiting-set query: WHERE workspace_id AND
+        # status='proposed' ORDER BY created_at. Composite because the plain
+        # workspace index degrades to a scan of every call the workspace ever
+        # made once the filter includes status — and this table only grows.
+        Index(
+            "ix_agent_tool_calls_workspace_status_created",
+            "workspace_id",
+            "status",
+            "created_at",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
@@ -651,6 +764,41 @@ class AgentToolCall(Base):
         if not value.startswith(MODE_DECIDER_PREFIX):
             return ""
         return value[len(MODE_DECIDER_PREFIX) :]
+
+
+class Space(Base):
+    """A grouping of chat threads with standing context of its own.
+
+    A space gives the threads inside it three things: custom instructions
+    appended to every turn's system prompt, knowledge files whose retrieval is
+    scoped to the space, and a memory shelf of its own (`MemoryItem.space_id`).
+    Unlike a `Folder` it does hold content — the instructions — and unlike a
+    subject it never narrows tools or leaves the rail.
+
+    Workspace-shared, like folders and documents: every member sees every
+    space. Privacy stays where ADR 0010 put it — on the thread
+    (`Conversation.shared`) and the memory owner axis — so a space is a
+    relevance boundary, not a visibility one.
+
+    Deletion is destructive: the space's threads, sources and memories go with
+    it (cascaded explicitly in `services/spaces.delete_space`). Detaching them
+    instead would flip every space-scoped source to `space_id = ""` — the
+    workspace library — silently widening retrieval, which is the one
+    direction scoping must never fail toward.
+    """
+
+    __tablename__ = "spaces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    #: Appended to the system prompt of every turn run in this space's threads,
+    #: after the base/agent layer and before any skill injection. Blank means
+    #: no injection — never an empty block.
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class Folder(Base):
@@ -1011,6 +1159,30 @@ class SandboxTool(Base):
     )
 
 
+class ApiToken(Base):
+    """A bearer credential for the workspace's own MCP server surface.
+
+    The secret is shown once at mint time and only its sha256 lands here —
+    the table can authenticate a presented secret (hash it, look it up) and
+    can never leak one. `user_id` is the member the token acts AS: every call
+    made with it resolves tools and policy as that person, so revoking their
+    membership revokes what their tokens could reach. Revocation is a stamp,
+    not a delete — a dead token's row is the audit answer to "what was this
+    credential, and when did it stop working".
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(80), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class McpServer(Base):
     """A configured MCP server: a stdio subprocess or a streamable HTTP endpoint."""
 
@@ -1196,7 +1368,10 @@ class MemoryItem(Base):
         # value for a claim and the workspace's shared value are two rows on one
         # claim key, which is what makes supersession stay inside a scope. See
         # ADR 0010 — without it, `_retire` retires your fact when I correct mine.
-        UniqueConstraint("workspace_id", "owner_id", "kind", "normalized_key"),
+        # `space_id` joins it for the same reason along the space axis: a
+        # correction made inside a space retires the space's row, never the
+        # workspace-global one.
+        UniqueConstraint("workspace_id", "owner_id", "space_id", "kind", "normalized_key"),
         Index("ix_memory_items_workspace_status", "workspace_id", "status"),
         # Serves recall()'s capped vector scan: workspace + status + ORDER BY
         # updated_at DESC LIMIT n. Declared here as well as in migration
@@ -1229,6 +1404,15 @@ class MemoryItem(Base):
     #: `sandbox_sessions.slot_index` for exactly that property; here it is the
     #: bug. "" collides with "" on both engines.
     owner_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
+    )
+    #: The space this was learned in; "" means workspace-global. The second
+    #: scope axis beside `owner_id`, same shape for the same ADR 0010 reasons:
+    #: a sentinel and never NULL because it joins the unique key. Stamped from
+    #: the conversation, never from a request field. Recall inside a space sees
+    #: `IN ("", space)`; outside, `== ""` — space is a relevance scope, not a
+    #: privacy scope, which stays the owner axis's job.
+    space_id: Mapped[str] = mapped_column(
         String(36), default="", server_default="", index=True
     )
     run_id: Mapped[str] = mapped_column(String(36), default="")
@@ -1520,6 +1704,42 @@ class DashboardPin(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class Favorite(Base):
+    """One entry in one person's sidebar Favorites block.
+
+    Per *user*, not per workspace, for `DashboardPin`'s exact reason: the
+    workspace's named things are shared, but which of them you keep in reach is
+    a personal arrangement — two people watching the same workspace must not
+    fight over one sidebar, and one of them tidying theirs must not rearrange
+    everybody else's.
+
+    `kind` + `target_id` name anything with a name; the closed set of kinds is
+    `services/favorites.FAVORITE_KINDS`, and that module owns turning the pair
+    back into a label under each kind's own visibility rule. `target_id` is
+    deliberately not a ForeignKey: one column cannot reference eight tables,
+    and a favorite must survive its target's deletion the way `Run.skill_id`
+    survives a skill's — a row whose target no longer resolves simply drops out
+    of the listing (`services/favorites.list_favorites`).
+    """
+
+    __tablename__ = "favorites"
+    __table_args__ = (
+        # Favoriting is a fact, not a log: a second favorite of the same thing
+        # has to update the first row rather than double the sidebar entry.
+        UniqueConstraint("user_id", "kind", "target_id"),
+        Index("ix_favorites_workspace_user", "workspace_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    target_id: Mapped[str] = mapped_column(String(36))
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class GeneratedApp(Base):
     __tablename__ = "generated_apps"
     __table_args__ = (UniqueConstraint("slug"),)
@@ -1770,6 +1990,8 @@ class ModelUsage(Base):
         Index("ix_model_usage_workspace_created", "workspace_id", "created_at"),
         # "What did this run cost" — the runaway-loop question, asked by run.
         Index("ix_model_usage_workspace_run", "workspace_id", "run_id"),
+        # "What does this agent cost" — the per-agent scorecard's axis.
+        Index("ix_model_usage_workspace_agent", "workspace_id", "agent_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -1777,6 +1999,9 @@ class ModelUsage(Base):
     run_id: Mapped[str] = mapped_column(String(36), default="")
     conversation_id: Mapped[str] = mapped_column(String(36), default="")
     user_id: Mapped[str] = mapped_column(String(36), default="")
+    # Plain column like run_id, and for the same reason: the ledger must outlive
+    # a retired agent. "" = the call had no agent (embeddings, compiles).
+    agent_id: Mapped[str] = mapped_column(String(36), default="")
     # What caused the call: chat | workflow_node | embedding | codegen |
     # context_blurb | memory_extraction | graph_extraction | workflow_compile.
     # Free text rather than an enum so a new caller records something honest

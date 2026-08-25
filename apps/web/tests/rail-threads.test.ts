@@ -3,6 +3,7 @@ import type { Conversation, Message } from "@workspace/api-client";
 import {
   groupThreads,
   senderInitial,
+  senderIsViewer,
   senderLabel,
   shareControl,
 } from "../components/views/shared";
@@ -28,7 +29,11 @@ function conversation(overrides: Partial<Conversation> = {}): Conversation {
     id: "conv-1",
     title: "Thread",
     subject_kind: "",
+    default_agent_id: "",
+    default_model: "",
+    default_effort: "",
     subject_id: "",
+    space_id: "",
     approval_mode: "ask_writes",
     shared: false,
     owned: true,
@@ -173,6 +178,35 @@ describe("attributing a message's name", () => {
 
   it("treats a tool row as non-user, so it is 'Assistant' too", () => {
     expect(senderLabel(message({ role: "tool", sender_name: "Ada" }), true)).toBe("Assistant");
+  });
+});
+
+describe("whose messages the viewer may edit", () => {
+  it("allows every user message on a personal thread, legacy ''-sender included", () => {
+    // The server never returns another member's personal thread, so on one the
+    // caller wrote every user message — including rows predating the sender
+    // column, which carry sender_id "".
+    expect(senderIsViewer(message({ sender_id: "user-1" }), false, "user-1")).toBe(true);
+    expect(senderIsViewer(message({ sender_id: "" }), false, "user-1")).toBe(true);
+  });
+
+  it("requires an exact attribution match on a shared thread", () => {
+    // An edit truncates everything after the message; a pencil on a teammate's
+    // prompt would offer to delete their turn (and 409 on click).
+    expect(senderIsViewer(message({ sender_id: "user-1" }), true, "user-1")).toBe(true);
+    expect(senderIsViewer(message({ sender_id: "user-2" }), true, "user-1")).toBe(false);
+  });
+
+  it("gives nobody a legacy unattributed message on a shared thread", () => {
+    // sender_id "" on a shared thread could be anyone's; matching it against a
+    // missing viewer id must not make it everyone's.
+    expect(senderIsViewer(message({ sender_id: "" }), true, "user-1")).toBe(false);
+    expect(senderIsViewer(message({ sender_id: "" }), true, "")).toBe(false);
+  });
+
+  it("never allows a non-user row, whatever the thread", () => {
+    expect(senderIsViewer(message({ role: "assistant", sender_id: "user-1" }), false, "user-1")).toBe(false);
+    expect(senderIsViewer(message({ role: "tool", sender_id: "user-1" }), true, "user-1")).toBe(false);
   });
 });
 

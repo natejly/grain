@@ -1,6 +1,7 @@
 "use client";
 
 import type { Bootstrap, Citation, Conversation, GeneratedApp, Source } from "@workspace/api-client";
+import { Maximize2, Minimize2 } from "lucide-react";
 import {
   Fragment,
   useEffect,
@@ -11,6 +12,14 @@ import {
   type ReactNode,
 } from "react";
 import { ChatPane } from "../chat-pane";
+import type { DashboardPinning } from "./dashboard-pin-bar";
+import {
+  SPLIT_SIZES_KEY,
+  applyDelta,
+  equalSizes,
+  parseStoredSizes,
+  serializeStoredSizes,
+} from "./split-sizes";
 
 export type ChatPaneRef = { id: string; conversationId: string };
 
@@ -33,13 +42,26 @@ export type ChatSplitProps = {
   focusPane: (paneId: string | null) => void;
   onSettled: () => Promise<void> | void;
   onApprovalChanged: (updated: Conversation) => void;
+  /** The shell's one pin bundle, handed to every extra pane — a dashboard
+   *  made in a side pane deserves the same finish-the-job bar. */
+  pinning?: DashboardPinning;
 };
 
 const MIN_PERCENT = 15;
 
-/** Equal shares for `count` columns, as flex-grow ratios summing to 100. */
-function equalSizes(count: number): number[] {
-  return Array.from({ length: count }, () => 100 / count);
+/**
+ * The ratios a `count`-column split last held, or an even split. Guarded for
+ * private-mode / server render like the pane layout itself: a throwing or
+ * absent store is simply the even share, never a crash. The decode lives in
+ * `split-sizes` so it can be tested without a DOM; this only adds the guard.
+ */
+function readStoredSizes(count: number): number[] {
+  if (typeof window === "undefined") return equalSizes(count);
+  try {
+    return parseStoredSizes(window.localStorage.getItem(SPLIT_SIZES_KEY), count);
+  } catch {
+    return equalSizes(count);
+  }
 }
 
 /**
@@ -70,6 +92,7 @@ export function ChatSplit({
   focusPane,
   onSettled,
   onApprovalChanged,
+  pinning,
 }: ChatSplitProps) {
   // Only panes whose conversation still exists. A conversation deleted between
   // sessions leaves a persisted pane pointing at nothing; dropping it here keeps
@@ -85,7 +108,7 @@ export function ChatSplit({
 
   const columnCount = 1 + resolved.length;
   const containerRef = useRef<HTMLDivElement>(null);
-  const [sizes, setSizes] = useState<number[]>(() => equalSizes(columnCount));
+  const [sizes, setSizes] = useState<number[]>(() => readStoredSizes(columnCount));
   // The ratios to render for the CURRENT column count. A pane opened or closed
   // changes `columnCount` one render before the effect below rewrites `sizes`;
   // rendering straight from `sizes` would commit a mismatched-length array for
@@ -96,19 +119,41 @@ export function ChatSplit({
     () => (sizes.length === columnCount ? sizes : equalSizes(columnCount)),
     [sizes, columnCount],
   );
+  // A count change lands on the ratios this count last held, not on a blind
+  // even reset: the store is keyed per column count, so closing a third pane
+  // restores the drag the user made at two.
   useEffect(() => {
-    setSizes((current) => (current.length === columnCount ? current : equalSizes(columnCount)));
+    setSizes((current) => (current.length === columnCount ? current : readStoredSizes(columnCount)));
   }, [columnCount]);
 
-  const drag = useRef<{ index: number; startX: number; width: number; sizes: number[] } | null>(
-    null,
-  );
+  /** Remember `next` as this column count's ratios — on a drag end or a nudge,
+   *  never per pointer-move. Private mode just does not survive a reload. */
+  function persistSizes(next: number[]) {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        SPLIT_SIZES_KEY,
+        serializeStoredSizes(window.localStorage.getItem(SPLIT_SIZES_KEY), columnCount, next),
+      );
+    } catch {
+      // Private mode: the drag just does not survive a reload.
+    }
+  }
+
+  const drag = useRef<{
+    index: number;
+    startX: number;
+    width: number;
+    sizes: number[];
+    /** The last ratios this drag committed, so the pointer-up can persist them. */
+    latest: number[] | null;
+  } | null>(null);
 
   function startDrag(index: number, event: PointerEvent<HTMLDivElement>) {
     const width = containerRef.current?.getBoundingClientRect().width;
     if (!width) return;
     event.preventDefault();
-    drag.current = { index, startX: event.clientX, width, sizes: [...effectiveSizes] };
+    drag.current = { index, startX: event.clientX, width, sizes: [...effectiveSizes], latest: null };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -116,49 +161,90 @@ export function ChatSplit({
     const state = drag.current;
     if (!state) return;
     const deltaPercent = ((event.clientX - state.startX) / state.width) * 100;
-    const left = state.sizes[state.index] + deltaPercent;
-    const right = state.sizes[state.index + 1] - deltaPercent;
-    // Neither neighbour may collapse below a usable width; refuse the move that
-    // would rather than letting a pane vanish behind its own divider.
-    if (left < MIN_PERCENT || right < MIN_PERCENT) return;
-    const next = [...state.sizes];
-    next[state.index] = left;
-    next[state.index + 1] = right;
+    // Neither neighbour may collapse below a usable width; `applyDelta` refuses
+    // the move that would rather than letting a pane vanish behind its divider.
+    const next = applyDelta(state.sizes, state.index, deltaPercent, MIN_PERCENT);
+    if (next === state.sizes) return;
+    state.latest = next;
     setSizes(next);
   }
 
   function endDrag(event: PointerEvent<HTMLDivElement>) {
-    if (!drag.current) return;
+    const state = drag.current;
+    if (!state) return;
     drag.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
+    if (state.latest) persistSizes(state.latest);
   }
 
   /** Keyboard resize: a separator is focusable, so arrow keys nudge the split. */
   function nudge(index: number, delta: number) {
-    setSizes((current) => {
-      const left = current[index] + delta;
-      const right = current[index + 1] - delta;
-      if (left < MIN_PERCENT || right < MIN_PERCENT) return current;
-      const next = [...current];
-      next[index] = left;
-      next[index + 1] = right;
-      return next;
-    });
+    const next = applyDelta(effectiveSizes, index, delta, MIN_PERCENT);
+    if (next === effectiveSizes) return;
+    setSizes(next);
+    persistSizes(next);
   }
+
+  // One pane the whole surface, on request: the pane's id, "primary" for pane
+  // 0, or null for the ordinary split. Sizes are untouched — restoring brings
+  // back exactly the split that was maximized away.
+  const [maximized, setMaximized] = useState<string | null>(null);
+
+  // Escape restores the split, scoped: the listener only exists while a pane
+  // is maximized, so the key keeps its meaning everywhere else.
+  useEffect(() => {
+    if (!maximized) return;
+    const onKey = (event: KeyboardEvent) => {
+      // An Escape a nested surface already answered (the palette backing out,
+      // a picker closing) is not also this restore's to consume.
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setMaximized(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [maximized]);
+
+  // Any change to the split's shape hands the surface back. This is what keeps
+  // a maximized pane's own close honest — the pane unmounts, and without this
+  // every survivor would stay display:none behind a maximize nobody holds —
+  // and it makes a newly opened pane visible rather than born hidden.
+  useEffect(() => {
+    setMaximized(null);
+  }, [columnCount]);
 
   // No extra panes — the primary alone, no wrapper that could alter its layout.
   if (resolved.length === 0) return <>{primary}</>;
 
+  /** The wrapper class for one column: hidden while another pane is maximized. */
+  function paneClass(id: string): string {
+    return maximized && maximized !== id ? "chat-split-pane pane-hidden" : "chat-split-pane";
+  }
+
   return (
-    <div className="chat-split" ref={containerRef}>
+    <div
+      className={maximized ? "chat-split has-maximized" : "chat-split"}
+      ref={containerRef}
+    >
       <div
-        className="chat-split-pane"
+        className={paneClass("primary")}
         style={{ flexGrow: effectiveSizes[0], flexBasis: 0 }}
         onPointerDown={() => focusPane(null)}
         // A stable, focusable landing spot: closing the last extra pane moves
         // DOM focus here rather than letting it fall to <body>.
         tabIndex={-1}
       >
+        {/* The primary is the shell's own ChatView and owns no pane head, so
+            its maximize control is the split's: a corner button that only
+            exists while there is a split to take the surface from. */}
+        <button
+          className="icon-button pane-max-corner"
+          title={maximized === "primary" ? "Restore split" : "Maximize pane"}
+          aria-label={maximized === "primary" ? "Restore split" : "Maximize primary pane"}
+          onClick={() => setMaximized((current) => (current === "primary" ? null : "primary"))}
+        >
+          {maximized === "primary" ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>
         {primary}
       </div>
       {resolved.map(({ pane, conversation }, index) => (
@@ -188,7 +274,7 @@ export function ChatSplit({
             }}
           />
           <div
-            className="chat-split-pane"
+            className={paneClass(pane.id)}
             style={{ flexGrow: effectiveSizes[index + 1], flexBasis: 0 }}
           >
             <ChatPane
@@ -202,6 +288,11 @@ export function ChatSplit({
               onFocus={() => focusPane(pane.id)}
               onSettled={onSettled}
               onApprovalChanged={onApprovalChanged}
+              pinning={pinning}
+              maximized={maximized === pane.id}
+              onToggleMaximize={() =>
+                setMaximized((current) => (current === pane.id ? null : pane.id))
+              }
             />
           </div>
         </Fragment>

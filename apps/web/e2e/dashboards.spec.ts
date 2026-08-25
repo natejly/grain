@@ -77,7 +77,7 @@ test.describe("dashboards", () => {
 
     // A dataset only exists downstream of a source, so upload one and let the
     // indexer finish before anything asks for its columns.
-    await openView(page, "Knowledge", /Sources/);
+    await openView(page, "Library", /Sources/);
     await page.locator('input[type="file"]').setInputFiles({
       name: SOURCE,
       mimeType: "text/csv",
@@ -87,11 +87,22 @@ test.describe("dashboards", () => {
     });
     await expect(page.getByText("Indexed").last()).toBeVisible({ timeout: 30_000 });
 
-    const { json: datasets } = await callApi(page, "GET", "/api/datasets");
-    const dataset = (datasets as { id: string; name: string }[]).find((item) =>
-      item.name.includes("dashboards-e2e"),
-    );
-    expect(dataset, "the uploaded CSV did not become a dataset").toBeTruthy();
+    // The dataset is created by a client-side effect AFTER the source reads
+    // "Indexed" — an async POST this page fires on its own schedule — so the
+    // lookup has to poll rather than race it with a single read.
+    let dataset: { id: string; name: string } | undefined;
+    await expect
+      .poll(
+        async () => {
+          const { json: datasets } = await callApi(page, "GET", "/api/datasets");
+          dataset = (datasets as { id: string; name: string }[]).find((item) =>
+            item.name.includes("dashboards-e2e"),
+          );
+          return dataset;
+        },
+        { timeout: 15_000, message: "the uploaded CSV did not become a dataset" },
+      )
+      .toBeTruthy();
 
     await callApi(
       page,
@@ -206,13 +217,12 @@ test.describe("dashboards", () => {
 
   test("pin from the catalog, and the rail lists what you pinned", async ({ page }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
 
-    // Requirement 2: one dropdown holding every dashboard in the workspace.
-    const catalog = page.getByRole("button", { name: /^All dashboards/ });
-    await expect(catalog).toBeVisible();
-    await catalog.click();
-    const menu = page.getByRole("group", { name: "All dashboards" });
+    // One page section holding every dashboard in the workspace — a shelf on
+    // the page rather than a popover you summon and lose on click-away.
+    const menu = page.getByRole("region", { name: "All dashboards" });
+    await expect(menu).toBeVisible();
     for (const name of DASHBOARDS) {
       await expect(menu.getByRole("button", { name: `Pin ${name}` })).toBeVisible();
     }
@@ -225,7 +235,6 @@ test.describe("dashboards", () => {
       "aria-pressed",
       "true",
     );
-    await page.keyboard.press("Escape");
 
     // Requirement 1: pinned dashboards appear beneath the rail's own items.
     const pinned = page.getByRole("navigation", { name: "Pinned dashboards" });
@@ -236,7 +245,7 @@ test.describe("dashboards", () => {
 
   test("a pinned tile draws the numbers its query returned", async ({ page }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
 
     const tile = page.locator(".dashboard-pin-tile", { hasText: DASHBOARDS[0] });
     await expect(tile).toBeVisible();
@@ -265,7 +274,7 @@ test.describe("dashboards", () => {
 
   test("arranging the grid survives a reload", async ({ page }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
     await expect(page.locator(".dashboard-pin-tile")).toHaveCount(2);
 
     const before = placementOf(await pinPlacements(page), DASHBOARDS[0]);
@@ -290,7 +299,7 @@ test.describe("dashboards", () => {
     expect(moved.w).toBe(before.w + 1);
 
     await page.reload();
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
     const tile = page.locator(".dashboard-pin-tile", { hasText: DASHBOARDS[0] });
     // The saved placement is what the browser actually lays the tile out with,
     // not merely what the API stored.
@@ -302,7 +311,7 @@ test.describe("dashboards", () => {
     page,
   }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
     await expect(page.locator(".dashboard-pin-tile")).toHaveCount(2);
 
     const grip = page.getByRole("button", { name: new RegExp(`^Move ${DASHBOARDS[1]}`) });
@@ -326,7 +335,7 @@ test.describe("dashboards", () => {
     page,
   }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
 
     const card = page.locator(".dashboard-template-card", { hasText: TEMPLATE });
     await expect(card).toBeVisible();
@@ -369,7 +378,7 @@ test.describe("dashboards", () => {
     page,
   }) => {
     await page.goto("/");
-    await openView(page, "Files", /^Dashboards/);
+    await openView(page, "Library", /^Dashboards/);
 
     await page
       .getByRole("button", { name: new RegExp(`^Unpin ${DASHBOARDS[1]}`) })
@@ -384,11 +393,10 @@ test.describe("dashboards", () => {
         .getByRole("navigation", { name: "Pinned dashboards" })
         .getByRole("button", { name: DASHBOARDS[1] }),
     ).toHaveCount(0);
-    // Unpinning is not deleting: the dashboard is still the workspace's.
-    await page.getByRole("button", { name: /^All dashboards/ }).click();
+    // Unpinning is not deleting: the dashboard is still on the shelf.
     await expect(
       page
-        .getByRole("group", { name: "All dashboards" })
+        .getByRole("region", { name: "All dashboards" })
         .getByRole("button", { name: `Pin ${DASHBOARDS[1]}` }),
     ).toBeVisible();
   });

@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, KanbanSquare, ListChecks, Plus, Trash2 } from "lucide-react";
 import type { Board } from "@workspace/api-client";
 import { useState } from "react";
 import {
@@ -15,8 +15,11 @@ import {
   slotFrom,
   writeDrag,
 } from "./board-columns";
+import { glyphFor, isTodoList } from "./todo-format";
+import { TodoChecklist, type TodoOps } from "./todos";
 
 export type BoardViewProps = {
+  /** Every board, lists included — this page is the one listing for both. */
   boards: Board[];
   createBoard: (name: string) => Promise<void>;
   addCard: (boardId: string, column: string, title: string) => Promise<void>;
@@ -24,7 +27,27 @@ export type BoardViewProps = {
   removeCard: (boardId: string, cardId: string) => Promise<void>;
   removeBoard: (board: Board) => Promise<void>;
   columnOps?: BoardColumnOps;
+  todoOps: TodoOps;
 };
+
+/** The glyph an entry wears — the whole visible difference between the shapes. */
+function Glyph({ board }: { board: Board }) {
+  const Icon = glyphFor(board) === "list" ? ListChecks : KanbanSquare;
+  return <Icon size={15} aria-hidden className="board-glyph" />;
+}
+
+/**
+ * The one deletion gate, for both shapes. A list and a board are the same
+ * object, so one click must not be able to destroy the one and only warn on
+ * the other; the copy names the thing and what it takes with it.
+ */
+function confirmRemoval(board: Board): boolean {
+  const count = board.columns.reduce((total, column) => total + column.cards.length, 0);
+  const cargo = isTodoList(board)
+    ? `${count} item${count === 1 ? "" : "s"}`
+    : `${count} card${count === 1 ? "" : "s"}`;
+  return window.confirm(`Delete “${board.name}” and its ${cargo}?`);
+}
 
 function AddCard({
   onAdd,
@@ -78,6 +101,54 @@ function AddCard({
   );
 }
 
+/**
+ * The keyboard route to a cross-column drag, in two steps: the select only
+ * states a destination, the button beside it commits. Matching the column
+ * header's delete-with-destination form — and unlike a bare select that
+ * committed onChange, which moved the card on the first ArrowDown of a
+ * keyboard user still browsing the options.
+ */
+function MoveCard({
+  cardTitle,
+  siblings,
+  onMove,
+}: {
+  cardTitle: string;
+  siblings: { id: string; name: string }[];
+  onMove: (destination: string) => Promise<void>;
+}) {
+  const [destination, setDestination] = useState("");
+  return (
+    <>
+      <select
+        className="kanban-move"
+        value={destination}
+        aria-label={`Move ${cardTitle} to`}
+        onChange={(event) => setDestination(event.target.value)}
+      >
+        <option value="">Move to…</option>
+        {siblings.map((item) => (
+          <option key={item.id} value={item.name}>
+            {item.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="ghost-button"
+        aria-label={`Move ${cardTitle}`}
+        onClick={() => {
+          if (!destination) return;
+          setDestination("");
+          void onMove(destination);
+        }}
+      >
+        Move
+      </button>
+    </>
+  );
+}
+
 type CardTarget = { columnId: string; slot: number };
 
 function BoardCanvas({
@@ -98,6 +169,20 @@ function BoardCanvas({
   const [drag, setDrag] = useState<DragPayload | null>(null);
   const [cardTarget, setCardTarget] = useState<CardTarget | null>(null);
   const [columnTarget, setColumnTarget] = useState<number | null>(null);
+  // A second chevron press before the reorder lands would be computed from the
+  // stale index and silently lost — same guard the column chevrons carry, and
+  // aria-disabled for the same reason: focus must survive the flight.
+  const [reordering, setReordering] = useState(false);
+
+  async function stepCard(cardId: string, index: number, columnId: string) {
+    if (!ops || reordering) return;
+    setReordering(true);
+    try {
+      await ops.reorderCard(board.id, cardId, index, columnId);
+    } finally {
+      setReordering(false);
+    }
+  }
 
   function clear() {
     setDrag(null);
@@ -213,6 +298,40 @@ function BoardCanvas({
                         ops.deleteColumn(board.id, column.id, moveCardsTo || undefined)
                     : undefined
                 }
+                // The keyboard route to what the drag does, through the same
+                // reindex the drop handler trusts. Null at an edge: the button
+                // stays, aria-disabled but focusable, so focus survives
+                // reaching either end.
+                move={
+                  ops
+                    ? {
+                        left:
+                          columnIndex > 0
+                            ? () =>
+                                ops.reorderColumns(
+                                  board.id,
+                                  reindex(
+                                    board.columns.map((item) => item.id),
+                                    column.id,
+                                    columnIndex - 1,
+                                  ),
+                                )
+                            : null,
+                        right:
+                          columnIndex < board.columns.length - 1
+                            ? () =>
+                                ops.reorderColumns(
+                                  board.id,
+                                  reindex(
+                                    board.columns.map((item) => item.id),
+                                    column.id,
+                                    columnIndex + 2,
+                                  ),
+                                )
+                            : null,
+                      }
+                    : undefined
+                }
               />
             </div>
             <div className="kanban-cards">
@@ -229,6 +348,16 @@ function BoardCanvas({
                     className="kanban-card"
                     draggable
                     onDragStart={(event) => {
+                      // Same bail as the column header: a press-and-slide on
+                      // the card's own controls must not start a card drag.
+                      if (
+                        (event.target as HTMLElement).closest(
+                          "input, select, button, textarea",
+                        )
+                      ) {
+                        event.preventDefault();
+                        return;
+                      }
                       const payload: DragPayload = {
                         kind: "card",
                         cardId: card.id,
@@ -257,6 +386,47 @@ function BoardCanvas({
                           {label}
                         </span>
                       ))}
+                      {/* The keyboard route to an in-column drag. aria-disabled
+                          at the edges, matching the column chevrons: the button
+                          stays focusable so focus survives reaching either
+                          end. */}
+                      {ops && (
+                        <>
+                          <button
+                            className="icon-button"
+                            aria-disabled={cardIndex === 0 || reordering}
+                            aria-label={`Move ${card.title} up`}
+                            onClick={() => {
+                              if (cardIndex === 0) return;
+                              void stepCard(card.id, cardIndex - 1, column.id);
+                            }}
+                          >
+                            <ChevronUp size={12} />
+                          </button>
+                          <button
+                            className="icon-button"
+                            aria-disabled={
+                              cardIndex === column.cards.length - 1 || reordering
+                            }
+                            aria-label={`Move ${card.title} down`}
+                            onClick={() => {
+                              if (cardIndex === column.cards.length - 1) return;
+                              void stepCard(card.id, cardIndex + 1, column.id);
+                            }}
+                          >
+                            <ChevronDown size={12} />
+                          </button>
+                        </>
+                      )}
+                      {siblings.length > 0 && (
+                        <MoveCard
+                          cardTitle={card.title}
+                          siblings={siblings}
+                          onMove={(destination) =>
+                            moveCard(board.id, card.id, destination)
+                          }
+                        />
+                      )}
                       <button
                         className="kanban-delete"
                         onClick={() => void removeCard(board.id, card.id)}
@@ -289,6 +459,15 @@ function BoardCanvas({
   );
 }
 
+/**
+ * The one listing for boards and todo lists both.
+ *
+ * A list is a board with one column, and until now that rule split the objects
+ * across two pages — so a one-column board silently *teleported* between
+ * "Lists" and "Boards" the moment its column count crossed 1. Here the object
+ * stays put: crossing the threshold changes its glyph (and the shell raises a
+ * notice saying so), never its place in the listing.
+ */
 export function BoardView({
   boards,
   createBoard,
@@ -297,27 +476,51 @@ export function BoardView({
   removeCard,
   removeBoard,
   columnOps,
+  todoOps,
 }: BoardViewProps) {
   const [name, setName] = useState("");
+  const [shape, setShape] = useState<"board" | "list">("board");
+
+  // The list entry's delete goes through TodoChecklist's own button, so the
+  // shared gate is threaded into the ops it calls: both shapes meet the same
+  // confirm, and neither is destroyed on a single click.
+  const gatedTodoOps: TodoOps = {
+    ...todoOps,
+    removeTodoList: async (list) => {
+      if (confirmRemoval(list)) await todoOps.removeTodoList(list);
+    },
+  };
 
   return (
     <div className="content-page">
       <div className="page-heading">
-        <h1>Boards</h1>
+        <h1>Boards & todos</h1>
         <form
           className="board-new"
           onSubmit={async (event) => {
             event.preventDefault();
-            if (!name.trim()) return;
-            await createBoard(name.trim());
+            const value = name.trim();
+            if (!value) return;
             setName("");
+            // Two shapes of the same thing: a board is born with three
+            // columns, a list with one. Nothing else differs at birth.
+            if (shape === "list") await todoOps.createTodoList(value);
+            else await createBoard(value);
           }}
         >
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
-            aria-label="Board name"
+            aria-label={shape === "list" ? "List name" : "Board name"}
           />
+          <select
+            value={shape}
+            onChange={(event) => setShape(event.target.value as "board" | "list")}
+            aria-label="Create as"
+          >
+            <option value="board">Board</option>
+            <option value="list">List</option>
+          </select>
           <button type="submit" className="primary-button" disabled={!name.trim()}>
             <Plus size={15} /> Create
           </button>
@@ -326,30 +529,47 @@ export function BoardView({
 
       {boards.length === 0 ? (
         <div className="empty-state">
-          <p>No boards yet.</p>
+          {/* Says where these come from rather than only that there are none:
+              the interesting way to get one is to ask for it in chat. */}
+          <p>No boards or lists yet. Make one here, or ask the assistant to track something.</p>
         </div>
       ) : (
-        boards.map((board) => (
-          <section key={board.id} className="board">
-            <header className="board-head">
-              <h2>{board.name}</h2>
-              <button
-                className="icon-button"
-                onClick={() => void removeBoard(board)}
-                aria-label={`Delete ${board.name}`}
-              >
-                <Trash2 size={15} />
-              </button>
-            </header>
-            <BoardCanvas
-              board={board}
-              addCard={addCard}
-              moveCard={moveCard}
-              removeCard={removeCard}
-              ops={columnOps}
-            />
-          </section>
-        ))
+        boards.map((board) =>
+          isTodoList(board) ? (
+            <section key={board.id} className="board" data-shape={glyphFor(board)}>
+              <TodoChecklist list={board} ops={gatedTodoOps} />
+              {/* The graduation affordance: the same Add column a board offers.
+                  Grow a second column and this entry redraws as a board — same
+                  place, same items, ticks intact. */}
+              {columnOps && (
+                <AddColumn onAdd={(columnName) => columnOps.addColumn(board.id, columnName)} />
+              )}
+            </section>
+          ) : (
+            <section key={board.id} className="board" data-shape={glyphFor(board)}>
+              <header className="board-head">
+                <Glyph board={board} />
+                <h2>{board.name}</h2>
+                <button
+                  className="icon-button"
+                  onClick={() => {
+                    if (confirmRemoval(board)) void removeBoard(board);
+                  }}
+                  aria-label={`Delete ${board.name}`}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </header>
+              <BoardCanvas
+                board={board}
+                addCard={addCard}
+                moveCard={moveCard}
+                removeCard={removeCard}
+                ops={columnOps}
+              />
+            </section>
+          ),
+        )
       )}
     </div>
   );

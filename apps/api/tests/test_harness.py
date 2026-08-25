@@ -73,7 +73,7 @@ def test_both_backends_conform_to_the_harness_interface():
     an implementation could register without conforming, the loop would discover
     the missing method mid-turn instead of here.
     """
-    assert set(HARNESSES) == {"openai", "scripted"}
+    assert set(HARNESSES) == {"openai", "anthropic", "scripted"}
     for name, harness in HARNESSES.items():
         assert isinstance(harness, Harness)
         assert harness.name == name
@@ -112,7 +112,7 @@ def test_resolve_harness_names_an_unregistered_provider():
     from types import SimpleNamespace
 
     with pytest.raises(ValueError, match="No harness is registered"):
-        resolve_harness(SimpleNamespace(active_model_provider="anthropic"))
+        resolve_harness(SimpleNamespace(active_model_provider="mistral"))
 
 
 def test_a_wrong_signature_build_step_is_rejected_by_invocation():
@@ -190,7 +190,7 @@ def test_registry_keys_only_on_providers_settings_would_boot(scripted_settings):
     provider Settings refused to boot can never be resolved. Guarding the two
     validators here keeps that assumption honest.
     """
-    assert set(HARNESSES) <= {"openai", "scripted"}
+    assert set(HARNESSES) <= {"openai", "anthropic", "scripted"}
     assert _openai_settings().active_model_provider == "openai"
     assert scripted_settings.active_model_provider == "scripted"
 
@@ -205,3 +205,6 @@ def test_registry_keys_only_on_providers_settings_would_boot(scripted_settings):
     # ...and openai is fatal without a key.
     with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
         Settings(_env_file=None, model_provider="openai", openai_api_key=None)
+    # ...and so is anthropic.
+    with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY"):
+        Settings(_env_file=None, model_provider="anthropic", anthropic_api_key=None)

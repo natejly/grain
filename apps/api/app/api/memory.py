@@ -12,7 +12,7 @@ from ..database import get_db
 from ..models import MemoryItem
 from ..schemas import MemoryItemOut
 from ..services.audit import record_audit
-from ..services.memory import SHARED_OWNER, _active, tombstone_key
+from ..services.memory import ALL_SPACES, SHARED_OWNER, _active, tombstone_key
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key
 
@@ -33,6 +33,7 @@ def _memory_out(item: MemoryItem) -> MemoryItemOut:
         # can learn, and putting a user id on the wire would say more. Same shape
         # `ConversationOut.shared` settled on for the identical question.
         shared=item.owner_id == SHARED_OWNER,
+        space_id=item.space_id,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -51,7 +52,10 @@ def list_memory(
     records every write.
     """
     items = db.scalars(
-        _active(select(MemoryItem), actor.workspace_id, actor.user_id)
+        # ALL_SPACES: the admin surface. Every space is workspace-visible, so
+        # hiding its shelf here would strand rows nowhere reviewable; the owner
+        # axis (the privacy one) stays exactly as narrow as before.
+        _active(select(MemoryItem), actor.workspace_id, actor.user_id, ALL_SPACES)
         .order_by(MemoryItem.updated_at.desc())
         .limit(200)
     )
@@ -78,7 +82,7 @@ def forget_memory(
     # member's personal memory is a 404 here for the same reason it is invisible
     # above — it is not that you may not delete it, it is that it is not yours.
     item = db.scalar(
-        _active(select(MemoryItem), actor.workspace_id, actor.user_id).where(
+        _active(select(MemoryItem), actor.workspace_id, actor.user_id, ALL_SPACES).where(
             MemoryItem.id == memory_id
         )
     )

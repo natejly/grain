@@ -10,13 +10,21 @@ import { expect, test, type Page } from "@playwright/test";
  * rather than to read.
  */
 const AGENT_WRITE_TIMEOUT = 45_000;
-import { openSettings, openView } from "./shell";
+
+// The margin above is useless while the *test* timeout stays at Playwright's
+// default 30s: a 45s expect inside a 30s test fails at 30s regardless, which is
+// exactly how these specs kept flaking under load after the margin was raised.
+// Several turns of agent writes can each take tens of seconds on a busy
+// machine, so the budget is per-file and generous for the same reason the
+// expect margin is.
+test.describe.configure({ timeout: 180_000 });
+import { newThread, openView, rail } from "./shell";
 
 test("upload, cited answer, provenance, graph, and deletion", async ({
   page,
 }) => {
   await page.goto("/");
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "northstar-e2e.md",
     mimeType: "text/markdown",
@@ -40,7 +48,7 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
   );
   await page.getByRole("button", { name: "Close provenance" }).click();
 
-  await openView(page, "Knowledge", /Graph/);
+  await openView(page, "Library", /Graph/);
   await expect(page.getByText("Project Northstar", { exact: true }).first()).toBeVisible();
 
   // The `/tool github-zen` approval that used to sit here is gone with the
@@ -49,7 +57,7 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
   // the dev seed, not the product. The real queue is asserted further down,
   // against an approval the agent loop actually parks.
 
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
   // Named, not "the delete button": the title is identical on every row, so the
   // bare locator only works while this spec's upload is the workspace's only
@@ -60,7 +68,7 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
 
 test("build a dashboard from chat, then publish it", async ({ page }) => {
   await page.goto("/");
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "revenue-e2e.csv",
     mimeType: "text/csv",
@@ -70,8 +78,8 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
   });
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
-  await openView(page, "Files", /^Dashboards/);
-  await page.getByRole("button", { name: "Add dashboard" }).first().click();
+  await openView(page, "Library", /^Apps/);
+  await page.getByRole("button", { name: "New app" }).first().click();
 
   await page.getByLabel("Dashboard name").fill("E2E revenue app");
   await page.getByLabel("Public link").check();
@@ -103,6 +111,19 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "E2E revenue app" })).toBeVisible();
   const published = page.frameLocator(".published-code-app iframe");
   await expect(published.getByText("North").first()).toBeVisible();
+
+  // The dataset the editor minted now has a home of its own: a Library tab
+  // with columns, a preview, and the cross-link that closes the old
+  // three-surface trek — "Chart this" hands the chat composer the sentence.
+  await page.goto("/");
+  await openView(page, "Library", /^Datasets/);
+  await page.locator(".dataset-row", { hasText: "revenue-e2e" }).first().click();
+  await expect(page.locator(".dataset-column-chip", { hasText: "revenue" })).toBeVisible();
+  await expect(page.locator(".dataset-table-scroll")).toContainText("North");
+  await page.getByRole("button", { name: "Chart this" }).click();
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue(
+    /Build a chart from/,
+  );
 });
 
 function chatComposer(page: Page) {
@@ -120,7 +141,7 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New thread" }).click();
+  await newThread(page);
   const composer = chatComposer(page);
 
   await composer.fill("Draft the launch runbook.");
@@ -161,7 +182,7 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
     timeout: AGENT_WRITE_TIMEOUT,
   });
 
-  await openView(page, "Files", /^Files/);
+  await openView(page, "Library", /^Documents/);
   // Anchored: a file row in the tree is named "<title> <kind>" and its move
   // menu is named "Move <title>", so an unanchored match finds both.
   await page.getByRole("button", { name: /^Launch Runbook/ }).click();
@@ -171,14 +192,14 @@ test("an agent write is proposed with a diff, applied on approve, dropped on den
 });
 
 async function openPlaybook(page: Page) {
-  await openView(page, "Files", /^Files/);
+  await openView(page, "Library", /^Documents/);
   // Anchored, for the same reason as Launch Runbook above.
   await page.getByRole("button", { name: /^Rollback Playbook/ }).click();
 }
 
 test("a parked write is decidable from the Files view", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New thread" }).click();
+  await newThread(page);
   const composer = chatComposer(page);
 
   await composer.fill("Draft the rollback playbook.");
@@ -196,13 +217,20 @@ test("a parked write is decidable from the Files view", async ({ page }) => {
     timeout: AGENT_WRITE_TIMEOUT,
   });
 
-  // The same parked call, seen from the approvals queue. This is the assertion
-  // the old `/tool github-zen` one should always have been: Activity read the
-  // legacy `tool_calls` table, which only the dev seed can populate, so in a
-  // real deployment it showed "No pending requests" no matter how many runs
-  // were waiting — and the Settings badge, fed by the same list, never lit.
-  await expect(page.getByRole("button", { name: /awaiting approval/ })).toBeVisible();
-  await openSettings(page, "Activity");
+  // Blocked-on-you at every altitude of the shell, all fed by the same
+  // unbounded feed. The sticky banner sits in the composer's non-scrolling
+  // zone — "working" and "waiting for you" are opposite states and this one
+  // cannot be scrolled away from; the sidebar strip greets the user before
+  // they open anything; the count rides the Inbox rail item — the shell's one
+  // badge — where it used to be buried on a menu labelled "Settings".
+  await expect(page.locator(".waiting-banner")).toContainText(
+    "Waiting for your approval",
+  );
+  await expect(page.locator(".waiting-strip")).toContainText("edit_document");
+  await expect(
+    rail(page).getByRole("button", { name: /^Inbox \d/ }),
+  ).toBeVisible();
+  await openView(page, "Inbox");
   const queued = page.locator(".approval-card", { hasText: "edit_document" });
   await expect(queued).toBeVisible();
   await expect(queued.locator(".diff-line.add")).toHaveText(
@@ -280,7 +308,7 @@ test("a fabricated citation is flagged under the answer that made it", async ({
   page,
 }) => {
   await page.goto("/");
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "rollout-e2e.md",
     mimeType: "text/markdown",
@@ -293,7 +321,7 @@ test("a fabricated citation is flagged under the answer that made it", async ({
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
   await page.getByRole("button", { name: "Chat", exact: true }).click();
-  await page.getByRole("button", { name: "New thread" }).click();
+  await newThread(page);
   const composer = chatComposer(page);
   await composer.fill("Check the rollout date for me.");
   await composer.press("Enter");
@@ -327,7 +355,7 @@ test("a fabricated citation is flagged under the answer that made it", async ({
   await openThread(page, "Check the rollout date for me.");
   await expect(page.locator(".citation-check.fabricated")).toContainText("[42]");
 
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete rollout-e2e.md" }).click();
   await expect(page.getByText("rollout-e2e.md")).toHaveCount(0);
@@ -335,7 +363,7 @@ test("a fabricated citation is flagged under the answer that made it", async ({
 
 test("a chart the agent draws is visible in the conversation", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New thread" }).click();
+  await newThread(page);
   const composer = chatComposer(page);
   await composer.fill("Plot the rollout for me.");
   await composer.press("Enter");
@@ -363,6 +391,18 @@ test("a chart the agent draws is visible in the conversation", async ({ page }) 
   await expect(figure).toHaveAttribute("alt", /Figure 1 of 1 produced by run_python/);
   await page.screenshot({ path: "test-results/chat-artifact.png", fullPage: true });
 
+  // The finish-the-job bar. A sandbox PNG has no query behind it, so the card
+  // offers the honest next step: hand the composer the sentence that asks the
+  // agent for the pinnable version. (The direct pin path needs a scripted
+  // create_dashboard turn, which agent-script.json does not carry.)
+  const makeDashboard = card.getByRole("button", { name: "Make this a dashboard" });
+  await expect(makeDashboard).toBeVisible();
+  await makeDashboard.click();
+  await expect(composer).toHaveValue(
+    "Turn the chart the run_python call above drew into a dashboard I can pin: ",
+  );
+  await composer.fill("");
+
   // Still there after a reload: the descriptors are on the tool call row, not
   // only on the event that streamed past.
   await page.reload();
@@ -372,7 +412,7 @@ test("a chart the agent draws is visible in the conversation", async ({ page }) 
   await expect.poll(() => decoded(reloaded), { timeout: 15_000 }).toBe(true);
 
   // The figure is also a workspace source, and can be opened from there.
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   const row = page.locator(".source-row", { hasText: "sandbox-png-1.png" });
   await expect(row).toBeVisible();
   await expect(row).toContainText("Saved");

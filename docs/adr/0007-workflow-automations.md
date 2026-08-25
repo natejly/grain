@@ -156,7 +156,7 @@ Option (c) is rejected for a separate reason: LangGraph's validation is
 *graph-shape* validation, and graph shape is the easy half. The checks that
 matter here — this tool exists in *this workspace's* registry, these arguments
 satisfy *that tool's* JSON Schema, this reference points at an upstream node —
-are entirely Jasmine-specific, and a dependency that does not perform them is a
+are entirely Grain-specific, and a dependency that does not perform them is a
 dependency carried for `add_edge`.
 
 What we take from LangGraph is its design, not its code: a checkpoint boundary

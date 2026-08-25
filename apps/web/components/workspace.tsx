@@ -1,21 +1,28 @@
 "use client";
 
 import type { Conversation, DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, Columns2, LogOut, Menu, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
+import { BarChart3, CircleDot, Columns2, LogOut, Menu, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { ApiHealthBanner } from "./api-health-banner";
+import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
 import { PaneToggle, useCollapsiblePane } from "./collapsible-pane";
+import { CommandPalette } from "./command-palette";
 import { CreateMenu } from "./create-menu";
-import { SettingsMenu } from "./settings-menu";
+import { WorkspaceSettingsMenu } from "./settings-menu";
+import { SystemStatus } from "./system-status";
 import { useWorkspace } from "./use-workspace";
-import { ActivityView } from "./views/activity";
+import { InboxView, asCall } from "./views/inbox";
 import { AdminView } from "./views/admin";
+import { DatasetsView } from "./views/datasets";
 import { AgentsView } from "./views/agents";
+import { SpacesView } from "./views/spaces";
+import { spaceNameOf } from "./views/space-threads";
+import { AppsView } from "./views/apps";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
 import { ChatSplit } from "./views/chat-split";
+import type { DashboardPinning } from "./views/dashboard-pin-bar";
 import { DashboardEditor } from "./views/dashboard-editor";
 import { DashboardsView } from "./views/dashboards";
 import { DataView } from "./views/data";
@@ -24,14 +31,15 @@ import { GraphView } from "./views/graph";
 import { IntegrationsView } from "./views/integrations";
 import { McpView } from "./views/mcp";
 import { MemoryView } from "./views/memory";
+import { CHORD_WINDOW_MS, chordEligible, chordTarget } from "./views/chords";
 import {
   DEFAULT_GROUP_VIEW,
-  NAV_GROUPS,
   RAIL_GROUPS,
   groupForView,
   type CreateAction,
   type GroupId,
 } from "./views/navigation";
+import { PoliciesView } from "./views/policies";
 import { ProjectsView } from "./views/projects";
 import { SandboxToolsView } from "./views/sandbox-tools";
 import {
@@ -42,8 +50,8 @@ import {
   type View,
 } from "./views/shared";
 import { SkillsView } from "./views/skills";
+import { SNOOZE_KEY, parseSnoozes, snoozedIds } from "./views/snooze";
 import { SourcesView } from "./views/sources";
-import { TodosView } from "./views/todos";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
 import { CronsView } from "./views/crons";
@@ -56,8 +64,12 @@ export function Workspace() {
     activeConversation,
     messages,
     sources,
+    spaces,
     agentCalls,
     auditEvents,
+    inbox,
+    createDatasetFromSource,
+    createDatasetVersionFromSource,
     graph,
     memories,
     datasets,
@@ -83,6 +95,7 @@ export function Workspace() {
     refreshConversations,
     patchConversation,
     shareConversation,
+    renameConversation,
     draft,
     setDraft,
     selectedAgentId,
@@ -114,6 +127,8 @@ export function Workspace() {
     setSidebarOpen,
     error,
     setError,
+    notice,
+    setNotice,
     endRef,
     fileInputRef,
     pendingApprovals,
@@ -125,8 +140,15 @@ export function Workspace() {
     pinnedIds,
     focusedDashboard,
     setFocusedDashboard,
+    focusedSource,
+    setFocusedSource,
+    focusedMemory,
+    setFocusedMemory,
+    focusedEntity,
+    setFocusedEntity,
     loadWorkspace,
     refreshOffScreenWork,
+    refreshSecondary,
     refreshPendingEdits,
     reloadOpenDocument,
     reloadOpenProject,
@@ -148,7 +170,7 @@ export function Workspace() {
     removeBoardCard,
     removeBoard,
     boardColumnOps,
-    kanbanBoards,
+    boards,
     todoLists,
     todoOps,
     addDbConnection,
@@ -173,9 +195,11 @@ export function Workspace() {
     newConversation,
     removeConversation,
     decideAgentCall,
+    steerActiveRun,
     setApprovalMode,
     cancelActiveRun,
     regenerate,
+    editMessage,
     submitPrompt,
     uploadFiles,
     removeSource,
@@ -201,11 +225,33 @@ export function Workspace() {
   // Always present: this component only renders inside the authenticated gate.
   const { session, signOut } = useSession();
 
+  // The one health loop the shell runs: the red banner and the system-status
+  // dot both read it, so they cannot disagree for a poll cycle.
+  const health = useApiHealth(api, loadWorkspace);
+
   // The open thread's own row, which is where its approval mode lives. Read
   // from the rail's list rather than held separately, so the picker and the
   // bypass indicator cannot disagree about which mode is in force.
   const activeThread = conversations.find((item) => item.id === activeConversation);
   const activeTitle = activeThread?.title || "New conversation";
+
+  // The one pin bundle, shared by the primary chat and every extra pane — a
+  // dashboard made in a side pane gets the same finish-the-job bar.
+  const pinning: DashboardPinning = {
+    dashboards,
+    pinnedIds,
+    pin: pinDashboard,
+    // "Show me" lands on the Dashboards view focused on the one the turn
+    // made — the same landing the sidebar's pin rows use.
+    open: (id) => {
+      setView("dashboards");
+      setSidebarOpen(false);
+      setFocusedDashboard(id);
+    },
+    // Appended rather than assigned: a half-written message in the composer
+    // is not this button's to discard.
+    askForChart: (seed) => setDraft((current) => (current ? `${current}\n${seed}` : seed)),
+  };
 
   // The rail's two audiences. A thread is shared with the whole workspace or it
   // is the caller's own — the server never returns another member's personal
@@ -218,8 +264,115 @@ export function Workspace() {
    * owner) — a member seeing it on every row could not act on most of them, and
    * a control that 403s on click is worse than no control.
    */
+  // Which rail row is an input right now, and what it says. Shell state (not
+  // row state) so exactly one rename can be open at a time.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  // ⌘K / Ctrl+K, from anywhere — inputs included, which is why this handler
+  // exists at the window and preventDefaults: the browser wants the shortcut
+  // for its own search bar.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((value) => !value);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ⌘\ / Ctrl+\ — the split's own key. With extra panes open it cycles the
+  // split's focus (primary → pane 1 → … → primary); with none it says where a
+  // split comes from rather than silently doing nothing. Window-level and live
+  // in typing contexts too, like ⌘K: the modifier is what keeps it out of the
+  // text's way, and the preventDefault keeps it from the browser.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key !== "\\") return;
+      event.preventDefault();
+      if (extraPanes.length === 0) {
+        setNotice({
+          text: "Open a thread in a split from its rail row, or ⌘⏎ in the palette",
+          at: Date.now(),
+        });
+        return;
+      }
+      const order: (string | null)[] = [null, ...extraPanes.map((pane) => pane.id)];
+      // A focused id no longer in the order lands at -1, so the cycle starts
+      // over from the primary rather than throwing.
+      const next = order[(order.indexOf(focusedPane) + 1) % order.length];
+      focusPane(next);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [extraPanes, focusedPane, focusPane, setNotice]);
+
+  // G-chords: G then a letter jumps to a destination (G C chat, G I inbox,
+  // G L library, G A automations, G D dashboards). Bare letters only, and
+  // never from a field — anything that edits text keeps its keys, so the
+  // chord cannot yank the view mid-sentence. The armed G lives in a local
+  // variable rather than state: it re-renders nothing and dies with the
+  // listener.
+  useEffect(() => {
+    let armedAt = 0;
+    const onKey = (event: KeyboardEvent) => {
+      if (!chordEligible(event)) return;
+      const now = Date.now();
+      if (armedAt && now - armedAt <= CHORD_WINDOW_MS) {
+        // A second G re-arms rather than lapsing, so "g g c" still lands.
+        armedAt = event.key.toLowerCase() === "g" ? now : 0;
+        const target = chordTarget(event.key);
+        if (target) {
+          event.preventDefault();
+          // A completed chord is spoken for: without this, "G A" would also
+          // reach the Inbox's bubble-phase A/D triage listener and approve
+          // whatever row it had focused. Capture phase (below) is what puts
+          // this handler ahead of that one regardless of mount order.
+          event.stopPropagation();
+          setView(target);
+          setSidebarOpen(false);
+        }
+        return;
+      }
+      if (event.key.toLowerCase() === "g") armedAt = now;
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [setView, setSidebarOpen]);
+
+  async function submitRename(conversation: Conversation) {
+    const title = renameDraft.trim();
+    setRenamingId(null);
+    if (!title || title === conversation.title) return;
+    await renameConversation(conversation.id, title);
+  }
+
   const renderThread = (conversation: Conversation) => {
     const share = shareControl(conversation, activeConversation);
+    if (renamingId === conversation.id) {
+      return (
+        <div key={conversation.id} className="thread active">
+          <input
+            className="thread-rename-input"
+            value={renameDraft}
+            aria-label={`Rename ${conversation.title}`}
+            autoFocus
+            onChange={(event) => setRenameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void submitRename(conversation);
+              }
+              if (event.key === "Escape") setRenamingId(null);
+            }}
+            onBlur={() => void submitRename(conversation)}
+          />
+        </div>
+      );
+    }
     return (
     <div
       key={conversation.id}
@@ -230,8 +383,30 @@ export function Workspace() {
         onClick={() => selectConversation(conversation.id)}
       >
         <span>{conversation.title}</span>
+        {spaceNameOf(conversation, spaces) && (
+          <span className="thread-space-chip">
+            {spaceNameOf(conversation, spaces)}
+          </span>
+        )}
         <time>{formatRelative(conversation.updated_at)}</time>
       </button>
+      {/* Rename rides only the OPEN thread, like share: an affordance on every
+          row is sidebar noise. Subject threads are named by what they hang
+          off, so they never offer it — the server refuses anyway. */}
+      {activeConversation === conversation.id && !conversation.subject_id && (
+        <button
+          className="thread-rename"
+          title="Rename thread"
+          aria-label={`Rename ${conversation.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setRenamingId(conversation.id);
+            setRenameDraft(conversation.title);
+          }}
+        >
+          <Pencil size={13} />
+        </button>
+      )}
       {share && (
         <button
           className={share.shared ? "thread-share shared" : "thread-share"}
@@ -269,21 +444,24 @@ export function Workspace() {
     );
   };
 
-  // Per-view badge numbers. A view with no count (Chat, Graph, Activity) is
-  // absent: Graph's size is a projection of Sources, so counting it in the
-  // Knowledge badge would double-count what the user actually put in.
+  // Per-view badge numbers, shown on the tab strip inside a group. A view with
+  // no count (Chat, Graph, Inbox) is absent: Graph's size is a projection of
+  // Sources, so counting it in the Knowledge badge would double-count what the
+  // user actually put in. Deliberately NOT summed onto the rail: the rail's one
+  // number is the Inbox's count of requests waiting on a human, and an
+  // inventory figure beside it would make "3" mean stock on one row and
+  // attention on the next.
   const viewCounts: Partial<Record<View, number>> = {
     sources: sources.length,
     memory: memories.length,
     documents: documents.length,
     projects: projects.length,
-    // Each tab counts what that tab shows: a one-column board is on Lists,
-    // not here, so counting it twice would make both numbers wrong.
-    boards: kanbanBoards.length,
-    todos: todoLists.length,
-    // Both kinds live on that page, so the badge counts both; a number that
-    // only counted half of what the page shows is worse than no number.
-    dashboards: dashboardApps.length + dashboards.length,
+    // One merged destination, so it counts everything it shows: boards and
+    // one-column lists live in the same listing now.
+    boards: boards.length,
+    datasets: datasets.length,
+    dashboards: dashboards.length,
+    apps: dashboardApps.length,
     data: dbConnections.length,
     mcp: mcpServers.length,
     "sandbox-tools": sandboxTools.length,
@@ -291,8 +469,8 @@ export function Workspace() {
   };
 
   const activeGroup = groupForView(view);
-  // A one-view group gets no strip: a tab bar with a single tab is noise.
-  const hasTabs = activeGroup.items.length > 1;
+  // A one-view group gets no section nav: a list with a single row is noise.
+  const showSections = activeGroup.items.length > 1;
 
   // Where each group reopens. Tracking `view` rather than the click means an
   // action that navigates on its own — an upload landing on Sources, the OAuth
@@ -317,16 +495,6 @@ export function Workspace() {
     setSidebarOpen(false);
   }
 
-  /** Totals for the groups the Settings menu hides; badges must not hide too. */
-  const groupCounts: Partial<Record<GroupId, number>> = Object.fromEntries(
-    NAV_GROUPS.filter((group) =>
-      group.items.some((item) => viewCounts[item.view] !== undefined),
-    ).map((group) => [
-      group.id,
-      group.items.reduce((sum, item) => sum + (viewCounts[item.view] ?? 0), 0),
-    ]),
-  );
-
   // "Workflow" in the Create menu opens the composer inside the panel that owns
   // workflows, rather than compiling anything on the way past. The panel lowers
   // the flag once it has acted, so navigating back later does not reopen a
@@ -349,15 +517,97 @@ export function Workspace() {
     if (action.id === "latex") return createProject(name, "", "latex");
     if (action.id === "board") return createBoard(name);
     // A workflow is a sentence, compiled and reviewed before it exists at all,
-    // so the composer *is* the creation step — same as a dashboard's editor.
+    // so the composer *is* the creation step — same as an app's editor.
     if (action.id === "workflow") return setWorkflowRequested(true);
-    // A dashboard is named, bound to data and generated in one editor; opening
-    // it *is* the creation step, and it lands on the gallery when closed.
+    // An app is named, bound to data and generated in one editor; opening
+    // it *is* the creation step, and it lands on the Apps gallery when closed.
     return setEditing("new");
   }
 
+  // The shell's ONE numeric badge: requests parked waiting on a human, on the
+  // destination that answers them. Counted from the unbounded feed, not from
+  // the fifty-row call window — the window is how this number used to read
+  // zero over a real backlog. Until the feed's first read lands, the window
+  // count stands in rather than showing a zero not yet known to be true.
+  // Snoozes deliberately do NOT subtract from it: the badge counts facts
+  // (requests waiting on a human), and sleeping through one does not make it
+  // stop waiting. Only the nag surfaces — the strip below and the Inbox's
+  // approvals tab — honour a snooze.
+  const inboxBadge = inbox
+    ? inbox.approvals.length + inbox.budget_holds.length
+    : pendingApprovals.length;
+
+  // The Inbox's "Later" schedule, re-read whenever the feed refreshes, the
+  // user moves between views, or the Inbox reports a change — same-tab state,
+  // so no storage event fires and these are the sync points. The callback
+  // matters when the Inbox and this strip are on screen together: a snooze
+  // written there must leave the doorbell in the same render cycle.
+  const [snoozedApprovals, setSnoozedApprovals] = useState<Set<string>>(new Set());
+  const rereadSnoozes = () =>
+    setSnoozedApprovals(
+      snoozedIds(parseSnoozes(window.localStorage.getItem(SNOOZE_KEY)), new Date()),
+    );
+  useEffect(() => {
+    rereadSnoozes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inbox, view]);
+  const waitingRows = inbox
+    ? inbox.approvals.filter((row) => !snoozedApprovals.has(row.id))
+    : [];
+
+  /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
+  const renderGroupButton = (group: (typeof RAIL_GROUPS)[number], wide: boolean) => {
+    const Icon = group.icon;
+    const badge = group.id === "inbox" ? inboxBadge : 0;
+    return (
+      <button
+        key={group.id}
+        className={activeGroup.id === group.id ? "nav-item active" : "nav-item"}
+        aria-current={activeGroup.id === group.id ? "page" : undefined}
+        // The badge joins the accessible name (an icon-only button's aria-label
+        // REPLACES its content for assistive tech, so a bare label would read
+        // "Inbox" over three waiting requests).
+        aria-label={
+          wide ? undefined : badge > 0 ? `${group.label} ${badge}` : group.label
+        }
+        title={wide ? undefined : group.label}
+        onClick={() => openGroup(group.id)}
+      >
+        <Icon size={wide ? 17 : 19} />
+        {wide && group.label}
+        {badge > 0 && <span className="approval-count">{badge}</span>}
+      </button>
+    );
+  };
+
   return (
     <div className={railCollapsed ? "workspace-shell rail-collapsed" : "workspace-shell"}>
+      <CommandPalette
+        open={paletteOpen}
+        close={() => setPaletteOpen(false)}
+        conversations={conversations}
+        openView={(next) => {
+          setView(next);
+          setSidebarOpen(false);
+        }}
+        openThread={(id) => void selectConversation(id)}
+        openThreadInSplit={openInNewPane}
+        create={create}
+        searchTranscripts={(q) => api.searchConversations(q)}
+      />
+
+      {/* Band 1: the icon rail — four doors, always visible on desktop. The
+          places you work and nothing else; creating and configuring live in
+          the top-right, and everything deeper is summoned per destination in
+          the contextual sidebar beside this. */}
+      <nav className="icon-rail" aria-label="Workspace">
+        {RAIL_GROUPS.map((group) => renderGroupButton(group, false))}
+      </nav>
+
+      {/* Band 2: the contextual sidebar — what the chosen door opens onto.
+          Collapsible to nothing (the icon rail keeps you oriented); on mobile
+          it is the drawer, and carries the destinations itself because the
+          icon rail is hidden there. */}
       <aside id="workspace-rail" className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-top">
           <button
@@ -372,36 +622,123 @@ export function Workspace() {
         {/* Above everything else because everything else is scoped to it. */}
         <WorkspaceSwitcher />
 
-        <button className="chrome-button new-thread-button" onClick={newConversation}>
-          <Plus size={16} />
-          New thread
-        </button>
-
-        {/* The rail is the places you work. Creating is not one of them, and
-            neither is administering — both moved to the top right. */}
-        <nav className="primary-nav" aria-label="Workspace">
-          {RAIL_GROUPS.map((group) => {
-            const Icon = group.icon;
-            const total = groupCounts[group.id];
-            return (
-              <button
-                key={group.id}
-                className={activeGroup.id === group.id ? "nav-item active" : "nav-item"}
-                aria-current={activeGroup.id === group.id ? "page" : undefined}
-                onClick={() => openGroup(group.id)}
-              >
-                <Icon size={17} />
-                {group.label}
-                {total !== undefined && <span className="nav-count">{total}</span>}
-              </button>
-            );
-          })}
+        {/* The icon rail is hidden under the drawer breakpoint, so the drawer
+            carries the destinations itself — labelled, because a drawer has
+            the width the rail deliberately does not. */}
+        <nav className="primary-nav mobile-group-nav" aria-label="Destinations">
+          {RAIL_GROUPS.map((group) => renderGroupButton(group, true))}
         </nav>
 
-        {/* Beneath the destinations, and deliberately not among them: a pin is
-            not a place the product has, it is a chart *this user* wanted where
-            they could see it. Its own nav so a screen reader is told which is
-            which, and so the rail's own list cannot grow by six on a Tuesday. */}
+        {activeGroup.id === "chat" && (
+          <button
+            className="chrome-button new-thread-button"
+            // Wrapped: newConversation takes an optional space id now, and a
+            // MouseEvent must not arrive in that slot.
+            onClick={() => void newConversation()}
+          >
+            <Plus size={16} />
+            New thread
+          </button>
+        )}
+
+        {/* This destination's own map: its views, under section headings that
+            say what each shelf holds. What the seven-tab strip grew into. */}
+        {showSections && (
+          <nav className="section-nav" aria-label={`${activeGroup.label} views`}>
+            {activeGroup.sections.map((section, index) => (
+              <div className="section-block" key={section.label || index}>
+                {section.label && (
+                  <span className="section-heading">{section.label}</span>
+                )}
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+                  const count = viewCounts[item.view];
+                  return (
+                    <button
+                      key={item.view}
+                      className={view === item.view ? "nav-item active" : "nav-item"}
+                      aria-current={view === item.view ? "page" : undefined}
+                      onClick={() => {
+                        setView(item.view);
+                        setSidebarOpen(false);
+                      }}
+                    >
+                      <Icon size={15} />
+                      {item.label}
+                      {count !== undefined && <span className="nav-count">{count}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+        )}
+
+        {/* Waiting-on-you: the top of the Inbox, rendered where the eye lands
+            first. A run that parked overnight greets the user before they open
+            anything; each row is decidable in place, and the strip caps at two
+            because it is a doorbell, not the door — the Inbox is one click up.
+            Snoozed rows stay out of it: this is a nag surface, and "Later"
+            means later here too. The rail badge above still counts them. */}
+        {waitingRows.length > 0 && (
+          <div className="waiting-strip" role="group" aria-label="Waiting on you">
+            <span className="waiting-strip-title">Waiting on you</span>
+            {waitingRows.slice(0, 2).map((row) => (
+              <div key={row.id} className="waiting-strip-item">
+                <button
+                  className="waiting-strip-open"
+                  onClick={() => {
+                    if (row.conversation_id) {
+                      void selectConversation(row.conversation_id);
+                    } else {
+                      openGroup("inbox");
+                    }
+                  }}
+                >
+                  <strong>{row.name}</strong>
+                  <span>
+                    {row.conversation_title || row.origin} ·{" "}
+                    {formatRelative(row.created_at)}
+                  </span>
+                </button>
+                <button
+                  className="icon-button waiting-approve"
+                  title={`Approve ${row.name}`}
+                  aria-label={`Approve ${row.name}`}
+                  onClick={() =>
+                    void decideAgentCall(asCall(row), "approved", false)
+                      .then(refreshSecondary)
+                      .catch(() => undefined)
+                  }
+                >
+                  ✓
+                </button>
+                <button
+                  className="icon-button waiting-deny"
+                  title={`Deny ${row.name}`}
+                  aria-label={`Deny ${row.name}`}
+                  onClick={() =>
+                    void decideAgentCall(asCall(row), "denied", false)
+                      .then(refreshSecondary)
+                      .catch(() => undefined)
+                  }
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {waitingRows.length > 2 && (
+              <button className="waiting-strip-more" onClick={() => openGroup("inbox")}>
+                {waitingRows.length - 2} more in Inbox
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* In every destination's sidebar, deliberately: a pin is not a place
+            the product has, it is a chart *this user* wanted where they could
+            see it — and "where they could see it" means wherever they are.
+            Its own nav so a screen reader is told which is which. */}
         {dashboardPins.length > 0 && (
           <nav className="pinned-nav" aria-label="Pinned dashboards">
             <span className="pinned-heading">Pinned</span>
@@ -432,29 +769,37 @@ export function Workspace() {
             what. The server already returns only the caller's own personal
             threads plus every shared thread in the workspace, so `shared` alone
             splits them. */}
-        <div className="thread-heading">
-          <span>Recent threads</span>
-        </div>
-        <div className="thread-list">
-          {conversations.length === 0 ? (
-            <p className="empty-threads">No conversations.</p>
-          ) : (
-            <>
-              {personalThreads.length > 0 && (
+        {activeGroup.id === "chat" && (
+          <>
+            <div className="thread-heading">
+              <span>Recent threads</span>
+            </div>
+            <div className="thread-list">
+              {conversations.length === 0 ? (
+                <p className="empty-threads">No conversations.</p>
+              ) : (
                 <>
-                  <div className="thread-group">Personal</div>
-                  {personalThreads.map(renderThread)}
+                  {personalThreads.length > 0 && (
+                    <>
+                      <div className="thread-group">Personal</div>
+                      {personalThreads.map(renderThread)}
+                    </>
+                  )}
+                  {sharedThreads.length > 0 && (
+                    <>
+                      <div className="thread-group">Shared</div>
+                      {sharedThreads.map(renderThread)}
+                    </>
+                  )}
                 </>
               )}
-              {sharedThreads.length > 0 && (
-                <>
-                  <div className="thread-group">Shared</div>
-                  {sharedThreads.map(renderThread)}
-                </>
-              )}
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
+
+        {/* Chat's thread list is the flexing element; every other destination
+            needs this spacer so the identity block still sits at the bottom. */}
+        {activeGroup.id !== "chat" && <div className="sidebar-spacer" />}
 
         <div className="workspace-identity">
           <div className="avatar">
@@ -496,8 +841,8 @@ export function Workspace() {
         />
       )}
 
-      <main className={hasTabs ? "main-panel has-tabs" : "main-panel"}>
-        <ApiHealthBanner api={api} onRecovered={loadWorkspace} />
+      <main className="main-panel">
+        <ApiHealthBanner api={api} health={health} />
         <header className="topbar">
           <button
             className="icon-button menu-button"
@@ -518,70 +863,42 @@ export function Workspace() {
             controls="workspace-rail"
           />
           <div className="page-context">
-            {hasTabs && <span>{activeGroup.label}</span>}
+            {showSections && <span>{activeGroup.label}</span>}
             <strong>{view === "chat" ? activeTitle : PAGE_TITLES[view]}</strong>
           </div>
           <div className="topbar-actions">
             <CreateMenu create={create} />
-            <SettingsMenu
-              activeGroup={activeGroup.id}
-              counts={groupCounts}
-              approvals={pendingApprovals.length}
-              open={openGroup}
-            />
+            <WorkspaceSettingsMenu activeGroup={activeGroup.id} open={openGroup} />
             <ThemeToggle />
-            {/* The prompt-injection screen's posture, shown only when it is on:
-                a status indicator, not a control. "enforce" is the mode that
-                actually escalates a flagged turn, so it reads as active; shadow
-                reads as watching. The proxy URL never reaches the client. */}
-            {bootstrap?.screen.enabled && (
-              <div
-                className={`screen-pill ${bootstrap.screen.mode}`}
-                title={`Prompt-injection screen: ${bootstrap.screen.mode} mode, ${bootstrap.screen.backend} backend`}
-              >
-                <ShieldAlert size={13} aria-hidden="true" />
-                Screen: {bootstrap.screen.mode}
-              </div>
-            )}
-            <div
-              className="agent-pill"
-              title={
-                bootstrap?.model_provider.provider === "openai"
-                  ? "OpenAI provider"
-                  : "Deterministic local provider"
-              }
-            >
-              {bootstrap?.model_provider.model || "Loading provider"}
-            </div>
+            {/* The screen and provider pills, folded into one popover: the
+                facts they spelt out are posture, not news, and belong behind a
+                dot that only colours when something is actually wrong. */}
+            <SystemStatus bootstrap={bootstrap} apiDown={health.down} />
           </div>
         </header>
 
-        {hasTabs && (
-          <nav className="view-tabs" aria-label={`${activeGroup.label} views`}>
-            {activeGroup.items.map((item) => {
-              const Icon = item.icon;
-              const count = viewCounts[item.view];
-              return (
-                <button
-                  key={item.view}
-                  className={view === item.view ? "view-tab active" : "view-tab"}
-                  aria-current={view === item.view ? "page" : undefined}
-                  onClick={() => setView(item.view)}
-                >
-                  <Icon size={14} />
-                  {item.label}
-                  {count !== undefined && <span className="tab-count">{count}</span>}
-                </button>
-              );
-            })}
-          </nav>
-        )}
+        {/* The tab strip is gone: a destination's siblings live in its
+            contextual sidebar, under section headings, where seven of them
+            read as a shelf rather than a lineup. */}
 
         {error && (
           <div className="error-toast" role="alert">
             <CircleDot size={15} />
             <span>{error}</span>
             <button onClick={() => setError("")} aria-label="Dismiss">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* The neutral toast — a presentation change (a list graduating to a
+            board), never a failure. Its own class and role="status", because
+            the red toast is role="alert" and pinned absent by specs that
+            expect nothing to have gone wrong. */}
+        {notice && (
+          <div className="notice-toast" role="status">
+            <span>{notice.text}</span>
+            <button onClick={() => setNotice(null)} aria-label="Dismiss notice">
               <X size={14} />
             </button>
           </div>
@@ -604,6 +921,7 @@ export function Workspace() {
             focusPane={focusPane}
             onSettled={refreshConversations}
             onApprovalChanged={patchConversation}
+            pinning={pinning}
             primary={
               <ChatView
                 messages={messages}
@@ -619,10 +937,19 @@ export function Workspace() {
                 sharedThread={activeThread?.shared}
                 submitPrompt={submitPrompt}
                 cancelActiveRun={cancelActiveRun}
+                steer={steerActiveRun}
                 regenerate={regenerate}
+                editMessage={editMessage}
+                // The signed-in member, so a shared thread offers the pencil
+                // only on their own prompts.
+                viewerId={session?.user_id}
                 decideAgentCall={decideAgentCall}
                 openCitation={openCitation}
-                onAttach={() => setView("sources")}
+                attach={{
+                  upload: uploadFiles,
+                  uploading,
+                  createDataset: createDatasetFromSource,
+                }}
                 approval={{
                   mode: activeThread?.approval_mode ?? "ask_writes",
                   setMode: setApprovalMode,
@@ -630,6 +957,7 @@ export function Workspace() {
                   conversationTitle: activeTitle,
                 }}
                 todos={{ lists: todoLists, ops: todoOps }}
+                pinning={pinning}
                 endRef={endRef}
                 selectedAgentId={selectedAgentId}
                 onSelectAgent={setSelectedAgentId}
@@ -665,23 +993,89 @@ export function Workspace() {
             uploadFiles={uploadFiles}
             removeSource={removeSource}
             fileInputRef={fileInputRef}
+            graph={graph}
+            spaces={spaces}
+            openEntity={(id) => {
+              setView("graph");
+              setFocusedEntity(id);
+            }}
+            focused={focusedSource}
+            setFocused={setFocusedSource}
           />
         )}
 
         {view === "memory" && (
-          <MemoryView memories={memories} forgetMemory={forgetMemory} />
+          <MemoryView
+            memories={memories}
+            forgetMemory={forgetMemory}
+            conversations={conversations}
+            spaces={spaces}
+            graph={graph}
+            // Already lands on the chat view; the id is enough.
+            openConversation={(id) => void selectConversation(id)}
+            openEntity={(id) => {
+              setView("graph");
+              setFocusedEntity(id);
+            }}
+            focused={focusedMemory}
+            setFocused={setFocusedMemory}
+          />
         )}
 
         {view === "graph" && (
-          <GraphView graph={graph} rebuild={rebuildKnowledgeGraph} openChunk={openChunk} />
+          <GraphView
+            graph={graph}
+            rebuild={rebuildKnowledgeGraph}
+            openChunk={openChunk}
+            sources={sources}
+            openSource={(id) => {
+              setView("sources");
+              setFocusedSource(id);
+            }}
+            openMemory={(id) => {
+              setView("memory");
+              setFocusedMemory(id);
+            }}
+            focused={focusedEntity}
+            setFocused={setFocusedEntity}
+          />
+        )}
+
+        {view === "datasets" && (
+          <DatasetsView
+            datasets={datasets}
+            sources={sources}
+            createDataset={createDatasetFromSource}
+            createVersion={createDatasetVersionFromSource}
+            // The cross-link that closes the connect-data → chart-it trek:
+            // dashboards are written by the agent, so "Chart this" hands the
+            // composer the sentence and goes where the agent answers.
+            chartThis={(dataset) => {
+              setDraft(`Build a chart from the “${dataset.name}” dataset: `);
+              setView("chat");
+              setSidebarOpen(false);
+            }}
+            setError={setError}
+          />
+        )}
+
+        {view === "apps" && (
+          <AppsView
+            apps={dashboardApps}
+            openEditor={setEditing}
+            publish={publishGeneratedApp}
+            rollback={rollbackGeneratedApp}
+          />
         )}
 
         {view === "dashboards" && (
           <DashboardsView
             apps={dashboardApps}
-            openEditor={setEditing}
-            publish={publishGeneratedApp}
-            rollback={rollbackGeneratedApp}
+            askForChart={() => {
+              setDraft("Build a chart from my data: ");
+              setView("chat");
+              setSidebarOpen(false);
+            }}
             dashboards={dashboards}
             templates={dashboardTemplates}
             datasets={datasets}
@@ -761,17 +1155,16 @@ export function Workspace() {
 
         {view === "boards" && (
           <BoardView
-            boards={kanbanBoards}
+            boards={boards}
             createBoard={createBoard}
             addCard={addBoardCard}
             moveCard={moveBoardCard}
             removeCard={removeBoardCard}
             removeBoard={removeBoard}
             columnOps={boardColumnOps}
+            todoOps={todoOps}
           />
         )}
-
-        {view === "todos" && <TodosView lists={todoLists} ops={todoOps} />}
 
         {view === "data" && (
           <DataView
@@ -809,6 +1202,17 @@ export function Workspace() {
 
         {/* Self-contained like WorkflowsView: the agent list is fetched when
             somebody opens the editor, not at page load. */}
+        {view === "spaces" && (
+          <SpacesView
+            spaces={spaces}
+            conversations={conversations}
+            sources={sources}
+            setError={setError}
+            refreshSpaces={refreshSecondary}
+            onSelectConversation={selectConversation}
+            onNewThread={(spaceId) => void newConversation(spaceId)}
+          />
+        )}
         {view === "agents" && <AgentsView setError={setError} />}
 
         {/* Self-contained like AgentsView: the skill list is nobody's business
@@ -852,13 +1256,20 @@ export function Workspace() {
         )}
 
         {view === "activity" && (
-          <ActivityView
-            calls={agentCalls}
+          <InboxView
+            feed={inbox}
+            refreshFeed={() => void refreshSecondary().catch(() => undefined)}
             events={auditEvents}
             decide={decideAgentCall}
             activeRun={activeRun}
+            openConversation={(id) => void selectConversation(id)}
+            onSnoozesChanged={rereadSnoozes}
           />
         )}
+
+        {/* Member-readable by design — the rules ledger and the org posture
+            both fetch for any caller, so this mounts with no role gate. */}
+        {view === "policies" && <PoliciesView setError={setError} />}
 
         {/* Owner-only and workspace-wide, so it is fetched on open rather than
             riding along with every page load. */}

@@ -66,10 +66,17 @@ class Settings(BaseSettings):
     tool_host_allowlist: str = "api.github.com"
     max_upload_bytes: int = 10 * 1024 * 1024
     max_tool_response_bytes: int = 256 * 1024
-    model_provider: Literal["openai", "scripted"] = "openai"
+    model_provider: Literal["openai", "anthropic", "scripted"] = "openai"
     # Path to a JSON script for MODEL_PROVIDER=scripted. See services/scripted_model.py.
     scripted_model_script: Optional[Path] = None
     openai_api_key: Optional[SecretStr] = None
+    anthropic_api_key: Optional[SecretStr] = None
+    anthropic_model: str = "claude-sonnet-5"
+    anthropic_max_output_tokens: int = 1200
+    anthropic_timeout_seconds: float = 60.0
+    # The cheap-model counterpart to `openai_context_model`: small auxiliary
+    # calls (today the guardian reviewer) on an Anthropic deployment.
+    anthropic_context_model: str = "claude-haiku-4-5-20251001"
     openai_model: str = "gpt-5.5"
     openai_reasoning_effort: ReasoningEffort = "low"
     # Optional deployment override for the per-turn model allow-list, comma
@@ -198,7 +205,7 @@ class Settings(BaseSettings):
     # Built from infra/sandbox/Dockerfile, which is also the package policy:
     # the sandbox has no network, so anything importable has to already be in
     # the image. `make sandbox-image` builds it.
-    sandbox_container_image: str = "jasmine-sandbox:latest"
+    sandbox_container_image: str = "grain-sandbox:latest"
     sandbox_docker_binary: str = "docker"
     # Interpreter for the `subprocess` driver. Blank means the API's own venv,
     # whose package set is NOT the container image's — code that imports scipy in
@@ -244,7 +251,7 @@ class Settings(BaseSettings):
 
     # --- LaTeX compile (server-side TeX Live) --------------------------------
     latex_compile_enabled: bool = True
-    latex_compile_image: str = "jasmine-latex:latest"
+    latex_compile_image: str = "grain-latex:latest"
     latex_compile_timeout_seconds: int = 60
     latex_compile_memory_mb: int = 2048
     latex_compile_cpus: float = 2.0
@@ -329,6 +336,24 @@ class Settings(BaseSettings):
     # Ceiling on rows returned by the LIKE prefilter that feeds lexical scoring.
     memory_lexical_candidate_limit: int = 400
     memory_transcript_messages: int = 10
+
+    # --- Conversation index -------------------------------------------------
+    # Past-conversation search: transcript windows + per-thread summaries in
+    # `conversation_chunks`, quoted back to agents by `search_conversations`.
+    # Off, nothing is indexed, the tool reports the feature disabled, and a
+    # turn is byte-identical to before the feature existed.
+    conversation_index_enabled: bool = True
+    # Quotes one search returns. Six matches memory_recall_limit: enough to
+    # cover a question that spans threads, small enough that the tool result
+    # stays inside MAX_RESULT_CHARS without gutting each quote.
+    conversation_search_limit: int = 6
+    # Ceiling on rows the LIKE prefilter returns for lexical scoring; same
+    # shape and same rationale as memory_lexical_candidate_limit.
+    conversation_lexical_candidate_limit: int = 400
+    # Ceiling on chunk vectors one search scores, newest first — a recency
+    # window, exactly the memory_recall_candidate_cap trade.
+    conversation_vector_candidate_cap: int = 20000
+
     run_lease_seconds: int = 90
 
     # --- Workflow schedules ------------------------------------------------
@@ -374,7 +399,7 @@ class Settings(BaseSettings):
     # Unlike session_cookie_name above, this one *is* a user-visible surface:
     # it is the From address a recipient reads in their mail client, so it
     # carries the product name and nothing depends on its old value.
-    email_from: str = "no-reply@jasmine.local"
+    email_from: str = "no-reply@grain.local"
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
@@ -489,6 +514,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "MODEL_PROVIDER=openai requires OPENAI_API_KEY. Set it in "
                     ".env (see .env.example) — there is no offline mode."
+                )
+            return self
+        if self.model_provider == "anthropic":
+            if self.anthropic_api_key is None or not self.anthropic_api_key.get_secret_value():
+                raise ValueError(
+                    "MODEL_PROVIDER=anthropic requires ANTHROPIC_API_KEY. Set it "
+                    "in .env — there is no offline mode."
                 )
             return self
         if self.app_env not in {"development", "test"}:
@@ -880,13 +912,25 @@ class Settings(BaseSettings):
         else:
             names = sorted(self.model_prices)
         ordered: List[str] = []
-        for name in [*names, self.openai_model]:
+        for name in [*names, self.default_model]:
             if name and name not in ordered:
                 ordered.append(name)
         return ordered
 
     @property
-    def active_model_provider(self) -> Literal["openai", "scripted"]:
+    def default_model(self) -> str:
+        """The model a turn with no override runs on, whichever harness is live.
+
+        The one name `_enforce_org_bounds` and `selectable_models` must agree
+        on: an org bound checked against `openai_model` while the Anthropic
+        harness serves `anthropic_model` would bound a model nobody is using.
+        """
+        if self.active_model_provider == "anthropic":
+            return self.anthropic_model
+        return self.openai_model
+
+    @property
+    def active_model_provider(self) -> Literal["openai", "anthropic", "scripted"]:
         """Which model is behind this process. Validated at startup, so it never
         names a provider that is missing what it needs to run."""
         return self.model_provider

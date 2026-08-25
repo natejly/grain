@@ -50,6 +50,8 @@ export function createBoardHandlers({ setError, setBoards }: BoardHandlerDeps) {
   }
 
   async function removeBoard(board: Board) {
+    // The confirm lives in the view (BoardView's confirmRemoval), where lists
+    // and boards share one gate — this handler only deletes.
     try {
       await api.deleteBoard(board.id);
       setBoards((items) => items.filter((item) => item.id !== board.id));

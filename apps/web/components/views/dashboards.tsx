@@ -9,32 +9,32 @@ import type {
   GeneratedApp,
   Source,
 } from "@workspace/api-client";
-import { Plus } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSubjectThread } from "../use-subject-thread";
 import { SubjectChatPanel } from "./subject-chat";
 import { DashboardCatalog, DashboardTemplates } from "./dashboard-catalog";
 import { DashboardGrid, type DashboardResultState } from "./dashboard-grid";
 import type { Tile } from "./dashboard-format";
-import { DashboardTile } from "./dashboard-tile";
 
 /**
- * One page, two kinds of thing, and the order says which one the product is
- * about.
+ * One page, one kind of thing.
  *
  * At the top is *your* screen: the dashboards you pinned, arranged where you
  * put them. Nothing on it was made here — the agent writes dashboards during a
  * conversation and this page never offers to — which is the whole product
- * decision made visible. Underneath are templates waiting for data, and below
- * those the generated apps, which are programs rather than charts and keep
- * their own gallery.
+ * decision made visible. Underneath are templates waiting for data. The
+ * generated apps that used to share this page have a tab of their own
+ * (`apps.tsx`): they are programs, not charts, and the button here that said
+ * "Add dashboard" was secretly opening their editor.
  */
 
 export type DashboardsViewProps = {
+  /**
+   * Still needed with the gallery gone: a chat turn about a dashboard can name
+   * a published app, and the side panel embeds it rather than only naming it.
+   */
   apps: GeneratedApp[];
-  openEditor: (value: string | "new") => void;
-  publish: (app: GeneratedApp, releaseId: string) => Promise<void>;
-  rollback: (app: GeneratedApp, releaseId: string) => Promise<void>;
 
   dashboards: Dashboard[];
   templates: DashboardTemplate[];
@@ -58,6 +58,13 @@ export type DashboardsViewProps = {
   /** Which pinned tile to reveal, set by the rail. Cleared once revealed. */
   focused: string | null;
   setFocused: (dashboardId: string | null) => void;
+  /**
+   * The honest create path, as a button: dashboards are written by the agent,
+   * so "new dashboard" means asking for a chart — this prefills the composer
+   * and goes to Chat. Where the old "Add dashboard" button stood, which
+   * secretly opened the sandbox-app editor.
+   */
+  askForChart?: () => void;
   /** What the side chat needs to be the same chat as the rail's. */
   chat?: DashboardChatDeps;
 };
@@ -80,9 +87,6 @@ export type DashboardChatDeps = {
 
 export function DashboardsView({
   apps,
-  openEditor,
-  publish,
-  rollback,
   dashboards,
   templates,
   datasets,
@@ -97,6 +101,7 @@ export function DashboardsView({
   removeDashboard,
   focused,
   setFocused,
+  askForChart,
   chat,
 }: DashboardsViewProps) {
   const revealed = useRef<string | null>(null);
@@ -143,26 +148,15 @@ export function DashboardsView({
       <div className="page-heading">
         <div>
           <h1>Dashboards</h1>
+          <p>The agent writes dashboards — ask for a chart.</p>
         </div>
         <div className="page-heading-actions">
-          <DashboardCatalog
-            dashboards={dashboards}
-            pinnedIds={pinnedIds}
-            pin={pinDashboard}
-            unpin={unpinDashboard}
-            remove={removeDashboard}
-            // Launching *is* pinning: there is no single-dashboard page to
-            // send someone to, and a chart you opened once is a chart you
-            // wanted on your screen. Already pinned, it is merely revealed.
-            open={(dashboardId) => {
-              if (!pinnedIds.has(dashboardId)) void pinDashboard(dashboardId);
-              setFocused(dashboardId);
-            }}
-          />
-          <button className="primary-button" onClick={() => openEditor("new")}>
-            <Plus size={16} />
-            Add dashboard
-          </button>
+          {askForChart && (
+            <button className="primary-button" onClick={askForChart}>
+              <Sparkles size={14} />
+              Ask the agent for a chart
+            </button>
+          )}
         </div>
       </div>
 
@@ -176,34 +170,28 @@ export function DashboardsView({
         focused={focused}
       />
 
+      {/* Below the pinned grid, deliberately: your screen first, the shelf
+          holding everything the workspace has underneath it. */}
+      <DashboardCatalog
+        dashboards={dashboards}
+        pinnedIds={pinnedIds}
+        pin={pinDashboard}
+        unpin={unpinDashboard}
+        remove={removeDashboard}
+        // Launching *is* pinning: there is no single-dashboard page to
+        // send someone to, and a chart you opened once is a chart you
+        // wanted on your screen. Already pinned, it is merely revealed.
+        open={(dashboardId) => {
+          if (!pinnedIds.has(dashboardId)) void pinDashboard(dashboardId);
+          setFocused(dashboardId);
+        }}
+      />
+
       <DashboardTemplates
         templates={templates}
         datasets={datasets}
         bind={bindDashboardTemplate}
       />
-
-      <section className="dashboard-apps" aria-label="Generated apps">
-        <h2>Apps</h2>
-        <p className="section-note">
-          Programs the sandbox builds and publishes, rather than a query and a
-          shape. They run in their own frame.
-        </p>
-        <div className="dashboard-gallery">
-          {apps.map((app) => (
-            <DashboardTile
-              key={app.id}
-              app={app}
-              open={() => openEditor(app.id)}
-              publish={publish}
-              rollback={rollback}
-            />
-          ))}
-          <button className="dashboard-add-tile" onClick={() => openEditor("new")}>
-            <Plus size={22} />
-            Add dashboard
-          </button>
-        </div>
-      </section>
     </section>
 
     {subject && chat && (

@@ -1,7 +1,13 @@
 "use client";
 
 import { Check, KeyRound, Plus, RefreshCw, Trash2, Unlink, X } from "lucide-react";
-import type { McpAuthStatus, McpServer, McpServerInput } from "@workspace/api-client";
+import type {
+  ApiToken,
+  ApiTokenMinted,
+  McpAuthStatus,
+  McpServer,
+  McpServerInput,
+} from "@workspace/api-client";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 
@@ -389,6 +395,130 @@ export function McpView({
           ))}
         </div>
       )}
+
+      <ExposeWorkspacePanel />
     </div>
+  );
+}
+
+/**
+ * The inverse of everything above: hand an OUTSIDE agent read-only access to
+ * this workspace, over Grain's own MCP server at `POST /api/mcp`.
+ *
+ * Self-fetching and self-contained — its own token state, no workspace prop —
+ * so it slots onto the page without threading anything through the shell. The
+ * minted secret lives only in this component's state, shown once with a copy
+ * button and never re-fetched; a reload lists names and stamps alone, which
+ * is all the server keeps.
+ */
+function ExposeWorkspacePanel() {
+  const [tokens, setTokens] = useState<ApiToken[]>([]);
+  const [name, setName] = useState("");
+  const [minted, setMinted] = useState<ApiTokenMinted | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const reload = useCallback(async () => {
+    try {
+      setTokens(await api.listApiTokens());
+    } catch {
+      // An owner-only panel a member reached shows empty rather than crashing.
+      setTokens([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      setMinted(await api.createApiToken(name.trim()));
+      setName("");
+      await reload();
+    } catch {
+      setError("Could not create the token. Only an owner may.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(token: ApiToken) {
+    if (!window.confirm(`Revoke "${token.name}"? Agents using it stop working.`)) return;
+    await api.revokeApiToken(token.id);
+    await reload();
+  }
+
+  return (
+    <section className="mcp-expose" aria-label="Expose this workspace">
+      <header className="mcp-expose-head">
+        <h2>Expose this workspace to an agent</h2>
+        <p>
+          Mint a token and point any MCP client (Claude Code, Codex, your own)
+          at <code>/api/mcp</code> with it. The agent gets this workspace&apos;s
+          read-only research tools — search, datasets, graph — and can change
+          nothing.
+        </p>
+      </header>
+
+      {minted && (
+        <div className="mcp-secret" role="status">
+          <strong>Copy this token now — it is shown only once.</strong>
+          <code>{minted.secret}</code>
+          <button
+            className="ghost-button"
+            onClick={() => void navigator.clipboard?.writeText(minted.secret)}
+          >
+            Copy
+          </button>
+        </div>
+      )}
+
+      <form className="mcp-expose-new" onSubmit={create}>
+        <input
+          type="text"
+          aria-label="Token name"
+          placeholder="Token name (e.g. my laptop's Claude Code)"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+        <button className="primary-button" disabled={busy || !name.trim()}>
+          <Plus size={14} /> Mint token
+        </button>
+      </form>
+      {error && <div className="mcp-error">{error}</div>}
+
+      {tokens.length > 0 && (
+        <ul className="mcp-token-list">
+          {tokens.map((token) => (
+            <li key={token.id} className={token.revoked_at ? "revoked" : ""}>
+              <div>
+                <strong>{token.name}</strong>
+                <span className="mcp-token-meta">
+                  {token.revoked_at
+                    ? "revoked"
+                    : token.last_used_at
+                      ? `last used ${new Date(token.last_used_at).toLocaleDateString()}`
+                      : "never used"}
+                </span>
+              </div>
+              {!token.revoked_at && (
+                <button
+                  className="icon-button"
+                  aria-label={`Revoke ${token.name}`}
+                  onClick={() => void revoke(token)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

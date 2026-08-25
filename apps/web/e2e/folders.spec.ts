@@ -37,7 +37,7 @@ const fileRow = (page: Page, title: string) =>
 
 async function openFiles(page: Page) {
   await page.goto("/");
-  await openView(page, "Files", /^Files/);
+  await openView(page, "Library", /^Documents/);
   await expect(page.locator(".documents-layout")).toBeVisible();
 }
 
@@ -144,7 +144,7 @@ test("a folder holding a file refuses to be deleted, and says what is in it", as
   await expect(tree(page).getByRole("button", { name: new RegExp(`^${FOLDER}`) }))
     .toBeVisible();
   await page.reload();
-  await openView(page, "Files", /^Files/);
+  await openView(page, "Library", /^Documents/);
   await expect(tree(page).getByRole("button", { name: new RegExp(`^${FOLDER}`) }))
     .toContainText("1 file");
 

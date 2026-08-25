@@ -18,7 +18,7 @@ actual rationale: the risk it refused was **arbitrary code execution with
 workspace authority**, and the property it bought was that generated code runs
 somewhere that cannot reach our data or our infrastructure. A hosted microVM on
 a third party's infrastructure preserves that property exactly. Code still never
-executes on a Jasmine host, still holds no session, still cannot reach the
+executes on a Grain host, still holds no session, still cannot reach the
 database. What changes is that the boundary now has a kernel.
 
 So this is an amendment: ADR 0004 keeps the *rendering* sandbox, and this ADR
@@ -134,7 +134,7 @@ Trivially true on Linux and a real trap on any VM-backed runtime: Colima,
 Rancher and Docker Desktop share only certain host directories into their VM, so
 a session directory under macOS's `/var/folders` temp space bind-mounts as an
 *empty* directory rather than failing. The symptom is
-`python3: can't open file '/workspace/.jasmine_exec.py'` on every execution,
+`python3: can't open file '/workspace/.grain_exec.py'` on every execution,
 which reads like a driver bug and is not one. `SANDBOX_WORKDIR` defaults to
 `./data/sandboxes` under the repo, which is inside `$HOME` and therefore shared;
 point it somewhere exotic and check the runtime shares that path first.

@@ -8,10 +8,10 @@ locals {
   // CLI. The daemon it reaches is the HOST daemon, so it resolves that bind
   // source against the host filesystem, not against the API container's. If the
   // API container saw the session directory at /data/sandboxes/abc while the
-  // host knew it as /var/lib/fieldnote/sandboxes/abc, docker would either fail
+  // host knew it as /var/lib/grain/sandboxes/abc, docker would either fail
   // or silently mount an empty host directory and every execution would run
   // against nothing. Identical paths on both sides is the fix.
-  data_mount      = "/var/lib/fieldnote"
+  data_mount      = "/var/lib/grain"
   objects_dir     = "${local.data_mount}/objects"
   sandbox_workdir = "${local.data_mount}/sandboxes"
 
@@ -123,7 +123,7 @@ resource "aws_ecs_task_definition" "api" {
   }
 
   volume {
-    name      = "fieldnote-data"
+    name      = "grain-data"
     host_path = local.data_mount
   }
 
@@ -165,7 +165,7 @@ resource "aws_ecs_task_definition" "api" {
         },
         {
           // Same path inside as outside. See local.data_mount above.
-          sourceVolume  = "fieldnote-data"
+          sourceVolume  = "grain-data"
           containerPath = local.data_mount
           readOnly      = false
         },

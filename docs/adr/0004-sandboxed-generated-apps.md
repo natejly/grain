@@ -30,11 +30,12 @@ Generated code executes only in a boundary that carries no workspace authority:
 - Embedded via `<iframe sandbox="allow-scripts">` without `allow-same-origin`:
   the code runs in an opaque origin with no cookies and no parent DOM access,
   and the CSP removes all network access.
-- Data crosses one postMessage protocol (`jasmine:init/ready/query/result`).
-  The host also answers the pre-rename `fieldnote:*` namespace, because a
-  published release freezes its runtime into the stored HTML and every
-  snapshot cut before the rename speaks the old names permanently; the
-  injected runtime likewise aliases `window.fieldnote` to `window.jasmine`.
+- Data crosses one postMessage protocol (`grain:init/ready/query/result`).
+  The host also answers the pre-rename `jasmine:*` and `fieldnote:*`
+  namespaces, because a published release freezes its runtime into the stored
+  HTML and every snapshot cut before a rename speaks the old names
+  permanently; the injected runtime likewise aliases `window.jasmine` and
+  `window.fieldnote` to `window.grain`.
   The host validates `event.source`, checks requested datasets against the
   release's declared `data_bindings`, and forwards queries to the existing
   typed DatasetQuery engine — the server remains the enforcement point.

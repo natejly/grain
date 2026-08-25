@@ -1,91 +1,502 @@
-# Organization tier — a governance layer above Workspace
+# Finish-the-todo run (started 2026-08-22)
 
-QM gap: *"Set org-level configuration, a security posture, and which harnesses
-and models are available"* — and **"Scopes can only tighten organization-wide
-policies."** Today a workspace owner is the highest authority that exists.
+Goal: complete Phases 3–6 of Foyer + loose ends, production grade.
 
-## The algebra (the whole feature)
+- [x] Loose end: budget.spec:299 — re-ran in isolation, passes (the Phase-2
+      session's feedWaiting second-sweep + copy constant landed); nothing to do
+- [x] Phase 3 remainder: pin chooser on chat chart artifacts (2026-08-22:
+      finish-the-job pin bar on succeeded create/update dashboard cards —
+      id-parse only, no name fallback after review; "Make this a dashboard"
+      seed on image charts, pane-aware after re-review; server copy reworded)
+- [x] Phase 3 remainder: Boards & Todos glyph/toast merge (2026-08-22: one nav
+      item, merged listing with data-shape glyphs, graduation notice toast
+      with nonce timer + multi-flip join, confirm-gated deletes both shapes,
+      keyboard moves: card up/down + two-step Move-to + column chevrons with
+      busy guards; e2e specs updated, teleport assertion inverted)
+- [x] Phase 3 remainder: Knowledge cross-links (2026-08-22 wf): purpose
+      subtitles on all three views; six link directions (sources↔graph↔memory,
+      memory→thread provenance); space chips on source+memory rows;
+      use-focus-reveal.ts extracted from the dashboards recipe;
+      13 RTL tests in knowledge-crosslinks.test.ts
+- [x] Phase 4: grants API → Inbox Rules tab + Policies page (2026-08-22 wf:
+      views/policies.tsx RulesTable — descriptions from the registry, plain
+      scope words, You/Everyone + grantor, revoke with owner gate — mounted in
+      Inbox as a Rules tab AND as the "Rules & policies" view under the Inbox
+      group; the two "always allow" checkboxes' copy fixed to "for me";
+      organization.spec re-pointed; policies-rules.test.ts)
+- [x] Phase 4: member-readable org policy (OrganizationPanel moved out of
+      AdminView's 403 wall onto the Policies page, unmodified)
+- [x] Phase 4: scope labels on composer controls (2026-08-23: "Agent/Model/
+      Reasoning effort · this thread" + remembered-on-thread titles;
+      composer-scope.test.ts)
+- [x] Phase 4: per-thread persistence of model/effort/agent (2026-08-23 web
+      half: shell seeds pickers once per thread switch from Conversation
+      defaults with a stomp-guard ref, pick* wrappers write through
+      setConversationDefaults and patch the rail row; extra panes seed from
+      their row and write back through the onApprovalChanged channel; fast
+      stays per-turn)
+- [x] Phase 4: approval-mode control in subject chats (2026-08-23:
+      use-subject-thread keeps the row's mode + setApprovalMode with a
+      stale-reply guard; panels pass the approval bundle, starter cards
+      opt-out via ChatView.showStarter)
+- [x] Phase 4: review banner (2026-08-23 wf + fixes): review DEFAULT-OPENS per
+      proposal (render-time state adjustment, no editor flash — keeps the e2e
+      no-click contract), "Later" parks it behind a banner over a read-only
+      editor; the interlock covers EVERY write path after review (Save, ⌘S,
+      History→Restore all disarmed while a proposal pends); tree dots via
+      FileTree pendingIds
+- [x] Phase 4: system-status popover (2026-08-23 wf): SystemStatus on
+      DisclosureMenu replaces the agent/screen pills; one useApiHealth loop
+      feeds both the down-banner (unchanged behavior) and the status dot
+- [x] Phase 4: Inbox snooze/Later (2026-08-23 wf + fixes): client-side
+      grain.inbox-snooze via total-parser module (now with pruneSnoozes
+      against the waiting set), Later/Unsnooze + "Later (N)" tab, waiting
+      strip filtered and synced via onSnoozesChanged, rail badge deliberately
+      unchanged; 12 unit tests
+      (also fixed from review: thread-default seeding self-heals a deleted
+      agent id through AgentSelect → the thread's remembered default)
+- [ ] Phase 5: unified right split pane (subject chat / artifact peek / extra panes)
+- [ ] Phase 5: message edit (backend DONE 2026-08-22: truncate-and-rerun —
+      conversations.truncate_after + POST /conversations/{id}/messages/{mid}/edit,
+      author-only, 409 over live runs, memory tombstoned, chunk index dropped
+      and rebuilt by the new run's hook; fixed the latent purge leak where a
+      DELETED thread's ConversationChunk rows stayed searchable forever;
+      6 tests in test_message_edit.py; web affordance is the gap)
+- [x] Phase 5: G-chords (G C / G I / G L / G A / G D) — views/chords.ts pure
+      module + 9 tests, capture-phase listener in workspace.tsx (stops a
+      completed chord reaching the Inbox's A/D triage), palette rows show
+      their chord as a kbd hint (e2e pass still owed with the phase gate)
+- [ ] Phase 5: universal Favorites + sidebar pruning
+- [ ] Phase 5: agent editor live try-chat
+- [ ] Phase 5: English-first Schedule composer + next-fire preview
+- [ ] Phase 6: saved named layouts
+- [ ] Phase 6: per-collection open behavior
+- [ ] Phase 6: graph legend + bidirectional selection
+- [ ] Phase 6: onboarding walkthrough (approval loop)
+- [ ] Phase 6: mobile bottom-tab shell
+- [ ] Full gate per phase: make lint, pytest, pnpm test, pnpm build, e2e
 
-Order the three verdicts by strictness: `allow` (0) < `ask` (1) < `deny` (2).
+Review-debt (phase3 panel, 2026-08-22) — ALL FIXED same day:
+- [x] truncate_after now sweeps by Run.created_at >= the pivot run's start
+      (overlapping earlier turn survives; regression test with staged clocks)
+- [x] shared threads: 409 when the sweep would take a teammate's run
+- [x] dashboards/tools.py success line names the on-card pin control (kept
+      the "(id <uuid>)" clause the pin bar parses)
+- Accepted-risk notes: hasChartImage offers "Make this a dashboard" under any
+  sandbox image (no client-side chart signal exists); G-chords lack a disable/
+  remap setting (WCAG 2.1.4) — fold into Phase 6 polish.
 
-    final = stricter_of(org_verdict, everything_below)
+Backend landed 2026-08-22 for Phase 5 (web halves pending):
+- [x] English→cron: POST /api/crons/compile-schedule + next_fires preview
+      helper (DST-aware minute scan, validator chokepoint shared with the
+      ticker), scripted-mode deterministic parser, 17 tests
+- [x] Universal Favorites: models.Favorite + migration 0047, service with the
+      one resolve chokepoint (conversations via resolve_visible, the rest
+      workspace-scoped), 4 routes modelled on dashboard pins, isolation cases,
+      test_favorites.py; api-client types + methods landed
+- [x] api-client contracts: Conversation.default_*, setConversationDefaults,
+      editMessage, ToolPolicy.created_by, MemoryItem.space_id, Favorite CRUD,
+      compileSchedule (fixtures updated; tsc + 593 web tests green)
+- Concurrent-session note: a peer session shares this tree (steer feature,
+  anthropic harness, delegation/guardian, admin scorecard, its migration
+  0046); its 0046 upgrade guard and one E501 were fixed from here and the
+  session notified. Its remaining red tests (harness registry ×3, delegation
+  db.get review) are theirs.
 
-That single `max` is the one-way rule. It is applied **last**, after the
-workspace tier, after the personal tier, after the approval mode, after
-`force_ask` — so every mechanism that can loosen has already run and none of
-them can reach past it.
+# Frontend redesign: "Foyer"
 
-Consequences, which are the three bullets in the brief:
+Full spec: https://claude.ai/code/artifact/547d1b83-5525-4537-afe9-aa8b42a272bb
+(produced 2026-08-19 by a 17-agent workflow: 6 UX audits of apps/web, 5 market
+studies, 3 competing proposals, 2 judges — Foyer won unanimously 9/8/9).
 
-- org `deny` → 2, and nothing below is stricter, so the answer is `deny`. No
-  allow row, no `auto_writes`, no `DEV_UNRESTRICTED_AGENT` moves it.
-- org `ask` → 1. Below may return 1 or 2 and win; a 0 is raised to 1.
-- org `allow` → 0, and every value below is ≥ 0, so the org constrains nothing.
+Shape: permanent chrome shrinks to a 4-item icon rail (Chat, Inbox, Library,
+Automations) + settings gear; everything else summoned via Cmd+K, one unified
+right split pane, and composer chips (+ Attach, @ Agent, / Skills). One badge
+in the whole app (Inbox). Every existing view has a mapped home; ~40 views are
+kept or reshuffled, few net-new builds (Inbox feed, palette, Datasets view,
+attach popover, Rules/Policies, new shell).
 
-## Tasks
+## Phases (each independently shippable) — approved 2026-08-19
 
-- [x] 1. `Organization`, `OrgMembership`, `OrgToolPolicy` models;
-      `Workspace.organization_id` NOT NULL.
-- [x] 2. Provisioning: `services/orgs.py`, signup mints a personal org with the
-      signer as org admin; a `before_flush` listener is the floor that makes an
-      orphan workspace unconstructable.
-- [x] 3. Migration `0041`, backfilling one org per existing workspace and
-      promoting each workspace owner to admin of it.
-- [x] 4. `evaluate_policy` clamp — org tier derived from `workspace_id` inside
-      the function, so no call site can forget to pass it.
-- [x] 5. Org-bounded harnesses and models; bootstrap and `POST /messages`
-      both read the bounded list.
-- [x] 6. `require_org_admin` + `/api/org` router. No workspace-owner route may
-      write an org role.
-- [x] 7. Tests, including the mutation proof, and isolation `RouteCase`s.
-- [x] 8. Gates.
+- [x] Phase 1 — Kill the worst lies (chrome only, no backend): dissolved
+      Settings menu ("Workspace settings" gear: Connections + Admin only),
+      Inbox on the rail with the only badge (approvals), Files→Library with
+      Documents tab (no more Files/Files), Workflows group→Automations with
+      crons tab→Schedules, Apps split from Dashboards (new view + Create says
+      App not Dashboard), in-place attach popover (upload handler no longer
+      teleports to Sources), composer chips (+Attach / @agent / /Skills),
+      empty-chat starter cards + approval-loop line, workspace-switcher
+      failure state with retry, delete confirms (agents, boards), Cmd+S in
+      the document editor
+- [x] Phase 2 — The real Inbox (core; snooze/Later + Rules deferred to Phase
+      4's trust work): GET /api/inbox — unbounded waiting set (approvals from
+      all origins via run_activity_predicate + member-visible budget holds) +
+      windowed workflow outcomes; composite index 0043 on agent_tool_calls;
+      InboxView (tabs, inline ProposalDiff decide, J/K + A/D keys, deep links,
+      History=audit) replacing ActivityView; feed-backed rail badge;
+      waiting-on-you sidebar strip (inline decide, cap 2 + "N more");
+      sticky "Waiting for your approval — Jump to request" composer banner;
+      workflows view's 25×20 client scan retired (feed-sourced strip, runs
+      loaded per selection); Admin read-only approvals panel deleted
+- [ ] Phase 3 — Library + Data (data half DONE 2026-08-19): ✔ Datasets view
+      (Library tab: list/columns/typed-query preview, create from tabular
+      source, new immutable version, no delete on purpose), ✔ attach popover
+      "also create a dataset" chip preselected for tabular files (upload
+      handler returns the Source), ✔ "Chart this" → prefilled chat composer,
+      ✔ Dashboards page "Ask the agent for a chart" button; ✔ SHELL (commit
+      31f860a): icon rail of four doors + contextual sidebars over a two-level
+      NAV registry (sections), Knowledge folded into Library, Databases moved
+      to Library→Data, collapse hides the sidebar and keeps the doors, mobile
+      drawer carries labelled destinations; ✔ Dashboards real list page
+      (83aa547: catalog popover → on-page shelf under the pinned grid);
+      REMAINING: finish-the-job pin chooser on chat chart artifacts,
+      Boards&Todos glyph/toast merge, Knowledge cross-links
+- [ ] Phase 4 — Trust surfaces: Rules/Policies (grant enumeration + revoke),
+      member-readable org policy, scope labels, per-thread setting
+      persistence, review banner (editor never replaced), status popover
+- [ ] Phase 5 — Power tier (started 2026-08-19, reframed as Claude-desktop
+      parity per user): ✔ Cmd+K palette (76bad8d — every view incl. settings,
+      the six creates with in-place naming, thread search by title);
+      ✔ thread rename (PUT /conversations/{id}/title, inline rail edit,
+      subject threads refused); ✔ transcript deep search in the palette
+      (b4993d8 — GET /conversations/search over the conversation index, same
+      visibility chokepoint as the agent tool); REMAINING for desktop parity:
+      artifacts-style right split pane (the big one), message edit,
+      G-chords + universal Favorites + sidebar pruning + agent live try-chat
+      + English-first Schedule composer
+- [ ] Phase 6 — Layouts & polish: saved named layouts, per-collection open
+      behavior, graph legend/selection, onboarding walkthrough, mobile
+      bottom-tab shell
 
 ## Review
 
-**The clamp.** `evaluate_policy` ends with `_stricter(result.policy, org_ceiling)`
-over allow(0) < ask(1) < deny(2). It runs *after* the workspace tier, the personal
-tier, the approval mode and `force_ask`, so every mechanism that can loosen has
-already finished and none can produce a value below the ceiling. The org id is
-derived from `workspace_id` **inside** the function rather than taken as a
-parameter — there is no argument for a call site to omit, so the ceiling is
-unbypassable by construction. `by_mode` is cleared when the clamp moves the
-answer, because a bypass that was overruled did not decide anything.
+Phase 1 (2026-08-19): tsc clean; 537/537 web unit tests (navigation.test.ts
+rewritten to pin the new IA); full Playwright suite 63 passed / 0 failed / 1
+skipped. Two long-standing e2e defects found and fixed along the way:
+(a) workspace.spec's 45s expect margin sat inside Playwright's default 30s
+test timeout, so the margin could never apply — fixed with a 180s per-file
+budget; (b) the real "agent-write flake" was a race: specs typed into the
+composer before the async "New thread" switch landed, so prompts fell into
+the previous thread (two specs' tool cards in one transcript). Fixed with a
+shared e2e `newThread()` helper that waits for the empty-thread starter
+heading (which Phase 1 added) before returning.
 
-**Two tiers, one sentence.** `_in_scope_or_carried_deny` is shared by the org and
-workspace tiers: a row in this scope decides, else a `chat` deny carries, else the
-tier is silent. Not a coincidence to maintain by hand.
+Phase 2 (2026-08-19): GET /api/inbox with 8 API tests (incl. the no-scan-bound
+regression test and the WorkflowRun-only budget hold); full backend suite exit
+0; tsc clean; 563/563 web unit tests; full Playwright suite 67 passed / 0
+failed / 1 skipped — with the Spaces, plan-mode and conversation-index
+features from the three parallel sessions all landed in the same tree. Two
+defects found by peer review (dashbored-0e) and fixed: the feed's Run-anchored
+holds query missed a workflow held between nodes with no backing run (second
+WorkflowRun sweep added), and the strip's copy drifted from the product's
+"Held by the spend limit" vocabulary (now one exported constant). The e2e
+newThread helper went through two more iterations — count-based switch
+signals all race the rail's first load because the "No conversations."
+placeholder also shows while fetching; the stable signal is the conjunction
+(active rail row is "New conversation") AND (starter heading visible).
 
-**Mutation proof.** Replacing the clamp with `clamped = result.policy` and running
-`test_org_scope.py` failed 8 tests; the headline one reported
-`assert 'allow' == 'deny'` on the first assertion of
-`test_an_org_deny_cannot_be_loosened_by_anything_below_it` — a workspace `allow`
-walking straight through an org `deny`. Restored, all 20 pass.
+# Plan mode + slash commands (/plan, /btw) — approved 2026-08-19
 
-**Migration.** Verified three ways: fresh chain from empty (0001 `create_all`
-already carries the schema, every 0041 block is a guarded no-op); a
-downgrade-then-seed-then-upgrade round trip on a genuine pre-0041 database with
-two workspaces and three memberships — 0 orphans, 2 distinct orgs, only the two
-*owners* promoted to admin, NOT NULL and the FK both present after the batch
-rebuild; and `test_personal_scope_migration.py`'s narrower legacy schema, which is
-why the backfill reads only `workspaces.id`/`name` and tolerates a missing
-`memberships` table.
+Design: plan mode is a fourth `ApprovalMode` value (`plan`) — stricter than
+`ask_all` for writes (deny, not ask), read-only tools still run, exits via an
+`exit_plan_mode` tool that parks on the existing approval machinery. Exiting
+restores `ask_writes` (no new column). `/btw` sends an aside: a user Message
+with no Run — lands in the transcript, no agent turn. Slash commands are
+frontend-resolved (like skills), never parsed server-side from text.
 
-**Deferred, and why.**
+## Backend
 
-- *Org-level harness/model config has no UI.* The panel edits the model bound and
-  the tool ceilings; the harness bound is read-only there (it shows the effective
-  count) and is settable only over the API. The harness is a process-wide setting
-  with two registered values, so a picker would be a control with nothing much to
-  pick — worth adding when a third harness ships.
-- *No org member management UI.* `GET/PUT /api/org/members` exist and are tested;
-  the panel does not render a roster. Granting org standing is a rare,
-  high-consequence action and the workspace roster right beside it made the two
-  easy to confuse in a first draft.
-- *Audit events for org actions are filed against the acting workspace.*
-  `audit_events` is workspace-scoped, and giving it a nullable `organization_id`
-  would have been a second migration on the busiest table in the schema for a
-  reporting nicety. The event names the org as its `resource_id`, so nothing is
-  lost, but "show me everything that happened to this org" is a query across
-  workspaces rather than a filter.
-- *`OrgToolPolicy` has no `owner_id`.* Deliberate, not deferred — there is nobody
-  below the org whose preference an org row would be expressing.
+- [x] `agent_loop.py`: add `PLAN` to `ApprovalMode`/`APPROVAL_MODES`
+- [x] `evaluate_policy`: plan branch — read-only keeps base verdict,
+      `exit_plan_mode` asks unconditionally, writes deny; org clamp unchanged
+- [x] `approval_mode_for_run`: pass `plan` through; plan outranks the dev
+      bypass; injection flag still escalates to `ask_all` (documented tradeoff)
+- [x] Plan instructions block spliced per loop entry (`_plan_narrowed`, called
+      from both entries — not `resolve_directives`, left alone for the
+      concurrent Spaces work)
+- [x] `exit_plan_mode` tool (llm_tools): read-only spec whose preview IS the
+      plan; spliced into the registry only in plan mode; approving it at the
+      decision endpoint restores `ask_writes` before the resume, audited
+      `via: exit_plan_mode`; `remember` is ignored for it
+- [x] `PUT /conversations/{id}/approval-mode`: accepts `plan` (schema literal)
+- [x] Asides: `aside: true` on send_message → Message without Run, run
+      nullable in the response, own idempotency operation, audited
+- [x] Tests: test_plan_mode.py (12), test_asides.py (5), PLAN added to
+      test_approval_mode's no-mode-clears-a-deny table
+
+## Frontend
+
+- [x] api-client: `plan` in the mode type, `sendAside`, `run: Run | null`
+- [x] `approval-format.ts`: "Plan first" entry (control renders it via
+      APPROVAL_MODES)
+- [x] `chat.tsx`: built-in commands merged into the slash picker (Terminal
+      icon, listed first, Enter picks command before skill); /plan toggles the
+      mode in place, /btw completes the token and the send path records an
+      aside; plan-review card renders the plan as markdown and hides
+      "always allow"; asides render dashed/muted
+- [x] `thread.ts`: aside branch in submitPrompt (no followRun; bare "/btw"
+      refused), regenerate skips asides
+- [x] Pure module `views/commands.ts` + tests/commands.test.ts
+- [x] Verify: api suites green, web tsc clean, 545/545 vitest, next build ok
+
+## Review
+
+Design change made while implementing: the mode restore moved from the exit
+tool's executor to the decision endpoint. Executor-side restore left the
+resumed turn on the plan-narrowed registry (registry/instructions resolve per
+loop entry, before the queue drains), so approving a plan could not implement
+until the next message. Endpoint-side restore re-enters the loop under the
+full registry; the parked exit call keeps its spec via a `setdefault` in
+`_continue`. `force_ask` ended up unused — the exit's unconditional `ask`
+lives in `evaluate_policy`'s plan branch so no standing row can pre-answer it.
+One behavior pinned by test rather than planned: a write approved before the
+thread switched into plan mode does NOT run on resume (mode switches are
+safety switches; same rule as auto_writes mid-turn). Full-suite runs also
+surfaced other-session noise (Spaces migration double-head, conversation_index
+db.get audit, GET /api/inbox route case) — not addressed here.
+
+E2e addendum (2026-08-19, second pass): plan-mode.spec.ts (4 tests — /plan
+toggle + plan card approve lifts the mode, deny keeps planning, /btw aside
+persists) green. Writing it flushed out and fixed two real bugs plus one
+scripted scenario:
+- handlers/chat.ts: setApprovalMode silently no-oped while a fresh thread's
+  createConversation was in flight — hoisted ensureConversation and shared it
+  with the send path, so picking /plan on a brand-new thread conjures the
+  thread like typing does;
+- use-workspace.ts loadWorkspace: the auto-select's listMessages could resolve
+  AFTER the user opened a new thread and stomp its empty transcript with the
+  old thread's messages — now guarded on activeConversationRef, same pattern
+  as the stream loop;
+- e2e/shell.ts newThread(): the starter heading is already visible on a fresh
+  load with nothing selected, so it never observed the switch — now also waits
+  for the new rail row.
+Full e2e: 64 passed, 3 failed — two workspace.spec failures pass in isolation
+(suite-order flakes), and budget.spec:299 is the Phase-2 feed rework dropping
+budget-held workflow runs from feedWaiting plus a ceiling/limit copy drift;
+reported to the Foyer session.
+
+# Conversation index — quote past conversations to agents (approved 2026-08-19)
+
+Design: full transcripts already persist (`Message`), but cross-thread history
+is unreachable — the only channel is extracted MemoryItems (≤5/run, 6 recalled).
+Add a `conversation_chunks` table (chunked transcript windows + one LLM summary
+row per thread), indexed with the existing embedding machinery, searched by a
+new read-only `search_conversations` core tool that returns verbatim quotes
+with provenance (thread title + date). Retrieval is memory.py-style hybrid
+(LIKE lexical + dense cosine) fused with RRF. Visibility mirrors
+`conversations.resolve_visible` through a single `_visible` chokepoint —
+private threads never leak (the ffa0608 rule). Tool output is already screened
+(`kind="tool_output"`), so quotes inherit injection screening. No memory.py
+changes (avoids the in-flight Spaces collision); scoping joins Conversation,
+which already carries `space_id`.
+
+- [x] 1. Model: `ConversationChunk` (kind chunk|summary, ordinal, content,
+      message_ids_json, message_count, last_message_at, embedding) + migration
+      0044 (guarded create_table; renumbered from 0043 and re-pointed onto the
+      concurrent session's 0043_inbox_call_index; round-tripped up/down/up on
+      a scratch DB)
+- [x] 2. Settings: conversation_index_enabled, conversation_search_limit,
+      conversation_lexical_candidate_limit, conversation_vector_candidate_cap
+      (+ .env.example entry)
+- [x] 3. model.py: `summarize_conversation` (LLM, minimal effort, "" on any
+      failure → caller falls back to naive topics line); usage op
+      CONVERSATION_SUMMARY
+- [x] 4. services/conversation_index.py: incremental chunking (pack whole
+      messages ~1200 chars, split long ones via make_chunks, watermark =
+      covered message ids), summary refresh every 10 messages, best-effort
+      embedding, `reconcile` (bounded self-heal at search time),
+      `search_conversation_chunks` with `_visible` chokepoint
+- [x] 5. Tool: `search_conversations` in the core family (auto-granted to
+      subject threads via SHARED_FAMILIES)
+- [x] 6. Hook: `update_conversation_index(run.id)` in `_finish_run` after
+      write_conversation_memory, same best-effort contract
+- [x] 7. scripts/backfill_conversation_index.py
+- [x] 8. Tests: 13 in test_conversation_index.py — incremental chunking,
+      summary fallback + cadence, visibility (private / shared / subject /
+      cross-workspace / chokepoint structure), dense arm honours the gate,
+      reconcile self-heal, off switch, tool registration + attributed quotes;
+      plus two reviewed entries in test_tenant_isolation's DB_GET_ALLOWLIST
+- [x] 9. Verify: full pytest suite green, exit 0, zero failures. Along the
+      way, cleared 4 failures from the concurrent sessions' in-flight work:
+      the 0040 migration trio died replaying the chain on a partial DB (0042's
+      `_add_space_column("sources")` — the spaces session guarded it itself;
+      0043_inbox_call_index's `get_indexes` had the same hole — I added a
+      `_table_missing()` guard), and test_route_table_matches_the_app needed
+      an isolation case for the new GET /api/inbox (added: SCOPED). Both
+      sessions notified.
+
+## Review
+
+Implemented 2026-08-19. Migration 0044_conversation_index (renumbered onto the
+concurrent session's 0043_inbox_call_index head; up/down/up round-trip on a
+scratch DB). New `conversation_chunks` table is derived data: verbatim
+transcript windows (~1200 chars, whole messages, `make_chunks` splits
+oversized ones; coverage tracked by message id so indexing is incremental and
+never repacks) plus one rolling summary per thread (LLM via
+`summarize_conversation` on the cheap context model, refreshed every 10
+messages, naive topics-line fallback offline — so scripted mode stays
+hermetic). Search is memory-recall-shaped: LIKE lexical arm + cosine dense arm
+fused with RRF, both arms behind the `_visible` chokepoint that mirrors
+`resolve_visible` clause for clause (structural test pins the columns to one
+occurrence). `search_conversations` ships in the core family → reaches subject
+threads automatically; results are quoted verbatim with thread title + date
+and inherit the existing tool_output injection screen. Post-run hook in
+`_finish_run` + bounded search-time reconcile (self-heals cron/tool-path
+threads) + bulk backfill script. 13 new tests pass; two `db.get` call sites
+reviewed into DB_GET_ALLOWLIST. Verification was twice disrupted by the
+concurrent session (shared test DB corruption — they patched conftest to
+per-pid DB files — and a transient memory.py syntax error mid-edit).
+
+# Spaces — Claude-Projects-style grouping (approved 2026-08-19)
+
+Plan: ~/.claude/plans/resilient-fluttering-lake.md. Space = workspace-shared
+grouping of rail threads + per-space instructions + scoped knowledge +
+space-scoped memory. Delete is destructive (threads/sources/memories die).
+
+- [x] 1. Model + migration 0042 (Space table; space_id on Conversation/Source/MemoryItem; widen memory unique key) — round-tripped on scratch DB
+- [x] 2. services/spaces.py + api/spaces.py CRUD (+ extract purge_source; register in main.py)
+- [x] 3. Conversations: create with space_id, ?space_id= filter, emit in ConversationOut
+- [x] 4. Directives: append space instructions in resolve_directives
+- [x] 5. Retrieval scoping: search_evidence + _search_sources; sources upload/list space_id; ToolContext.space_id
+- [x] 6. Memory space axis: _active/_upsert_item/shadowing/write path/tools; eval unchanged (93.3%/0%)
+- [x] 7. api-client: Space types + CRUD, createConversation/uploadSource space params
+- [x] 8. Nav + state: spaces View, use-workspace state, newConversation(spaceId)
+- [x] 9. SpacesView + space-threads.ts pure module + rail chip + CSS
+- [x] 10. Tests: isolation harness (+5 route cases), test_spaces/directives/retrieval/memory (28), web unit/CSS/RTL (18), e2e spaces.spec.ts
+- [x] 11. Verify: full pytest exit 0; memory eval 93.3%/0% unchanged; retrieval eval floors ok; 563 web units; spaces e2e green (full e2e run queued behind the Foyer session's port hold)
+
+
+## Review (Spaces, 2026-08-19)
+
+Landed end to end on feat/agentic-workspace. Notable decisions vs the plan:
+delete cascade confirmed destructive (D6) and asserted in e2e; memory recall
+derives its space from the conversation inside recall()/remember_memory()
+(mirroring memory_owner) instead of a threaded param, so read/write scope
+cannot disagree; GET /api/memory widens via an explicit ALL_SPACES constant
+so space rows stay administrable. 0042_spaces gained has_table guards after
+the migration-replay tests caught partial-DB builds. Detail rename input is
+aria-label "Rename space" (create input owns "Space name").
+
+
+# Harness gap build — subagents, steering, guardian, observability (2026-08-22)
+
+From the opencode/Codex gap study (artifact 18f3a615). Six features, sequenced
+backend-first, agents own only new files, shared-file edits stay serial.
+
+- [x] 0. Contracts: ModelUsage.agent_id column + index, migration 0046,
+      usage.Attribution/usage_scope agent_id, ToolContext.run_id,
+      config: anthropic provider fields (a peer session added the
+      absent-table guard to 0046 — kept)
+- [x] 1. Delegation: services/delegation.py — `delegate` tool (new "delegation"
+      family), read-only child loop (no parking; budget/cancel abort), depth 1
+      by construction, parallel batch execution for consecutive delegate calls
+      in _drain_pending (own session + copy_context per thread; concurrency
+      proven by a barrier test) — tests/test_delegation.py (8)
+- [x] 2. ask_user tool (core family, force_ask) + decision endpoint inputs→
+      amendment bridge + web answer card — tests/test_ask_user.py (6)
+- [x] 3. Mid-turn steering: POST /api/runs/{id}/steer → steer.requested event
+      + transcript Message row, loop pickup via LoopState.last_steer_sequence
+      — tests/test_steering_loop.py (4), test_steer_endpoint.py
+- [x] 4. Guardian approval mode: evaluate_policy first-arm handling (NOT the
+      auto_writes else-branch), _drain_pending consult on "ask" (never for
+      force_ask/exit_plan_mode), 5-approvals-per-turn cap on LoopState,
+      fail-closed park; services/guardian.py — test_guardian.py (25),
+      test_guardian_mode.py (6)
+- [x] 5. Anthropic harness: services/harness/anthropic.py + config guard +
+      HARNESSES entry + settings.default_model + model.py extract_memories
+      degradation + anthropic dep — test_anthropic_harness.py (9)
+- [x] 6. SKILL.md interop: services/skill_markdown.py parse/render (73 tests) +
+      import/export endpoints + isolation entries — test_skill_interop.py
+- [x] 7. Per-agent observability: GET /api/admin/agents scorecard (runs, tool
+      calls, denials, mode-approved, screen flags, usage by agent_id) —
+      test_admin_agents.py (fixed a select_from join bug it caught)
+- [x] 8. Web: ask_user answer card + Answer button, guardian mode option
+      (bypass-flagged), SteerStrip in all three chat panes, api-client
+      steerRun + ApprovalMode widening
+- [x] 9. Full gate + adversarial review: 25-agent review workflow returned
+      19 confirmed findings (5 major) — ALL fixed and regression-tested:
+      atomic event sequences (scalar subquery in append_event), guardian
+      provenance flag (never softens a policy-row/org ask; defers on
+      unabsorbed steers, reads absorbed ones), ask_user forged-answer strip,
+      child screen-hit evidence carry-back (enforce + shadow), parallel-batch
+      failure parity, steer auth tightening + single-txn idempotency +
+      run_id-stamped Message, Inbox answer box + remember suppression,
+      SteerStrip park gating + draft retention, proposal-note pre-wrap,
+      export newline 500, honest effort ladder under anthropic.
+      Final gate: ruff ✓ mypy ✓ full pytest exit 0 ✓ alembic up/down/up ✓
+      vitest 612/612 ✓ eslint 0 errors ✓ next build ✓ e2e approvals 6/6 ✓;
+      symbol-survival check vs 10 concurrent peer sessions ✓
+
+- [x] 10. Browser proof (2026-08-23): e2e/harness-features.spec.ts — ask_user
+      question card with options → typed answer round-trips through the
+      amendment into the recorded result; delegate runs a real scripted child
+      ("Research partner") and its words surface in the parent card; guardian
+      mode selectable, bypass banner up, and fails closed to a human park on
+      a scripted deployment (no reviewer). 4 script entries added to
+      e2e/agent-script.json. Steer-strip visibility extracted to
+      views/steer-format.ts (pure module, 7 tests) per repo convention.
+      3/3 specs green first run; screenshots inspected by eye (options render
+      as lines — pre-wrap fix visible; answer text in RESULT). Full e2e suite
+      queued as the phase gate.
+
+- Full-suite e2e gate (2026-08-23, harness session): 65 passed incl. the 3 new
+  harness-features specs. 4 red in the full run: palette rename + workflows ×2
+  PASS in isolation (ordering/load, not code); dashboards.spec beforeAll fails
+  deterministically — the Sources-view CSV upload never becomes a dataset
+  (spec:94), 5 dashboard tests skipped. That surface is the in-flight
+  Knowledge cross-links work (uncommitted sources.tsx/use-workspace edits), so
+  it was flagged to dashbored-2e rather than patched from here.
+
+- [x] 11. Anthropic harness completed (2026-08-23): effort now maps onto the
+      Messages API's OWN ladder (output_config.effort is literally
+      low/medium/high/xhigh/max; "none" → thinking disabled; unset falls back
+      to openai_reasoning_effort as the deployment reasoning default), and
+      thinking/redacted_thinking blocks round-trip through LoopState history
+      (_ThinkingItem — required for tool-use continuations with thinking on).
+      Bootstrap's effort ladder restored for anthropic since every choice now
+      does something. 12 harness tests green incl. 3 new; ruff+mypy clean;
+      gap-study artifact updated with the shipped-status addendum.
+
+# Harness open-list build (2026-08-23, "implement everything on the list")
+
+The gap study's deliberately-open items. The org agent registry stays with the
+marketplace epic (still plan-only, verified — no Listing code in tree); its
+non-overlapping org piece, audit export, ships here instead.
+
+- [x] A. Best-of-N: `delegate(attempts=N)` — N parallel children of one agent,
+      all answers labelled back to the parent model to judge
+- [x] B. Guardian under the Anthropic provider (anthropic_context_model,
+      messages.create JSON verdict, billed provider=anthropic)
+- [x] C. Audit export: GET /api/admin/audit-events/export — keyset cursor
+      (created_at,id) ascending, since/action filters, no offset cap
+- [x] D. Grain as an MCP server: workspace API tokens (model + 0048) +
+      POST /api/mcp-server JSON-RPC endpoint (initialize/tools list+call,
+      read-only registry only) + api-client + minimal UI if uncontested
+- [x] E. Gates: ruff/mypy/full pytest/alembic round trip; web gates if touched
+
+## Review (open-list build, 2026-08-25)
+
+All five items (A best-of-N, B guardian-on-Anthropic, C audit export, D
+Grain-as-MCP-server, E gates) landed on feat/agentic-workspace.
+
+Adversarial review (a 3-agent lite pass, after the first heavier workflow
+stalled on the loaded box) found 3 real defects, all fixed + regression-tested:
+- MAJOR: a crafted JSON-RPC `id` of NaN/Infinity 500'd POST /api/mcp — json.loads
+  accepts the token, then JSONResponse's allow_nan=False dump raises OUTSIDE the
+  body-parse try. Fixed at the parse boundary (parse_constant raiser + scalar-id
+  guard); test_a_non_finite_or_non_scalar_id_never_500s.
+- MINOR x2: shadow-mode screen excerpts were dropped on a child ABORT (the
+  except handler ignored shadow_hits) and could be clipped off the tail in
+  best-of-N. Fixed by a shared `_notice_first` that LEADS the delegate result
+  with the safety notice (survives clipping) and is used by both the answer and
+  abort paths; test_shadow_hits_survive_a_child_abort_and_lead_the_content.
+
+I also self-verified the three highest-risk surfaces before the review returned:
+MCP offers ONLY read-only tools (empirical registry probe — zero write-capable),
+the audit keyset drains 10 same-timestamp rows exactly once in id order, and the
+JSON-RPC handler survives malformed bodies.
+
+Gate: ruff ✓ mypy ✓ alembic 0048 up/down/up ✓ vitest 663/663 ✓ web lint 0
+errors ✓ next build ✓ full pytest exit 0 except the one pre-existing
+password-timing flake (a constant-time-ratio assertion, load-sensitive, passes
+1/1 in isolation — not this build's code).

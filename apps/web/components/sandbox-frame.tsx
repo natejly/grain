@@ -26,18 +26,19 @@ type SandboxFrameProps = {
  * live queries are validated against the release's declared bindings before
  * reaching the typed DatasetQuery engine.
  *
- * Two protocol namespaces, deliberately. Current apps carry the `jasmine:*`
+ * Three protocol namespaces, deliberately. Current apps carry the `grain:*`
  * runtime, but a published release freezes its runtime into the stored HTML,
- * so every snapshot cut before the rename still speaks `fieldnote:*` and always
- * will. Unprompted init therefore goes out on both namespaces — each runtime
- * ignores the type it does not know, so neither ever sees a duplicate — and a
- * reply is sent back on whichever namespace the request arrived on.
+ * so every snapshot cut before a rename still speaks `jasmine:*` or
+ * `fieldnote:*` and always will. Unprompted init therefore goes out on every
+ * namespace — each runtime ignores the types it does not know, so none ever
+ * sees a duplicate — and a reply is sent back on whichever namespace the
+ * request arrived on.
  */
 
-const NAMESPACES = ["jasmine", "fieldnote"] as const;
+const NAMESPACES = ["grain", "jasmine", "fieldnote"] as const;
 type Namespace = (typeof NAMESPACES)[number];
 
-/** "jasmine:query" -> "jasmine", and nothing for a message that is not ours. */
+/** "grain:query" -> "grain", and nothing for a message that is not ours. */
 function namespaceOf(type: string | undefined, verb: string): Namespace | null {
   for (const namespace of NAMESPACES) {
     if (type === `${namespace}:${verb}`) return namespace;

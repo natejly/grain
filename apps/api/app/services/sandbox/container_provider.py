@@ -169,8 +169,8 @@ class ContainerProvider(local_exec.LocalProvider):
         # Written to the bind mount rather than passed as `python -c`, so the
         # code is not in the process table and a traceback carries real line
         # numbers against a real file.
-        (root / ".jasmine_exec.py").write_text(code, encoding="utf-8")
-        return self._run(root, ["python3", f"{MOUNT}/.jasmine_exec.py"], timeout, on_output)
+        (root / ".grain_exec.py").write_text(code, encoding="utf-8")
+        return self._run(root, ["python3", f"{MOUNT}/.grain_exec.py"], timeout, on_output)
 
     def run_command(
         self,
@@ -246,7 +246,7 @@ class ContainerProvider(local_exec.LocalProvider):
         on_output: OutputSink,
     ) -> ExecResult:
         before = local_exec.snapshot(root)
-        name = f"jasmine-{uuid.uuid4().hex[:16]}"
+        name = f"grain-{uuid.uuid4().hex[:16]}"
         result = local_exec.run_process(
             self._docker_argv(root, inner, name),
             cwd=self._workdir,

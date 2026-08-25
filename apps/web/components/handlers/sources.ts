@@ -3,11 +3,10 @@
 import type { Source } from "@workspace/api-client";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { api } from "../api";
-import { describeError, type View } from "../views/shared";
+import { describeError } from "../views/shared";
 
 export type SourceHandlerDeps = {
   setError: Dispatch<SetStateAction<string>>;
-  setView: Dispatch<SetStateAction<View>>;
   setUploading: Dispatch<SetStateAction<boolean>>;
   setDragging: Dispatch<SetStateAction<boolean>>;
   refreshSecondary: () => Promise<void>;
@@ -17,26 +16,34 @@ export type SourceHandlerDeps = {
 
 export function createSourceHandlers({
   setError,
-  setView,
   setUploading,
   setDragging,
   refreshSecondary,
   refreshExpansion,
   fileInputRef,
 }: SourceHandlerDeps) {
-  async function uploadFiles(files: FileList | File[]) {
+  /**
+   * Upload one file into workspace knowledge; returns the Source row so the
+   * caller can chain on it (the attach popover turns a tabular upload into a
+   * dataset), or null when the upload failed — the error is already shown.
+   */
+  async function uploadFiles(files: FileList | File[]): Promise<Source | null> {
     const file = Array.from(files)[0];
-    if (!file) return;
+    if (!file) return null;
     setUploading(true);
     setError("");
-    // Switch immediately so later refreshes never clobber user navigation.
-    setView("sources");
+    // Deliberately no setView here. Attaching used to teleport the user to the
+    // Sources page mid-conversation; the upload lands in Sources either way,
+    // and the surface that asked for it — the composer's attach popover, the
+    // Sources page itself — is where the user stays.
     try {
-      await api.uploadSource(file);
+      const uploaded = await api.uploadSource(file);
       await refreshSecondary();
       await refreshExpansion();
+      return uploaded;
     } catch (caught) {
       setError(describeError(caught, "Upload failed"));
+      return null;
     } finally {
       setUploading(false);
       setDragging(false);

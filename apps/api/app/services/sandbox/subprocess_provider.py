@@ -78,7 +78,7 @@ class SubprocessProvider(local_exec.LocalProvider):
         if language != "python":
             raise SandboxError(f"the {self.name} driver runs python, not {language}")
         root = local_exec.ensure_session_root(self._workdir, handle.external_id)
-        script = root / ".jasmine_exec.py"
+        script = root / ".grain_exec.py"
         script.write_text(code, encoding="utf-8")
         return self._run([self._python, str(script)], root, timeout, on_output)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import List, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
@@ -25,19 +26,24 @@ from ..models import (
     new_id,
 )
 from ..schemas import (
+    ApiModel,
     ApprovalMode,
     ApprovalModeRequest,
     CitationCheck,
     ConversationCreate,
+    ConversationDefaultsRequest,
     ConversationOut,
     ConversationShareRequest,
+    ConversationTitleRequest,
     MessageOut,
     RunOut,
     SendMessageRequest,
     SendMessageResponse,
+    SteerRequest,
 )
-from ..services import conversations, orgs, subjects
+from ..services import conversation_index, conversations, orgs, subjects
 from ..services import skills as skills_service
+from ..services import spaces as spaces_service
 from ..services.artifacts import documents
 from ..services.audit import record_audit
 from ..services.events import append_event
@@ -104,6 +110,10 @@ def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationO
         shared=bool(conversation.shared),
         owned=conversation.created_by == actor.user_id,
         can_share=_can_share(conversation, actor),
+        space_id=conversation.space_id,
+        default_agent_id=conversation.default_agent_id,
+        default_model=conversation.default_model,
+        default_effort=conversation.default_effort,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -111,6 +121,7 @@ def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationO
 
 @router.get("/conversations", response_model=List[ConversationOut])
 def list_conversations(
+    space_id: Optional[str] = Query(default=None),
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[ConversationOut]:
@@ -123,7 +134,7 @@ def list_conversations(
     # ones. The `workspace_id` filter is never removed — `shared` only relaxes
     # the within-workspace creator filter, so this can never return another
     # workspace's rows, and another member's personal thread stays hidden.
-    conversations_list = db.scalars(
+    stmt = (
         select(Conversation)
         .where(
             Conversation.workspace_id == actor.workspace_id,  # NEVER removed
@@ -133,7 +144,63 @@ def list_conversations(
         )
         .order_by(Conversation.updated_at.desc())
     )
+    if space_id is not None:
+        # Exact, "" included, so the space page lists its threads and a caller
+        # asking for "no space" is expressible. Only ever narrows the query —
+        # the visibility predicate above is untouched.
+        stmt = stmt.where(Conversation.space_id == space_id)
+    conversations_list = db.scalars(stmt)
     return [_conversation_out(conversation, actor) for conversation in conversations_list]
+
+
+class ConversationSearchHitOut(ApiModel):
+    """One transcript passage matching a search, with where and when."""
+
+    conversation_id: str
+    title: str
+    #: "quote" for a transcript window, "summary" for a thread's rolling summary.
+    kind: str
+    snippet: str
+    spoken_at: datetime
+
+
+#: Enough to recognise the conversation in a palette row; the full passage is
+#: one click away in the thread itself.
+SEARCH_SNIPPET_CHARS = 240
+
+
+@router.get("/conversations/search", response_model=List[ConversationSearchHitOut])
+def search_conversations_http(
+    q: str = Query(min_length=2, max_length=200),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> List[ConversationSearchHitOut]:
+    """Search past conversations by what was said, not only what they are named.
+
+    The same hybrid index (and, critically, the same visibility chokepoint)
+    the agent's `search_conversations` tool reads — a member searching by HTTP
+    must see exactly what the agent quoting on their behalf would see, and a
+    personal thread stays its creator's in both. Declared before FastAPI could
+    ever confuse it with a by-id path, and returning [] rather than erroring
+    when the index is disabled: to a palette, "no hits" and "no index" call
+    for the same quiet row.
+    """
+    hits = conversation_index.search_conversation_chunks(
+        db,
+        workspace_id=actor.workspace_id,
+        viewer_id=actor.user_id,
+        query=q,
+    )
+    return [
+        ConversationSearchHitOut(
+            conversation_id=hit.conversation_id,
+            title=hit.title,
+            kind=hit.kind,
+            snippet=hit.content[:SEARCH_SNIPPET_CHARS],
+            spoken_at=hit.spoken_at,
+        )
+        for hit in hits
+    ]
 
 
 @router.post("/conversations", response_model=ConversationOut, status_code=201)
@@ -154,11 +221,23 @@ def create_conversation(
         if conversation is None or conversation.workspace_id != actor.workspace_id:
             raise replayed_resource_gone()
         return _conversation_out(conversation, actor)
+    space_id = ""
+    if payload.space_id:
+        # Proved against the caller's workspace before it is stamped; a foreign
+        # or deleted space is the same fact to this caller — 404 — never a
+        # thread that silently lost its scope.
+        try:
+            space_id = spaces_service.get_space(
+                db, workspace_id=actor.workspace_id, space_id=payload.space_id
+            ).id
+        except spaces_service.SpaceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     conversation = Conversation(
         id=new_id(),
         workspace_id=actor.workspace_id,
         created_by=actor.user_id,
         title=payload.title.strip() or "New conversation",
+        space_id=space_id,
     )
     db.add(conversation)
     record_key(
@@ -352,6 +431,84 @@ def set_approval_mode(
     return _conversation_out(conversation, actor)
 
 
+@router.patch(
+    "/conversations/{conversation_id}/defaults", response_model=ConversationOut
+)
+def set_conversation_defaults(
+    conversation_id: str,
+    payload: ConversationDefaultsRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    """Remember the composer's choices — agent, model, effort — on the thread.
+
+    A PATCH of preferences, not policy: the run path never reads these (every
+    turn still names its controls explicitly), so there is nothing here to
+    audit and no gate beyond visibility. Any member a shared thread is visible
+    to may set them — they are the thread's working setup, like its title.
+
+    No `Idempotency-Key`: a retry lands on the same state by construction.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.default_agent_id is not None:
+        conversation.default_agent_id = payload.default_agent_id
+    if payload.default_model is not None:
+        conversation.default_model = payload.default_model
+    if payload.default_effort is not None:
+        conversation.default_effort = payload.default_effort
+    db.commit()
+    db.refresh(conversation)
+    return _conversation_out(conversation, actor)
+
+
+@router.put("/conversations/{conversation_id}/title", response_model=ConversationOut)
+def rename_conversation(
+    conversation_id: str,
+    payload: ConversationTitleRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    """Rename a thread.
+
+    Any member the thread is visible to may rename it, same as the approval
+    mode: a shared thread's name is the collaboration's, not the creator's,
+    and a personal thread is only ever visible to its creator anyway. Subject
+    threads are refused — their titles are derived from the subject they hang
+    off ("Document: Q3 notes"), and a hand-renamed one would stop saying what
+    it is attached to.
+
+    No `Idempotency-Key`: a PUT of a value, so a retry lands on the same state
+    by construction.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation.subject_id:
+        raise HTTPException(
+            status_code=409,
+            detail="A subject thread is named by what it is attached to",
+        )
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="A title needs at least one character")
+    conversation.title = title
+    db.commit()
+    db.refresh(conversation)
+    return _conversation_out(conversation, actor)
+
+
 @router.put("/conversations/{conversation_id}/share", response_model=ConversationOut)
 def set_conversation_shared(
     conversation_id: str,
@@ -498,48 +655,17 @@ def list_messages(
     ]
 
 
-@router.post(
-    "/conversations/{conversation_id}/messages",
-    response_model=SendMessageResponse,
-    status_code=202,
-)
-def send_message(
-    conversation_id: str,
+def _stage_turn(
+    db: Session,
+    *,
+    actor: Actor,
+    settings: Settings,
+    conversation: Conversation,
     payload: SendMessageRequest,
-    background_tasks: BackgroundTasks,
-    key: str = Depends(idempotency_key),
-    actor: Actor = Depends(get_actor),
-    settings: Settings = Depends(get_settings),
-    db: Session = Depends(get_db),
-) -> SendMessageResponse:
-    conversation = conversations.resolve_visible(
-        db,
-        workspace_id=actor.workspace_id,
-        user_id=actor.user_id,
-        conversation_id=conversation_id,
-    )
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    replay = find_replay(
-        db, workspace_id=actor.workspace_id, operation="message.send", key=key
-    )
-    if replay:
-        run = db.scalar(
-            select(Run).where(
-                Run.id == replay.resource_id,
-                Run.workspace_id == actor.workspace_id,
-            )
-        )
-        message = db.scalar(
-            select(Message).where(Message.run_id == replay.resource_id, Message.role == "user")
-        )
-        if run is None or message is None:
-            raise replayed_resource_gone()
-        return SendMessageResponse(
-            message=_message_out(message, actor.user_name),
-            run=RunOut.model_validate(run),
-            replayed=True,
-        )
+) -> tuple[Run, Message]:
+    """Resolve the agent, model and skill, then stage the run and its user
+    message — everything a new turn needs short of idempotency, audit and
+    commit, which differ between the callers (send vs edit)."""
     # "The default agent" is now per workspace — every account gets one at
     # signup — because a global id would point a new tenant at the dev seed's
     # agent, or at nothing at all.
@@ -625,6 +751,107 @@ def send_message(
         event_type="run.queued",
         payload={"status": "queued", "message_id": message.id},
     )
+    return run, message
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages",
+    response_model=SendMessageResponse,
+    status_code=202,
+)
+def send_message(
+    conversation_id: str,
+    payload: SendMessageRequest,
+    background_tasks: BackgroundTasks,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> SendMessageResponse:
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.aside:
+        # An aside ("/btw") is a message, not a turn: it lands in the transcript
+        # and is read as context by whichever turn comes next — `_transcript`
+        # collects by conversation, not by run — but nothing is queued and no
+        # agent runs. Its own idempotency operation, because the resource a
+        # replay must return is a message rather than a run.
+        replay = find_replay(
+            db, workspace_id=actor.workspace_id, operation="message.aside", key=key
+        )
+        if replay:
+            message = db.scalar(
+                select(Message).where(
+                    Message.id == replay.resource_id,
+                    Message.workspace_id == actor.workspace_id,
+                )
+            )
+            if message is None:
+                raise replayed_resource_gone()
+            return SendMessageResponse(
+                message=_message_out(message, actor.user_name),
+                run=None,
+                replayed=True,
+            )
+        message = Message(
+            id=new_id(),
+            workspace_id=actor.workspace_id,
+            conversation_id=conversation.id,
+            run_id="",
+            role="user",
+            created_by=actor.user_id,
+            content=payload.content,
+        )
+        db.add(message)
+        record_key(
+            db,
+            workspace_id=actor.workspace_id,
+            operation="message.aside",
+            key=key,
+            resource_id=message.id,
+        )
+        record_audit(
+            db,
+            workspace_id=actor.workspace_id,
+            actor_id=actor.user_id,
+            action="message.aside",
+            resource_type="message",
+            resource_id=message.id,
+            detail={"conversation_id": conversation.id},
+        )
+        db.commit()
+        return SendMessageResponse(
+            message=_message_out(message, actor.user_name), run=None
+        )
+    replay = find_replay(
+        db, workspace_id=actor.workspace_id, operation="message.send", key=key
+    )
+    if replay:
+        run = db.scalar(
+            select(Run).where(
+                Run.id == replay.resource_id,
+                Run.workspace_id == actor.workspace_id,
+            )
+        )
+        message = db.scalar(
+            select(Message).where(Message.run_id == replay.resource_id, Message.role == "user")
+        )
+        if run is None or message is None:
+            raise replayed_resource_gone()
+        return SendMessageResponse(
+            message=_message_out(message, actor.user_name),
+            run=RunOut.model_validate(run),
+            replayed=True,
+        )
+    run, message = _stage_turn(
+        db, actor=actor, settings=settings, conversation=conversation, payload=payload
+    )
     record_key(
         db,
         workspace_id=actor.workspace_id,
@@ -641,7 +868,138 @@ def send_message(
         action="run.created",
         resource_type="run",
         resource_id=run.id,
-        detail={"conversation_id": conversation.id, "agent_id": agent.id},
+        detail={"conversation_id": conversation.id, "agent_id": run.agent_id},
+    )
+    db.commit()
+    background_tasks.add_task(process_run, run.id)
+    return SendMessageResponse(
+        message=_message_out(message, actor.user_name),
+        run=RunOut.model_validate(run),
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/edit",
+    response_model=SendMessageResponse,
+    status_code=202,
+)
+def edit_message(
+    conversation_id: str,
+    message_id: str,
+    payload: SendMessageRequest,
+    background_tasks: BackgroundTasks,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> SendMessageResponse:
+    """Rewrite one of your prompts and re-run the conversation from there.
+
+    The edit IS a truncation: the old turn's messages, tool cards and runs are
+    deleted — not superseded — and a fresh turn is queued with the new words.
+    History reaches the model rebuilt from `messages` on every turn, so what
+    remains after the cut is exactly the context the re-run sees; keeping the
+    old answer around would leave the transcript contradicting itself.
+
+    Only the author may edit (a shared thread must not let one member rewrite
+    another's words), only a `user` message that started a turn qualifies (an
+    assistant message is not yours to put words into; an aside never ran), and
+    a turn that is still running or parked refuses with a 409 — deciding or
+    cancelling it comes first.
+
+    Same idempotency shape as `message.send`, its own operation: the resource
+    a replay must return is the NEW run.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.aside:
+        raise HTTPException(status_code=422, detail="An aside is added, not edited into")
+    replay = find_replay(
+        db, workspace_id=actor.workspace_id, operation="message.edit", key=key
+    )
+    if replay:
+        run = db.scalar(
+            select(Run).where(
+                Run.id == replay.resource_id,
+                Run.workspace_id == actor.workspace_id,
+            )
+        )
+        message = db.scalar(
+            select(Message).where(Message.run_id == replay.resource_id, Message.role == "user")
+        )
+        if run is None or message is None:
+            raise replayed_resource_gone()
+        return SendMessageResponse(
+            message=_message_out(message, actor.user_name),
+            run=RunOut.model_validate(run),
+            replayed=True,
+        )
+    pivot = db.scalar(
+        select(Message).where(
+            Message.id == message_id,
+            Message.conversation_id == conversation.id,
+            Message.workspace_id == actor.workspace_id,
+        )
+    )
+    if pivot is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if pivot.role != "user" or pivot.run_id == "":
+        raise HTTPException(
+            status_code=422,
+            detail="Only a prompt that started a turn can be edited",
+        )
+    if pivot.created_by != actor.user_id:
+        raise HTTPException(
+            status_code=403, detail="Only the author may edit their message"
+        )
+    try:
+        removed_runs = conversations.truncate_after(
+            db,
+            workspace_id=actor.workspace_id,
+            conversation_id=conversation.id,
+            message_id=pivot.id,
+            # On a shared thread the sweep must not take a teammate's turn with
+            # it; on a personal thread every run is the caller's anyway.
+            only_runs_by=actor.user_id if conversation.shared else None,
+        )
+    except conversations.TruncationBlocked as blocked:
+        raise HTTPException(status_code=409, detail=str(blocked)) from blocked
+    run, message = _stage_turn(
+        db, actor=actor, settings=settings, conversation=conversation, payload=payload
+    )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="message.edit",
+        key=key,
+        resource_id=run.id,
+    )
+    # The destructive half gets its own audit row, before the routine
+    # `run.created` one: "who cut this transcript, where, and which runs went"
+    # must have an answer that is not implied by a run appearing.
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="message.edited",
+        resource_type="message",
+        resource_id=pivot.id,
+        detail={"conversation_id": conversation.id, "removed_runs": removed_runs},
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="run.created",
+        resource_type="run",
+        resource_id=run.id,
+        detail={"conversation_id": conversation.id, "agent_id": run.agent_id},
     )
     db.commit()
     background_tasks.add_task(process_run, run.id)
@@ -710,6 +1068,117 @@ def cancel_run(
         resource_id=run.id,
     )
     db.commit()
+    return run
+
+
+@router.post("/runs/{run_id}/steer", response_model=RunOut)
+def steer_run(
+    run_id: str,
+    payload: SteerRequest,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> Run:
+    """Inject a mid-turn user message into a run that is still working.
+
+    The message rides `run_events` — the channel the loop already polls for
+    cancellation — as a `steer.requested` event the loop folds into the
+    transcript at the head of its next iteration (`_absorb_steering`). Only a
+    queued or running turn accepts one: a parked run is waiting on a decision,
+    not on words, and a finished run has a composer for the next turn.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from ..services.agent_loop import STEER_REQUESTED
+
+    run = db.scalar(
+        select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    # Stricter than cancel's gate, on purpose. Cancel only stops work, so every
+    # member may cancel an automation; steer INJECTS instructions into a turn
+    # and writes a user message into its conversation, so it demands the same
+    # authority sending a message there would: the run is the caller's own, or
+    # its conversation is one the caller could post to (shared, or their own).
+    # A cron run targeting another member's personal thread refuses — without
+    # this, a member could write into (and redirect) a thread they cannot open.
+    conversation = (
+        db.get(Conversation, run.conversation_id) if run.conversation_id else None
+    )
+    if conversation is not None and conversation.workspace_id != actor.workspace_id:
+        conversation = None
+    may_steer = run.created_by == actor.user_id or (
+        conversation is not None
+        and (bool(conversation.shared) or conversation.created_by == actor.user_id)
+    )
+    if not may_steer:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if find_replay(
+        db, workspace_id=actor.workspace_id, operation="run.steer", key=key
+    ):
+        return run
+    if run.status not in {"queued", "running"}:
+        raise HTTPException(
+            status_code=409, detail="Run is not in flight; send a message instead"
+        )
+    # One transaction for all four writes, so the idempotency key covers
+    # exactly what it makes replayable: a crash after the commit replays as
+    # "already steered", a crash before it left nothing to duplicate. The
+    # steer's Message carries `run_id=run.id` like the turn's own prompt
+    # message does — `_transcript` excludes the current run's messages, so a
+    # queued run that starts later, or a lease-recovery re-run that rebuilds
+    # its LoopState from scratch, re-absorbs the steer from its events without
+    # ALSO meeting it in the transcript; later turns see it as ordinary
+    # history.
+    #
+    # `append_event` assigns the sequence atomically, but a snapshot-isolated
+    # backend can still collide with the loop's own writer; one retry
+    # recomputes it, and losing twice means something is genuinely wrong.
+    for attempt in (1, 2):
+        try:
+            append_event(
+                db,
+                workspace_id=actor.workspace_id,
+                run_id=run.id,
+                event_type=STEER_REQUESTED,
+                payload={"content": payload.content, "user_id": actor.user_id},
+            )
+            db.add(
+                Message(
+                    id=new_id(),
+                    workspace_id=actor.workspace_id,
+                    conversation_id=run.conversation_id,
+                    run_id=run.id,
+                    role="user",
+                    created_by=actor.user_id,
+                    content=payload.content,
+                )
+            )
+            record_key(
+                db,
+                workspace_id=actor.workspace_id,
+                operation="run.steer",
+                key=key,
+                resource_id=run.id,
+            )
+            record_audit(
+                db,
+                workspace_id=actor.workspace_id,
+                actor_id=actor.user_id,
+                action="run.steered",
+                resource_type="run",
+                resource_id=run.id,
+                detail={"chars": len(payload.content)},
+            )
+            db.commit()
+            break
+        except IntegrityError:
+            db.rollback()
+            if attempt == 2:
+                raise HTTPException(
+                    status_code=409, detail="The run is busy; try steering again"
+                ) from None
     return run
 
 

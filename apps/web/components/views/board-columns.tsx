@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, GripVertical, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, GripVertical, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { BoardColumn } from "@workspace/api-client";
 import { useState } from "react";
 
@@ -160,6 +160,16 @@ type ColumnHeaderProps = {
   siblings: BoardColumn[];
   onRename?: (name: string) => Promise<void>;
   onDelete?: (moveCardsTo: string) => Promise<void>;
+  /**
+   * The keyboard alternative to dragging the column: shift it one slot either
+   * way. Null on the side that has no further to go — the button stays
+   * rendered and focusable (aria-disabled, not disabled), so focus does not
+   * fall off the edge mid-move.
+   */
+  move?: {
+    left: (() => Promise<void>) | null;
+    right: (() => Promise<void>) | null;
+  };
 };
 
 export function ColumnHeader({
@@ -167,12 +177,22 @@ export function ColumnHeader({
   siblings,
   onRename,
   onDelete,
+  move,
 }: ColumnHeaderProps) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(column.name);
   const [confirming, setConfirming] = useState(false);
   const [destination, setDestination] = useState(siblings[0]?.id ?? "");
+  // A move in flight parks both chevrons: a second click before the reorder
+  // lands would be computed from the stale order and silently dropped.
+  const [moving, setMoving] = useState(false);
   const editable = Boolean(onRename && onDelete);
+
+  function shift(action: (() => Promise<void>) | null) {
+    if (!action || moving) return;
+    setMoving(true);
+    void action().finally(() => setMoving(false));
+  }
 
   if (renaming && onRename) {
     return (
@@ -269,6 +289,26 @@ export function ColumnHeader({
       {editable && <GripVertical size={13} aria-hidden />}
       <span>{column.name}</span>
       <span className="kanban-count">{column.cards.length}</span>
+      {move && (
+        <>
+          <button
+            className="icon-button"
+            aria-disabled={!move.left || moving}
+            onClick={() => shift(move.left)}
+            aria-label={`Move ${column.name} left`}
+          >
+            <ChevronLeft size={12} />
+          </button>
+          <button
+            className="icon-button"
+            aria-disabled={!move.right || moving}
+            onClick={() => shift(move.right)}
+            aria-label={`Move ${column.name} right`}
+          >
+            <ChevronRight size={12} />
+          </button>
+        </>
+      )}
       {editable && (
         <>
           <button

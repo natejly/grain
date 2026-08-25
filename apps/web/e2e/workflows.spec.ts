@@ -143,7 +143,7 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   // "thing" is the sentence, so this opens the composer, like a dashboard's.
   await createFromMenu(page, "Workflow");
   await expect(page.locator(".workflow-author")).toBeVisible();
-  await expect(rail(page).getByRole("button", { name: /^Workflows/ })).toHaveAttribute(
+  await expect(rail(page).getByRole("button", { name: /^Automations/ })).toHaveAttribute(
     "aria-current",
     "page",
   );
@@ -258,7 +258,7 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   await expect(page.locator(".workflow-item")).toHaveCount(0);
 
   // The approved write really happened, and is this spec's to clean up.
-  await openView(page, "Files", /^Files/);
+  await openView(page, "Library", /^Documents/);
   await page.getByText(WORKFLOW_DOCUMENT).click();
   // Confirm()-gated like every other destructive action here, so the handler
   // has to be armed before the click. It is consumed by this dialog, which is
@@ -286,7 +286,7 @@ test("workflows: a declared input is a form, and a refusal names the field", asy
   await page.goto("/");
   await storeWorkflow(page, PARAMETERISED);
 
-  await openView(page, "Workflows");
+  await openView(page, "Automations");
   await page.getByRole("button", { name: PARAMETERISED_NAME }).first().click();
   await expect(page.getByRole("heading", { name: PARAMETERISED_NAME })).toBeVisible();
 

@@ -12,38 +12,43 @@ import { createFromMenu, openSettings, openView, rail, tabs } from "./shell";
  * because these specs share a workspace and run in file order.
  */
 
-test("the rail is the places you work, and only those", async ({ page }) => {
+test("the rail is four doors, and only those", async ({ page }) => {
   await page.goto("/");
   await expect(rail(page).getByRole("button")).toHaveCount(4);
-  // Workflows earned a rail slot rather than a place behind Settings: half of
-  // what it does is operating a running thing, and an approval waiting since
-  // 3am is not something you go looking for in a configuration menu.
-  for (const label of ["Chat", "Files", "Knowledge", "Workflows"]) {
+  // The foyer: talk, what needs me, where's my stuff, what runs without me.
+  // Inbox is here because the approval queue is work waiting on a human, and
+  // it used to hide behind a menu labelled "Settings".
+  for (const label of ["Chat", "Inbox", "Library", "Automations"]) {
     await expect(rail(page).getByRole("button", { name: new RegExp(`^${label}`) }))
       .toBeVisible();
   }
   // Creating is an action, so it is no longer a place you can visit; the
-  // subsystems live inside a destination or behind Settings. "Sandbox" is on
-  // this list for the sharper reason: running code is a capability, not a
-  // destination — you ask for a chart and it appears on the tool card that drew
-  // it, the same way you never visit "the database".
+  // subsystems live inside a destination or behind workspace settings.
+  // "Sandbox" is on this list for the sharper reason: running code is a
+  // capability, not a destination — you ask for a chart and it appears on the
+  // tool card that drew it, the same way you never visit "the database".
+  // "Files", "Workflows", "Activity" and "Knowledge" are the retired rail
+  // names, pinned gone so a regression cannot quietly bring a fifth door back.
   for (const gone of [
     "Create",
     "Sandbox",
+    "Files",
+    "Workflows",
+    "Activity",
+    "Knowledge",
     "Projects",
     "Databases",
     "MCP",
     "Integrations",
     "Graph",
     "Connections",
-    "Activity",
     "Admin",
   ]) {
     await expect(rail(page).getByRole("button", { name: gone })).toHaveCount(0);
   }
   // The two menus that took the rest of the navigation.
   await expect(page.getByRole("button", { name: "Create new" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Settings/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Workspace settings" })).toBeVisible();
 });
 
 /**
@@ -59,53 +64,76 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
   await page.goto("/");
   await shot(page, "chat");
 
-  await openView(page, "Files");
+  await openView(page, "Library");
   await expect(page.locator(".documents-layout")).toBeVisible();
-  // The group is Files, and the siblings that shared it came along. Sandbox is
-  // still not among them: it left the product's navigation entirely, and
-  // nothing here should offer a way back to it. Lists joined, beside Boards
-  // rather than inside them — a todo list is a one-column board, and that is a
-  // detail nobody should have to know to find their checklist.
-  for (const tab of ["Files", "Projects", "Boards", "Lists", "Dashboards"]) {
+  // The group is Library, and its sidebar is what it holds, shelved under
+  // section headings. The first entry is Documents — not "Files", which
+  // doubled the group's old name into a "Files / Files" breadcrumb. Boards and
+  // lists are ONE entry — a todo list is a one-column board, and two entries
+  // made an object teleport between them the moment its column count crossed
+  // 1; now it stays put and changes its glyph. Databases moved here from the
+  // Settings menu, beside the Datasets they feed; Knowledge folded in from the
+  // rail, one always-visible click away.
+  for (const entry of [
+    "Documents",
+    "Projects",
+    "Boards & todos",
+    "Datasets",
+    "Databases",
+    "Dashboards",
+    "Apps",
+    "Sources",
+    "Memory",
+    "Graph",
+  ]) {
     // Anchored: "Boards" is a substring of "Dashboards", and the count badge is
     // part of the accessible name, so neither end can be matched loosely.
-    await expect(tabs(page, "Files").getByRole("button", { name: new RegExp(`^${tab}`) }))
+    await expect(tabs(page, "Library").getByRole("button", { name: new RegExp(`^${entry}`) }))
       .toBeVisible();
   }
-  await expect(tabs(page, "Files").getByRole("button")).toHaveCount(5);
-  await expect(tabs(page, "Files").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
+  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(10);
+  // The retired "Lists" entry stays gone: one destination, one listing.
+  await expect(tabs(page, "Library").getByRole("button", { name: /^Lists/ })).toHaveCount(0);
+  await expect(tabs(page, "Library").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
+  // The shelves say their names.
+  for (const heading of ["Boards & todos", "Data", "Dashboards", "Knowledge"]) {
+    await expect(
+      tabs(page, "Library").locator(".section-heading", { hasText: heading }),
+    ).toBeVisible();
+  }
 
-  await shot(page, "files");
+  await shot(page, "library");
 
-  await openView(page, "Knowledge");
+  await openView(page, "Library", /^Sources/);
   await expect(page.getByRole("heading", { name: "Sources" })).toBeVisible();
-  for (const tab of ["Sources", "Memory", "Graph"]) {
-    await expect(tabs(page, "Knowledge").getByRole("button", { name: tab }))
-      .toBeVisible();
-  }
 
   await shot(page, "knowledge");
 
   await openSettings(page, "Connections");
-  // Sandbox tools joined this group beside MCP: both register capabilities the
-  // agent may call, and neither is a machine you operate from the rail.
-  for (const tab of ["Databases", "MCP", "Sandbox tools", "Integrations"]) {
-    await expect(tabs(page, "Connections").getByRole("button", { name: tab }))
+  // Sandbox tools sit beside MCP: both register capabilities the agent may
+  // call. Databases left for Library → Data, where the datasets they feed live.
+  for (const entry of ["MCP", "Sandbox tools", "Integrations"]) {
+    await expect(tabs(page, "Connections").getByRole("button", { name: entry }))
       .toBeVisible();
   }
-  await expect(tabs(page, "Connections").getByRole("button")).toHaveCount(4);
+  await expect(tabs(page, "Connections").getByRole("button")).toHaveCount(3);
   await tabs(page, "Connections").getByRole("button", { name: /MCP/ }).click();
   await expect(page.getByRole("heading", { name: "MCP servers" })).toBeVisible();
 
   await shot(page, "connections");
 
-  // Single-view destinations get no strip — a tab bar with one tab is noise.
-  await openSettings(page, "Activity");
-  await expect(page.locator(".view-tabs")).toHaveCount(0);
-  await shot(page, "activity");
+  // Inbox carries a section nav now that the Rules ledger lives beside the
+  // queue — and the queue is still what the door lands on.
+  await openView(page, "Inbox");
+  await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+  for (const entry of [/^Inbox/, /^Rules/]) {
+    await expect(tabs(page, "Inbox").getByRole("button", { name: entry })).toBeVisible();
+  }
+  await shot(page, "inbox");
 
+  // Single-view destinations get no section nav — a list with one row is noise.
   await openSettings(page, "Admin");
-  await expect(page.locator(".view-tabs")).toHaveCount(0);
+  await expect(page.locator(".section-nav")).toHaveCount(0);
   // Either the caller owns this workspace and gets the panels, or the API says
   // 403 and the view says so in a sentence. Both are the surface working.
   await expect(
@@ -127,8 +155,8 @@ test("Create makes the thing and opens it, rather than going to a list", async (
   // The document exists and is open for editing — not a list, not a form.
   await expect(page.getByRole("heading", { name: "Create Menu Note" })).toBeVisible();
   await expect(page.locator(".document-source")).toBeVisible();
-  // And it landed on the destination that holds files, with its tab strip.
-  await expect(tabs(page, "Files").getByRole("button", { name: /^Files/ }))
+  // And it landed on the destination that holds documents, with its tab strip.
+  await expect(tabs(page, "Library").getByRole("button", { name: /^Documents/ }))
     .toHaveAttribute("aria-current", "page");
 
   // Put the shared workspace back: a stray document makes the next spec's
@@ -145,11 +173,11 @@ test("Create reaches a sibling of the destination it opens", async ({ page }) =>
   await createFromMenu(page, "Board", "Create Menu Board");
 
   await expect(page.getByRole("heading", { name: "Create Menu Board" })).toBeVisible();
-  await expect(tabs(page, "Files").getByRole("button", { name: /^Boards/ }))
+  await expect(tabs(page, "Library").getByRole("button", { name: /^Boards/ }))
     .toHaveAttribute("aria-current", "page");
 
-  // No arm: deleting a board is not confirm()-gated, and a handler with nothing
-  // to catch stays live for whatever dialog comes next in this test.
+  // A board takes its cards with it, so deleting one is confirm()-gated now.
+  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete Create Menu Board" }).click();
   await expect(page.getByRole("heading", { name: "Create Menu Board" })).toHaveCount(0);
 });
@@ -163,17 +191,19 @@ test("the Create menu offers every kind of thing", async ({ page }) => {
     "Project",
     "LaTeX document",
     "Board",
-    "Dashboard",
+    "App",
     "Workflow",
   ]) {
     await expect(menu.getByRole("button", { name: thing, exact: true })).toBeVisible();
   }
-  // Two absences, for two different reasons. "Sandbox" was never a thing you
-  // make — it was a machine you were being asked to operate. "Folder" is a
+  // Three absences, for three different reasons. "Sandbox" was never a thing
+  // you make — it was a machine you were being asked to operate. "Folder" is a
   // thing you make, but the only question worth asking about a new one is which
   // folder it goes in, and a menu in the corner of the screen cannot ask that;
   // it is made in the tree, where the answer is whatever you were pointing at.
-  for (const absent of ["Sandbox", "Folder"]) {
+  // "Dashboard" is the retired lie: the entry that said it built a sandbox app,
+  // and real dashboards are written by the agent when you ask for a chart.
+  for (const absent of ["Sandbox", "Folder", "Dashboard"]) {
     await expect(menu.getByRole("button", { name: absent, exact: true })).toHaveCount(0);
   }
   await shot(page, "create-menu");
@@ -194,8 +224,8 @@ test("the Create menu offers every kind of thing", async ({ page }) => {
   // The open panel's scrim covers the viewport, so Create has to be dismissed
   // before another trigger can be reached — same as it is for a user.
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: /^Settings/ }).click();
-  await expect(page.getByRole("group", { name: "Settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Workspace settings" }).click();
+  await expect(page.getByRole("group", { name: "Workspace settings" })).toBeVisible();
   await shot(page, "settings-menu");
 });
 
@@ -214,20 +244,20 @@ test("a menu closes on Escape with focus back on its trigger, and on a click out
   await expect(create).toBeFocused();
   await expect(create).toHaveAttribute("aria-expanded", "false");
 
-  await page.getByRole("button", { name: /^Settings/ }).click();
-  await expect(page.getByRole("group", { name: "Settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Workspace settings" }).click();
+  await expect(page.getByRole("group", { name: "Workspace settings" })).toBeVisible();
   // The scrim covers the viewport, so any click outside the panel lands on it.
   await page.mouse.click(400, 400);
-  await expect(page.getByRole("group", { name: "Settings" })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Workspace settings" })).toHaveCount(0);
 });
 
-test("memory is a first-class surface under Knowledge", async ({ page }) => {
+test("memory is a first-class surface on Library's Knowledge shelf", async ({ page }) => {
   await page.goto("/");
-  await openView(page, "Knowledge", /Memory/);
+  await openView(page, "Library", /Memory/);
 
   await expect(page.getByRole("heading", { name: "Memory" })).toBeVisible();
   // The topbar says which group you are in, so the title is never context-free.
-  await expect(page.locator(".page-context")).toContainText("Knowledge");
+  await expect(page.locator(".page-context")).toContainText("Library");
 
   // Either it has memories — and then they are searchable and forgettable — or
   // it says so. Both are the surface working; which one depends on the run.
@@ -243,13 +273,13 @@ test("memory is a first-class surface under Knowledge", async ({ page }) => {
   }
 
   // Memory left the graph page when it got its own; it must not be in both.
-  await tabs(page, "Knowledge").getByRole("button", { name: "Graph" }).click();
+  await tabs(page, "Library").getByRole("button", { name: "Graph" }).click();
   await expect(page.locator(".memory-row")).toHaveCount(0);
 });
 
 test("a destination reopens where you left it", async ({ page }) => {
   await page.goto("/");
-  await openView(page, "Knowledge", /Memory/);
+  await openView(page, "Library", /Memory/);
   await expect(page.getByRole("heading", { name: "Memory" })).toBeVisible();
 
   await openView(page, "Chat");
@@ -260,7 +290,7 @@ test("a destination reopens where you left it", async ({ page }) => {
   await expect(tabs(page, "Chat").getByRole("button", { name: /^Chat/ })).toBeVisible();
   await expect(tabs(page, "Chat").getByRole("button", { name: /^Agents/ })).toBeVisible();
 
-  await openView(page, "Knowledge");
+  await openView(page, "Library");
   await expect(page.getByRole("heading", { name: "Memory" })).toBeVisible();
 
   // The same memory applies to the destinations behind Settings.

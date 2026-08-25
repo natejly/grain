@@ -1,5 +1,4 @@
 import {
-  Activity,
   BarChart3,
   Blocks,
   Bot,
@@ -8,14 +7,18 @@ import {
   Clock,
   Database,
   FileText,
+  Inbox,
   KanbanSquare,
+  Layers,
+  LayoutGrid,
   Library,
-  ListChecks,
+  LibraryBig,
   MessageSquare,
   Network,
   Plug,
   ShieldCheck,
   Sparkles,
+  Table2,
   Terminal,
   Workflow,
   type LucideIcon,
@@ -26,39 +29,42 @@ import type { View } from "./shared";
  * One table describes the whole of navigation, because a view that is missing
  * from it is a view with no way to reach it — and the shell would still render.
  *
- * The sidebar answers "what am I trying to do", not "which subsystem owns
- * this". Eleven flat entries required a user to know the architecture before
- * they could find anything; a group's siblings are reachable from a tab strip
- * once you are inside it, and the first item of a group is where it lands.
+ * Two levels now, not one. The rail is four icons — Chat, Inbox, Library,
+ * Automations — and each opens a contextual sidebar whose SECTIONS group that
+ * destination's views under honest headings. The flat tab strip this replaces
+ * had grown to seven tabs under Library alone, at which point a strip stops
+ * being "the siblings at a glance" and becomes a second navigation problem.
  *
- * What changed here is that "Create" stopped being a place. Creating is an
- * action, so it left the rail for a menu in the top right that actually makes
- * the thing; the *files* that used to hide behind it are a destination in their
- * own right, and they took their siblings' tab strip with them. Knowledge stays
- * on the rail on purpose: a user who could not find their memories is not
- * helped by moving them further away.
+ * Knowledge lives inside Library rather than on the rail. It earned a rail
+ * seat when the alternative was burial in a Settings menu; with Library's
+ * sidebar always showing its section headings, Sources/Memory/Graph are one
+ * click from anywhere and *visible* the whole time you are in Library — nearer
+ * than the old rail seat left them, not further. Databases moved beside
+ * Datasets for the same reason: connect-data and chart-it were a Settings
+ * menu and a rail destination apart, and the audit called that trek out by
+ * name.
  *
- * Sandbox left for a different reason, and it is the sharper one: a sandbox is
- * a *capability*, not a destination. You do not visit it any more than you
- * visit the database — you ask for a chart and you get one, and the figure
- * appears on the tool card in the conversation that asked. A rail entry for it
- * was inviting users to go and operate a machine, which is the agent's job; it
- * also invited them, whenever SANDBOX_ENABLED was false, to start a machine
- * that 502s. The service, its tools and its API are untouched.
+ * Inbox is on the rail because approvals are the product's primary work
+ * object, not an audit artifact. It carries the shell's only numeric badge.
+ *
+ * Sandbox is not a destination anywhere, and that is the sharper decision: a
+ * sandbox is a *capability*. You do not visit it any more than you visit the
+ * database — you ask for a chart and the figure appears on the tool card in
+ * the conversation that asked.
  */
 export type GroupId =
   | "chat"
+  | "inbox"
   | "files"
   | "workflows"
-  | "knowledge"
   | "connections"
-  | "activity"
   | "admin";
 
 /**
- * Where a group is reached from. "rail" is the left sidebar — the places you
- * work. "settings" is the top-right menu — the places you configure and audit,
- * which are visited rarely and do not deserve permanent rail space.
+ * Where a group is reached from. "rail" is the icon rail — the places you
+ * work. "settings" is the workspace-settings menu — the places you configure,
+ * which are visited rarely and do not deserve permanent rail space. Nothing
+ * that *waits on a person* may live behind "settings".
  *
  * Both surfaces read this one list, so a group cannot appear on neither.
  */
@@ -66,9 +72,18 @@ export type NavSurface = "rail" | "settings";
 
 export type NavItem = {
   view: View;
-  /** Short label for the sidebar/tab strip; PAGE_TITLES carries the long form. */
+  /** Short label for the sidebar; PAGE_TITLES carries the long form. */
   label: string;
   icon: LucideIcon;
+};
+
+/**
+ * One headed block of a destination's sidebar. `label: ""` renders no heading
+ * — the unlabelled block a destination's primary views sit in.
+ */
+export type NavSection = {
+  label: string;
+  items: NavItem[];
 };
 
 export type NavGroup = {
@@ -76,10 +91,15 @@ export type NavGroup = {
   label: string;
   icon: LucideIcon;
   surface: NavSurface;
+  sections: NavSection[];
+  /** Every view in the group, in sidebar order. Derived from `sections`. */
   items: NavItem[];
 };
 
-export const NAV_GROUPS: NavGroup[] = [
+/** The declaration shape: `items` is derived below, never written by hand. */
+type NavGroupSpec = Omit<NavGroup, "items">;
+
+const GROUP_SPECS: NavGroupSpec[] = [
   {
     id: "chat",
     label: "Chat",
@@ -87,83 +107,147 @@ export const NAV_GROUPS: NavGroup[] = [
     surface: "rail",
     /**
      * Agents live beside Chat, not in settings: an agent is who you are
-     * talking to, so the place you author one is a tab away from the place
-     * you use one. A skill is the same argument in the other dimension — not
-     * who answers but what you ask them to do — so it sits alongside, authored
-     * a tab from the composer that invokes it with "/".
+     * talking to, so the place you author one is a click from the place you
+     * use one. A skill is the same argument in the other dimension — not who
+     * answers but what you ask them to do. A space groups conversations, and
+     * conversations are what this destination is for.
      */
-    items: [
-      { view: "chat", label: "Chat", icon: MessageSquare },
-      { view: "agents", label: "Agents", icon: Bot },
-      { view: "skills", label: "Skills", icon: Sparkles },
+    sections: [
+      {
+        label: "",
+        items: [
+          { view: "chat", label: "Chat", icon: MessageSquare },
+          { view: "spaces", label: "Spaces", icon: Layers },
+          { view: "agents", label: "Agents", icon: Bot },
+          { view: "skills", label: "Skills", icon: Sparkles },
+        ],
+      },
     ],
   },
   /**
-   * "Files", not "Documents". The group has held Projects, Boards and
-   * Dashboards for as long as it has existed, so its old name described one of
-   * its four tabs and mislabelled the other three — and now that the first tab
-   * is a folder tree rather than a flat list, "Files" is also what the thing
-   * itself is.
+   * What needs you. The approval queue used to be the first half of a page
+   * called Activity, reachable only through the Settings menu — four clicks
+   * from the thing that was actually blocked on a human. It is a rail
+   * destination now, second from the top, and the count of parked requests
+   * rides its rail icon as the shell's only numeric badge.
+   */
+  {
+    id: "inbox",
+    label: "Inbox",
+    icon: Inbox,
+    surface: "rail",
+    sections: [
+      {
+        label: "",
+        items: [
+          { view: "activity", label: "Inbox", icon: Inbox },
+          // The ledger of standing grants beside the queue that writes them:
+          // an "always allow" ticked on an approval card lands here, and here
+          // is where it is taken back. The org ceilings render on the same
+          // page — the rule that denies you belongs next to the rules you
+          // wrote yourself.
+          { view: "policies", label: "Rules", icon: ShieldCheck },
+        ],
+      },
+    ],
+  },
+  /**
+   * "Library", because that is what it holds — and held under headings,
+   * because a flat strip of seven tabs answers "where is my stuff" with a
+   * lineup rather than a shelf.
    */
   {
     id: "files",
-    label: "Files",
-    icon: FileText,
+    label: "Library",
+    icon: LibraryBig,
     surface: "rail",
-    items: [
-      { view: "documents", label: "Files", icon: FileText },
-      { view: "projects", label: "Projects", icon: Braces },
-      { view: "boards", label: "Boards", icon: KanbanSquare },
-      /**
-       * Beside Boards rather than inside them, because a list is a board with
-       * one column and that is an implementation detail nobody should have to
-       * know to find their checklist. A tab of its own is also what makes the
-       * graduation legible in the other direction: add a second column to a
-       * list and it stops appearing here and starts appearing there, same id,
-       * same items, ticks intact.
-       */
-      { view: "todos", label: "Lists", icon: ListChecks },
-      { view: "dashboards", label: "Dashboards", icon: BarChart3 },
-    ],
-  },
-  {
-    id: "knowledge",
-    label: "Knowledge",
-    icon: Library,
-    surface: "rail",
-    items: [
-      { view: "sources", label: "Sources", icon: Library },
-      { view: "memory", label: "Memory", icon: Brain },
-      { view: "graph", label: "Graph", icon: Network },
+    sections: [
+      {
+        label: "",
+        items: [
+          { view: "documents", label: "Documents", icon: FileText },
+          { view: "projects", label: "Projects", icon: Braces },
+        ],
+      },
+      {
+        /**
+         * One destination, because a list is a board with one column and that
+         * is an implementation detail nobody should have to know to find
+         * their checklist. Two entries used to sit here, which made a list
+         * *teleport* to the other row the moment it grew a second column;
+         * now the object stays put in one listing and only its glyph changes.
+         */
+        label: "Boards & todos",
+        items: [{ view: "boards", label: "Boards & todos", icon: KanbanSquare }],
+      },
+      {
+        /**
+         * Data beside the things drawn from it. Databases used to live behind
+         * the Settings menu while Dashboards lived here — the connect-data →
+         * chart-it trek crossed the whole shell. Now the pipeline reads top to
+         * bottom: connect or upload, dataset, dashboard.
+         */
+        label: "Data",
+        items: [
+          { view: "datasets", label: "Datasets", icon: Table2 },
+          { view: "data", label: "Databases", icon: Database },
+        ],
+      },
+      {
+        label: "Dashboards",
+        items: [
+          { view: "dashboards", label: "Dashboards", icon: BarChart3 },
+          /**
+           * Apps are programs the sandbox builds, publishes and rolls back.
+           * They shared a page with Dashboards once, which made "Add
+           * dashboard" secretly build an app. Same heading, two entries, two
+           * words that each mean one thing.
+           */
+          { view: "apps", label: "Apps", icon: LayoutGrid },
+        ],
+      },
+      {
+        /**
+         * Inside Library rather than on the rail: with section headings always
+         * visible, Sources/Memory/Graph are nearer than their old rail seat
+         * left them — one click from anywhere and on screen the whole time you
+         * are in Library. The rail seat existed to keep them out of a Settings
+         * menu, and that threat is gone with the menu.
+         */
+        label: "Knowledge",
+        items: [
+          { view: "sources", label: "Sources", icon: Library },
+          { view: "memory", label: "Memory", icon: Brain },
+          { view: "graph", label: "Graph", icon: Network },
+        ],
+      },
     ],
   },
   /**
    * On the rail, and the argument had two sides.
    *
    * Against: the rail is deliberately short, and a workflow is a thing you
-   * *make*, which would put it among Files' siblings. But nobody looking for
-   * automation looks under "Files", and only half of what this surface
-   * does is making. The other half is operating — watching a run, and answering
-   * the approval an unattended run parked on. Settings is where you go rarely
-   * and on purpose; an approval that has been waiting since 3am is the opposite
-   * of that. So: a place you work, appended rather than inserted, because the
-   * three that were already here should not move for a fourth.
+   * *make*. But nobody looking for automation looks under "Library", and only
+   * half of what this surface does is making. The other half is operating —
+   * watching a run, and answering the approval an unattended run parked on.
    *
-   * Automations sit beside Workflows rather than in a group of their own: both
-   * are unattended recurring work armed by the same ticker, and a personal cron
-   * that fired a task run parks its writes for a person exactly as a scheduled
-   * workflow does — so the same reason Workflows earns a rail seat (you come
-   * here to *answer* what ran unwatched, not only to make one) is the reason a
-   * cron's approval belongs a tab away rather than buried in Settings.
+   * The group is "Automations" — the idea — and its entries are the two
+   * kinds: Workflows (a sentence compiled to a reviewable graph) and
+   * Schedules (a recurring prompt on a timer).
    */
   {
     id: "workflows",
-    label: "Workflows",
+    label: "Automations",
     icon: Workflow,
     surface: "rail",
-    items: [
-      { view: "workflows", label: "Workflows", icon: Workflow },
-      { view: "crons", label: "Automations", icon: Clock },
+    sections: [
+      {
+        label: "",
+        items: [
+          { view: "workflows", label: "Workflows", icon: Workflow },
+          { view: "crons", label: "Schedules", icon: Clock },
+        ],
+      },
     ],
   },
   {
@@ -171,36 +255,38 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Connections",
     icon: Plug,
     surface: "settings",
-    items: [
-      { view: "data", label: "Databases", icon: Database },
-      { view: "mcp", label: "MCP", icon: Blocks },
-      // Beside MCP because it is the same kind of surface: registering tools the
-      // agent may call. Not on the rail — you configure it rarely and on
-      // purpose, and it is not a machine you operate.
-      { view: "sandbox-tools", label: "Sandbox tools", icon: Terminal },
-      { view: "integrations", label: "Integrations", icon: Plug },
+    sections: [
+      {
+        label: "",
+        items: [
+          { view: "mcp", label: "MCP", icon: Blocks },
+          // Beside MCP because it is the same kind of surface: registering
+          // tools the agent may call. Databases left for Library → Data,
+          // where the datasets they feed live.
+          { view: "sandbox-tools", label: "Sandbox tools", icon: Terminal },
+          { view: "integrations", label: "Integrations", icon: Plug },
+        ],
+      },
     ],
-  },
-  {
-    id: "activity",
-    label: "Activity",
-    icon: Activity,
-    surface: "settings",
-    items: [{ view: "activity", label: "Activity", icon: Activity }],
   },
   {
     id: "admin",
     label: "Admin",
     icon: ShieldCheck,
     surface: "settings",
-    items: [{ view: "admin", label: "Admin", icon: ShieldCheck }],
+    sections: [{ label: "", items: [{ view: "admin", label: "Admin", icon: ShieldCheck }] }],
   },
 ];
+
+export const NAV_GROUPS: NavGroup[] = GROUP_SPECS.map((group) => ({
+  ...group,
+  items: group.sections.flatMap((section) => section.items),
+}));
 
 /** The rail, in order. Derived so a group cannot be on the rail and nowhere else. */
 export const RAIL_GROUPS = NAV_GROUPS.filter((group) => group.surface === "rail");
 
-/** What the Settings menu offers, in order. */
+/** What the workspace-settings menu offers, in order. */
 export const SETTINGS_GROUPS = NAV_GROUPS.filter((group) => group.surface === "settings");
 
 const ITEM_OF_VIEW = new Map<View, NavItem>(
@@ -228,7 +314,7 @@ export type CreateActionId =
   | "project"
   | "latex"
   | "board"
-  | "dashboard"
+  | "app"
   | "workflow";
 
 export type CreateAction = {
@@ -247,7 +333,7 @@ export type CreateAction = {
   icon: LucideIcon;
   /**
    * What to ask for before creating, or "" for the things that name themselves
-   * later: a dashboard collects its name, datasets and prompt in the editor it
+   * later: an app collects its name, datasets and prompt in the editor it
    * opens, and a workflow is named by the compiler from the sentence it was
    * asked for.
    */
@@ -264,6 +350,11 @@ export type CreateAction = {
  * of the same name, which renders KaTeX maths and produces no PDF, and
  * reported the TeX compiler as broken. In this menu the word now means one
  * thing — TeX in, PDF out.
+ *
+ * There is no "Dashboard" here, and that is the fix for a lie: the entry that
+ * said "Dashboard" opened the app editor and built a sandbox program.
+ * Dashboards are written by the agent during a conversation — ask for a chart
+ * — so the menu offers the thing the editor actually makes, an App.
  *
  * There is no "Folder" here, and that is not an oversight. Every entry in this
  * menu makes something with contents; a folder is only the place contents go,
@@ -292,13 +383,13 @@ export const CREATE_ACTIONS: CreateAction[] = (
     },
     { id: "board", label: "Board", noun: "board", view: "boards", prompt: "Board name" },
     {
-      id: "dashboard",
-      label: "Dashboard",
-      noun: "dashboard",
-      view: "dashboards",
+      id: "app",
+      label: "App",
+      noun: "app",
+      view: "apps",
       prompt: "",
     },
-    // Nothing is asked for here, for the same reason a dashboard asks for
+    // Nothing is asked for here, for the same reason an app asks for
     // nothing: the sentence *is* the workflow. A name typed now would be
     // thrown away, because the compiler names the automation from the ask.
     {

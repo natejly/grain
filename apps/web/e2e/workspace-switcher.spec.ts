@@ -56,7 +56,7 @@ test("a stored workspace the user is no longer in falls back", async ({ page }) 
   await page.goto("/");
   await page.evaluate(() =>
     window.localStorage.setItem(
-      "jasmine.workspace-id",
+      "grain.workspace-id",
       "00000000-0000-4000-8000-0000deadbeef",
     ),
   );
@@ -68,5 +68,5 @@ test("a stored workspace the user is no longer in falls back", async ({ page }) 
   await expect(page.getByRole("button", { name: "New thread" })).toBeVisible();
   await expect(page.locator(".error-toast")).toHaveCount(0);
 
-  await page.evaluate(() => window.localStorage.removeItem("jasmine.workspace-id"));
+  await page.evaluate(() => window.localStorage.removeItem("grain.workspace-id"));
 });

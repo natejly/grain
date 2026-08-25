@@ -244,5 +244,86 @@
         "denied_text": "Understood \u2014 I left the dashboard as it was."
       }
     ]
+  },
+  {
+    "match": "plan the atlas rollout",
+    "steps": [
+      {
+        "call": {
+          "name": "exit_plan_mode",
+          "arguments": {
+            "plan": "## Atlas rollout\n\n1. Freeze the release branch.\n2. Run the migrations.\n3. Flip the feature flag."
+          }
+        }
+      },
+      {
+        "text": "Plan approved - starting with the release freeze.",
+        "denied_text": "Understood - I'll revise the plan and propose again."
+      }
+    ]
+  },
+  {
+    "match": "which region should we deploy",
+    "steps": [
+      {
+        "call": {
+          "name": "ask_user",
+          "arguments": {
+            "question": "Which region should we deploy to?",
+            "options": [
+              "us-east",
+              "eu-west"
+            ]
+          }
+        }
+      },
+      {
+        "text": "Deploying as instructed.",
+        "denied_text": "Understood, holding off on the deploy."
+      }
+    ]
+  },
+  {
+    "match": "delegate the atlas research",
+    "steps": [
+      {
+        "call": {
+          "name": "delegate",
+          "arguments": {
+            "agent": "Research partner",
+            "prompt": "e2e-child-atlas-briefing"
+          }
+        }
+      },
+      {
+        "text": "Per the sub-agent, Atlas is fully covered."
+      }
+    ]
+  },
+  {
+    "match": "e2e-child-atlas-briefing",
+    "steps": [
+      {
+        "text": "Atlas is the demo corpus; nothing else to report."
+      }
+    ]
+  },
+  {
+    "match": "track the guarded checklist",
+    "steps": [
+      {
+        "call": {
+          "name": "add_todo",
+          "arguments": {
+            "list": "Guarded checklist",
+            "title": "Freeze the release branch"
+          }
+        }
+      },
+      {
+        "text": "Tracked it.",
+        "denied_text": "Understood \u2014 not tracking that."
+      }
+    ]
   }
 ]

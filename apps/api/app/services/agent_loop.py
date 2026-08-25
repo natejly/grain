@@ -22,11 +22,19 @@ from ..models import (
     ToolPolicy,
     WorkflowRun,
 )
-from . import budget, orgs, screen, skills, subjects, usage
+from . import budget, orgs, screen, skills, spaces, subjects, usage
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .harness import ModelStep, resolve_harness
-from .llm_tools import ToolContext, ToolResult, ToolSpec, build_registry
+from .llm_tools import (
+    ASK_USER,
+    EXIT_PLAN_MODE,
+    ToolContext,
+    ToolResult,
+    ToolSpec,
+    build_registry,
+    exit_plan_mode_spec,
+)
 from .model import CHAT_INSTRUCTIONS, _openai_input
 from .retrieval import Evidence
 from .usage import usage_scope
@@ -125,6 +133,15 @@ class LoopState:
     iteration: int = 0
     text_so_far: str = ""
     evidence: List[Evidence] = field(default_factory=list)
+    #: The highest `steer.requested` event sequence already folded into
+    #: `input_items`. On the state so a parked turn resumed in another process
+    #: neither re-injects a steer it already read nor drops one that arrived
+    #: while it was parked.
+    last_steer_sequence: int = 0
+    #: How many parked-grade calls the guardian reviewer has waved through this
+    #: turn. On the state for the same reason: the cap is per turn, and a turn
+    #: can cross processes.
+    guardian_approvals: int = 0
 
     def to_json(self) -> str:
         return json.dumps(
@@ -134,6 +151,8 @@ class LoopState:
                 "iteration": self.iteration,
                 "text_so_far": self.text_so_far,
                 "evidence": [asdict(item) for item in self.evidence],
+                "last_steer_sequence": self.last_steer_sequence,
+                "guardian_approvals": self.guardian_approvals,
             },
             default=str,
         )
@@ -147,6 +166,8 @@ class LoopState:
             iteration=int(data.get("iteration") or 0),
             text_so_far=data.get("text_so_far") or "",
             evidence=[revive_evidence(item) for item in data.get("evidence") or []],
+            last_steer_sequence=int(data.get("last_steer_sequence") or 0),
+            guardian_approvals=int(data.get("guardian_approvals") or 0),
         )
 
 
@@ -214,7 +235,7 @@ def _enforce_org_bounds(db: Session, run: Run, settings: Settings) -> None:
             f"Your organization does not allow the “{settings.active_model_provider}” "
             f"harness."
         )
-    effective_model = run.requested_model or settings.openai_model
+    effective_model = run.requested_model or settings.default_model
     # Only enforced against models the deployment itself offers. An org list that
     # does not mention a model outside `selectable_models` is not a prohibition on
     # it — `_bounded` intersects, and a model the deployment never vouched for is
@@ -279,13 +300,34 @@ WORKFLOW_SCOPE: PolicyScope = "workflow"
 #: - ``ask_all``      everything parks, read-only searches included, for a thread
 #:                    working somewhere sensitive enough to want each look first.
 #: - ``auto_writes``  writes execute without parking. The bypass.
-ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes"]
+#: - ``plan``         the thread is researching, not acting: read-only tools
+#:                    run, write-capable tools are refused outright (deny, not
+#:                    ask — stricter than ``ask_all``), and the mode is left by
+#:                    the model proposing a plan through ``exit_plan_mode``,
+#:                    whose approval card carries the plan itself.
+#: - ``guardian``     writes are triaged by a cheap reviewer model before they
+#:                    park: a call the guardian judges a routine, clearly-safe
+#:                    application of the user's request executes (attributed
+#:                    ``mode:guardian``, capped per turn); everything else
+#:                    parks for the human exactly as ``ask_writes`` would.
+#:                    Policy-wise it IS ``ask_writes`` — the triage happens at
+#:                    the park site, never inside `evaluate_policy`, so a deny
+#:                    still denies and a `force_ask` still reaches a person.
+ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes", "plan", "guardian"]
 
 ASK_WRITES: ApprovalMode = "ask_writes"
 ASK_ALL: ApprovalMode = "ask_all"
 AUTO_WRITES: ApprovalMode = "auto_writes"
+PLAN: ApprovalMode = "plan"
+GUARDIAN: ApprovalMode = "guardian"
 
-APPROVAL_MODES: Tuple[ApprovalMode, ...] = (ASK_WRITES, ASK_ALL, AUTO_WRITES)
+APPROVAL_MODES: Tuple[ApprovalMode, ...] = (
+    ASK_WRITES,
+    ASK_ALL,
+    AUTO_WRITES,
+    PLAN,
+    GUARDIAN,
+)
 
 #: `MODE_DECIDER_PREFIX` is the prefix `AgentToolCall.decided_by` carries when a
 #: *mode* let a call through. The column otherwise holds a user id, and ids here
@@ -376,6 +418,13 @@ class Verdict:
     #: that is the only case in which a write happens and no person ever sees it.
     #: `AgentToolCall.decided_by` is stamped from it.
     by_mode: str = ""
+    #: True only when this `ask` is the tool's own DEFAULT under guardian mode —
+    #: no policy row asked it, no org ceiling mandated it, no `force_ask` raised
+    #: it. The guardian reviewer may only ever soften that default: a person or
+    #: an organization who wrote "ask me" gets a person, and computing the
+    #: provenance HERE — where the rows and the ceiling are already in hand — is
+    #: what keeps the park site from having to re-derive it and drift.
+    guardian_may_review: bool = False
 
 
 def evaluate_policy(
@@ -508,8 +557,45 @@ def evaluate_policy(
         resolved = _in_scope_or_carried_deny(scope, _tier)
         base = resolved if resolved is not None else ("allow" if spec.read_only else "ask")
 
-    if scope != CHAT_SCOPE or mode == ASK_WRITES or base == "deny":
-        result = Verdict(policy=base)
+    # An `ask` the guardian may later soften: the tool's own default, under
+    # guardian mode, in chat scope — never one a policy row wrote. Rows are the
+    # user's or the workspace's explicit "ask me", and the reviewer replaces
+    # only the *default* prudence, not a stated instruction. The org ceiling
+    # and `force_ask` get their say below.
+    default_guardian_ask = (
+        spec is not None
+        and not spec.force_ask
+        and mode == GUARDIAN
+        and scope == CHAT_SCOPE
+        and resolved is None
+        and base == "ask"
+    )
+
+    # GUARDIAN is deliberately in the first arm: at policy level it *is*
+    # ask_writes, and letting a new mode value fall through to the final
+    # `else` would silently make it a second `auto_writes`. The guardian's
+    # triage happens where the resulting `ask` would park, in
+    # `_drain_pending`, so nothing it does can loosen a deny or reach a
+    # workflow scope this line already refused.
+    if scope != CHAT_SCOPE or mode in (ASK_WRITES, GUARDIAN) or base == "deny":
+        result = Verdict(policy=base, guardian_may_review=default_guardian_ask)
+    elif mode == PLAN:
+        # Plan mode. Read-only tools keep whatever the rows above said, so a
+        # standing `ask` still asks; `exit_plan_mode` parks unconditionally,
+        # because approving that card *is* approving the plan and no standing
+        # row may pre-answer it; and anything write-capable is refused outright.
+        # A plan-mode turn is never *offered* a write tool (`_plan_narrowed`
+        # strips them from the registry), so this deny is the second,
+        # independent lock — it catches a queued write from a conversation
+        # switched into plan mode while parked. `by_mode` stays "" on that
+        # deny: the attribution marks a bypass letting a write through, and
+        # refusing one is the opposite of that.
+        if spec is not None and spec.name == EXIT_PLAN_MODE:
+            result = Verdict(policy="ask")
+        elif spec is not None and not spec.read_only:
+            result = Verdict(policy="deny")
+        else:
+            result = Verdict(policy=base)
     elif mode == ASK_ALL:
         result = Verdict(policy="ask")
     else:
@@ -531,12 +617,23 @@ def evaluate_policy(
         return result
     # The organization ceiling, and it is last on purpose — see the docstring.
     # Removing this clamp is the mutation that makes `test_org_scope.py` fail.
-    clamped = _stricter(
-        result.policy,
-        _org_ceiling(db, workspace_id=workspace_id, tool_name=spec.name, scope=scope),
+    ceiling = _org_ceiling(
+        db, workspace_id=workspace_id, tool_name=spec.name, scope=scope
     )
+    clamped = _stricter(result.policy, ceiling)
+    # An org that voiced ANY opinion — even an `ask` that happens to equal the
+    # default the value arrived at — takes the call out of the guardian's
+    # reach. "A human must review this tool" from an org is not the default
+    # prudence the reviewer exists to soften; letting a cheap model answer it
+    # would be the exact scope-may-only-tighten inversion the clamp's
+    # placement exists to rule out.
+    may_review = result.guardian_may_review and ceiling == "allow"
     if clamped == result.policy:
-        return result
+        if may_review == result.guardian_may_review:
+            return result
+        return Verdict(
+            policy=result.policy, by_mode=result.by_mode, guardian_may_review=False
+        )
     # The org moved the answer, so a `by_mode` attribution would now be a lie: the
     # bypass did not let this call through, it was overruled. Property 3 of the
     # approval modes is that `decided_by` says what actually happened, and a row
@@ -681,12 +778,45 @@ def approval_mode_for_run(
     enforce mode (shadow records the same flag but never escalates) and on chat
     scope like the rest of this function. Read per call, so a hit recorded from a
     tool output mid-turn escalates the very next call in the same turn.
+
+    The escalation lands on `ask_all` even for a thread in `plan` mode, and that
+    is a deliberate trade rather than an oversight: the two modes are not
+    ordered. Plan is stricter about writes (deny beats ask) but looser about
+    reads (they run silently, and a read with attacker-shaped arguments is an
+    exfiltration channel). `ask_all` is the posture where *nothing* runs without
+    a person seeing it — reads park, and the write a planning model should not
+    be proposing anyway meets a human decision instead of a silent deny.
     """
     if scope != CHAT_SCOPE or not run.conversation_id:
         return ASK_WRITES
     settings = settings or get_settings()
     if settings.screen_mode == "enforce" and _run_was_flagged(db, run):
         return ASK_ALL
+    conversation = db.get(Conversation, run.conversation_id)
+    if conversation is None or conversation.workspace_id != run.workspace_id:
+        conversation = None
+    # Plan mode outranks the development bypass below, alone among the modes:
+    # the bypass exists to skip approval friction while developing, and a
+    # developer who switched a thread into plan mode is exercising plan mode
+    # itself — a flag that quietly turned it back into `auto_writes` would make
+    # the feature untestable in the only environment the flag can be on.
+    #
+    # Refreshed rather than trusted, for the same reason `_drain_pending`
+    # refreshes the run: switching a thread's mode is a safety switch, and one
+    # that waits for the current turn to finish is not one. Sessions here are
+    # opened with `expire_on_commit=False`, so a Conversation still resident in
+    # the identity map would keep answering with whatever it said when the turn
+    # began — for all six iterations of it. As written today the identity map's
+    # references are weak and this function drops the only strong one before it
+    # returns, so the refresh changes no behaviour; it is what stops the
+    # behaviour from being an accident of garbage collection that any future
+    # caller holding on to a Conversation would silently undo. No guard for a
+    # conversation deleted mid-turn: purging one deletes its runs too, and
+    # `_drain_pending`'s `db.refresh(run)` reaches that first.
+    if conversation is not None:
+        db.refresh(conversation)
+        if conversation.approval_mode == PLAN:
+            return PLAN
     # The development bypass, and it deliberately sits BELOW the injection
     # escalation rather than above it. `DEV_UNRESTRICTED_AGENT` is a bypass, and
     # a bypass that outranked the screen would be strictly weaker than the
@@ -701,31 +831,16 @@ def approval_mode_for_run(
     # — is the code that is already there and already tested.
     if settings.dev_unrestricted_agent:
         return AUTO_WRITES
-    conversation = db.get(Conversation, run.conversation_id)
-    if conversation is None or conversation.workspace_id != run.workspace_id:
+    if conversation is None:
         return ASK_WRITES
-    # Refreshed rather than trusted, for the same reason `_drain_pending`
-    # refreshes the run a few lines earlier: turning the bypass back off is a
-    # safety switch, and one that waits for the current turn to finish is not
-    # one. Sessions here are opened with `expire_on_commit=False`, so a
-    # Conversation still resident in the identity map would keep answering with
-    # whatever it said when the turn began — for all six iterations of it.
-    #
-    # As written today that cannot happen, because the identity map's references
-    # are weak and this function drops the only strong one before it returns. So
-    # this line changes no behaviour; it is what stops the behaviour from being
-    # an accident of garbage collection that any future caller holding on to a
-    # Conversation would silently undo.
-    #
-    # No guard for a conversation deleted mid-turn: purging one deletes its runs
-    # too, and the `db.refresh(run)` above reaches that first.
-    db.refresh(conversation)
     # Spelled out rather than cast: a column holding a value this enum has since
     # dropped must land on the strict mode, not on whatever it says.
     if conversation.approval_mode == ASK_ALL:
         return ASK_ALL
     if conversation.approval_mode == AUTO_WRITES:
         return AUTO_WRITES
+    if conversation.approval_mode == GUARDIAN:
+        return GUARDIAN
     return ASK_WRITES
 
 
@@ -1040,6 +1155,30 @@ def execute_agent_tool_call(
     return result
 
 
+def _sanitized_arguments(name: str, raw: str) -> str:
+    """Strip argument keys only a human may supply, before the amendment merge.
+
+    `ask_user`'s executor reads `answer` out of its merged arguments, and the
+    genuine answer arrives as a decision amendment. The model authors
+    `arguments_json` freely, so without this strip it could ship its own
+    `answer` alongside the question and a bare Approve would enter fabricated
+    text into the transcript as the user's own words — the one trust class
+    that is deliberately never screened. In-band flags cannot fix this (the
+    model writes the whole object); removing the key at the execution boundary
+    can.
+    """
+    if name != ASK_USER:
+        return raw
+    try:
+        parsed = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        return raw
+    if not isinstance(parsed, dict) or "answer" not in parsed:
+        return raw
+    parsed.pop("answer", None)
+    return json.dumps(parsed)
+
+
 def _amended(raw_arguments: str, amendment: Optional[Any]) -> str:
     """Fold a reviewer's amendment into the model's arguments.
 
@@ -1059,6 +1198,304 @@ def _amended(raw_arguments: str, amendment: Optional[Any]) -> str:
     return json.dumps({**parsed, **amendment})
 
 
+def _guardian_clears(
+    db: Session,
+    run: Run,
+    state: LoopState,
+    *,
+    spec: ToolSpec,
+    call: Dict[str, Any],
+    context: ToolContext,
+    scope: PolicyScope,
+    mode: ApprovalMode,
+    settings: Settings,
+) -> bool:
+    """Whether the guardian reviewer waves this would-park call through.
+
+    Only ever *loosens* an `ask` into an execution, under five stacked guards:
+    the conversation opted into guardian mode; the scope is chat (an unattended
+    run has no user whose intent a reviewer could check the call against); the
+    spec does not `force_ask` (its author demanded a person); the call is not
+    `exit_plan_mode` (approving a plan is the user's, definitionally); and the
+    per-turn approval cap has room. Everything else — a defer, a reviewer
+    error, a missing reviewer — falls back to the park, which is exactly
+    today's behaviour. Fail-closed means the feature can only remove waits,
+    never reviews the mode did not already gate.
+    """
+    if mode != GUARDIAN or scope != CHAT_SCOPE:
+        return False
+    if spec.force_ask or spec.name == EXIT_PLAN_MODE:
+        return False
+    from . import guardian
+
+    if state.guardian_approvals >= guardian.MAX_GUARDIAN_APPROVALS_PER_TURN:
+        return False
+    # The reviewer judges the call against what the user is asking for NOW,
+    # not only the prompt that started the turn. Two rules keep those in step
+    # with steering: a steer this model step has not yet absorbed means the
+    # user is actively re-instructing — the reviewer defers to the human park,
+    # because a person mid-sentence outranks any triage of their old words —
+    # and steers the step did absorb are appended to the prompt the reviewer
+    # reads, so "don't send it yet" reaches the gate that would have sent it.
+    steers = list(
+        db.scalars(
+            select(RunEvent)
+            .where(
+                RunEvent.run_id == run.id,
+                RunEvent.event_type == STEER_REQUESTED,
+            )
+            .order_by(RunEvent.sequence)
+        )
+    )
+    if any(row.sequence > state.last_steer_sequence for row in steers):
+        return False
+    prompt = run.prompt
+    if steers:
+        notes = []
+        for row in steers:
+            try:
+                content = str(json.loads(row.payload_json).get("content") or "")
+            except ValueError:
+                content = ""
+            if content.strip():
+                notes.append(f"- {content.strip()}")
+        if notes:
+            prompt = f"{prompt}\n\nMid-task additions from the user:\n" + "\n".join(
+                notes
+            )
+    raw_arguments = str(call.get("arguments") or "{}")
+    verdict = guardian.review(
+        name=spec.name,
+        arguments_json=raw_arguments,
+        preview=describe_proposal(db, context, spec, raw_arguments),
+        prompt=prompt,
+        settings=settings,
+    )
+    if not verdict.approve:
+        return False
+    state.guardian_approvals += 1
+    record_audit(
+        db,
+        workspace_id=run.workspace_id,
+        actor_id=run.created_by,
+        action="agent_tool.guardian_approved",
+        resource_type="run",
+        resource_id=run.id,
+        detail={"tool": spec.name, "reason": verdict.reason[:300]},
+    )
+    db.commit()
+    return True
+
+
+def _delegate_parallel_batch(
+    db: Session,
+    run: Run,
+    state: LoopState,
+    *,
+    registry: Dict[str, ToolSpec],
+    context: ToolContext,
+    scope: PolicyScope,
+    settings: Settings,
+) -> bool:
+    """Execute a run of queued `delegate` calls concurrently. False = not ours.
+
+    The one place the loop fans out, and the shape is chosen by two hard
+    constraints. `run_events` is unique on (run_id, sequence), so worker
+    threads write **no events** — every row and event is written serially on
+    the parent session, before and after the concurrent section, in queue
+    order. And `usage_scope` is a ContextVar, so each worker runs inside a
+    `contextvars` copy of this frame's context and bills to the same turn.
+
+    Only calls whose policy verdict is a plain `allow` join a batch; the first
+    call needing anything else falls back to the serial path, which knows how
+    to park, deny, and attribute. A batch of one is left to the serial path
+    too — same behaviour, one code path fewer.
+    """
+    from .delegation import DELEGATE_TOOL, MAX_PARALLEL_DELEGATES, _delegate
+
+    spec = registry.get(DELEGATE_TOOL)
+    if spec is None:
+        return False
+    batch: List[Dict[str, Any]] = []
+    for call in state.pending_calls[:MAX_PARALLEL_DELEGATES]:
+        if str(call.get("name") or "") != DELEGATE_TOOL or call.get("decision"):
+            break
+        verdict = evaluate_policy(
+            db,
+            workspace_id=run.workspace_id,
+            user_id=run.created_by,
+            spec=spec,
+            scope=scope,
+            mode=approval_mode_for_run(db, run, scope=scope, settings=settings),
+        )
+        if verdict.policy != "allow" or verdict.by_mode:
+            break
+        batch.append(call)
+    if len(batch) < 2:
+        return False
+
+    # Serial bookkeeping, first half: the same rows and events
+    # `execute_agent_tool_call` would write, in queue order.
+    records: List[AgentToolCall] = []
+    parsed_args: List[Dict[str, Any]] = []
+    for call in batch:
+        raw_arguments = str(call.get("arguments") or "{}")
+        try:
+            arguments = json.loads(raw_arguments) if raw_arguments else {}
+            if not isinstance(arguments, dict):
+                raise ValueError
+        except (ValueError, TypeError):
+            arguments = {}
+        parsed_args.append(arguments)
+        record = AgentToolCall(
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            name=DELEGATE_TOOL,
+            arguments_json=raw_arguments[:4000],
+            call_id=str(call.get("call_id") or "")[:80],
+        )
+        db.add(record)
+        db.flush()
+        records.append(record)
+        append_event(
+            db,
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            event_type="tool.started",
+            payload={
+                "tool_call_id": record.id,
+                "tool_name": DELEGATE_TOOL,
+                "approved_by_mode": record.approved_by_mode,
+            },
+        )
+    db.commit()
+
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ..database import SessionLocal
+
+    def _work(arguments: Dict[str, Any]) -> Tuple[ToolResult, int, str]:
+        started = time.monotonic()
+        session = SessionLocal()
+        error_text = ""
+        try:
+            result = _delegate(session, context, arguments)
+        except Exception as exc:  # Parity with the serial path: bugs become
+            session.rollback()  # model-visible errors, never a crashed turn —
+            # and the ROW says failed, exactly as execute_agent_tool_call
+            # records the identical failure when the same call runs alone.
+            error_text = str(exc)[:1000]
+            result = ToolResult(content=f"Error: tool failed: {str(exc)[:300]}")
+        finally:
+            session.close()
+        return result, int((time.monotonic() - started) * 1000), error_text
+
+    with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+        futures = [
+            pool.submit(contextvars.copy_context().run, _work, arguments)
+            for arguments in parsed_args
+        ]
+        outcomes = [future.result() for future in futures]
+
+    # Serial bookkeeping, second half — still queue order, so the transcript,
+    # the events, and the evidence numbering are byte-identical to a serial
+    # execution of the same calls.
+    for call, record, (result, latency_ms, error_text) in zip(
+        batch, records, outcomes, strict=True
+    ):
+        record.status = "failed" if error_text else "succeeded"
+        if error_text:
+            record.error = error_text
+        record.latency_ms = latency_ms
+        record.result_preview = (result.content or "")[:500]
+        record.artifacts_json = json.dumps(result.artifacts)
+        append_event(
+            db,
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            event_type="tool.completed",
+            payload={
+                "tool_call_id": record.id,
+                "tool_name": DELEGATE_TOOL,
+                "status": record.status,
+                "preview": record.result_preview,
+                "artifacts": result.artifacts,
+                "approved_by_mode": record.approved_by_mode,
+            },
+        )
+        record_audit(
+            db,
+            workspace_id=run.workspace_id,
+            actor_id=run.created_by,
+            action="agent_tool.executed",
+            resource_type="agent_tool_call",
+            resource_id=record.id,
+            detail={"tool": DELEGATE_TOOL, "status": record.status},
+        )
+        db.commit()
+        _screen(
+            db,
+            run,
+            kind="tool_output",
+            text="\n\n".join(
+                [result.content or "", *(item.excerpt for item in result.evidence)]
+            ),
+            settings=settings,
+        )
+        state.input_items.append(
+            {
+                "type": "function_call_output",
+                "call_id": str(call.get("call_id") or ""),
+                "output": _render_result(result, evidence_offset=len(state.evidence)),
+            }
+        )
+        state.evidence.extend(result.evidence)
+    del state.pending_calls[: len(batch)]
+    return True
+
+
+def _absorb_steering(db: Session, run: Run, state: LoopState) -> None:
+    """Fold mid-turn user messages into the transcript before the next step.
+
+    `POST /api/runs/{id}/steer` appends `steer.requested` events; the loop
+    reads them here, at the head of each iteration, so a steer lands before
+    the very next model call rather than after the turn. The cursor lives on
+    `LoopState`, so a park/resume neither replays nor drops one. The text is
+    the user's own typed input — trusted exactly as `run.prompt` is, so it is
+    not screened as an attack on itself.
+    """
+    rows = list(
+        db.scalars(
+            select(RunEvent)
+            .where(
+                RunEvent.run_id == run.id,
+                RunEvent.event_type == STEER_REQUESTED,
+                RunEvent.sequence > state.last_steer_sequence,
+            )
+            .order_by(RunEvent.sequence)
+        )
+    )
+    for row in rows:
+        try:
+            content = str(json.loads(row.payload_json).get("content") or "")
+        except ValueError:
+            content = ""
+        if content.strip():
+            state.input_items.append(
+                {
+                    "role": "user",
+                    "content": f"[The user adds, mid-task]: {content}",
+                }
+            )
+        state.last_steer_sequence = row.sequence
+
+
+#: The event the steer endpoint writes and `_absorb_steering` reads. One name,
+#: defined beside the reader, imported by the writer.
+STEER_REQUESTED = "steer.requested"
+
+
 def _drain_pending(
     db: Session,
     run: Run,
@@ -1074,6 +1511,16 @@ def _drain_pending(
         db.refresh(run)
         if run.cancel_requested:
             return _cancelled(db, run, state)
+        if _delegate_parallel_batch(
+            db,
+            run,
+            state,
+            registry=registry,
+            context=context,
+            scope=scope,
+            settings=settings,
+        ):
+            continue
         call = state.pending_calls[0]
         name = str(call.get("name") or "")
         spec = registry.get(name)
@@ -1083,6 +1530,7 @@ def _drain_pending(
         # itself. Nothing left for this path to attribute.
         decided_by = ""
         if decision is None:
+            mode = approval_mode_for_run(db, run, scope=scope, settings=settings)
             verdict = evaluate_policy(
                 db,
                 workspace_id=run.workspace_id,
@@ -1092,19 +1540,40 @@ def _drain_pending(
                 user_id=run.created_by,
                 spec=spec,
                 scope=scope,
-                mode=approval_mode_for_run(db, run, scope=scope, settings=settings),
+                mode=mode,
             )
             if verdict.policy == "ask" and spec is not None:
-                return _park_for_approval(db, run, state, call, spec, context)
-            decision = "denied" if verdict.policy == "deny" else "approved"
-            decided_by = mode_decider(verdict.by_mode)
+                # `guardian_may_review` is the policy's provenance ruling: only
+                # the tool's own default ask, org silent, no standing row. The
+                # helper's checks are the second lock, not the first.
+                if verdict.guardian_may_review and _guardian_clears(
+                    db,
+                    run,
+                    state,
+                    spec=spec,
+                    call=call,
+                    context=context,
+                    scope=scope,
+                    mode=mode,
+                    settings=settings,
+                ):
+                    decision = "approved"
+                    decided_by = mode_decider(GUARDIAN)
+                else:
+                    return _park_for_approval(db, run, state, call, spec, context)
+            else:
+                decision = "denied" if verdict.policy == "deny" else "approved"
+                decided_by = mode_decider(verdict.by_mode)
         result = execute_agent_tool_call(
             db,
             run,
             registry,
             context,
             name,
-            _amended(str(call.get("arguments") or "{}"), call.get("amendment")),
+            _amended(
+                _sanitized_arguments(name, str(call.get("arguments") or "{}")),
+                call.get("amendment"),
+            ),
             existing_id=call.get("tool_call_id"),
             denied=decision == "denied",
             decided_by=decided_by,
@@ -1203,6 +1672,14 @@ class AgentDirectives:
     allowed: Optional[frozenset[str]]
 
 
+def _space_id_for(db: Session, run: Run) -> str:
+    """The run's space, for the ToolContext — "" for every failure, and "" by
+    construction for workflow, cron and subject runs."""
+    return spaces.space_id_for_conversation(
+        db, workspace_id=run.workspace_id, conversation_id=run.conversation_id
+    )
+
+
 def resolve_directives(db: Session, run: Run) -> AgentDirectives:
     """`run.agent_id` → the instructions and tool subset this turn runs under.
 
@@ -1233,6 +1710,16 @@ def resolve_directives(db: Session, run: Run) -> AgentDirectives:
                 parsed = None
             if isinstance(parsed, list):
                 allowed = frozenset(str(item) for item in parsed)
+    # A space's standing instructions compose with the agent's voice rather
+    # than replacing it — only an agent replaces the base — and sit before the
+    # skill splice so the most turn-specific layer stays last. Trusted like
+    # `Agent.instructions` (member-authored through an authenticated PATCH),
+    # so not `_screen`ed. `for_run` degrades every failure — missing
+    # conversation, deleted space, cross-workspace id, blank text — to None or
+    # "" here: no injection, never a failed turn.
+    space = spaces.for_run(db, run)
+    if space is not None and space.instructions.strip():
+        instructions = f"{instructions}\n\n{spaces.space_block(space)}"
     # A skill invoked for this turn is spliced onto the agent's voice, not in
     # place of it: same instruction path, resolved once per loop entry, so a
     # turn that parks and resumes re-injects the identical body. A deleted skill
@@ -1283,6 +1770,44 @@ def _registry_for(
     return build_registry(db, context, allowed=allowed)
 
 
+#: Spliced onto the turn's instructions while its conversation is in plan mode,
+#: the same way a skill's body is spliced on — and like a skill it is resolved
+#: per loop entry, so a resume whose approval already lifted the mode rebuilds
+#: without it.
+PLAN_MODE_INSTRUCTIONS = (
+    "Plan mode is on for this conversation. The user wants to review a plan "
+    "before anything is changed. Research with the read-only tools available; "
+    "do not attempt to create, edit, or delete anything — write-capable tools "
+    "are withheld until the plan is approved. When you know enough to propose, "
+    "call `exit_plan_mode` with the complete plan (as markdown) in the `plan` "
+    "argument. The user reviews it there: approval turns plan mode off so the "
+    "work can begin, and denial means revise the plan and propose again."
+)
+
+
+def _plan_narrowed(
+    registry: Dict[str, ToolSpec], instructions: str, mode: ApprovalMode
+) -> Tuple[Dict[str, ToolSpec], str]:
+    """The turn's registry and instructions, adjusted for plan mode.
+
+    Narrowing follows `_registry_for`'s rule that a tool a turn must not run is
+    *absent*, not present-and-denied: a planning model is never offered a
+    write-capable tool, so it plans around what it can see instead of burning
+    iterations on refusals. `evaluate_policy`'s plan branch stays as the
+    second, independent lock for the call that arrives anyway.
+
+    `exit_plan_mode` is added here rather than shipped by a registry family
+    because it is mode machinery, not a capability: an agent's provisioned
+    subset must not be able to strip it (a plan mode with no exit is a locked
+    room), and no other mode should ever offer it.
+    """
+    if mode != PLAN:
+        return registry, instructions
+    narrowed = {name: spec for name, spec in registry.items() if spec.read_only}
+    narrowed[EXIT_PLAN_MODE] = exit_plan_mode_spec()
+    return narrowed, f"{instructions}\n\n{PLAN_MODE_INSTRUCTIONS}"
+
+
 def _advance(
     db: Session,
     run: Run,
@@ -1313,6 +1838,11 @@ def _advance(
         db.refresh(run)
         if run.cancel_requested:
             return _cancelled(db, run, state)
+        # Mid-turn steering lands here, at the head of each iteration: after
+        # the queue drained (so a steer never splits a function_call from its
+        # output) and before the model is called (so it shapes the very next
+        # step instead of the next turn).
+        _absorb_steering(db, run, state)
 
         # The ceiling, checked here and nowhere else on this path: the last
         # statement before the expensive call. Every iteration, not once per
@@ -1407,9 +1937,14 @@ def run_agent_turn(
     if not workflow_node and backs_workflow:
         raise RuntimeError("This run belongs to a workflow; start it through the executor")
     subject = subjects.resolve(db, run)
-    context = subjects.tool_context(run, subject)
+    context = subjects.tool_context(run, subject, space_id=_space_id_for(db, run))
     directives = resolve_directives(db, run)
     registry = _registry_for(db, context, subject, directives, settings)
+    registry, instructions = _plan_narrowed(
+        registry,
+        directives.instructions,
+        approval_mode_for_run(db, run, scope=scope, settings=settings),
+    )
     state = LoopState(
         input_items=[
             {
@@ -1433,6 +1968,7 @@ def run_agent_turn(
         run_id=run.id,
         conversation_id=run.conversation_id,
         user_id=run.created_by,
+        agent_id=run.agent_id or "",
         operation=_billing_operation(scope),
     ):
         # The turn-start injection points: the retrieved passages, the open
@@ -1475,7 +2011,7 @@ def run_agent_turn(
             step=model_step or _default_model_step(settings, run, list(evidence)),
             settings=settings,
             scope=scope,
-            instructions=directives.instructions,
+            instructions=instructions,
         )
     return _finish(db, run, outcome)
 
@@ -1612,15 +2148,27 @@ def _continue(
     from .workflows import executor as workflow_executor
 
     subject = subjects.resolve(db, run)
-    context = subjects.tool_context(run, subject)
+    context = subjects.tool_context(run, subject, space_id=_space_id_for(db, run))
     directives = resolve_directives(db, run)
     registry = _registry_for(db, context, subject, directives, settings)
     scope = policy_scope_for_run(db, run)
+    registry, instructions = _plan_narrowed(
+        registry,
+        directives.instructions,
+        approval_mode_for_run(db, run, scope=scope, settings=settings),
+    )
+    if any(call.get("name") == EXIT_PLAN_MODE for call in state.pending_calls):
+        # The approval that resumes this turn may itself have lifted plan mode,
+        # rebuilding the full registry above — but the parked `exit_plan_mode`
+        # call at the head of the queue still needs its spec to execute rather
+        # than land on "unknown tool".
+        registry.setdefault(EXIT_PLAN_MODE, exit_plan_mode_spec())
     with usage_scope(
         workspace_id=run.workspace_id,
         run_id=run.id,
         conversation_id=run.conversation_id,
         user_id=run.created_by,
+        agent_id=run.agent_id or "",
         operation=_billing_operation(scope),
     ):
         # Re-checked on resume, not just at turn start: a parked run comes back
@@ -1636,7 +2184,7 @@ def _continue(
             step=model_step or _default_model_step(settings, run, state.evidence),
             settings=settings,
             scope=scope,
-            instructions=directives.instructions,
+            instructions=instructions,
         )
     if workflow_run is not None:
         # The agent node's turn is over; the graph is not. Returning None keeps

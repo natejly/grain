@@ -10,8 +10,8 @@ afterEach(() => window.localStorage.clear());
 
 describe("collapseKey", () => {
   it("namespaces per pane, so two panes cannot overwrite each other", () => {
-    expect(collapseKey("rail")).toBe("jasmine.collapsed.rail");
-    expect(collapseKey("documents-list")).toBe("jasmine.collapsed.documents-list");
+    expect(collapseKey("rail")).toBe("grain.collapsed.rail");
+    expect(collapseKey("documents-list")).toBe("grain.collapsed.documents-list");
     expect(collapseKey("rail")).not.toBe(collapseKey("documents-list"));
   });
 });

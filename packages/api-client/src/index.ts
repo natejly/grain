@@ -178,8 +178,32 @@ export type Conversation = {
   /** True when the caller may toggle `shared` (its creator, or a workspace owner).
    *  Lets the rail disable the control rather than surprise a member with a 403. */
   can_share: boolean;
+  /**
+   * The space this thread lives in, or "" for none. Unlike a subject, a space
+   * thread stays in the rail with ordinary personal/shared semantics — the
+   * space only adds standing context (instructions, knowledge, memory) to its
+   * turns on the server side.
+   */
+  space_id: string;
+  /**
+   * The composer's remembered choices for this thread — which authored agent
+   * answers, and the model/effort overrides — "" meaning "the deployment's
+   * default". Seeds for the pickers when the thread reopens; the run path
+   * never reads them, so every turn still names its controls explicitly.
+   */
+  default_agent_id: string;
+  default_model: string;
+  default_effort: string;
   created_at: string;
   updated_at: string;
+};
+
+/** The PATCHable half of a conversation's composer defaults. Omitted fields
+ *  are untouched; "" is a real value meaning "back to the default". */
+export type ConversationDefaults = {
+  default_agent_id?: string;
+  default_model?: string;
+  default_effort?: string;
 };
 
 /**
@@ -190,8 +214,17 @@ export type Conversation = {
  * - `ask_writes` — read-only tools run, writes park. The default.
  * - `ask_all` — everything parks, searches included.
  * - `auto_writes` — writes execute unattended. The bypass.
+ * - `plan` — the thread researches and proposes: reads run, writes are refused
+ *   outright, and the model exits by proposing a plan on an approval card
+ *   (`exit_plan_mode`). Approving the plan drops the thread back to
+ *   `ask_writes`.
  */
-export type ApprovalMode = "ask_writes" | "ask_all" | "auto_writes";
+export type ApprovalMode =
+  | "ask_writes"
+  | "ask_all"
+  | "auto_writes"
+  | "plan"
+  | "guardian";
 
 export type Citation = {
   chunk_id: string;
@@ -271,7 +304,8 @@ export type Run = {
 
 export type SendMessageResponse = {
   message: Message;
-  run: Run;
+  /** Null exactly when the message was an aside — nothing queued, nothing to follow. */
+  run: Run | null;
   replayed: boolean;
 };
 
@@ -289,7 +323,32 @@ export type Source = {
   status: "queued" | "processing" | "ready" | "stored" | "failed" | "deleted";
   error: string;
   chunk_count: number;
+  /** The space whose threads this file informs; "" is the workspace library. */
+  space_id: string;
   created_at: string;
+};
+
+export type Space = {
+  id: string;
+  name: string;
+  /** Appended to the system prompt of every turn in the space's threads. "" = none. */
+  instructions: string;
+  /** How much the space holds — rail threads and live knowledge files. */
+  thread_count: number;
+  source_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SpaceCreateBody = {
+  name: string;
+  instructions?: string;
+};
+
+/** Absent field = unchanged; `instructions: ""` clears them. */
+export type SpaceUpdateBody = {
+  name?: string;
+  instructions?: string;
 };
 
 export type ProvenanceChunk = {
@@ -356,6 +415,9 @@ export type ToolPolicy = {
   shared: boolean;
   created_at: string;
   updated_at: string;
+  /** Who made the grant — the Rules ledger's origin column. A user id, not a
+   *  name; the member list resolves it, so a rename cannot go stale here. */
+  created_by: string;
 };
 
 // --- Agents (authored system prompts + provisioned tools) ---
@@ -707,6 +769,17 @@ export type McpTool = {
   enabled: boolean;
 };
 
+export type ApiToken = {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+/** The mint response — the only time `secret` is ever populated. */
+export type ApiTokenMinted = ApiToken & { secret: string };
+
 export type McpServer = {
   id: string;
   name: string;
@@ -792,6 +865,65 @@ export type AuditEvent = {
   created_at: string;
 };
 
+/** One transcript passage matching a search, with where and when. */
+export type ConversationSearchHit = {
+  conversation_id: string;
+  title: string;
+  /** "quote" for a transcript window, "summary" for a thread's rolling summary. */
+  kind: string;
+  snippet: string;
+  spoken_at: string;
+};
+
+/** One proposed tool call whose run is parked on the decision. */
+export type InboxApproval = {
+  id: string;
+  run_id: string;
+  conversation_id: string;
+  conversation_title: string;
+  name: string;
+  proposal_preview: string;
+  /** chat | subject | workflow | schedule — decides the deep link offered. */
+  origin: string;
+  workflow_run_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  created_at: string;
+};
+
+/** One run the spend ceiling is holding. Nothing to approve — an owner raises
+ * the ceiling on the admin budget page to release it. */
+export type InboxBudgetHold = {
+  run_id: string;
+  conversation_id: string;
+  origin: string;
+  workflow_run_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  created_at: string;
+};
+
+/** One finished workflow run — the Inbox's history shelf, not its work. */
+export type InboxRun = {
+  id: string;
+  workflow_id: string;
+  workflow_name: string;
+  status: string;
+  error: string;
+  created_at: string;
+};
+
+/**
+ * The attention feed. `approvals` and `budget_holds` are the waiting set and
+ * arrive UNBOUNDED, oldest first — the server's contract is that nothing
+ * parked can be pushed off this list by newer, already-decided calls.
+ */
+export type InboxFeed = {
+  approvals: InboxApproval[];
+  budget_holds: InboxBudgetHold[];
+  recent_runs: InboxRun[];
+};
+
 export type GraphEntity = {
   id: string;
   name: string;
@@ -830,6 +962,9 @@ export type MemoryItem = {
    * shape `Conversation.shared` uses for the identical question.
    */
   shared: boolean;
+  /** The space this memory is scoped to, or "" for the workspace-wide shelf.
+   *  The server has sent it since the Spaces work; the type finally admits it. */
+  space_id: string;
   created_at: string;
   updated_at: string;
 };
@@ -949,6 +1084,36 @@ export type DashboardTemplate = {
  * A workspace shares its dashboards and does not share your home screen: the
  * pin, and every coordinate on it, belongs to one person.
  */
+/** The kinds a favorite can point at — anything with a name. */
+export type FavoriteKind =
+  | "conversation"
+  | "agent"
+  | "document"
+  | "project"
+  | "board"
+  | "dashboard"
+  | "workflow"
+  | "cron";
+
+/**
+ * One sidebar Favorites entry, already resolved: `label` is the target's
+ * current name read at listing time under that kind's own visibility rule —
+ * never stored, so a rename anywhere shows up without a write, and a target
+ * the caller can no longer see is simply absent from the list.
+ */
+export type Favorite = {
+  kind: FavoriteKind;
+  target_id: string;
+  label: string;
+  ordinal: number;
+};
+
+export type FavoriteOrderEntry = {
+  kind: FavoriteKind;
+  target_id: string;
+  ordinal: number;
+};
+
 export type DashboardPin = {
   dashboard: Dashboard;
   grid_x: number;
@@ -1933,10 +2098,13 @@ export class WorkspaceApi {
     return this.request("/api/conversations");
   }
 
-  createConversation(title = "New conversation"): Promise<Conversation> {
+  createConversation(title = "New conversation", spaceId = ""): Promise<Conversation> {
     return this.request(
       "/api/conversations",
-      { method: "POST", body: JSON.stringify({ title }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ title, ...(spaceId ? { space_id: spaceId } : {}) }),
+      },
       true,
     );
   }
@@ -1996,6 +2164,37 @@ export class WorkspaceApi {
     });
   }
 
+  /** Rename a thread. A PUT of a value, like share — retries land identically. */
+  renameConversation(conversationId: string, title: string): Promise<Conversation> {
+    return this.request(`/api/conversations/${conversationId}/title`, {
+      method: "PUT",
+      body: JSON.stringify({ title }),
+    });
+  }
+
+  /**
+   * Remember the composer's choices — agent, model, effort — on the thread.
+   * A PATCH of preferences: omitted fields are untouched, "" clears one back
+   * to the deployment default. No key — retries land on the same state.
+   */
+  setConversationDefaults(
+    conversationId: string,
+    defaults: ConversationDefaults,
+  ): Promise<Conversation> {
+    return this.request(`/api/conversations/${conversationId}/defaults`, {
+      method: "PATCH",
+      body: JSON.stringify(defaults),
+    });
+  }
+
+  /**
+   * Search past conversations by what was said — the same hybrid index and
+   * visibility the agent's own quoting tool reads. [] when the index is off.
+   */
+  searchConversations(q: string): Promise<ConversationSearchHit[]> {
+    return this.request(`/api/conversations/search?q=${encodeURIComponent(q)}`);
+  }
+
   deleteConversation(conversationId: string): Promise<void> {
     return this.request(
       `/api/conversations/${conversationId}`,
@@ -2044,6 +2243,56 @@ export class WorkspaceApi {
     );
   }
 
+  /**
+   * Rewrite one of your prompts and re-run the conversation from there.
+   *
+   * The edit IS a truncation: the old turn and everything after it is deleted
+   * server-side and a fresh turn is queued with the new words. 409 when a
+   * swept turn is still live, or when it belongs to a teammate on a shared
+   * thread. Same controls as `sendMessage`; its own idempotency operation.
+   */
+  editMessage(
+    conversationId: string,
+    messageId: string,
+    content: string,
+    agentId?: string,
+    controls?: MessageControls,
+  ): Promise<SendMessageResponse> {
+    return this.request(
+      `/api/conversations/${conversationId}/messages/${messageId}/edit`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          content,
+          ...(agentId ? { agent_id: agentId } : {}),
+          ...(controls?.model ? { model: controls.model } : {}),
+          ...(controls?.effort ? { effort: controls.effort } : {}),
+          ...(controls?.fast ? { fast: true } : {}),
+        }),
+      },
+      true,
+    );
+  }
+
+  /**
+   * An aside ("/btw"): record a message in the thread without starting a turn.
+   *
+   * The server creates the Message and nothing else — no run, no agent turn —
+   * and the next real turn reads it as transcript context. Same endpoint as
+   * `sendMessage`, distinguished by the `aside` flag rather than a second
+   * route, so thread visibility and idempotency are one code path server-side.
+   */
+  sendAside(conversationId: string, content: string): Promise<SendMessageResponse> {
+    return this.request(
+      `/api/conversations/${conversationId}/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({ content, aside: true }),
+      },
+      true,
+    );
+  }
+
   cancelRun(runId: string): Promise<Run> {
     return this.request(`/api/runs/${runId}/cancel`, { method: "POST" }, true);
   }
@@ -2052,9 +2301,10 @@ export class WorkspaceApi {
     return this.request("/api/sources");
   }
 
-  uploadSource(file: File): Promise<Source> {
+  uploadSource(file: File, spaceId = ""): Promise<Source> {
     const body = new FormData();
     body.set("file", file);
+    if (spaceId) body.set("space_id", spaceId);
     return this.request("/api/sources", { method: "POST", body }, true);
   }
 
@@ -2119,6 +2369,11 @@ export class WorkspaceApi {
     return this.request("/api/agent-tool-calls");
   }
 
+  /** The unified attention feed: everything waiting on a person, unbounded. */
+  getInbox(): Promise<InboxFeed> {
+    return this.request("/api/inbox");
+  }
+
   /**
    * What a reviewer changed about the call before allowing it.
    *
@@ -2151,7 +2406,49 @@ export class WorkspaceApi {
     );
   }
 
+  /**
+   * Add a mid-turn message to a run that is still working.
+   *
+   * Not a new turn: the text lands in the running turn's transcript before its
+   * next model step, and as a plain user message in the thread. Only a queued
+   * or running run accepts one — a parked or settled run answers 409, and the
+   * composer's ordinary send is the right channel there.
+   */
+  steerRun(runId: string, content: string): Promise<Run> {
+    return this.request(
+      `/api/runs/${runId}/steer`,
+      { method: "POST", body: JSON.stringify({ content }) },
+      true,
+    );
+  }
+
   // --- Agents (authored system prompts + provisioned tools) ---
+
+  // --- Spaces (thread groups with standing instructions and knowledge) ---
+
+  listSpaces(): Promise<Space[]> {
+    return this.request("/api/spaces");
+  }
+
+  createSpace(body: SpaceCreateBody): Promise<Space> {
+    return this.request("/api/spaces", { method: "POST", body: JSON.stringify(body) }, true);
+  }
+
+  updateSpace(spaceId: string, body: SpaceUpdateBody): Promise<Space> {
+    return this.request(`/api/spaces/${spaceId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Destructive on the server: the space's threads, knowledge files and
+   * memory go with it — the confirm copy in the view says so. `true` because
+   * the route requires an Idempotency-Key, so a retry deletes once.
+   */
+  deleteSpace(spaceId: string): Promise<void> {
+    return this.request(`/api/spaces/${spaceId}`, { method: "DELETE" }, true);
+  }
 
   listAgents(): Promise<AgentInfo[]> {
     return this.request("/api/agents");
@@ -2571,6 +2868,28 @@ export class WorkspaceApi {
     return this.request("/api/documents-pending");
   }
 
+  /**
+   * The workspace's own bearer tokens, for the MCP server surface an external
+   * agent points at `POST /api/mcp`. Owner-gated. The secret is returned once,
+   * by `createApiToken`, and never again — the list carries only names and
+   * stamps.
+   */
+  listApiTokens(): Promise<ApiToken[]> {
+    return this.request("/api/api-tokens");
+  }
+
+  createApiToken(name: string): Promise<ApiTokenMinted> {
+    return this.request(
+      "/api/api-tokens",
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
+  }
+
+  revokeApiToken(tokenId: string): Promise<void> {
+    return this.request(`/api/api-tokens/${tokenId}`, { method: "DELETE" }, true);
+  }
+
   listMcpServers(): Promise<McpServer[]> {
     return this.request("/api/mcp/servers");
   }
@@ -2862,6 +3181,32 @@ export class WorkspaceApi {
       { method: "PUT", body: JSON.stringify({ tiles }) },
       true,
     );
+  }
+
+  // --- Favorites — the caller's own sidebar block, any named thing ----------
+
+  /** The caller's favorites in their chosen order, labels resolved server-side.
+   *  A row whose target was deleted (or unshared away) is simply absent. */
+  listFavorites(): Promise<Favorite[]> {
+    return this.request("/api/favorites");
+  }
+
+  /** Pin one named thing. Idempotent by construction, so no key rides along;
+   *  404 when the target is not visible to the caller. */
+  addFavorite(kind: FavoriteKind, targetId: string): Promise<Favorite> {
+    return this.request(`/api/favorites/${kind}/${targetId}`, { method: "PUT" });
+  }
+
+  removeFavorite(kind: FavoriteKind, targetId: string): Promise<void> {
+    return this.request(`/api/favorites/${kind}/${targetId}`, { method: "DELETE" });
+  }
+
+  /** The whole block's order in one write, like the dashboard grid. */
+  saveFavoritesOrder(entries: FavoriteOrderEntry[]): Promise<Favorite[]> {
+    return this.request("/api/favorites/order", {
+      method: "PUT",
+      body: JSON.stringify({ entries }),
+    });
   }
 
   listApps(): Promise<GeneratedApp[]> {
@@ -3282,6 +3627,19 @@ export class WorkspaceApi {
       { method: "POST", body: JSON.stringify(payload) },
       true,
     );
+  }
+
+  /**
+   * Turn an English sentence into a validated cron + timezone, with the next
+   * few fire instants as the sanity check a person reads before saving. 422
+   * with a human sentence when the text cannot be compiled. Stores nothing,
+   * so no key rides along — same reasoning as `compileWorkflow`.
+   */
+  compileSchedule(text: string, timezone = "UTC"): Promise<ScheduleCompileResult> {
+    return this.request("/api/crons/compile-schedule", {
+      method: "POST",
+      body: JSON.stringify({ text, timezone }),
+    });
   }
 
   getCron(cronId: string): Promise<Cron> {
@@ -3734,6 +4092,14 @@ export type Cron = {
   last_dispatched_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+/** What "every Friday at 9" compiles to, plus when it would actually fire. */
+export type ScheduleCompileResult = {
+  schedule_cron: string;
+  schedule_timezone: string;
+  /** The next few fire minutes as UTC instants, at most three. */
+  next_fires: string[];
 };
 
 export type CronCreateInput = {

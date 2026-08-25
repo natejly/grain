@@ -31,7 +31,7 @@ from typing import Any, Iterator
 
 import pytest
 
-IMAGE = os.environ.get("SANDBOX_CONTAINER_IMAGE", "jasmine-sandbox:latest")
+IMAGE = os.environ.get("SANDBOX_CONTAINER_IMAGE", "grain-sandbox:latest")
 DOCKER = os.environ.get("SANDBOX_DOCKER_BINARY", "docker")
 
 #: Set wherever a skip would be a lie — CI sets it, two steps after building the
@@ -89,7 +89,7 @@ def _mount_round_trips() -> bool:
     Every session is a bind mount, so a runtime that cannot share the test's temp
     directory proves nothing: Docker does not fail such a mount, it silently
     presents an *empty* directory, and all eleven probes then fail with
-    `can't open file '/workspace/.jasmine_exec.py'` — a message that reads like a
+    `can't open file '/workspace/.grain_exec.py'` — a message that reads like a
     driver bug and is not one.
 
     This is a real condition on developer machines. Colima and Lima share only

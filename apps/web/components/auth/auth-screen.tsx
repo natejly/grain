@@ -3,7 +3,7 @@
 import type { AuthSession } from "@workspace/api-client";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { ApiHealthBanner } from "../api-health-banner";
+import { ApiHealthBanner, useApiHealth } from "../api-health-banner";
 import { AuthPanel } from "./auth-panel";
 
 /**
@@ -16,7 +16,7 @@ const OAUTH_ERRORS: Record<string, string> = {
   denied: "Google sign-in was cancelled.",
   exchange: "Google could not confirm that sign-in. Try again.",
   account_exists:
-    "That address already has a Jasmine password. Sign in with your password instead.",
+    "That address already has a Grain password. Sign in with your password instead.",
   account: "That account is not available. Contact whoever owns the workspace.",
   no_email: "Google did not share an email address, so there is nothing to sign in as.",
 };
@@ -26,7 +26,7 @@ export function AuthSplash({ message = "Restoring your session…" }: { message?
   return (
     <div className="auth-shell">
       <div className="auth-stage">
-        <div className="auth-brand">Jasmine</div>
+        <div className="auth-brand">Grain <span className="auth-brand-byline">by Rice Labs</span></div>
         <p className="auth-splash">{message}</p>
       </div>
     </div>
@@ -42,6 +42,8 @@ export type AuthScreenProps = {
 
 export function AuthScreen({ offline, onSignedIn, onRecovered }: AuthScreenProps) {
   const [notice, setNotice] = useState("");
+  // The banner's poll loop, held here since the hook moved out of the banner.
+  const health = useApiHealth(api, onRecovered);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -54,9 +56,9 @@ export function AuthScreen({ offline, onSignedIn, onRecovered }: AuthScreenProps
 
   return (
     <div className="auth-shell">
-      <ApiHealthBanner api={api} onRecovered={onRecovered} />
+      <ApiHealthBanner api={api} health={health} />
       <div className="auth-stage">
-        <div className="auth-brand">Jasmine</div>
+        <div className="auth-brand">Grain <span className="auth-brand-byline">by Rice Labs</span></div>
         {offline ? (
           <div className="auth-card">
             <div className="auth-sent">

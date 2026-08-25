@@ -25,14 +25,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Collection, Dict, List, Mapping, Optional
+from typing import Any, Callable, Collection, Dict, List, Mapping, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 from ...config import Settings, get_settings
 from ..llm_tools import ToolContext, ToolSpec, build_registry
 from ..model import _openai_client, call_responses, privacy_safe_identifier
-from ..usage import WORKFLOW_COMPILE, usage_scope
+from ..usage import SCHEDULE_COMPILE, WORKFLOW_COMPILE, usage_scope
 from .dag import MAX_INPUTS, MAX_NODES, WorkflowGraph
 from .validate import (
     CompileError,
@@ -124,6 +124,25 @@ run. That is expected — do not avoid them, and do not pretend a read-only tool
 can do a write.
 """
 
+SCHEDULE_INSTRUCTIONS = """You turn one English sentence describing when something \
+should happen into a cron schedule.
+
+Reply with one JSON object and nothing else. No prose, no code fence.
+
+{"cron": "5-field cron (minute hour day-of-month month day-of-week)",
+ "timezone": "IANA zone"}
+
+Rules:
+
+1. Exactly 5 cron fields. No @daily / @weekly nicknames, no seconds field.
+2. "timezone" is the default timezone given below — unless the sentence names a
+   place or zone, in which case use that place's IANA zone instead.
+3. Take the smallest faithful reading: "every morning" is 0 9 * * *,
+   "weekdays" is 1-5 in day-of-week, "every hour" is 0 * * * *.
+4. If the sentence does not describe a recurring schedule, reply
+   {"cron": "", "timezone": ""} so the caller can say so.
+"""
+
 REPAIR_INSTRUCTIONS = """Your previous workflow JSON failed validation.
 
 Fix every listed error and reply with the corrected JSON object only. Keep the
@@ -196,6 +215,10 @@ def _repair_input(
     )
 
 
+def _schedule_input(text: str, timezone: str) -> str:
+    return f"Schedule to express:\n{text.strip()}\n\nDefault timezone:\n{timezone}"
+
+
 def default_step(settings: Settings, *, user_id: str) -> CompilerStep:
     """The model behind a compile: OpenAI in product, the script double in tests."""
     if settings.active_model_provider == "scripted":
@@ -225,6 +248,99 @@ def default_step(settings: Settings, *, user_id: str) -> CompilerStep:
         return str(response.output_text or "")
 
     return step
+
+
+def default_schedule_step(settings: Settings, *, user_id: str) -> CompilerStep:
+    """The model behind a schedule compile — `default_step`'s small sibling.
+
+    Its own function rather than a flag on `default_step` because the two calls
+    differ in every dimension that matters: no tool catalogue, no reasoning
+    budget worth spending, a 1-line answer under the chat token ceiling rather
+    than the codegen one, and its own usage operation so an operator can see
+    what schedule previews cost apart from workflow compiles. Under the
+    scripted provider it degrades to a deterministic English parser, so the
+    offline suites exercise the real route end to end.
+    """
+    if settings.active_model_provider == "scripted":
+        from ..scripted_model import scripted_schedule_json
+
+        def scripted(instructions: str, input_text: str) -> str:
+            return scripted_schedule_json(input_text)
+
+        return scripted
+
+    client = _openai_client(settings)
+
+    def step(instructions: str, input_text: str) -> str:
+        response = call_responses(
+            client,
+            operation=SCHEDULE_COMPILE,
+            settings=settings,
+            model=settings.openai_model,
+            instructions=instructions,
+            input=input_text,
+            reasoning={"effort": settings.openai_reasoning_effort},
+            text={"verbosity": "low"},
+            max_output_tokens=settings.openai_max_output_tokens,
+            safety_identifier=privacy_safe_identifier(user_id),
+            store=False,
+        )
+        return str(response.output_text or "")
+
+    return step
+
+
+def compile_schedule(
+    *,
+    text: str,
+    timezone: str,
+    user_id: str,
+    workspace_id: str,
+    conversation_id: str = "",
+    settings: Optional[Settings] = None,
+    step: Optional[CompilerStep] = None,
+) -> Tuple[str, str]:
+    """One English sentence to a (cron, timezone) pair, or raise with why not.
+
+    Deliberately not `compile_workflow`: that call carries the whole tool
+    catalogue and can spend two model turns to produce a DAG, when the composer
+    needs one narrow completion to fill two form fields. No repair loop either —
+    a bad cron here is one field, and the caller's validator message *is* the
+    repair prompt a person can act on.
+
+    The answer is not validated here. The route feeds it through the same
+    `_validate_schedule` chokepoint a hand-typed cron passes (the
+    `compile_document` argument: model output and human input held to exactly
+    one standard), so this function only refuses what it cannot even read.
+    """
+    settings = settings or get_settings()
+    call = step or default_schedule_step(settings, user_id=user_id)
+    with usage_scope(
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    ):
+        raw = call(SCHEDULE_INSTRUCTIONS, _schedule_input(text, timezone))
+    parsed = parse_model_json(raw)
+    cron = str(parsed.get("cron") or "").strip() if isinstance(parsed, dict) else ""
+    if not cron:
+        raise WorkflowCompileError(
+            CompileReport(
+                errors=[
+                    CompileError(
+                        code="schedule_uncompilable",
+                        message=(
+                            f"could not read “{text.strip()}” as a repeating "
+                            f"schedule — try something like “every weekday at 9am”"
+                        ),
+                    )
+                ]
+            )
+        )
+    zone = ""
+    if isinstance(parsed, dict):
+        zone = str(parsed.get("timezone") or "").strip()
+    return cron, zone or timezone or "UTC"
 
 
 def parse_model_json(raw: str) -> Any:

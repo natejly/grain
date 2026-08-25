@@ -55,12 +55,12 @@ def bootstrap(
         model_provider=ModelProviderStatus(
             provider=settings.active_model_provider,
             # True whenever a real provider is answering. Startup already refuses
-            # an openai process with no key, so this is False only for the
+            # a real provider with no key, so this is False only for the
             # scripted test double.
-            configured=settings.active_model_provider == "openai",
+            configured=settings.active_model_provider != "scripted",
             model=(
-                settings.openai_model
-                if settings.active_model_provider == "openai"
+                settings.default_model
+                if settings.active_model_provider != "scripted"
                 else "scripted-double"
             ),
             # The scripted double talks to no provider, so its only selectable
@@ -76,9 +76,13 @@ def bootstrap(
                 orgs.allowed_models(
                     db, workspace_id=actor.workspace_id, settings=settings
                 )
-                if settings.active_model_provider == "openai"
+                if settings.active_model_provider != "scripted"
                 else ["scripted-double"]
             ),
+            # One ladder for both real providers: OpenAI reasoning effort, and
+            # Anthropic's own `output_config.effort` — the same five strings —
+            # via the harness's `_thinking_kwargs` mapping ("none" disables
+            # thinking). Every choice in the dropdown does something on both.
             reasoning_efforts=list(get_args(ReasoningEffort)),
             default_effort=settings.openai_reasoning_effort,
         ),

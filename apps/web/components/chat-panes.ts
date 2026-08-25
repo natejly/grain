@@ -18,8 +18,8 @@ export type ChatPane = { id: string; conversationId: string };
 /** How many extra panes may open beside the primary — four chats at most. */
 export const MAX_EXTRA_PANES = 3;
 
-/** localStorage key for the open-pane layout, following the `jasmine.*` convention. */
-export const CHAT_PANES_KEY = "jasmine.chat-panes";
+/** localStorage key for the open-pane layout, following the `grain.*` convention. */
+export const CHAT_PANES_KEY = "grain.chat-panes";
 
 /**
  * Decode a persisted layout. A missing, malformed, or hostile value is an empty

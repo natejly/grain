@@ -2,29 +2,38 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
-from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import Chunk, Source, new_id
 from ..schemas import ChunkOut, SourceOut
+from ..services import spaces as spaces_service
 from ..services.audit import record_audit
 from ..services.graph import mark_graph_stale, rebuild_graph
 from ..services.ingestion import (
     SOURCE_CONTENT_ROUTE,
     ingest_source,
     object_path,
+    purge_source,
     sanitize_filename,
     validate_filename,
 )
-from ..services.retrieval import clear_source_postings
 from ..services.web_search import WEB_CHUNK_PREFIX
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
@@ -34,25 +43,30 @@ router = APIRouter(prefix="/api", tags=["sources"])
 
 @router.get("/sources", response_model=List[SourceOut])
 def list_sources(
+    space_id: Optional[str] = Query(default=None),
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[Source]:
-    return list(
-        db.scalars(
-            select(Source)
-            .where(
-                Source.workspace_id == actor.workspace_id,
-                Source.deleted_at.is_(None),
-            )
-            .order_by(Source.created_at.desc())
+    stmt = (
+        select(Source)
+        .where(
+            Source.workspace_id == actor.workspace_id,
+            Source.deleted_at.is_(None),
         )
+        .order_by(Source.created_at.desc())
     )
+    if space_id is not None:
+        # Exact, "" included, so the library page and a space page are both one
+        # request. Only ever narrows; absent means everything, as before.
+        stmt = stmt.where(Source.space_id == space_id)
+    return list(db.scalars(stmt))
 
 
 @router.post("/sources", response_model=SourceOut, status_code=202)
 async def upload_source(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    space_id: str = Form(""),
     key: str = Depends(idempotency_key),
     actor: Actor = Depends(get_actor),
     settings: Settings = Depends(get_settings),
@@ -75,6 +89,16 @@ async def upload_source(
         if source is None:
             raise replayed_resource_gone()
         return source
+    if space_id:
+        # Proved against the caller's workspace before it is stamped; a foreign
+        # or deleted space is the same fact to this caller — 404 — never a file
+        # that silently lands in the workspace library instead.
+        try:
+            spaces_service.get_space(
+                db, workspace_id=actor.workspace_id, space_id=space_id
+            )
+        except spaces_service.SpaceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     filename = sanitize_filename(file.filename or "source.txt")
     try:
         validate_filename(filename)
@@ -94,6 +118,7 @@ async def upload_source(
         object_key="",
         byte_size=len(data),
         status="queued",
+        space_id=space_id,
     )
     path = object_path(actor.workspace_id, source.id, filename)
     path.write_bytes(data)
@@ -269,20 +294,9 @@ def delete_source(
     )
     if replay:
         return
-    source = db.scalar(
-        select(Source).where(
-            Source.id == source_id,
-            Source.workspace_id == actor.workspace_id,
-            Source.deleted_at.is_(None),
-        )
-    )
+    source = purge_source(db, workspace_id=actor.workspace_id, source_id=source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    source.deleted_at = utcnow()
-    source.status = "deleted"
-    # Postings reference chunks, so they go first — see clear_source_postings.
-    clear_source_postings(db, source.id)
-    db.execute(delete(Chunk).where(Chunk.source_id == source.id))
     mark_graph_stale(db, actor.workspace_id)
     record_key(
         db,

@@ -291,9 +291,14 @@ def _create_dashboard(
         return ToolResult(content=f"Error: {exc}")
     except DashboardBindError as exc:
         return ToolResult(content=f"Dashboard rejected:\n{exc.report.render()}")
+    # The model reads this back to the user, so it must agree with the UI: the
+    # chart card now carries its own "Pin to home screen" control, and sending
+    # people to the dashboards screen would contradict the button under the
+    # very card this sentence lands on. The "(id …)" clause is load-bearing —
+    # the card's pin bar parses it to know which dashboard it is offering.
     return ToolResult(
         content=f"Created dashboard “{dashboard.name}” (id {dashboard.id}) showing "
-        f"{_describe(spec)}. Pin it from the dashboards screen to keep it in view."
+        f"{_describe(spec)}. A pin control appears on this card to keep it in view."
     )
 
 

@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-Jasmine is a cited knowledge and analytical workspace. It does execute generated
+Grain is a cited knowledge and analytical workspace. It does execute generated
 code — the boundary is that code only ever runs somewhere holding no workspace
 authority, never that code does not run. See "Code execution boundaries" below,
 which is the section to read before trusting any security claim in this file.
@@ -155,7 +155,7 @@ a security claim in a document is most prone to. What replaced it is in the next
 section.
 
 A generated app gets **no backend** (ADR 0009). It already has one in the only
-sense that matters — `window.jasmine.query()` over the validated `postMessage`
+sense that matters — `window.grain.query()` over the validated `postMessage`
 channel, checked against the release's `data_bindings` — and that is a query API
 it did not write and cannot widen. The decision turns on a containment fact
 rather than a preference: the frame runs `sandbox="allow-scripts"` with

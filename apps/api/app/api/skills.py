@@ -21,13 +21,21 @@ from __future__ import annotations
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
 from ..models import Skill, SkillVersion
-from ..schemas import SkillCreate, SkillOut, SkillUpdate, SkillVersionOut
+from ..schemas import (
+    SkillCreate,
+    SkillImportRequest,
+    SkillOut,
+    SkillUpdate,
+    SkillVersionOut,
+)
+from ..services import skill_markdown
 from ..services import skills as skills_service
 from ..services.audit import record_audit
 from .dependencies import idempotency_key
@@ -281,3 +289,112 @@ def restore_skill_version(
     )
     db.commit()
     return _out(skill, actor)
+
+
+@router.post("/skills/import", response_model=SkillOut, status_code=201)
+def import_skill(
+    payload: SkillImportRequest,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> SkillOut:
+    """Create a skill from a SKILL.md file — the open agent-skills format.
+
+    Deliberately a thin translation onto the same service call `POST /skills`
+    makes: the parser owns format errors (422, its messages are user-ready),
+    this route owns the same name-conflict 409 the create route answers, and
+    what lands is inert by default — private, no args — exactly like any other
+    newly authored skill. Grain's declared args have no SKILL.md
+    representation, so an import starts with none; `{{ placeholders }}` in the
+    body stay literal until args are declared in the editor.
+    """
+    replay = find_replay(
+        db, workspace_id=actor.workspace_id, operation="skill.import", key=key
+    )
+    if replay:
+        skill = db.scalar(
+            select(Skill).where(
+                Skill.id == replay.resource_id,
+                Skill.workspace_id == actor.workspace_id,
+            )
+        )
+        if skill is None:
+            raise replayed_resource_gone()
+        return _out(skill, actor)
+    try:
+        parsed = skill_markdown.parse_skill_markdown(payload.markdown)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    existing = db.scalar(
+        select(Skill).where(
+            Skill.workspace_id == actor.workspace_id, Skill.name == parsed.name
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A skill named “{parsed.name}” already exists. Edit it, or "
+                "rename the file's frontmatter `name` to import alongside it."
+            ),
+        )
+    skill = skills_service.create_skill(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        name=parsed.name,
+        title=parsed.title,
+        description=parsed.description,
+        body=parsed.body,
+        args=[],
+        shared=False,
+    )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="skill.import",
+        key=key,
+        resource_id=skill.id,
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="skill.imported",
+        resource_type="skill",
+        resource_id=skill.id,
+        detail={"name": skill.name},
+    )
+    db.commit()
+    return _out(skill, actor)
+
+
+@router.get("/skills/{skill_id}/export")
+def export_skill(
+    skill_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> PlainTextResponse:
+    """The skill as a SKILL.md file, portable to any agent-skills consumer.
+
+    Declared args are the one thing the format cannot carry; the body's
+    `{{ placeholders }}` export literally, which the round trip back into
+    Grain also preserves.
+    """
+    skill = _load_visible(db, actor, skill_id)
+    # SKILL.md frontmatter values are single-line; a natively authored skill's
+    # title/description may legally hold newlines (the create schema bounds
+    # only length), and the renderer refuses them. Collapsing whitespace here
+    # is lossy in exactly the way the format demands — the alternative is a
+    # 500 on a skill the API itself accepted.
+    rendered = skill_markdown.render_skill_markdown(
+        name=skill.name,
+        title=" ".join(skill.title.split()),
+        description=" ".join(skill.description.split()),
+        body=skill.body,
+    )
+    return PlainTextResponse(
+        rendered,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="SKILL.md"'},
+    )

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentic-knowledge-api"
+name = "grain-api"
 version = "0.1.0"
 description = "Durable API for the agentic knowledge workspace"
 requires-python = ">=3.10"
@@ -17,6 +17,9 @@ dependencies = [
   "python-multipart>=0.0.9,<1",
   "httpx>=0.27,<1",
   "openai>=1.55,<3",
+  # Second first-party harness (services/harness/anthropic.py). Imported only
+  # when MODEL_PROVIDER=anthropic.
+  "anthropic>=0.40,<2",
   "pypdf>=5,<7",
   "duckdb>=1.2,<2",
   "cryptography>=42,<46",
@@ -60,7 +63,7 @@ include = ["app*"]
 testpaths = ["tests"]
 addopts = "-q"
 markers = [
-  "latex: requires jasmine-latex Docker image (make latex-image)",
+  "latex: requires grain-latex Docker image (make latex-image)",
 ]
 
 [tool.ruff]

@@ -1,7 +1,7 @@
 "use client";
 
 import type { WorkspaceMembership } from "@workspace/api-client";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, RefreshCw } from "lucide-react";
 import {
   Fragment,
   createContext,
@@ -33,13 +33,22 @@ import { DisclosureMenu } from "./disclosure-menu";
  * showing the previous workspace's rows.
  */
 
-const STORAGE_KEY = "jasmine.workspace-id";
+const STORAGE_KEY = "grain.workspace-id";
 
 type WorkspaceSelectionValue = {
   /** Every workspace the user belongs to; empty when the list could not load. */
   workspaces: WorkspaceMembership[];
   currentId: string;
   select: (workspaceId: string) => void;
+  /**
+   * The list request failed. Distinguished from "belongs to nothing" because
+   * the two demand opposite chrome: nothing-to-switch renders no switcher,
+   * while a failed fetch renders a disabled one with a retry — a user with
+   * three workspaces must not be silently locked into whichever one the
+   * session defaulted to.
+   */
+  failed: boolean;
+  retry: () => void;
 };
 
 const WorkspaceSelectionContext = createContext<WorkspaceSelectionValue | null>(null);
@@ -67,16 +76,23 @@ export function WorkspaceSelection({ children }: { children: React.ReactNode }) 
   // workspace and then immediately remount to load the stored one.
   const [workspaces, setWorkspaces] = useState<WorkspaceMembership[] | null>(null);
   const [currentId, setCurrentId] = useState("");
+  const [failed, setFailed] = useState(false);
+  // Bumped by retry(); the fetch effect re-runs on it.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       let listed: WorkspaceMembership[] = [];
+      let listFailed = false;
       try {
         listed = await api.listWorkspaces();
       } catch {
-        // The switcher is chrome, not a gate. With no list there is nothing to
-        // switch between, and the session's own workspace opens as it always did.
+        // The switcher is chrome, not a gate: the session's own workspace
+        // still opens. But the failure is remembered rather than swallowed, so
+        // the switcher can say it is broken and offer a retry instead of
+        // silently rendering nothing.
+        listFailed = true;
       }
       if (cancelled) return;
       const stored = readStored();
@@ -89,11 +105,14 @@ export function WorkspaceSelection({ children }: { children: React.ReactNode }) 
       if (chosen) api.setWorkspaceId(chosen);
       setCurrentId(chosen);
       setWorkspaces(listed);
+      setFailed(listFailed);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
+
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   const select = useCallback(
     (workspaceId: string) => {
@@ -106,8 +125,8 @@ export function WorkspaceSelection({ children }: { children: React.ReactNode }) 
   );
 
   const value = useMemo(
-    () => ({ workspaces: workspaces ?? [], currentId, select }),
-    [workspaces, currentId, select],
+    () => ({ workspaces: workspaces ?? [], currentId, select, failed, retry }),
+    [workspaces, currentId, select, failed, retry],
   );
 
   if (workspaces === null) return <AuthSplash message="Opening your workspace…" />;
@@ -136,7 +155,29 @@ export function useWorkspaceSelection(): WorkspaceSelectionValue {
  * threads, sources, memory, the graph — is scoped to whatever it says.
  */
 export function WorkspaceSwitcher() {
-  const { workspaces, currentId, select } = useWorkspaceSelection();
+  const { workspaces, currentId, select, failed, retry } = useWorkspaceSelection();
+
+  // The list request failed: say so where the switcher would be, with the one
+  // action that helps. A silent null here reads as "you have no other
+  // workspaces", which for a member of three is simply false.
+  if (failed && workspaces.length === 0) {
+    return (
+      <div className="workspace-switcher-failed">
+        <button
+          className="chrome-button workspace-switcher-trigger"
+          disabled
+          aria-label="Workspaces unavailable"
+        >
+          <span className="workspace-switcher-mark">!</span>
+          <span className="chrome-button-label">Workspaces unavailable</span>
+        </button>
+        <button className="ghost-button" onClick={retry}>
+          <RefreshCw size={13} aria-hidden="true" />
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   // Nothing loaded means nothing to switch between; the identity chip at the
   // bottom of the sidebar already says who is signed in.

@@ -21,13 +21,14 @@ async function widthOf(locator: Locator): Promise<number> {
 /** A toggle addressed the way a screen reader meets it: by what it will do. */
 const toggle = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 
-test("the rail collapses, hands its width to the view, and stays collapsed", async ({
+test("the sidebar collapses, hands its width to the view, and stays collapsed", async ({
   page,
 }) => {
   await page.goto("/");
   await expect(rail(page).getByRole("button")).toHaveCount(4);
 
   const main = page.locator(".main-panel");
+  const sidebar = page.locator("#workspace-rail");
   const wide = await widthOf(main);
 
   // Reached and operated from the keyboard, not the mouse: focus it and press
@@ -39,10 +40,13 @@ test("the rail collapses, hands its width to the view, and stays collapsed", asy
   await expect(collapse).toBeFocused();
   await page.keyboard.press("Enter");
 
-  // The rail is gone and the view has the room. 200px is a floor, not a
-  // measurement: the rail's track is 252px, and anything that merely hid it
-  // without releasing the column would move this by zero.
-  await expect(rail(page)).toBeHidden();
+  // The CONTEXT sidebar is gone and the view has the room; the icon rail
+  // stays, because the four doors are what keep a collapsed shell navigable.
+  // 200px is a floor, not a measurement: the sidebar's track is 252px, and
+  // anything that merely hid it without releasing the column would move this
+  // by zero.
+  await expect(sidebar).toBeHidden();
+  await expect(rail(page)).toBeVisible();
   const collapsedWidth = await widthOf(main);
   expect(collapsedWidth - wide).toBeGreaterThan(200);
 
@@ -54,13 +58,14 @@ test("the rail collapses, hands its width to the view, and stays collapsed", asy
   // Across a reload, which is the whole reason it is in localStorage.
   await page.reload();
   await expect(toggle(page, "Show the sidebar")).toBeVisible();
-  await expect(rail(page)).toBeHidden();
+  await expect(sidebar).toBeHidden();
+  await expect(rail(page)).toBeVisible();
   expect(await widthOf(main)).toBeGreaterThan(wide + 200);
 
   // And back, so the rest of this file — and any spec that shares the storage
   // state — meets the shell it expects.
   await toggle(page, "Show the sidebar").click();
-  await expect(rail(page).getByRole("button")).toHaveCount(4);
+  await expect(sidebar).toBeVisible();
   expect(await widthOf(main)).toBeCloseTo(wide, 0);
 });
 
@@ -68,10 +73,8 @@ test("the documents file list collapses to a strip that can still be reopened", 
   page,
 }) => {
   await page.goto("/");
-  // The tab is "Files", not "Documents" — the group was renamed when its first
-  // tab became a folder tree (see `views/navigation.ts`), and every other spec
-  // addresses it as `^Files`.
-  await openView(page, "Files", /^Files/);
+  // The Library group lands on Documents, whose sidebar is the folder tree.
+  await openView(page, "Library", /^Documents/);
 
   const list = page.locator(".documents-list");
   const editor = page.locator(".documents-layout");
@@ -80,7 +83,7 @@ test("the documents file list collapses to a strip that can still be reopened", 
   expect(openWidth).toBeGreaterThan(180);
   // The tree's own content, which is what disappears — asserted as text so this
   // cannot pass against an empty pane that happens to be the right width.
-  await expect(list).toContainText("Files");
+  await expect(list).toContainText("Documents");
 
   await toggle(page, "Hide the file list").click();
 
@@ -95,7 +98,7 @@ test("the documents file list collapses to a strip that can still be reopened", 
   // order while leaving them in `textContent`, and `textContent` is what
   // `toContainText` reads. So the claim is made the way a user meets it: none
   // of the tree shows, and the single control left standing is the toggle back.
-  await expect(list.getByText("Files", { exact: true })).toBeHidden();
+  await expect(list.getByText("Documents", { exact: true })).toBeHidden();
   await expect(list.getByRole("button")).toHaveCount(1);
   const reopen = toggle(page, "Show the file list");
   await expect(reopen).toBeVisible();
@@ -106,11 +109,11 @@ test("the documents file list collapses to a strip that can still be reopened", 
   expect(await widthOf(editor)).toBeGreaterThan(0);
 
   await page.reload();
-  await openView(page, "Files", /^Files/);
+  await openView(page, "Library", /^Documents/);
   await expect(toggle(page, "Show the file list")).toBeVisible();
   expect(await widthOf(page.locator(".documents-list"))).toBeLessThan(60);
 
   await toggle(page, "Show the file list").click();
-  await expect(page.locator(".documents-list")).toContainText("Files");
+  await expect(page.locator(".documents-list")).toContainText("Documents");
   expect(await widthOf(page.locator(".documents-list"))).toBeCloseTo(openWidth, 0);
 });

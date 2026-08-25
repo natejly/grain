@@ -267,13 +267,27 @@ def embed_chunks(
 # --- the two arms -----------------------------------------------------------
 
 
-def _live_sources() -> Tuple[ColumnElement[bool], ...]:
-    """The filter every arm shares: only ready, undeleted sources are citable."""
-    return (Source.deleted_at.is_(None), Source.status == "ready")
+def _live_sources(space_id: str = "") -> Tuple[ColumnElement[bool], ...]:
+    """The filter every arm shares: only ready, undeleted sources are citable —
+    and only sources in scope.
+
+    `space_id` is the space the *querying thread* is in. A turn in space S
+    retrieves the space's files plus the workspace library (`IN ("", S)`); the
+    default collapses that to `== ""`, the library alone — so a caller that
+    never learned about spaces retrieves less, never more, and a space's files
+    cannot surface in general chat. The predicate lives here, in the one tuple
+    every arm and the hydrate spread, because a scope filter applied to three
+    of four queries is a bypass with extra steps.
+    """
+    return (
+        Source.deleted_at.is_(None),
+        Source.status == "ready",
+        Source.space_id.in_(("", space_id)),
+    )
 
 
 def legacy_lexical_ranking(
-    db: Session, *, workspace_id: str, query: str
+    db: Session, *, workspace_id: str, query: str, space_id: str = ""
 ) -> List[Tuple[str, float]]:
     """The pre-BM25 scorer, kept as the ablation arm for `RETRIEVAL_BM25=0`.
 
@@ -290,7 +304,7 @@ def legacy_lexical_ranking(
         .where(
             Chunk.workspace_id == workspace_id,
             Source.workspace_id == workspace_id,
-            *_live_sources(),
+            *_live_sources(space_id),
         )
     ).all()
     scored: List[Tuple[str, float]] = []
@@ -370,7 +384,12 @@ def _selective_terms(
 
 
 def bm25_ranking(
-    db: Session, *, workspace_id: str, query: str, settings: Optional[Settings] = None
+    db: Session,
+    *,
+    workspace_id: str,
+    query: str,
+    space_id: str = "",
+    settings: Optional[Settings] = None,
 ) -> List[Tuple[str, float]]:
     """Okapi BM25 over the portable inverted index.
 
@@ -389,7 +408,7 @@ def bm25_ranking(
     live = (
         Chunk.workspace_id == workspace_id,
         Source.workspace_id == workspace_id,
-        *_live_sources(),
+        *_live_sources(space_id),
     )
     totals = db.execute(
         select(func.count(Chunk.id), func.coalesce(func.sum(Chunk.lexical_length), 0))
@@ -477,7 +496,12 @@ def _embed_query(query: str, settings: Settings) -> Optional[bytes]:
 
 
 def dense_ranking(
-    db: Session, *, workspace_id: str, query: str, settings: Optional[Settings] = None
+    db: Session,
+    *,
+    workspace_id: str,
+    query: str,
+    space_id: str = "",
+    settings: Optional[Settings] = None,
 ) -> List[Tuple[str, float]]:
     """Cosine ranking over chunk vectors, or an empty ranking when there are none.
 
@@ -507,7 +531,7 @@ def dense_ranking(
         .where(
             Chunk.workspace_id == workspace_id,
             Source.workspace_id == workspace_id,
-            *_live_sources(),
+            *_live_sources(space_id),
             Chunk.embedding.is_not(None),
             # Vectors from two embedding models are not comparable, and same-width
             # vectors from different models are the case the length guard cannot
@@ -529,7 +553,12 @@ def dense_ranking(
 
 
 def rank_arms(
-    db: Session, *, workspace_id: str, query: str, settings: Optional[Settings] = None
+    db: Session,
+    *,
+    workspace_id: str,
+    query: str,
+    space_id: str = "",
+    settings: Optional[Settings] = None,
 ) -> ArmRankings:
     """Both arms, unfused. The eval harness calls this for per-arm attribution."""
     settings = settings or get_settings()
@@ -538,12 +567,18 @@ def rank_arms(
         # slow first query.
         reconcile_index(db, workspace_id=workspace_id)
         lexical = bm25_ranking(
-            db, workspace_id=workspace_id, query=query, settings=settings
+            db, workspace_id=workspace_id, query=query, space_id=space_id,
+            settings=settings,
         )
     else:
-        lexical = legacy_lexical_ranking(db, workspace_id=workspace_id, query=query)
+        lexical = legacy_lexical_ranking(
+            db, workspace_id=workspace_id, query=query, space_id=space_id
+        )
     dense = (
-        dense_ranking(db, workspace_id=workspace_id, query=query, settings=settings)
+        dense_ranking(
+            db, workspace_id=workspace_id, query=query, space_id=space_id,
+            settings=settings,
+        )
         if settings.retrieval_hybrid
         else []
     )
@@ -579,6 +614,7 @@ def search_evidence(
     *,
     workspace_id: str,
     query: str,
+    space_id: str = "",
     limit: int = 5,
     token_budget: int = 1200,
     settings: Optional[Settings] = None,
@@ -591,7 +627,10 @@ def search_evidence(
         # similarity to "what is the", and cite the top five — evidence pinned to
         # a prompt that asked for none is worse than no evidence at all.
         return []
-    arms = rank_arms(db, workspace_id=workspace_id, query=query, settings=settings)
+    arms = rank_arms(
+        db, workspace_id=workspace_id, query=query, space_id=space_id,
+        settings=settings,
+    )
     fused = reciprocal_rank_fusion(
         [arms.lexical, arms.dense],
         k=settings.retrieval_rrf_k,
@@ -612,7 +651,7 @@ def search_evidence(
             Chunk.workspace_id == workspace_id,
             Source.workspace_id == workspace_id,
             Chunk.id.in_(list(candidates)),
-            *_live_sources(),
+            *_live_sources(space_id),
         )
     ).all()
     ordered = sorted(

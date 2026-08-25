@@ -295,7 +295,7 @@ def probe_authentication(url: str, settings: Settings) -> Optional[AuthChallenge
         "params": {
             "protocolVersion": "2025-06-18",
             "capabilities": {},
-            "clientInfo": {"name": "fieldnote", "version": "1.0"},
+            "clientInfo": {"name": "grain", "version": "1.0"},
         },
     }
     try:
@@ -558,7 +558,7 @@ def register_client(
         )
     scope = " ".join(scopes or auth_server.scopes)
     payload: Dict[str, Any] = {
-        "client_name": "Fieldnote",
+        "client_name": "Grain",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Jasmine — theme tokens
+   Grain — theme tokens
    ==========================================================================
 
    Every rule in this file reads these custom properties and nothing else: no
@@ -203,6 +203,16 @@
   --preview-bg: #ffffff;
 }
 
+/* Layout tokens — dimensions, not colours, so they live outside the three
+   theme blocks above (which must hold identical token sets) and both themes
+   inherit them from here. */
+:root {
+  /* The one width of the chat band beside a document, a project or the
+     dashboards. Every subject-chat grid reads this, so the three surfaces
+     cannot drift to three different widths. */
+  --split-width: 340px;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -244,8 +254,93 @@ select:focus-visible {
 .workspace-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-columns: 56px 252px minmax(0, 1fr);
   background: var(--bg);
+}
+
+/* Band 1: the icon rail — four doors, always on screen. Icon-only because a
+   door needs recognising, not reading; the label is the tooltip and the
+   accessible name. */
+.icon-rail {
+  position: relative;
+  z-index: 21;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 0 12px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.icon-rail .nav-item {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.icon-rail .nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.icon-rail .nav-item.active {
+  background: var(--surface-raised);
+  color: var(--accent);
+}
+
+/* The shell's one badge, riding the Inbox door. Absolute so a two-digit count
+   cannot widen the rail. */
+.icon-rail .approval-count {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  margin: 0;
+}
+
+/* The drawer's labelled destination list: only where the icon rail is not.
+   Doubled selector on purpose — .primary-nav sets display:flex later in the
+   sheet, and at equal specificity the later rule would win and surface a
+   duplicate destination list on desktop. */
+.primary-nav.mobile-group-nav {
+  display: none;
+}
+
+/* Band 2's section nav: the destination's own map. */
+.section-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  overflow-y: auto;
+}
+
+.section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.section-heading {
+  margin: 0 10px 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sidebar-spacer {
+  flex: 1;
 }
 
 .sidebar {
@@ -612,10 +707,13 @@ select:focus-visible {
   width: 100%;
   height: 34px;
   display: grid;
-  /* Three trailing action columns: share/unshare (open thread only), open in a
-     new pane, and delete. The share column is `auto`, so it collapses to zero
-     width on every row that does not render the toggle. */
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  /* FOUR trailing action columns: rename and share/unshare (open thread only),
+     open in a new pane, and delete. `auto` collapses to zero width on rows
+     that do not render a control — but the column has to EXIST: with three
+     columns, the open row's fifth item wrapped to a second grid row inside
+     this fixed 34px height and bled over the next thread, which then
+     intercepted clicks meant for this row's own delete button. */
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;
@@ -839,72 +937,6 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
-/* ---- Sub-navigation inside a group ---- */
-
-.view-tabs {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 9px 22px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.view-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.view-tab {
-  height: 28px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 11px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.view-tab:hover {
-  background: var(--surface);
-  color: var(--text);
-}
-
-.view-tab.active {
-  border-color: var(--accent-border);
-  background: var(--accent-muted);
-  color: var(--accent-text);
-}
-
-.view-tab.active svg {
-  color: var(--accent);
-}
-
-.tab-count {
-  min-width: 18px;
-  height: 16px;
-  display: grid;
-  place-items: center;
-  padding: 0 5px;
-  border-radius: 8px;
-  background: var(--surface-raised);
-  color: var(--text-dim);
-  font-size: 9px;
-}
-
-.view-tab.active .tab-count {
-  color: var(--accent-text);
-}
-
 .topbar-actions {
   margin-left: auto;
   display: flex;
@@ -924,40 +956,59 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.agent-pill {
-  height: 28px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 600;
+/* The system-status popover: the screen and provider pills folded into one
+   quiet dot. Green is "nothing needs saying"; amber is the two states worth a
+   glance — the API is down, or the dev bypass is running everything
+   unreviewed. The detail lives in the disclosure panel, not the chrome. */
+.system-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
 }
 
-/* The prompt-injection screen's posture pill, mirroring .agent-pill so the two
-   status indicators read as one row. Coloured only in enforce — the mode that
-   actually gates a flagged turn — so a shadow deployment stays quiet chrome. */
-.screen-pill {
-  height: 28px;
+.system-status-dot.warn {
+  background: var(--amber);
+}
+
+.system-status-panel {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  min-width: 230px;
+  font-size: 11px;
+}
+
+.system-status-row {
+  display: grid;
+  gap: 2px;
+}
+
+.system-status-term {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-size: 10px;
   font-weight: 600;
-  text-transform: capitalize;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
-.screen-pill.enforce {
-  border-color: var(--red-border);
+.system-status-value {
+  color: var(--text);
+}
+
+.system-status-bad {
+  color: var(--red);
+}
+
+.system-status-warning {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--red-border);
+  border-radius: 5px;
   background: var(--red-muted);
   color: var(--red);
 }
@@ -978,6 +1029,20 @@ select:focus-visible {
 .icon-button:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+/* aria-disabled, not disabled: the button stays focusable so an edge move or
+   an in-flight reorder does not drop keyboard focus to <body>. It still has
+   to look inert. */
+.icon-button[aria-disabled="true"],
+.primary-button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.icon-button[aria-disabled="true"]:hover {
+  background: var(--surface);
+  color: var(--text-muted);
 }
 
 .menu-button,
@@ -1005,17 +1070,49 @@ select:focus-visible {
   font-size: 11px;
 }
 
-/* The toast is anchored under the topbar; a group with a tab strip pushes it
-   down so an error never sits on top of the navigation it interrupts. */
-.main-panel.has-tabs .error-toast {
-  top: 115px;
-}
-
 .error-toast span {
   flex: 1;
 }
 
 .error-toast button {
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* The error toast's neutral sibling: same box, calm colours. A separate class
+   on purpose — the red one is role="alert" and asserted absent by specs that
+   expect nothing to have failed, so nothing informational may ever wear it.
+   Its own slot below the error's, too: the two can be up at once, and a
+   notice must never paint over an active alert. */
+.notice-toast {
+  position: absolute;
+  z-index: 30;
+  top: 114px;
+  left: 50%;
+  max-width: min(520px, calc(100% - 32px));
+  min-height: 38px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.notice-toast span {
+  flex: 1;
+}
+
+.notice-toast button {
   display: grid;
   place-items: center;
   padding: 3px;
@@ -1107,6 +1204,15 @@ select:focus-visible {
   border-radius: 6px;
   background: var(--surface);
   line-height: 1.5;
+}
+
+/* An aside ("/btw"): a note the next turn will read, not a prompt a turn
+   answered — quieter than a turn, and visibly not one. */
+.message.user.aside .message-body {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .message-body p {
@@ -1445,6 +1551,691 @@ select:focus-visible {
   opacity: 0.6;
 }
 
+/* The composer's labelled verbs — Attach, the agent picker, Skills. Same
+   override story as .composer-toggle: they carry words, so they size to their
+   content rather than the 29px icon square. */
+.composer-tools .composer-chip {
+  width: auto;
+  height: 29px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.composer-tools .composer-chip:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.composer-tools .composer-chip.on {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+
+.composer-tools .composer-chip:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* The agent chip wraps a real <select>; the chip draws the border, so the
+   select inside must not draw its own. */
+.composer-tools .agent-chip .agent-select {
+  max-width: 130px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* Floats above the composer like the skill picker, so the textarea does not
+   jump under the cursor when it opens. */
+.attach-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  width: min(320px, 100%);
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px var(--tint);
+}
+
+.attach-menu p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* The empty conversation's first lesson: the product's verbs, then the
+   promise that nothing runs without approval. Centered by .message-scroll.empty. */
+.chat-starter {
+  width: min(640px, 100%);
+  padding-bottom: 40px;
+  text-align: center;
+}
+
+.chat-starter h2 {
+  margin: 0 0 18px;
+  font-size: 18px;
+}
+
+.chat-starter-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.chat-starter-cards > button {
+  display: grid;
+  gap: 4px;
+  padding: 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-starter-cards > button:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.chat-starter-cards > button > span {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.chat-starter-note {
+  margin: 16px 0 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* ---- Command palette ---- */
+
+.palette-scrim {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 14vh;
+  background: var(--scrim);
+}
+
+.palette {
+  width: min(580px, calc(100vw - 32px));
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 16px 48px var(--tint);
+  overflow: hidden;
+}
+
+.palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.palette-input-row input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.palette-input-row kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.palette-list {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.palette-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.palette-row.focused {
+  background: var(--surface-raised);
+}
+
+.palette-row svg {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.palette-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-row-hint {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+/* The chord a row teaches — same chrome as the input row's esc hint. */
+.palette-row-shortcut {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.palette-empty {
+  padding: 14px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.palette-naming-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+/* The rail row mid-rename: the input takes the whole row. */
+.thread-rename-input {
+  width: 100%;
+  margin: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  outline: 0;
+}
+
+.thread-rename {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.thread-rename:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---- Datasets ---- */
+
+.dataset-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.dataset-create input,
+.dataset-create select,
+.dataset-version select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.dataset-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.dataset-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.dataset-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dataset-row:hover {
+  background: var(--surface-hover);
+}
+
+.dataset-row.active {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.dataset-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.dataset-row-meta {
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dataset-detail {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.dataset-detail.empty {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.dataset-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.dataset-detail-head h2 {
+  margin: 0 0 2px;
+  font-size: 15px;
+}
+
+.dataset-detail-head span {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.dataset-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.dataset-column-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dataset-column-chip small {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.dataset-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* Its own scroll container, so a wide table never scrolls the page body. */
+.dataset-table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.dataset-table-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dataset-table-scroll th,
+.dataset-table-scroll td {
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.dataset-table-scroll th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-raised);
+  font-weight: 650;
+}
+
+.dataset-table-scroll tr:last-child td {
+  border-bottom: 0;
+}
+
+.dataset-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.attach-menu-file {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-menu-dataset {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* ---- Inbox ---- */
+
+.inbox-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.inbox-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.inbox-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.inbox-tab.active {
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.inbox-queue {
+  max-width: 720px;
+}
+
+.inbox-hint {
+  margin: 0 0 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.inbox-hint kbd {
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 10px;
+}
+
+.approval-card.focused {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.approval-open {
+  margin-left: auto;
+  flex: none;
+}
+
+.inbox-hold-note {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* The wake-time line on a snoozed row, with the way back beside it. Clay, not
+   red: a snooze is the user's own schedule, not a problem the card has. */
+.inbox-snoozed-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0 0;
+  color: var(--amber);
+  font-size: 11.5px;
+}
+
+.inbox-snoozed-note .ghost-button {
+  margin-left: auto;
+}
+
+.status-pill.failed {
+  border-color: var(--clay);
+  color: var(--amber);
+}
+
+/* The sidebar's waiting-on-you strip: the top of the Inbox where the eye
+   lands first, each row decidable in place. */
+.waiting-strip {
+  margin: 12px 0 0;
+  padding: 8px;
+  border: 1px solid var(--clay);
+  border-radius: 8px;
+  background: var(--clay-muted);
+}
+
+.waiting-strip-title {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.waiting-strip-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.waiting-strip-open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.waiting-strip-open:hover {
+  background: var(--surface-hover);
+}
+
+.waiting-strip-open strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waiting-strip-open span {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.waiting-approve,
+.waiting-deny {
+  flex: none;
+  font-size: 11px;
+}
+
+.waiting-approve:hover {
+  color: var(--accent);
+}
+
+.waiting-deny:hover {
+  color: var(--amber);
+}
+
+.waiting-strip-more {
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--amber);
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.waiting-strip-more:hover {
+  background: var(--surface-hover);
+}
+
+/* Blocked-on-you in the composer zone: visually distinct from busy, cannot
+   scroll away. Shares the bypass banner's slot above the composer. */
+.waiting-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--clay);
+  border-radius: 8px;
+  background: var(--clay-muted);
+  color: var(--amber);
+  font-size: 12px;
+}
+
+.waiting-banner strong {
+  color: var(--text);
+}
+
+/* The switcher's failure state: a disabled trigger that says what broke and a
+   retry beside it. The sidebar's own padding does the spacing, same as the
+   switcher it stands in for. */
+.workspace-switcher-failed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-switcher-failed .chrome-button {
+  flex: 1;
+  opacity: 0.7;
+}
+
 .composer-tools .send-button {
   margin-left: auto;
   background: var(--accent);
@@ -1539,6 +2330,18 @@ select:focus-visible {
 .skill-picker-desc {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+/* The plan-review card's body: the proposed plan, rendered as prose for a
+   person to read before approving the exit from plan mode. */
+.plan-proposal {
+  margin: 0 10px 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 /* The attached skill sits on its own row between the textarea and the tools, so
@@ -2178,6 +2981,12 @@ select:focus-visible {
 .decision-buttons button:hover {
   border-color: var(--border-strong);
   color: var(--text);
+}
+
+/* Three-up when the row offers "Later": the snooze takes only the room its
+   label needs, so Deny and Approve keep their familiar proportions. */
+.decision-buttons.with-snooze {
+  grid-template-columns: auto 1fr 1.35fr;
 }
 
 .decision-buttons button.approve {
@@ -2979,6 +3788,21 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  /* The rail cedes to the drawer on mobile; the drawer carries the labelled
+     destination list instead, because it has the width the rail refuses. */
+  .icon-rail {
+    display: none;
+  }
+
+  .primary-nav.mobile-group-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
@@ -3034,10 +3858,6 @@ select:focus-visible {
     padding: 0 12px;
   }
 
-  .agent-pill {
-    display: none;
-  }
-
   /* Words go before controls do: the triggers keep their icons and their
      accessible names, and lose only the visible label. Scoped to the topbar so
      the sidebar switcher still says which workspace you are in. */
@@ -3059,10 +3879,6 @@ select:focus-visible {
 
   .content-page {
     padding: 30px 14px 50px;
-  }
-
-  .view-tabs {
-    padding: 8px 14px;
   }
 
   .page-heading {
@@ -3343,6 +4159,94 @@ select:focus-visible {
   color: var(--accent);
 }
 
+/* --- Knowledge cross-links ----------------------------------------------- */
+
+/* An inline "go there" on a Knowledge row — a button because it navigates
+   in-app, styled as a link because it lives mid-sentence in row metadata.
+   The .entity-row form has to out-rank that row's bordered default button. */
+.knowledge-link,
+.entity-row button.knowledge-link {
+  display: inline;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 550;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.knowledge-link:hover {
+  text-decoration: underline;
+}
+
+/* The space a source or memory is scoped to. .thread-space-chip's look under
+   new names — that class name is pinned to the rail by the e2e suite, and
+   these rows are not threads. */
+.source-space,
+.memory-space {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-active);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 72px;
+  vertical-align: middle;
+}
+
+.memory-space {
+  margin-left: 5px;
+  font-size: 9px;
+}
+
+/* Where the graph read an entity: the first source file, as a chip that lands
+   on its row in Sources. Quieter than the Passage button beside it — naming,
+   not the primary action. */
+.entity-row button.entity-source-chip {
+  min-height: 0;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-active);
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 500;
+  max-width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entity-row button.entity-source-chip:hover {
+  color: var(--text);
+}
+
+/* A conversation_id whose thread the list does not hold — personal to someone
+   else, or deleted. Quiet: it explains an absence, it is not a defect. */
+.memory-thread-gone {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* The landing ring a cross-link asks for; it self-clears after a beat
+   (views/use-focus-reveal.ts), same as a rail-focused dashboard tile. */
+.source-row.focused,
+.memory-row.focused,
+.entity-row.focused {
+  outline: 2px solid var(--accent-border-strong);
+  outline-offset: -2px;
+}
+
 .integration-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -3535,6 +4439,48 @@ select:focus-visible {
 
 .message:hover .message-author .copy-button {
   opacity: 1;
+}
+
+/* The pencil while a turn streams: present but inert — the server would 409
+   an edit over a live turn, and a control that vanishes reads as a bug. */
+.copy-button:disabled {
+  cursor: default;
+}
+
+.copy-button:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.message:hover .message-author .copy-button:disabled {
+  opacity: 0.45;
+}
+
+/* Editing a sent prompt in place, where the words were. */
+.message-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.message-edit textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.message-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .code-block {
@@ -4049,6 +4995,17 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+/* The parked-write marker on a tree row: a document with an agent edit
+   waiting on approval wears a clay dot, so the queue is visible from the tree
+   rather than only after opening the right file. */
+.tree-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--clay);
+}
+
 .doc-kind {
   flex: none;
   padding: 1px 6px;
@@ -4306,6 +5263,55 @@ select:focus-visible {
 
 /* ---- Reviewing a proposal inside the document ---- */
 
+/* The parked-proposal banner: shown over the (read-only) editor after "Later",
+   holding the count, the reason editing is paused, and the way back into
+   review. Clay because it is the needs-approval state, not an error. */
+.document-review-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--clay);
+  background: var(--clay-muted);
+  color: var(--amber);
+  font-size: 12px;
+}
+
+.document-review-banner > div {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.document-review-banner .field-hint {
+  margin-top: 0;
+}
+
+.document-review-banner .primary-button {
+  flex: none;
+}
+
+/* The reviewer's exit lane — "Later" parks the proposal and hands the column
+   back to the editor. Outside DocumentReview, which stays a pure
+   decide-the-diff component. */
+.document-review-exit {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: none;
+  padding: 6px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.document-review-exit .field-hint {
+  margin-top: 0;
+}
+
 /* Takes the place of .document-panes, so it inherits the same job: be the one
    thing between the header and the bottom of the panel that scrolls. The bar
    stays out of the scrollport — an Apply button that leaves the screen as you
@@ -4414,14 +5420,14 @@ select:focus-visible {
    to tell apart. */
 
 .documents-layout.with-chat {
-  grid-template-columns: 240px minmax(0, 1fr) 340px;
+  grid-template-columns: 240px minmax(0, 1fr) var(--split-width);
 }
 
 /* The preview column gives up the width, not the editor: a project chat is read
    beside the code being changed, and squeezing the source to keep the preview
    at full size inverts what the panel is for. */
 .projects-layout.with-chat {
-  grid-template-columns: 190px minmax(0, 1fr) minmax(0, 0.9fr) 320px;
+  grid-template-columns: 190px minmax(0, 1fr) minmax(0, 0.9fr) var(--split-width);
 }
 
 /* Four columns do not fit a laptop: at 1280 the editor's own header slid under
@@ -4431,7 +5437,7 @@ select:focus-visible {
    thing the user is meant to be watching while they chat. */
 @media (max-width: 1500px) {
   .projects-layout.with-chat {
-    grid-template-columns: 190px minmax(0, 1fr) 320px;
+    grid-template-columns: 190px minmax(0, 1fr) var(--split-width);
     grid-template-rows: minmax(0, 1fr) minmax(0, 0.75fr);
     grid-template-areas:
       "tree editor chat"
@@ -4483,8 +5489,10 @@ select:focus-visible {
    puts it in the *first* track — the 0 — leaving the 1fr track empty. The whole
    app then measures zero wide and the window renders blank. */
 @media (min-width: 901px) {
+  /* Collapsing hides band 2 — the contextual sidebar — never the icon rail:
+     the four doors are what keep a collapsed shell navigable at all. */
   .workspace-shell.rail-collapsed {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 56px minmax(0, 1fr);
   }
 
   .workspace-shell.rail-collapsed > .sidebar {
@@ -4528,7 +5536,7 @@ select:focus-visible {
 }
 
 .documents-layout.with-chat.list-collapsed {
-  grid-template-columns: 44px minmax(0, 1fr) 340px;
+  grid-template-columns: 44px minmax(0, 1fr) var(--split-width);
 }
 
 .projects-layout.list-collapsed {
@@ -4536,14 +5544,14 @@ select:focus-visible {
 }
 
 .projects-layout.with-chat.list-collapsed {
-  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 0.9fr) 320px;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 0.9fr) var(--split-width);
 }
 
 /* Its own media block rather than a line in the one above: a plain rule here
    would out-order that block's tracks and put four columns back on a laptop. */
 @media (max-width: 1500px) {
   .projects-layout.with-chat.list-collapsed {
-    grid-template-columns: 44px minmax(0, 1fr) 320px;
+    grid-template-columns: 44px minmax(0, 1fr) var(--split-width);
   }
 }
 
@@ -4584,7 +5592,7 @@ select:focus-visible {
 }
 
 .dashboards-layout.with-chat {
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) var(--split-width);
 }
 
 .subject-chat {
@@ -4678,12 +5686,36 @@ select:focus-visible {
 
 .chat-split-pane {
   /* flex-grow (the resize ratio) is set inline per pane; min-width:0 is what
-     lets a pane shrink under its content rather than forcing the row wider. */
+     lets a pane shrink under its content rather than forcing the row wider.
+     Positioned so the primary's corner maximize button can anchor to it. */
+  position: relative;
   flex-shrink: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* ---- One pane the whole surface ----
+   Maximizing hides the other panes and every divider with `display: none` —
+   the collapse idiom the rail uses, never a zero-width track — so the one
+   remaining flex item simply fills the row. The drag ratios are untouched;
+   restoring brings back exactly the split that was maximized away. */
+.chat-split-pane.pane-hidden,
+.chat-split.has-maximized .pane-divider {
+  display: none;
+}
+
+/* The primary pane is the shell's own ChatView and has no pane head, so its
+   maximize control floats in its top-right corner, over the scroll area. It
+   only exists while the split does. */
+.pane-max-corner {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 5;
+  border: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .pane-divider {
@@ -4730,10 +5762,29 @@ select:focus-visible {
 }
 
 .chat-pane-title {
+  /* The flexing element: the head now holds two buttons, and without this
+     `space-between` would spread them apart instead of docking them right. */
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
+}
+
+/* The close-confirm the head swaps into while a turn is running: two inline
+   buttons, no scrim and no window.confirm — the pane the question is about
+   stays visible under it. Clay for the question, because it is the
+   needs-a-decision state, not an error. */
+.chat-pane-head.chat-pane-confirm .chat-pane-title {
+  color: var(--amber);
+}
+
+.chat-pane-head.chat-pane-confirm .ghost-button {
+  flex: none;
+  padding: 3px 8px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .chat-pane > .tool-error {
@@ -4758,7 +5809,8 @@ select:focus-visible {
   gap: 8px;
 }
 
-.board-new input {
+.board-new input,
+.board-new select {
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -4769,6 +5821,18 @@ select:focus-visible {
 
 .board {
   margin-bottom: 28px;
+}
+
+/* The one visible difference between the two shapes of the merged listing. */
+.board-glyph {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* A list entry hosts its checklist plus the graduation affordance; the section
+   owns the bottom margin, so the checklist's own collapses to a small gap. */
+.board[data-shape="list"] .todo-list {
+  margin-bottom: 8px;
 }
 
 .board-head {
@@ -4864,8 +5928,20 @@ select:focus-visible {
   font-size: 10px;
 }
 
-.kanban-delete {
+/* The keyboard route to what a drag does: a card's Move to… control. It takes
+   the auto margin so the delete button keeps its seat at the card's edge. */
+.kanban-move {
   margin-left: auto;
+  max-width: 45%;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.kanban-delete {
   padding: 2px;
   border: 0;
   border-radius: 5px;
@@ -5452,6 +6528,12 @@ select:focus-visible {
   color: var(--text-muted);
 }
 
+.auth-brand-byline {
+  font-weight: 450;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
+
 .auth-splash {
   margin: 0;
   color: var(--text-dim);
@@ -5641,6 +6723,54 @@ select:focus-visible {
   border-radius: 6px;
 }
 
+/* The finish-the-job row under a chart-shaped tool card: pin the dashboard
+   the turn made, or ask for the pinnable version of a chart that is only a
+   picture. A sibling of the figures, styled like the card's other rows. */
+.artifact-pin-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.artifact-pin-bar .pin-bar-name {
+  /* The name flexes; whatever follows — the pin button, or the Pinned badge
+     and its jump — sits at the row's end. */
+  margin-right: auto;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Mounted before there is anything to announce, so the live region exists
+   when "Pinned" arrives — but an empty inline pill with padding and a border
+   still paints. visibility (not display) keeps it in the accessibility tree. */
+.artifact-pin-bar .pin-bar-done:empty {
+  visibility: hidden;
+  border: 0;
+  padding: 0;
+}
+
+.artifact-pin-bar .pin-bar-done {
+  padding: 2px 8px;
+  border: 1px solid var(--green-border);
+  border-radius: 999px;
+  background: var(--green-muted);
+  color: var(--green);
+  font-size: 11px;
+}
+
+.artifact-pin-bar .primary-button,
+.artifact-pin-bar .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
 .artifact-pending {
   width: 100%;
   min-height: 48px;
@@ -5667,6 +6797,17 @@ select:focus-visible {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   align-items: start;
   gap: 14px;
+}
+
+/* Rules & policies: one column, never the admin grid's auto-fit two — the
+   ledger sits ABOVE the org panel because the second is the authority the
+   first is subject to, and side-by-side placement loses that reading order. */
+.policies-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(1060px, 100%);
+  margin: 0 auto;
 }
 
 .admin-panel {
@@ -7991,13 +9132,35 @@ select:focus-visible {
 
 /* ---- The catalogue dropdown ---- */
 
+/* A page section now, not a popover: same width discipline as Templates. */
+.dashboard-catalog {
+  width: min(1060px, 100%);
+  margin: 0 auto 30px;
+}
+
+.dashboard-catalog h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.dashboard-catalog h2 .nav-count {
+  margin-left: 0;
+}
+
 .dashboard-catalog-list {
   margin: 0;
-  padding: 0;
+  padding: 6px;
   list-style: none;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
 }
 
 .dashboard-catalog-list li {
@@ -8050,14 +9213,12 @@ select:focus-visible {
 
 /* ---- Templates ---- */
 
-.dashboard-templates,
-.dashboard-apps {
+.dashboard-templates {
   width: min(1060px, 100%);
   margin: 0 auto 30px;
 }
 
-.dashboard-templates h2,
-.dashboard-apps h2 {
+.dashboard-templates h2 {
   margin: 0 0 4px;
   font-size: 13px;
   font-weight: 650;
@@ -8219,11 +9380,6 @@ select:focus-visible {
 
 /* ---- Todo lists ---- */
 
-.todo-new {
-  display: flex;
-  gap: 8px;
-}
-
 .todo-list {
   margin-bottom: 26px;
   padding: 14px 16px 10px;
@@ -8244,7 +9400,9 @@ select:focus-visible {
   font-weight: 600;
 }
 
-.todo-list-head > div:first-child {
+/* first-of-type, not first-child: on the merged page the head leads with the
+   list glyph, and the name block must keep pushing the delete button right. */
+.todo-list-head > div:first-of-type {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -8693,3 +9851,280 @@ select:focus-visible {
   background: var(--green-muted);
   color: var(--green);
 }
+
+/* --- Spaces: the thread-group view ---------------------------------------- */
+
+.spaces-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+
+.spaces-list {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  min-height: 0;
+  padding: 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.spaces-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 6px 12px;
+}
+
+.spaces-create input {
+  width: 100%;
+}
+
+.space-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.space-row:hover {
+  background: var(--surface-hover);
+}
+
+.space-row.active {
+  background: var(--surface-active);
+}
+
+.space-row-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-row-count {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.space-detail {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.space-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.space-detail-head input {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.space-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.space-instructions > span,
+.space-knowledge h2,
+.space-threads h2 {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.space-instructions textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.space-knowledge,
+.space-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.space-source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.space-source-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.space-source-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-threads-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.space-thread-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.space-thread-row:hover {
+  background: var(--surface-hover);
+}
+
+.space-thread-row time {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* The rail chip naming a thread's space. Sits inside .thread-open, which is
+   a flex row; the chip must shrink before the title does. */
+.thread-space-chip {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-active);
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 72px;
+  flex-shrink: 1;
+}
+
+/* --- Mid-turn steering strip + ask_user answer box ----------------------- */
+
+.steer-strip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 4px 0 8px;
+}
+
+.steer-strip input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+.ask-user-answer {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  margin-bottom: 8px;
+}
+
+/* Prose previews carry server-authored line breaks — an ask_user card's
+   question and its enumerated options most of all. Without this, HTML
+   collapses them into one run-on line and the list structure is lost. */
+.proposal-note {
+  white-space: pre-wrap;
+}
+
+/* --- Expose-this-workspace (Grain as an MCP server) ---------------------- */
+.mcp-expose {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+.mcp-expose-head h2 { font-size: 16px; margin: 0 0 4px; }
+.mcp-expose-head p { color: var(--text-muted); font-size: 13px; max-width: 60ch; }
+.mcp-secret {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+.mcp-secret code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.mcp-expose-new { display: flex; gap: 8px; margin: 12px 0; }
+.mcp-expose-new input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+.mcp-token-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.mcp-token-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.mcp-token-list li.revoked { opacity: 0.55; }
+.mcp-token-meta { display: block; font-size: 12px; color: var(--text-muted); }

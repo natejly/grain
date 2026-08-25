@@ -68,10 +68,11 @@ def test_generate_creates_code_draft_with_snapshots(client, code_app):
     manifest = release["manifest"]
     assert manifest["kind"] == "code"
     assert manifest["schema_version"] == 2
-    assert "window.jasmine" in manifest["html"]
-    # The alias is the compatibility contract for app bodies written against
-    # the old name; dropping it silently breaks them.
-    assert "window.fieldnote = window.jasmine;" in manifest["html"]
+    assert "window.grain" in manifest["html"]
+    # The aliases are the compatibility contract for app bodies written against
+    # the old names; dropping either silently breaks them.
+    assert "window.jasmine = window.grain;" in manifest["html"]
+    assert "window.fieldnote = window.grain;" in manifest["html"]
     assert manifest["data_bindings"] == [
         {"dataset_id": code_app["dataset"]["id"], "name": "codegen-revenue"}
     ]
@@ -92,8 +93,9 @@ def test_preview_frame_serves_html_with_lockdown_csp(client, code_app):
     assert "connect-src 'none'" in csp
     assert "frame-ancestors" in csp
     assert response.headers["cache-control"] == "no-store"
-    assert "window.jasmine" in response.text
-    assert "window.fieldnote = window.jasmine;" in response.text
+    assert "window.grain" in response.text
+    assert "window.jasmine = window.grain;" in response.text
+    assert "window.fieldnote = window.grain;" in response.text
 
 
 def test_published_frame_requires_publication(client, code_app):

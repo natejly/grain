@@ -15,7 +15,7 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   await page.goto("/");
   // The graph only has a canvas once there is something to draw, so seed an
   // entity-rich source first — the same flow the main spec uses.
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "graph3d-e2e.md",
     mimeType: "text/markdown",
@@ -26,7 +26,7 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   });
   await expect(page.getByText("Indexed").last()).toBeVisible();
 
-  await openView(page, "Knowledge", /Graph/);
+  await openView(page, "Library", /Graph/);
   await expect(
     page.getByText("Project Northstar", { exact: true }).first(),
   ).toBeVisible();
@@ -45,7 +45,7 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
 
   // Leave the shared workspace as we found it. Without this the source lingers
   // and the main spec's "Delete source" lookup matches two buttons.
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .locator(".source-row", { hasText: "graph3d-e2e.md" })

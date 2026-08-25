@@ -58,7 +58,7 @@ if str(REPO_ROOT / "apps" / "api") not in sys.path:
 from app.services.sandbox.container_provider import ContainerProvider  # noqa: E402
 from app.services.sandbox.types import ExecResult, SandboxHandle, SandboxSpec  # noqa: E402
 
-DEFAULT_IMAGE = os.environ.get("SANDBOX_CONTAINER_IMAGE", "jasmine-sandbox:latest")
+DEFAULT_IMAGE = os.environ.get("SANDBOX_CONTAINER_IMAGE", "grain-sandbox:latest")
 DEFAULT_DOCKER = os.environ.get("SANDBOX_DOCKER_BINARY", "docker")
 
 #: The environment the probes run with. Production builds this from `Settings`
@@ -66,7 +66,7 @@ DEFAULT_DOCKER = os.environ.get("SANDBOX_DOCKER_BINARY", "docker")
 #: proof runnable with no configuration at all. What `Settings` is *not* allowed
 #: to leak into here is asserted by `test_sandbox_security.py`, which is the
 #: right place for it — that claim needs no container.
-SANDBOX_ENV: Dict[str, str] = {"JASMINE_SANDBOX": "1", "PYTHONUNBUFFERED": "1"}
+SANDBOX_ENV: Dict[str, str] = {"GRAIN_SANDBOX": "1", "PYTHONUNBUFFERED": "1"}
 
 # Errno numbers as *Linux* defines them, spelled out rather than read from this
 # process's `errno` module. The numbers being compared were produced inside the

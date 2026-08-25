@@ -37,18 +37,19 @@ describe("the collapsed rail", () => {
     // Read from the selector forward rather than through `ruleBody`, which
     // anchors on `^ } ,` and so cannot see the first rule inside a media block.
     //
-    // One track, and the count is the assertion. The rail is removed with
-    // `display: none`, so it is not a grid item at all and <main> is the only
-    // thing left to place — under a two-track `0 minmax(0, 1fr)` template
-    // auto-placement drops it into the leading 0 and the whole app measures
-    // zero wide. That is the bug this pins: the browser rendered a blank
-    // window, and the width the spec measures went *down* by the rail's width.
+    // Two tracks in the collapsed shell — the icon rail's 56px and the main
+    // panel — and the count is the assertion. The CONTEXT sidebar is removed
+    // with `display: none`, so it is not a grid item at all; a template that
+    // kept a `0` track for it would auto-place <main> into the 0 and the whole
+    // app would measure zero wide. That is the bug this pins: the browser
+    // rendered a blank window, and the width the spec measures went *down*.
     const rule = css.slice(
       at(".workspace-shell.rail-collapsed {"),
-      at(".workspace-shell.rail-collapsed {") + 200,
+      at(".workspace-shell.rail-collapsed {") + 260,
     );
-    expect(rule).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\);/);
-    expect(rule).not.toMatch(/grid-template-columns:\s*0 /);
+    expect(rule).toMatch(/grid-template-columns:\s*56px minmax\(0, 1fr\);/);
+    // No bare `0` track (the `0` inside minmax() is not a track of its own).
+    expect(rule).not.toMatch(/grid-template-columns:[^;]*\s0[\s;]/);
     expect(ruleBody(".rail-collapsed")).toMatch(/display:\s*none/);
   });
 
@@ -106,9 +107,20 @@ describe("the collapsed list panes", () => {
   it("re-state the laptop projects grid inside its own media block", () => {
     // A plain rule after the 1500px block would win at every width and put four
     // columns back on a laptop, which is the bug that block exists to fix.
+    // The chat track is the shared `--split-width` token now, not a literal:
+    // every subject-chat band reads the one width, so the three cannot drift.
     const narrow = css.slice(at(".projects-layout.with-chat.list-collapsed"));
     expect(narrow).toMatch(
-      /@media \(max-width: 1500px\) \{\s*\.projects-layout\.with-chat\.list-collapsed \{\s*grid-template-columns:\s*44px minmax\(0, 1fr\) 320px/,
+      /@media \(max-width: 1500px\) \{\s*\.projects-layout\.with-chat\.list-collapsed \{\s*grid-template-columns:\s*44px minmax\(0, 1fr\) var\(--split-width\)/,
     );
+  });
+
+  it("sizes every subject-chat band from the one shared width token", () => {
+    // The point of the token: a hand-tuned literal on one of the three grids
+    // is exactly how they drifted to two widths before.
+    expect(css).toMatch(/:root \{[^}]*--split-width:\s*340px/);
+    for (const layout of [".documents-layout", ".projects-layout", ".dashboards-layout"]) {
+      expect(ruleBody(`${layout}.with-chat`)).toMatch(/var\(--split-width\)/);
+    }
   });
 });

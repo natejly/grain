@@ -16,12 +16,14 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, false, select, update
 from sqlalchemy.orm import Session
 
 from ..models import (
     AgentToolCall,
     Conversation,
+    ConversationChunk,
+    MemoryItem,
     Message,
     Run,
     RunEvent,
@@ -242,5 +244,140 @@ def purge(db: Session, *, workspace_id: str, conversation_id: str) -> Optional[s
             Run.workspace_id == workspace_id,
         )
     )
+    # The derived search index over this transcript. Nothing else ever deletes
+    # a ConversationChunk, and the rows quote the transcript verbatim — so
+    # without this line a deleted thread stayed quotable through
+    # `search_conversations` and the palette's deep search forever.
+    db.execute(
+        delete(ConversationChunk).where(
+            ConversationChunk.conversation_id == conversation.id,
+            ConversationChunk.workspace_id == workspace_id,
+        )
+    )
     db.delete(conversation)
     return title
+
+
+class TruncationBlocked(Exception):
+    """A truncation met a run that is still queued, running or parked.
+
+    Editing over a live loop would delete the transcript out from under a
+    leased `agent_state_json`; the caller turns this into a 409 and the user
+    cancels or decides the parked call first.
+    """
+
+
+def truncate_after(
+    db: Session,
+    *,
+    workspace_id: str,
+    conversation_id: str,
+    message_id: str,
+    only_runs_by: Optional[str] = None,
+) -> List[str]:
+    """Delete a message and everything after it, so an edit can re-run.
+
+    "After" is measured by RUN start, not by message time. Nothing serializes
+    sends per conversation, so an earlier turn can still be streaming when the
+    pivot was sent — its answer then lands after the pivot, and a sweep by
+    message timestamp would delete that earlier turn whole, its pre-pivot
+    prompt included. The removed set is the pivot's run plus every run started
+    at-or-after it (plus any aside typed after the pivot); an older overlapping
+    run keeps its prompt and its answer, exactly as the reader saw them.
+
+    `only_runs_by` is the shared-thread gate: when set, meeting a removed run
+    created by anyone else raises `TruncationBlocked` — an edit must not
+    silently destroy a teammate's turn. Returns the removed run ids; does not
+    commit, same contract as `purge`.
+
+    Derived data follows the same rule as `purge`: the conversation's chunk
+    index is dropped whole (the indexer's incremental contract assumes
+    messages are append-only, so a shrunken transcript must reindex from
+    scratch), and memory extracted by the removed runs is tombstoned through
+    its existing lifecycle rather than deleted — "deleted" already means
+    "out of recall, auditable" there. The usage ledger is deliberately left
+    alone: those turns happened and were paid for.
+    """
+    pivot = db.scalar(
+        select(Message).where(
+            Message.id == message_id,
+            Message.conversation_id == conversation_id,
+            Message.workspace_id == workspace_id,
+        )
+    )
+    if pivot is None:
+        return []
+    pivot_run = db.scalar(
+        select(Run).where(
+            Run.id == pivot.run_id,
+            Run.workspace_id == workspace_id,
+        )
+    )
+    # The cut point. A pivot whose run row is somehow gone (no FK enforces it)
+    # falls back to the message's own time — strictly wider, never narrower.
+    cut = pivot_run.created_at if pivot_run is not None else pivot.created_at
+    run_rows = db.execute(
+        select(Run.id, Run.created_by, Run.status).where(
+            Run.conversation_id == conversation_id,
+            Run.workspace_id == workspace_id,
+            Run.created_at >= cut,
+        )
+    ).all()
+    run_ids = {row.id for row in run_rows}
+    if pivot.run_id:
+        run_ids.add(pivot.run_id)
+    removed_runs = list(run_ids)
+    if removed_runs:
+        # Imported here, not at module top: runs → agent_loop → spaces →
+        # conversations is a cycle a module-level import would close.
+        from .runs import TERMINAL_RUN_STATES
+
+        if only_runs_by is not None and any(
+            row.created_by != only_runs_by for row in run_rows
+        ):
+            raise TruncationBlocked(
+                "Editing here would delete a teammate's turn — only your own "
+                "trailing turns can be rewritten"
+            )
+        live = db.scalars(
+            select(Run.id).where(
+                Run.id.in_(removed_runs),
+                Run.status.notin_(sorted(TERMINAL_RUN_STATES)),
+            )
+        ).first()
+        if live:
+            raise TruncationBlocked(
+                "A turn being edited over is still running or waiting on a "
+                "decision — stop it first"
+            )
+        db.execute(delete(ToolCall).where(ToolCall.run_id.in_(removed_runs)))
+        db.execute(delete(AgentToolCall).where(AgentToolCall.run_id.in_(removed_runs)))
+        db.execute(delete(RunEvent).where(RunEvent.run_id.in_(removed_runs)))
+    db.execute(
+        delete(Message).where(
+            Message.conversation_id == conversation_id,
+            Message.workspace_id == workspace_id,
+            # Asides after the pivot go with the cut; run-backed messages go
+            # with their runs, wherever their timestamps landed.
+            ((Message.run_id == "") & (Message.created_at > pivot.created_at))
+            | (Message.id == pivot.id)
+            | (Message.run_id.in_(removed_runs) if removed_runs else false()),
+        )
+    )
+    if removed_runs:
+        db.execute(delete(Run).where(Run.id.in_(removed_runs)))
+        db.execute(
+            update(MemoryItem)
+            .where(
+                MemoryItem.run_id.in_(removed_runs),
+                MemoryItem.workspace_id == workspace_id,
+            )
+            .values(status="deleted")
+        )
+    db.execute(
+        delete(ConversationChunk).where(
+            ConversationChunk.conversation_id == conversation_id,
+            ConversationChunk.workspace_id == workspace_id,
+        )
+    )
+    return removed_runs

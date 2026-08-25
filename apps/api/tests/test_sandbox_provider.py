@@ -214,7 +214,7 @@ def test_create_passes_lifecycle_metadata_env_and_timeout(stub_sdk: Any) -> None
             workspace_id="w1",
             template="tpl",
             timeout_seconds=300,
-            env={"JASMINE_SANDBOX": "1"},
+            env={"GRAIN_SANDBOX": "1"},
             metadata={"workspace_id": "w1"},
         )
     )
@@ -225,7 +225,7 @@ def test_create_passes_lifecycle_metadata_env_and_timeout(stub_sdk: Any) -> None
     }
     assert kwargs["timeout"] == 300
     assert kwargs["template"] == "tpl"
-    assert kwargs["envs"] == {"JASMINE_SANDBOX": "1"}
+    assert kwargs["envs"] == {"GRAIN_SANDBOX": "1"}
     assert kwargs["metadata"] == {"workspace_id": "w1"}
     assert handle == SandboxHandle(provider="e2b", external_id="sbx-1")
 

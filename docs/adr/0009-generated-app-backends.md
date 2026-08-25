@@ -44,7 +44,7 @@ exits. Nothing is added that listens on a port.
 Three tiers, and the boundary between the second and the third is the decision.
 
 **Tier 0 — frontend only, with live typed queries. Already built.** The frame
-already has a backend in the only sense that matters: `window.jasmine.query()`
+already has a backend in the only sense that matters: `window.grain.query()`
 crosses the postMessage boundary in `components/sandbox-frame.tsx`, is checked
 against the release's declared `data_bindings`, and is answered by
 `analytics.execute_dataset_query` — a typed AST, field names matched against

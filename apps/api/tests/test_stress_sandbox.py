@@ -51,7 +51,7 @@ def local(workdir: Path) -> SubprocessProvider:
     import sys
 
     return SubprocessProvider(
-        workdir=workdir, env={"JASMINE_SANDBOX": "1"}, python_binary=sys.executable
+        workdir=workdir, env={"GRAIN_SANDBOX": "1"}, python_binary=sys.executable
     )
 
 

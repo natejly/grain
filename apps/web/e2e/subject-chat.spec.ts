@@ -205,7 +205,7 @@ test.fixme("the dashboard panel revises the chart it is beside", async ({ page }
 
   // A dataset only exists downstream of a source, so upload one and let the
   // indexer finish before anything asks for its columns.
-  await openView(page, "Knowledge", /Sources/);
+  await openView(page, "Library", /Sources/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "subject-chat-e2e.csv",
     mimeType: "text/csv",
@@ -254,12 +254,11 @@ test.fixme("the dashboard panel revises the chart it is beside", async ({ page }
   // will not appear.
   await page.reload();
 
-  await openView(page, "Files", /^Dashboards/);
-  await page.getByRole("button", { name: /^All dashboards/ }).click();
-  // The catalog's open button is named by the dashboard and what it draws, so
-  // it is anchored rather than matched exactly.
+  await openView(page, "Library", /^Dashboards/);
+  // The catalog is a page section now; its open button is named by the
+  // dashboard and what it draws, so it is anchored rather than matched exactly.
   await page
-    .getByRole("group", { name: "All dashboards" })
+    .getByRole("region", { name: "All dashboards" })
     .getByRole("button", { name: /^E2E Chat Dashboard/ })
     .click();
 

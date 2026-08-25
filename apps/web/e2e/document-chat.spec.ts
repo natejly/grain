@@ -16,7 +16,7 @@ import { openView } from "./shell";
 
 /** Make a document from the Files view and land in its editor. */
 async function newDocument(page: Page, title: string, format: string) {
-  await openView(page, "Files", /^Files/);
+  await openView(page, "Library", /^Documents/);
   await page.getByRole("button", { name: "New document" }).click();
   const form = page.locator(".documents-new");
   await form.getByRole("textbox", { name: "Title" }).fill(title);
@@ -25,7 +25,7 @@ async function newDocument(page: Page, title: string, format: string) {
   await expect(page.getByRole("heading", { name: title })).toBeVisible();
 }
 
-/** Delete the open document. Documents *are* confirm()-gated; boards are not. */
+/** Delete the open document; the confirm dialog is armed before the click. */
 async function deleteOpenDocument(page: Page, title: string) {
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete document" }).click();

@@ -2,6 +2,7 @@
 
 import {
   FileText,
+  GitPullRequestArrow,
   History,
   MessageSquare,
   Plus,
@@ -170,6 +171,13 @@ export function DocumentsView({
     ...(active ? pending.filter((edit) => edit.document_id === active.id) : []),
     ...pending.filter((edit) => edit.name === "create_document"),
   ];
+  // Every document with a write parked on it, for the tree's dots — the open
+  // document's proposals are on screen, but the other rows' are invisible
+  // until the user happens to open them, and a queue nobody can see is a queue
+  // nobody answers. Creates have no document to dot, so the empty id drops out.
+  const pendingDocIds = new Set(
+    pending.map((edit) => edit.document_id).filter(Boolean),
+  );
   /**
    * The one proposal the inline reviewer owns: an edit to the open document
    * that the server broke into hunks. Everything else — a create, a target that
@@ -185,6 +193,59 @@ export function DocumentsView({
           edit.segments.length > 0,
       )
     : undefined;
+  /**
+   * Which proposal the inline reviewer currently owns the column for. Review
+   * is the DEFAULT for a newly-arrived proposal — the diff has to find the
+   * user without a click — but "Later" hands the column back to the editor,
+   * so the state is the id under review rather than a boolean.
+   *
+   * Adjusted during render, not in an effect: an effect runs after paint, and
+   * the editor flashing for a frame before the reviewer replaces it is the
+   * silent-swap bug wearing a shorter costume. Scoped to document + proposal
+   * so a new proposal reopens review and "Later" survives mere re-renders.
+   */
+  const [reviewing, setReviewing] = useState("");
+  const [reviewScope, setReviewScope] = useState("");
+  const scope = `${active?.id ?? ""}/${reviewable?.id ?? ""}`;
+  if (scope !== reviewScope) {
+    setReviewScope(scope);
+    setReviewing(reviewable?.id ?? "");
+  }
+  const reviewOpen = Boolean(reviewable && decidePendingEdit) && reviewing === reviewable?.id;
+  /** A parked proposal: review exists but the user pressed "Later". The editor
+      is back on screen, read-only — the swap always prevented a concurrent
+      edit, and the banner state must not silently allow a race the server
+      would reject. */
+  const reviewParked = Boolean(reviewable && decidePendingEdit) && !reviewOpen;
+  /** The interlock the banner promises, applied to EVERY write path. A pending
+      proposal pauses editing whether review is open or parked — a stale draft
+      saved (button, ⌘S, or a history Restore) would change the document under
+      the proposal and stale its hunks, which is exactly the concurrent-write
+      race the pause exists to prevent. */
+  const editingPaused = Boolean(reviewable && decidePendingEdit);
+
+  // Cmd/Ctrl+S saves the open document — the shortcut every editor teaches,
+  // caught at the document level so it works from the textarea and from the
+  // preview alike, and always prevented so the browser's own save dialog never
+  // appears over an editor that has its own Save. No-op when nothing changed —
+  // and refused outright while a proposal is pending, same as the Save button:
+  // a shortcut must not slip through the interlock the button honors. Declared
+  // below the pause computation because it reads it.
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "s" || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      if (!dirty || editingPaused) return;
+      void saveDocument(active.id, draft).then(() => setDirty(false));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, dirty, draft, saveDocument, editingPaused]);
+  // The honest count: hunks the reviewer can decide, not context stretches.
+  const proposedHunks = reviewable
+    ? reviewable.segments.filter((segment) => segment.index >= 0).length
+    : 0;
   const carded = proposals.filter((edit) => edit.id !== reviewable?.id);
   /** Every proposal the editor column already offers a decision for. Empty when
       it offers none, so the panel is never the *only* place to answer one. */
@@ -221,7 +282,7 @@ export function DocumentsView({
             toggle={toggleList}
             controls="documents-file-list"
           />
-          <span>Files</span>
+          <span>Documents</span>
           <button
             className="icon-button"
             onClick={() => {
@@ -280,6 +341,7 @@ export function DocumentsView({
           activeId={active?.id ?? ""}
           openDocument={openDocument}
           ops={folderOps}
+          pendingIds={pendingDocIds}
           onNewDocument={(folderId) => {
             setNewFolder(folderId);
             setCreating(true);
@@ -318,7 +380,12 @@ export function DocumentsView({
               </button>
               <button
                 className="primary-button"
-                disabled={!dirty}
+                disabled={!dirty || editingPaused}
+                title={
+                  editingPaused
+                    ? "Editing is paused while proposed changes are pending"
+                    : undefined
+                }
                 onClick={async () => {
                   await saveDocument(active.id, draft);
                   setDirty(false);
@@ -356,6 +423,12 @@ export function DocumentsView({
                       <span>{version.summary}</span>
                       <button
                         className="ghost-button"
+                        disabled={editingPaused}
+                        title={
+                          editingPaused
+                            ? "Editing is paused while proposed changes are pending"
+                            : undefined
+                        }
                         onClick={() => void restoreVersion(active.id, version.id)}
                       >
                         <RotateCcw size={13} /> Restore
@@ -369,27 +442,72 @@ export function DocumentsView({
 
           {approvals}
 
+          {/* The proposal is parked, not gone: the banner names it, offers the
+              way back in, and explains why the editor underneath is read-only. */}
+          {reviewable && reviewParked && (
+            <div className="document-review-banner" role="status">
+              <GitPullRequestArrow size={15} />
+              <div>
+                <strong>
+                  {proposedHunks > 0
+                    ? `The agent proposed ${proposedHunks} change${proposedHunks === 1 ? "" : "s"}`
+                    : "The agent proposed changes"}
+                </strong>
+                <span className="field-hint">
+                  Editing is paused while changes are pending so the two of you
+                  don’t overwrite each other.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => setReviewing(reviewable.id)}
+              >
+                Review
+              </button>
+            </div>
+          )}
+
           {/* The reviewer replaces the editor rather than sitting above it. The
               document is mid-proposal: an editable textarea beside it would let
               a user type into text the agent is asking to change, and whichever
               of the two writes last would silently win. */}
-          {reviewable && decidePendingEdit ? (
-            /* Keyed on the proposal, so a second one arriving while the first
-               is still on screen gets a fresh reviewer. Without it React reuses
-               the instance and its staged rejections, and the new diff opens
-               with hunks already crossed out that nobody crossed out — with the
-               Apply count agreeing. */
-            <DocumentReview
-              key={reviewable.id}
-              edit={reviewable}
-              decide={decidePendingEdit}
-            />
+          {reviewable && decidePendingEdit && reviewOpen ? (
+            <>
+              {/* The exit, beside the reviewer rather than in it: DocumentReview
+                  stays a pure decide-the-diff component, and "Later" is the
+                  column's business — it parks the proposal and hands the space
+                  back to the editor, with the banner above holding the way in. */}
+              <div className="document-review-exit">
+                <span className="field-hint">
+                  Not ready to decide? The proposal keeps until you are.
+                </span>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setReviewing("")}
+                >
+                  Later
+                </button>
+              </div>
+              {/* Keyed on the proposal, so a second one arriving while the first
+                  is still on screen gets a fresh reviewer. Without it React
+                  reuses the instance and its staged rejections, and the new diff
+                  opens with hunks already crossed out that nobody crossed out —
+                  with the Apply count agreeing. */}
+              <DocumentReview
+                key={reviewable.id}
+                edit={reviewable}
+                decide={decidePendingEdit}
+              />
+            </>
           ) : (
             <div className="document-panes">
               <textarea
                 className="document-source"
                 value={draft}
                 spellCheck
+                readOnly={reviewParked}
                 aria-label="Document source"
                 onChange={(event) => {
                   setDraft(event.target.value);

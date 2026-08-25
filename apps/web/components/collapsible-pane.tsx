@@ -17,7 +17,7 @@ import { useEffect, useState } from "react";
 
 /**
  * localStorage key for one pane's collapsed state, following the workspace
- * switcher's `jasmine.*` convention.
+ * switcher's `grain.*` convention.
  *
  * One key per pane rather than one key holding a set: two of these are mounted
  * at once (the rail and whichever list pane the open view has), and a shared key
@@ -25,7 +25,7 @@ import { useEffect, useState } from "react";
  * the last toggle silently reverting the previous one.
  */
 export function collapseKey(pane: string): string {
-  return `jasmine.collapsed.${pane}`;
+  return `grain.collapsed.${pane}`;
 }
 
 /**

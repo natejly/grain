@@ -6,6 +6,7 @@ import type {
   Board,
   Bootstrap,
   Conversation,
+  ConversationDefaults,
   Dashboard,
   DashboardPin,
   DashboardTemplate,
@@ -15,6 +16,7 @@ import type {
   DocumentVersion,
   Folder,
   GeneratedApp,
+  InboxFeed,
   IntegrationProvider,
   KnowledgeGraph,
   McpServer,
@@ -26,6 +28,7 @@ import type {
   SandboxTool,
   Skill,
   Source,
+  Space,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
@@ -33,6 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import {
   CHAT_PANES_KEY,
+  MAX_EXTRA_PANES,
   addPane,
   newPaneId,
   parseStoredPanes,
@@ -59,7 +63,7 @@ import { createTodoHandlers } from "./handlers/todos";
 import type { BudgetPark } from "./views/budget-format";
 import type { DashboardResultState } from "./views/dashboard-grid";
 import { baseName, describeError, isTabular, type View } from "./views/shared";
-import { isTodoList, todoListsFrom } from "./views/todo-format";
+import { graduationNotice, isTodoList, todoListsFrom } from "./views/todo-format";
 
 /**
  * The persisted pane layout, or none. Guarded for private-mode / server render
@@ -86,8 +90,13 @@ export function useWorkspace() {
   const [activeConversation, setActiveConversation] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
+  const [spaces, setSpaces] = useState<Space[]>([]);
   const [agentCalls, setAgentCalls] = useState<AgentToolCall[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  // The unified attention feed (GET /api/inbox): the server-truth waiting set
+  // behind the rail badge, the sidebar strip and the Inbox page. Null until
+  // the first read lands, so "0" is never shown before it is known.
+  const [inbox, setInbox] = useState<InboxFeed | null>(null);
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -115,12 +124,14 @@ export function useWorkspace() {
   const [focusedPane, setFocusedPane] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // Which authored agent answers the next message; "" is the workspace
-  // default. Session state on purpose — a conversation does not remember it.
+  // default. No longer bare session state: the thread remembers it
+  // (Conversation.default_agent_id) — see the seeding effect and the pick*
+  // wrappers below. Every turn still SENDS its controls explicitly; the
+  // thread's defaults only decide what the pickers show when it reopens.
   const [selectedAgentId, setSelectedAgentId] = useState("");
-  // Per-turn model / reasoning-effort / fast overrides for the composer, session
-  // state like the agent selection above. The model stays "" (the deployment's
-  // own) until the user picks one; the effort seeds from the deployment default
-  // once bootstrap arrives; "fast" is the low-effort shortcut.
+  // Per-turn model / reasoning-effort overrides, remembered on the thread the
+  // same way. "fast" stays session state — it is a per-turn shortcut, not a
+  // preference worth outliving the moment.
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedEffort, setSelectedEffort] = useState("");
   const [fast, setFast] = useState(false);
@@ -156,10 +167,20 @@ export function useWorkspace() {
   const [dragging, setDragging] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [error, setError] = useState("");
+  // The neutral sibling of `error`: something changed how it is shown, nothing
+  // went wrong. Its own state and its own toast, because the red one is
+  // role="alert" and asserted absent by specs that never expect a failure.
+  // Carried with a nonce, not as a bare string: the same line earned twice
+  // must re-show and restart the dismiss clock, which identical strings
+  // cannot do through a state setter.
+  const [notice, setNotice] = useState<{ text: string; at: number } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeConversationRef = useRef<string | null>(null);
   const conversationsRef = useRef<Conversation[]>([]);
+  // Synced like conversationsRef, so `openInNewPane` (a [] callback) can read
+  // the live pane count without re-binding on every open and close.
+  const extraPanesRef = useRef<ChatPane[]>(extraPanes);
   const activeDocumentRef = useRef<string | null>(null);
   const activeProjectRef = useRef<string | null>(null);
   const datasetAttempts = useRef(new Set<string>());
@@ -181,6 +202,15 @@ export function useWorkspace() {
   const requestedDashboards = useRef(new Set<string>());
   /** A dashboard the rail asked for; the grid scrolls to it and outlines it. */
   const [focusedDashboard, setFocusedDashboard] = useState<string | null>(null);
+  /**
+   * The Knowledge cross-links land the same way: the three views point into
+   * each other, and the arriving page scrolls to the row the link named and
+   * outlines it briefly. One slot per destination, not one shared slot — a
+   * source id and an entity id must never race for the same focus.
+   */
+  const [focusedSource, setFocusedSource] = useState<string | null>(null);
+  const [focusedMemory, setFocusedMemory] = useState<string | null>(null);
+  const [focusedEntity, setFocusedEntity] = useState<string | null>(null);
 
   /**
    * Drives the Activity badge, so it has to count the approvals that actually
@@ -221,27 +251,47 @@ export function useWorkspace() {
   const todoLists = useMemo(() => todoListsFrom(boards), [boards]);
 
   /**
-   * The rest — the boards with something to drag between.
-   *
-   * The two views partition `boards` rather than overlapping, so a thing is in
-   * exactly one place and the badge on each tab counts what that tab shows.
-   * It also makes the graduation visible: add a second column to a list and it
-   * leaves Lists for Boards, same id, same cards, ticks intact.
+   * The graduation toast. Boards and lists share one listing now, so an object
+   * crossing the one-column threshold stays exactly where it was — and this
+   * diff is what says its *presentation* changed. It watches `boards` itself
+   * because that is the only seam every mutation shares: column ops patch a
+   * Board back in, list creation refetches, agent tool calls replace the array
+   * wholesale via refreshArtifacts. Ids the previous render never saw are
+   * ignored — first load and creations are not graduations.
    */
-  const kanbanBoards = useMemo(
-    () => boards.filter((board) => !isTodoList(board)),
-    [boards],
-  );
+  const boardShapes = useRef(new Map<string, boolean>());
+  useEffect(() => {
+    const flip = graduationNotice(boardShapes.current, boards);
+    boardShapes.current = new Map(boards.map((board) => [board.id, isTodoList(board)]));
+    if (flip) setNotice({ text: flip, at: Date.now() });
+  }, [boards]);
+
+  // Self-dismissing, unlike the error toast: a presentation change needs no
+  // acknowledgement. A fresh notice — the nonce makes even a repeat of the
+  // same line fresh — restarts the clock via the cleanup.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const refreshSecondary = useCallback(async () => {
-    const [nextSources, nextAgentCalls, nextAudit] = await Promise.all([
+    const [nextSources, nextSpaces, nextAgentCalls, nextAudit, nextInbox] = await Promise.all([
       api.listSources(),
+      api.listSpaces(),
       api.listAgentToolCalls(),
       api.listAuditEvents(),
+      // Beside — not derived from — the call list: `listAgentToolCalls` is a
+      // fifty-row window of calls of ANY status, so counting its proposed rows
+      // is how the badge used to undercount a backlog. The feed is the
+      // server's own unbounded waiting set.
+      api.getInbox(),
     ]);
     setSources(nextSources);
+    setSpaces(nextSpaces);
     setAgentCalls(nextAgentCalls);
     setAuditEvents(nextAudit);
+    setInbox(nextInbox);
   }, []);
 
   const refreshExpansion = useCallback(async () => {
@@ -282,6 +332,32 @@ export function useWorkspace() {
     setDashboardTemplates(nextTemplates);
     setDashboardPins(nextPins);
   }, []);
+
+  /** Make a dataset from an indexed tabular source, and show it everywhere. */
+  const createDatasetFromSource = useCallback(
+    async (name: string, sourceId: string) => {
+      try {
+        await api.createDataset(name, sourceId);
+        await refreshExpansion();
+      } catch (caught) {
+        setError(describeError(caught, "Could not create the dataset"));
+      }
+    },
+    [refreshExpansion],
+  );
+
+  /** A new immutable version; the old one stays and its bindings keep working. */
+  const createDatasetVersionFromSource = useCallback(
+    async (datasetId: string, sourceId: string) => {
+      try {
+        await api.createDatasetVersion(datasetId, sourceId);
+        await refreshExpansion();
+      } catch (caught) {
+        setError(describeError(caught, "Could not create the version"));
+      }
+    },
+    [refreshExpansion],
+  );
 
   const refreshArtifacts = useCallback(async () => {
     const [nextDocuments, nextFolders, nextBoards] = await Promise.all([
@@ -344,6 +420,19 @@ export function useWorkspace() {
     [patchConversation],
   );
 
+  /** Rename a thread and replace its rail row with the server's copy. */
+  const renameConversation = useCallback(
+    async (conversationId: string, title: string) => {
+      setError("");
+      try {
+        patchConversation(await api.renameConversation(conversationId, title));
+      } catch (caught) {
+        setError(describeError(caught, "Could not rename the thread"));
+      }
+    },
+    [patchConversation],
+  );
+
   /**
    * Open a conversation in an extra pane beside the primary chat.
    *
@@ -353,11 +442,20 @@ export function useWorkspace() {
    * when the action is fired from the rail on another view.
    */
   const openInNewPane = useCallback((conversationId: string) => {
-    // The early return gates the SIDE EFFECTS — a no-op open must not yank the
-    // view to Chat or shut the rail. `addPane` re-checks the same guard so it
+    // The early returns gate the SIDE EFFECTS — a no-op open must not yank the
+    // view to Chat or shut the rail. `addPane` re-checks the same guards so it
     // stays a total pure function, but the list decision and the view switch
     // are two separate concerns.
     if (conversationId === activeConversationRef.current) return;
+    // At the cap the refusal is SAID, not silent: a button that does nothing
+    // reads as broken. The neutral toast, because nothing went wrong.
+    if (extraPanesRef.current.length >= MAX_EXTRA_PANES) {
+      setNotice({
+        text: `Split is full — close a pane first (${MAX_EXTRA_PANES} extra panes max)`,
+        at: Date.now(),
+      });
+      return;
+    }
     setExtraPanes((panes) =>
       addPane(panes, conversationId, activeConversationRef.current, newPaneId()),
     );
@@ -429,8 +527,10 @@ export function useWorkspace() {
         boot,
         chats,
         nextSources,
+        nextSpaces,
         nextAgentCalls,
         nextAudit,
+        nextInbox,
         nextGraph,
         nextMemories,
         nextDatasets,
@@ -442,8 +542,10 @@ export function useWorkspace() {
         api.bootstrap(),
         api.listConversations(),
         api.listSources(),
+        api.listSpaces(),
         api.listAgentToolCalls(),
         api.listAuditEvents(),
+        api.getInbox(),
         api.getGraph(),
         api.listMemory(),
         api.listDatasets(),
@@ -461,8 +563,10 @@ export function useWorkspace() {
         return [...createdDuringLoad, ...chats];
       });
       setSources(nextSources);
+      setSpaces(nextSpaces);
       setAgentCalls(nextAgentCalls);
       setAuditEvents(nextAudit);
+      setInbox(nextInbox);
       setGraph(nextGraph);
       setMemories(nextMemories);
       setDatasets(nextDatasets);
@@ -474,7 +578,12 @@ export function useWorkspace() {
       if (chats[0] && !activeConversationRef.current) {
         setActiveConversation(chats[0].id);
         activeConversationRef.current = chats[0].id;
-        setMessages(await api.listMessages(chats[0].id));
+        const loaded = await api.listMessages(chats[0].id);
+        // The user may have switched threads while this fetch was in flight —
+        // "New thread" clicked right after page load — and a stale transcript
+        // replacing theirs puts one thread's messages under another's header.
+        // Same guard the stream loop uses, for the same reason.
+        if (activeConversationRef.current === chats[0].id) setMessages(loaded);
       }
     } catch (caught) {
       setError(describeError(caught, "Could not load workspace"));
@@ -493,6 +602,71 @@ export function useWorkspace() {
     if (preset) setSelectedEffort((current) => current || preset);
   }, [bootstrap]);
 
+  // What the composer shows when a thread opens is what the thread remembers
+  // (Conversation.default_*). Seeded exactly once per thread switch — the ref
+  // is what stops a later conversations-list refresh from stomping a pick the
+  // user made after the seed — and retried until the list actually holds the
+  // row, because the auto-selected first thread can land before the list does.
+  const lastSeededThread = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeConversation || lastSeededThread.current === activeConversation) {
+      return;
+    }
+    const thread = conversations.find((item) => item.id === activeConversation);
+    if (!thread) return;
+    lastSeededThread.current = activeConversation;
+    setSelectedAgentId(thread.default_agent_id);
+    setSelectedModel(thread.default_model);
+    // "" means "never picked here": fall through to the deployment default the
+    // bootstrap effect above would have chosen, so an untouched thread reads
+    // exactly as it always has.
+    setSelectedEffort(
+      thread.default_effort || bootstrap?.model_provider.default_effort || "",
+    );
+  }, [activeConversation, conversations, bootstrap]);
+
+  /**
+   * A composer pick is two writes: the control now, and the thread's memory —
+   * so the choice survives reopening the thread, on any device. Best-effort on
+   * the wire (the pick already governs this session either way), but a refusal
+   * still surfaces; the response row replaces the rail's copy so the remembered
+   * value has one home.
+   */
+  const rememberThreadDefault = useCallback(
+    (patch: ConversationDefaults) => {
+      const id = activeConversationRef.current;
+      if (!id) return;
+      void api
+        .setConversationDefaults(id, patch)
+        .then(patchConversation)
+        .catch((caught) =>
+          setError(describeError(caught, "Could not remember that choice")),
+        );
+    },
+    [patchConversation],
+  );
+  const pickAgent = useCallback(
+    (value: string) => {
+      setSelectedAgentId(value);
+      rememberThreadDefault({ default_agent_id: value });
+    },
+    [rememberThreadDefault],
+  );
+  const pickModel = useCallback(
+    (value: string) => {
+      setSelectedModel(value);
+      rememberThreadDefault({ default_model: value });
+    },
+    [rememberThreadDefault],
+  );
+  const pickEffort = useCallback(
+    (value: string) => {
+      setSelectedEffort(value);
+      rememberThreadDefault({ default_effort: value });
+    },
+    [rememberThreadDefault],
+  );
+
   useEffect(() => {
     void refreshArtifacts().catch(() => undefined);
   }, [refreshArtifacts]);
@@ -508,6 +682,10 @@ export function useWorkspace() {
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  useEffect(() => {
+    extraPanesRef.current = extraPanes;
+  }, [extraPanes]);
 
   useEffect(() => {
     activeDocumentRef.current = activeDocument?.id ?? null;
@@ -717,7 +895,6 @@ export function useWorkspace() {
 
   const sourceHandlers = createSourceHandlers({
     setError,
-    setView,
     setUploading,
     setDragging,
     refreshSecondary,
@@ -757,8 +934,13 @@ export function useWorkspace() {
     activeConversation,
     messages,
     sources,
+    spaces,
     agentCalls,
     auditEvents,
+    inbox,
+    refreshSecondary,
+    createDatasetFromSource,
+    createDatasetVersionFromSource,
     graph,
     memories,
     datasets,
@@ -787,15 +969,19 @@ export function useWorkspace() {
     focusPane,
     refreshConversations,
     patchConversation,
+    renameConversation,
     shareConversation,
     draft,
     setDraft,
     selectedAgentId,
-    setSelectedAgentId,
+    // The UI's setters are the remembering kind; the raw state setters stay
+    // internal (the seeding effect and the turn handlers use them without
+    // writing anything back to the thread).
+    setSelectedAgentId: pickAgent,
     selectedModel,
-    setSelectedModel,
+    setSelectedModel: pickModel,
     selectedEffort,
-    setSelectedEffort,
+    setSelectedEffort: pickEffort,
     fast,
     setFast,
     attachedSkill,
@@ -819,6 +1005,8 @@ export function useWorkspace() {
     setSidebarOpen,
     error,
     setError,
+    notice,
+    setNotice,
     endRef,
     fileInputRef,
     pendingApprovals,
@@ -829,9 +1017,14 @@ export function useWorkspace() {
     dashboardResults,
     pinnedIds,
     todoLists,
-    kanbanBoards,
     focusedDashboard,
     setFocusedDashboard,
+    focusedSource,
+    setFocusedSource,
+    focusedMemory,
+    setFocusedMemory,
+    focusedEntity,
+    setFocusedEntity,
     loadWorkspace,
     refreshOffScreenWork,
     // Both exposed for the chat panel beside a document, which has to refetch

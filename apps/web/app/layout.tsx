@@ -7,7 +7,7 @@ import "katex/dist/katex.min.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Jasmine",
+  title: "Grain",
   description: "Cited knowledge, graph projections, dashboards, and published snapshots.",
 };
 

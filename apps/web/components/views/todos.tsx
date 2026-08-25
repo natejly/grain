@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { ListChecks, Plus, Trash2 } from "lucide-react";
 import type { Board } from "@workspace/api-client";
 import { useState } from "react";
 import { describeProgress, itemsOf } from "./todo-format";
@@ -8,12 +8,13 @@ import { describeProgress, itemsOf } from "./todo-format";
 /**
  * Todo lists — a one-column board, drawn as checkboxes.
  *
- * `TodoChecklist` is the whole feature and it is mounted twice: on this page,
- * and inline in a conversation under the tool call that touched a list. That is
- * the point of writing it once. The chat mount is the one that matters — "track
- * these three things" should produce something checkable *where it was asked
- * for*, not a link to a page — and if the two were separate components the one
- * in chat would be the one that quietly rotted.
+ * `TodoChecklist` is the whole feature and it is mounted twice: on the merged
+ * Boards & todos page, and inline in a conversation under the tool call that
+ * touched a list. That is the point of writing it once. The chat mount is the
+ * one that matters — "track these three things" should produce something
+ * checkable *where it was asked for*, not a link to a page — and if the two
+ * were separate components the one in chat would be the one that quietly
+ * rotted.
  */
 
 export type TodoOps = {
@@ -22,11 +23,6 @@ export type TodoOps = {
   setTodoItemDone: (list: Board, itemId: string, done: boolean) => Promise<void>;
   removeTodoItem: (list: Board, itemId: string) => Promise<void>;
   removeTodoList: (list: Board) => Promise<void>;
-};
-
-export type TodoViewProps = {
-  lists: Board[];
-  ops: TodoOps;
 };
 
 function AddItem({ onAdd, label }: { onAdd: (title: string) => Promise<void>; label: string }) {
@@ -89,6 +85,10 @@ export function TodoChecklist({ list, ops, caption, compact }: TodoChecklistProp
   return (
     <section className={compact ? "todo-list compact" : "todo-list"}>
       <header className="todo-list-head">
+        {/* The list's glyph in the merged listing — a board of the same name
+            wears a kanban square here. Chat's compact card skips it: inline,
+            the caption already says what this is. */}
+        {!compact && <ListChecks size={15} aria-hidden className="board-glyph" />}
         <div>
           <h2>{list.name}</h2>
           <span className="todo-progress">{describeProgress(list)}</span>
@@ -138,46 +138,5 @@ export function TodoChecklist({ list, ops, caption, compact }: TodoChecklistProp
         onAdd={(title) => ops.addTodoItem(list, title)}
       />
     </section>
-  );
-}
-
-export function TodosView({ lists, ops }: TodoViewProps) {
-  const [name, setName] = useState("");
-
-  return (
-    <div className="content-page">
-      <div className="page-heading">
-        <h1>Lists</h1>
-        <form
-          className="todo-new"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const value = name.trim();
-            if (!value) return;
-            setName("");
-            await ops.createTodoList(value);
-          }}
-        >
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            aria-label="List name"
-          />
-          <button type="submit" className="primary-button" disabled={!name.trim()}>
-            <Plus size={15} /> Create
-          </button>
-        </form>
-      </div>
-
-      {lists.length === 0 ? (
-        <div className="empty-state">
-          {/* Says where lists come from rather than only that there are none:
-              the interesting way to get one is to ask for it in chat. */}
-          <p>No lists yet. Make one here, or ask the assistant to track something.</p>
-        </div>
-      ) : (
-        lists.map((list) => <TodoChecklist key={list.id} list={list} ops={ops} />)
-      )}
-    </div>
   );
 }
