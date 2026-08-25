@@ -1212,6 +1212,54 @@ export type DashboardLayoutTile = {
   grid_h: number;
 };
 
+/** What a share link points at — the two kinds with no public surface of their own. */
+export type ShareLinkKind = "dashboard" | "document";
+
+/**
+ * One revocable public URL onto a dashboard or document. No token appears here
+ * in any form: the server stores only a hash, and the raw value exists in
+ * exactly one response — `ShareLinkCreated`, at mint time.
+ */
+export type ShareLink = {
+  id: string;
+  resource_kind: ShareLinkKind;
+  resource_id: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+};
+
+/**
+ * The 201 body, and the only time the raw link is ever available — the
+ * `AdminInviteCreated` contract. Show it, let the person copy it, and do not
+ * persist it; an idempotent replay of the create answers with `token` and
+ * `url_path` blank because the raw value cannot be re-derived from its hash.
+ */
+export type ShareLinkCreated = {
+  link: ShareLink;
+  token: string;
+  /** The web app's path for the link ("/share/{token}"); blank on replay. */
+  url_path: string;
+};
+
+/**
+ * What an anonymous holder of a working link sees at `GET /shared/{token}`.
+ * One shape for both kinds; the half that does not apply stays at its empty
+ * default. A dashboard's rows are re-queried live at request time.
+ */
+export type SharedResource = {
+  kind: ShareLinkKind;
+  title: string;
+  spec_json: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  generated_at: string | null;
+  document_kind: string;
+  content: string;
+  updated_at: string | null;
+};
+
 export type AppRelease = {
   id: string;
   version: number;
@@ -3222,6 +3270,43 @@ export class WorkspaceApi {
   duplicateDashboard(dashboardId: string): Promise<Dashboard> {
     return this.request(
       `/api/dashboards/${dashboardId}/duplicate`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  // --- Share links ----------------------------------------------------------
+
+  /**
+   * Mint a revocable public URL onto a dashboard or document. The response is
+   * the only place the raw token ever appears — see `ShareLinkCreated`.
+   */
+  createShareLink(
+    resourceKind: ShareLinkKind,
+    resourceId: string,
+  ): Promise<ShareLinkCreated> {
+    return this.request(
+      "/api/share-links",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          resource_kind: resourceKind,
+          resource_id: resourceId,
+        }),
+      },
+      true,
+    );
+  }
+
+  /** Every link this workspace has issued, newest first. Never any token. */
+  listShareLinks(): Promise<ShareLink[]> {
+    return this.request("/api/share-links");
+  }
+
+  /** Stop a link working, now. Idempotent — a second revoke changes nothing. */
+  revokeShareLink(linkId: string): Promise<ShareLink> {
+    return this.request(
+      `/api/share-links/${linkId}/revoke`,
       { method: "POST" },
       true,
     );

@@ -96,6 +96,7 @@ from app.models import (
     SandboxExecution,
     SandboxSession,
     SandboxTool,
+    ShareLink,
     Skill,
     SkillVersion,
     Source,
@@ -119,6 +120,7 @@ from app.services.analytics import create_dataset_version
 from app.services.auth.invites import hash_token as invite_hash
 from app.services.crypto import encrypt_secret
 from app.services.ingestion import object_path
+from app.services.share_links import hash_token as share_link_hash
 
 DENY = "deny"
 SCOPED = "scoped"
@@ -655,6 +657,24 @@ def build_tenant(label: str) -> Tenant:
         db.add(dashboard)
         db.flush()
         ids["dashboard"] = dashboard.id
+
+        # A live share link onto that dashboard. The raw token is kept beside
+        # the row's id, as the invite's is: the token is the whole credential
+        # for `GET /shared/{token}`, so storing it under an id kind makes the
+        # leak scan prove no authenticated response — the list route above all —
+        # ever echoes it back.
+        share_token = f"{label.lower()}-isolation-share-token"
+        share_link = ShareLink(
+            workspace_id=workspace_id,
+            resource_kind="dashboard",
+            resource_id=dashboard.id,
+            token_hash=share_link_hash(share_token),
+            created_by=user_id,
+        )
+        db.add(share_link)
+        db.flush()
+        ids["share_link"] = share_link.id
+        ids["share_link_token"] = share_token
 
         # A template whose declared shape the tenant's own dataset satisfies, so
         # a cross-tenant bind fails for the reason under test (the template is
@@ -2042,6 +2062,31 @@ ROUTE_CASES: List[RouteCase] = [
         },
         body_ids={"tiles.0.dashboard_id": "dashboard"},
         note="moves a tile on another tenant's home screen",
+    ),
+    # -- share links --------------------------------------------------------
+    RouteCase("GET", "/api/share-links", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/share-links",
+        DENY,
+        body={"resource_kind": "dashboard", "resource_id": ""},
+        body_ids={"resource_id": "dashboard"},
+        note="mints a public link onto another tenant's dashboard",
+    ),
+    RouteCase(
+        "POST",
+        "/api/share-links/{link_id}/revoke",
+        DENY,
+        path_ids={"link_id": "share_link"},
+    ),
+    # The token is the whole credential, so this is deliberately open; the
+    # revoked/expired/foreign fail-closed 404s are pinned in the targeted
+    # tests (test_share_links.py), per the PUBLIC docstring above.
+    RouteCase(
+        "GET",
+        "/shared/{token}",
+        PUBLIC,
+        path_ids={"token": "share_link_token"},
     ),
     # -- database connections ---------------------------------------------
     RouteCase("GET", "/api/db/connections", SCOPED),

@@ -35,6 +35,7 @@ from .api import (
     projects,
     sandbox,
     sandbox_tools,
+    share_links,
     skills,
     sources,
     spaces,
@@ -130,6 +131,7 @@ app.include_router(sandbox.router)
 app.include_router(sandbox_tools.router)
 app.include_router(analytics.router)
 app.include_router(dashboards.router)
+app.include_router(share_links.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)
 app.include_router(templates.router)

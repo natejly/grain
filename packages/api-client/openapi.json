@@ -7311,6 +7311,188 @@
         "title": "SessionRequest",
         "type": "object"
       },
+      "ShareLinkCreateRequest": {
+        "properties": {
+          "resource_id": {
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "resource_kind": {
+            "enum": [
+              "dashboard",
+              "document"
+            ],
+            "title": "Resource Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_kind",
+          "resource_id"
+        ],
+        "title": "ShareLinkCreateRequest",
+        "type": "object"
+      },
+      "ShareLinkCreatedOut": {
+        "description": "The 201 body, and the only place the raw token ever appears.\n\n`AdminInviteCreatedOut`'s contract: the database holds a SHA-256, the list\nroute never returns tokens, and nothing logs it. An idempotent replay of\nthe create answers with the link row but `token`/`url_path` blank \u2014 the\nraw value cannot be re-derived from its hash, and a credential that\nappears in two responses is a credential that appears in logs.",
+        "properties": {
+          "link": {
+            "$ref": "#/components/schemas/ShareLinkOut"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "url_path": {
+            "title": "Url Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "link",
+          "token",
+          "url_path"
+        ],
+        "title": "ShareLinkCreatedOut",
+        "type": "object"
+      },
+      "ShareLinkOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "resource_kind": {
+            "title": "Resource Kind",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "required": [
+          "id",
+          "resource_kind",
+          "resource_id",
+          "created_by",
+          "created_at",
+          "expires_at",
+          "revoked_at"
+        ],
+        "title": "ShareLinkOut",
+        "type": "object"
+      },
+      "SharedResourceOut": {
+        "description": "What an anonymous holder of a working link sees. One model for both\nkinds \u2014 the unset half stays at its empty default \u2014 so the public page has\none response shape to render.",
+        "properties": {
+          "columns": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "content": {
+            "default": "",
+            "title": "Content",
+            "type": "string"
+          },
+          "document_kind": {
+            "default": "",
+            "title": "Document Kind",
+            "type": "string"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "rows": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "spec_json": {
+            "default": "",
+            "title": "Spec Json",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "kind",
+          "title"
+        ],
+        "title": "SharedResourceOut",
+        "type": "object"
+      },
       "SignupIn": {
         "properties": {
           "email": {
@@ -19750,6 +19932,187 @@
         ]
       }
     },
+    "/api/share-links": {
+      "get": {
+        "description": "Every link this workspace has issued, newest first \u2014 revoked and expired\nones included, because \"did we ever share that, and is it off now?\" is the\nquestion this list is opened to answer. No token, hashed or raw, appears\nanywhere in the response.",
+        "operationId": "list_share_links_api_share_links_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ShareLinkOut"
+                  },
+                  "title": "Response List Share Links Api Share Links Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Share Links",
+        "tags": [
+          "share-links"
+        ]
+      },
+      "post": {
+        "operationId": "create_share_link_api_share_links_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareLinkCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareLinkCreatedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Share Link",
+        "tags": [
+          "share-links"
+        ]
+      }
+    },
+    "/api/share-links/{link_id}/revoke": {
+      "post": {
+        "description": "Stop the link working, now. Naturally idempotent \u2014 revoking is a one-way\ndoor and a second click keeps the first timestamp \u2014 so it takes no\nIdempotency-Key, per the tool-policies precedent.",
+        "operationId": "revoke_share_link_api_share_links__link_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "link_id",
+            "required": true,
+            "schema": {
+              "title": "Link Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareLinkOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Share Link",
+        "tags": [
+          "share-links"
+        ]
+      }
+    },
     "/api/skills": {
       "get": {
         "operationId": "list_skills_api_skills_get",
@@ -22601,6 +22964,48 @@
         "summary": "Published App Frame",
         "tags": [
           "generated-apps"
+        ]
+      }
+    },
+    "/shared/{token}": {
+      "get": {
+        "operationId": "read_shared_resource_shared__token__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedResourceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Shared Resource",
+        "tags": [
+          "share-links"
         ]
       }
     }

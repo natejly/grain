@@ -5,7 +5,7 @@ import type {
   DashboardTemplate,
   Dataset,
 } from "@workspace/api-client";
-import { Copy, MessageSquareText, Pin, PinOff, Trash2 } from "lucide-react";
+import { Copy, Link2, MessageSquareText, Pin, PinOff, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { describeDashboard, refusalLines } from "./dashboard-format";
 
@@ -30,6 +30,8 @@ export type DashboardCatalogProps = {
   open: (dashboardId: string) => void;
   /** Open the shell's comments drawer about this dashboard. */
   comment?: (dashboard: Dashboard) => void;
+  /** Open the share-links modal: public read-only URLs for this dashboard. */
+  share?: (dashboard: Dashboard) => void;
 };
 
 /**
@@ -49,6 +51,7 @@ export function DashboardCatalog({
   remove,
   open,
   comment,
+  share,
 }: DashboardCatalogProps) {
   return (
     <section className="dashboard-catalog" aria-label="All dashboards">
@@ -99,6 +102,17 @@ export function DashboardCatalog({
                     onClick={() => comment(dashboard)}
                   >
                     <MessageSquareText size={14} />
+                  </button>
+                )}
+                {share && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Share ${dashboard.name}`}
+                    title="Share this dashboard with a public link"
+                    onClick={() => share(dashboard)}
+                  >
+                    <Link2 size={14} />
                   </button>
                 )}
                 <button

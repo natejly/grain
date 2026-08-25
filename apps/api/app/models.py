@@ -276,6 +276,44 @@ class WorkspaceInvite(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ShareLink(Base):
+    """A revocable read-only public URL onto one dashboard or document.
+
+    `WorkspaceInvite`'s shape, for `WorkspaceInvite`'s reasons: the database
+    holds only the SHA-256 of the link (`services/share_links.hash_token`), the
+    raw token is returned exactly once at creation, `expires_at` bounds how long
+    a leaked link is worth anything, and `revoked_at` is a terminal timestamp
+    rather than a DELETE — "we shared this and then stopped" is a fact an owner
+    may need to see again.
+
+    `resource_kind`/`resource_id` follow the polymorphic-subject convention
+    (`Conversation.subject_kind`): one table for the two shareable kinds,
+    'dashboard' and 'document'. Published apps already have their own public
+    surface, so they are deliberately not a kind here. `resource_id` is a plain
+    column, not a ForeignKey, per the house convention for references that may
+    outlive their target: deleting the document must not fail because someone
+    once shared it — the public route fail-closes to 404 instead.
+
+    The public read resolves the workspace from THIS row, never from the
+    request: the token is the entire credential, and everything it serves is
+    re-read live under `workspace_id` at request time.
+    """
+
+    __tablename__ = "share_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: 'dashboard' | 'document' — the only kinds with no public surface of
+    #: their own.
+    resource_kind: Mapped[str] = mapped_column(String(16), default="")
+    resource_id: Mapped[str] = mapped_column(String(36), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class Membership(Base):
     """One person's place in one workspace.
 

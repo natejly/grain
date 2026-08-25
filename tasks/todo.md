@@ -25,8 +25,14 @@ cases, unit tests, and its own commit.
       helpers services/mail_render.py render_table/render_link_button with
       html.escape on every interpolation — consumed by F10/F13; config
       guards untouched; tests in test_mail_render.py)
-- [ ] 9. Share links: revocable read-only public URLs (dashboard/document/
-      artifact)
+- [x] 9. Share links: revocable read-only public URLs (dashboard/document)
+      (scoped to dashboards + documents, NOT artifacts: published apps
+      already have their own public surface at /published/apps/{slug};
+      share_links stores sha256 only, raw token in the 201 exactly once —
+      blank on idempotent replay; GET /shared/{token} is PUBLIC and
+      fail-closed 404 for unknown/revoked/expired/deleted, dashboards
+      re-queried LIVE server-side; web page app/share/[token], modal on
+      Dashboards + Documents)
 - [ ] 10. Dashboard subscriptions: scheduled snapshot delivery
 - [ ] 11. Outbound webhooks + API tokens (trigger workflow / post to thread;
       event push)

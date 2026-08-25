@@ -11,6 +11,7 @@ import type {
 } from "@workspace/api-client";
 import { Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ShareLinksModal } from "../share-links-modal";
 import { useSubjectThread } from "../use-subject-thread";
 import { SubjectChatPanel } from "./subject-chat";
 import { DashboardCatalog, DashboardTemplates } from "./dashboard-catalog";
@@ -117,6 +118,9 @@ export function DashboardsView({
   // the reader never chose.
   const [chatting, setChatting] = useState<string | null>(null);
   const subject = dashboards.find((item) => item.id === chatting) ?? null;
+  // The dashboard whose share-links modal is open. Local on purpose: the modal
+  // is self-contained (it talks to the API itself) and no other view cares.
+  const [sharing, setSharing] = useState<Dashboard | null>(null);
 
   const onRunSettled = useCallback(async () => {
     await chat?.reloadDashboards().catch(() => undefined);
@@ -186,6 +190,7 @@ export function DashboardsView({
         duplicate={duplicateDashboard}
         remove={removeDashboard}
         comment={openComments}
+        share={setSharing}
         // Launching *is* pinning: there is no single-dashboard page to
         // send someone to, and a chart you opened once is a chart you
         // wanted on your screen. Already pinned, it is merely revealed.
@@ -201,6 +206,15 @@ export function DashboardsView({
         bind={bindDashboardTemplate}
       />
     </section>
+
+    {sharing && (
+      <ShareLinksModal
+        kind="dashboard"
+        resourceId={sharing.id}
+        resourceName={sharing.name}
+        close={() => setSharing(null)}
+      />
+    )}
 
     {subject && chat && (
       <SubjectChatPanel
