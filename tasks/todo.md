@@ -1,3 +1,108 @@
+# Finish-the-todo run (started 2026-08-22)
+
+Goal: complete Phases 3–6 of Foyer + loose ends, production grade.
+
+- [x] Loose end: budget.spec:299 — re-ran in isolation, passes (the Phase-2
+      session's feedWaiting second-sweep + copy constant landed); nothing to do
+- [x] Phase 3 remainder: pin chooser on chat chart artifacts (2026-08-22:
+      finish-the-job pin bar on succeeded create/update dashboard cards —
+      id-parse only, no name fallback after review; "Make this a dashboard"
+      seed on image charts, pane-aware after re-review; server copy reworded)
+- [x] Phase 3 remainder: Boards & Todos glyph/toast merge (2026-08-22: one nav
+      item, merged listing with data-shape glyphs, graduation notice toast
+      with nonce timer + multi-flip join, confirm-gated deletes both shapes,
+      keyboard moves: card up/down + two-step Move-to + column chevrons with
+      busy guards; e2e specs updated, teleport assertion inverted)
+- [x] Phase 3 remainder: Knowledge cross-links (2026-08-22 wf): purpose
+      subtitles on all three views; six link directions (sources↔graph↔memory,
+      memory→thread provenance); space chips on source+memory rows;
+      use-focus-reveal.ts extracted from the dashboards recipe;
+      13 RTL tests in knowledge-crosslinks.test.ts
+- [x] Phase 4: grants API → Inbox Rules tab + Policies page (2026-08-22 wf:
+      views/policies.tsx RulesTable — descriptions from the registry, plain
+      scope words, You/Everyone + grantor, revoke with owner gate — mounted in
+      Inbox as a Rules tab AND as the "Rules & policies" view under the Inbox
+      group; the two "always allow" checkboxes' copy fixed to "for me";
+      organization.spec re-pointed; policies-rules.test.ts)
+- [x] Phase 4: member-readable org policy (OrganizationPanel moved out of
+      AdminView's 403 wall onto the Policies page, unmodified)
+- [x] Phase 4: scope labels on composer controls (2026-08-23: "Agent/Model/
+      Reasoning effort · this thread" + remembered-on-thread titles;
+      composer-scope.test.ts)
+- [x] Phase 4: per-thread persistence of model/effort/agent (2026-08-23 web
+      half: shell seeds pickers once per thread switch from Conversation
+      defaults with a stomp-guard ref, pick* wrappers write through
+      setConversationDefaults and patch the rail row; extra panes seed from
+      their row and write back through the onApprovalChanged channel; fast
+      stays per-turn)
+- [x] Phase 4: approval-mode control in subject chats (2026-08-23:
+      use-subject-thread keeps the row's mode + setApprovalMode with a
+      stale-reply guard; panels pass the approval bundle, starter cards
+      opt-out via ChatView.showStarter)
+- [x] Phase 4: review banner (2026-08-23 wf + fixes): review DEFAULT-OPENS per
+      proposal (render-time state adjustment, no editor flash — keeps the e2e
+      no-click contract), "Later" parks it behind a banner over a read-only
+      editor; the interlock covers EVERY write path after review (Save, ⌘S,
+      History→Restore all disarmed while a proposal pends); tree dots via
+      FileTree pendingIds
+- [x] Phase 4: system-status popover (2026-08-23 wf): SystemStatus on
+      DisclosureMenu replaces the agent/screen pills; one useApiHealth loop
+      feeds both the down-banner (unchanged behavior) and the status dot
+- [x] Phase 4: Inbox snooze/Later (2026-08-23 wf + fixes): client-side
+      grain.inbox-snooze via total-parser module (now with pruneSnoozes
+      against the waiting set), Later/Unsnooze + "Later (N)" tab, waiting
+      strip filtered and synced via onSnoozesChanged, rail badge deliberately
+      unchanged; 12 unit tests
+      (also fixed from review: thread-default seeding self-heals a deleted
+      agent id through AgentSelect → the thread's remembered default)
+- [ ] Phase 5: unified right split pane (subject chat / artifact peek / extra panes)
+- [ ] Phase 5: message edit (backend DONE 2026-08-22: truncate-and-rerun —
+      conversations.truncate_after + POST /conversations/{id}/messages/{mid}/edit,
+      author-only, 409 over live runs, memory tombstoned, chunk index dropped
+      and rebuilt by the new run's hook; fixed the latent purge leak where a
+      DELETED thread's ConversationChunk rows stayed searchable forever;
+      6 tests in test_message_edit.py; web affordance is the gap)
+- [x] Phase 5: G-chords (G C / G I / G L / G A / G D) — views/chords.ts pure
+      module + 9 tests, capture-phase listener in workspace.tsx (stops a
+      completed chord reaching the Inbox's A/D triage), palette rows show
+      their chord as a kbd hint (e2e pass still owed with the phase gate)
+- [ ] Phase 5: universal Favorites + sidebar pruning
+- [ ] Phase 5: agent editor live try-chat
+- [ ] Phase 5: English-first Schedule composer + next-fire preview
+- [ ] Phase 6: saved named layouts
+- [ ] Phase 6: per-collection open behavior
+- [ ] Phase 6: graph legend + bidirectional selection
+- [ ] Phase 6: onboarding walkthrough (approval loop)
+- [ ] Phase 6: mobile bottom-tab shell
+- [ ] Full gate per phase: make lint, pytest, pnpm test, pnpm build, e2e
+
+Review-debt (phase3 panel, 2026-08-22) — ALL FIXED same day:
+- [x] truncate_after now sweeps by Run.created_at >= the pivot run's start
+      (overlapping earlier turn survives; regression test with staged clocks)
+- [x] shared threads: 409 when the sweep would take a teammate's run
+- [x] dashboards/tools.py success line names the on-card pin control (kept
+      the "(id <uuid>)" clause the pin bar parses)
+- Accepted-risk notes: hasChartImage offers "Make this a dashboard" under any
+  sandbox image (no client-side chart signal exists); G-chords lack a disable/
+  remap setting (WCAG 2.1.4) — fold into Phase 6 polish.
+
+Backend landed 2026-08-22 for Phase 5 (web halves pending):
+- [x] English→cron: POST /api/crons/compile-schedule + next_fires preview
+      helper (DST-aware minute scan, validator chokepoint shared with the
+      ticker), scripted-mode deterministic parser, 17 tests
+- [x] Universal Favorites: models.Favorite + migration 0047, service with the
+      one resolve chokepoint (conversations via resolve_visible, the rest
+      workspace-scoped), 4 routes modelled on dashboard pins, isolation cases,
+      test_favorites.py; api-client types + methods landed
+- [x] api-client contracts: Conversation.default_*, setConversationDefaults,
+      editMessage, ToolPolicy.created_by, MemoryItem.space_id, Favorite CRUD,
+      compileSchedule (fixtures updated; tsc + 593 web tests green)
+- Concurrent-session note: a peer session shares this tree (steer feature,
+  anthropic harness, delegation/guardian, admin scorecard, its migration
+  0046); its 0046 upgrade guard and one E501 were fixed from here and the
+  session notified. Its remaining red tests (harness registry ×3, delegation
+  db.get review) are theirs.
+
 # Frontend redesign: "Foyer"
 
 Full spec: https://claude.ai/code/artifact/547d1b83-5525-4537-afe9-aa8b42a272bb
@@ -271,3 +376,127 @@ cannot disagree; GET /api/memory widens via an explicit ALL_SPACES constant
 so space rows stay administrable. 0042_spaces gained has_table guards after
 the migration-replay tests caught partial-DB builds. Detail rename input is
 aria-label "Rename space" (create input owns "Space name").
+
+
+# Harness gap build — subagents, steering, guardian, observability (2026-08-22)
+
+From the opencode/Codex gap study (artifact 18f3a615). Six features, sequenced
+backend-first, agents own only new files, shared-file edits stay serial.
+
+- [x] 0. Contracts: ModelUsage.agent_id column + index, migration 0046,
+      usage.Attribution/usage_scope agent_id, ToolContext.run_id,
+      config: anthropic provider fields (a peer session added the
+      absent-table guard to 0046 — kept)
+- [x] 1. Delegation: services/delegation.py — `delegate` tool (new "delegation"
+      family), read-only child loop (no parking; budget/cancel abort), depth 1
+      by construction, parallel batch execution for consecutive delegate calls
+      in _drain_pending (own session + copy_context per thread; concurrency
+      proven by a barrier test) — tests/test_delegation.py (8)
+- [x] 2. ask_user tool (core family, force_ask) + decision endpoint inputs→
+      amendment bridge + web answer card — tests/test_ask_user.py (6)
+- [x] 3. Mid-turn steering: POST /api/runs/{id}/steer → steer.requested event
+      + transcript Message row, loop pickup via LoopState.last_steer_sequence
+      — tests/test_steering_loop.py (4), test_steer_endpoint.py
+- [x] 4. Guardian approval mode: evaluate_policy first-arm handling (NOT the
+      auto_writes else-branch), _drain_pending consult on "ask" (never for
+      force_ask/exit_plan_mode), 5-approvals-per-turn cap on LoopState,
+      fail-closed park; services/guardian.py — test_guardian.py (25),
+      test_guardian_mode.py (6)
+- [x] 5. Anthropic harness: services/harness/anthropic.py + config guard +
+      HARNESSES entry + settings.default_model + model.py extract_memories
+      degradation + anthropic dep — test_anthropic_harness.py (9)
+- [x] 6. SKILL.md interop: services/skill_markdown.py parse/render (73 tests) +
+      import/export endpoints + isolation entries — test_skill_interop.py
+- [x] 7. Per-agent observability: GET /api/admin/agents scorecard (runs, tool
+      calls, denials, mode-approved, screen flags, usage by agent_id) —
+      test_admin_agents.py (fixed a select_from join bug it caught)
+- [x] 8. Web: ask_user answer card + Answer button, guardian mode option
+      (bypass-flagged), SteerStrip in all three chat panes, api-client
+      steerRun + ApprovalMode widening
+- [x] 9. Full gate + adversarial review: 25-agent review workflow returned
+      19 confirmed findings (5 major) — ALL fixed and regression-tested:
+      atomic event sequences (scalar subquery in append_event), guardian
+      provenance flag (never softens a policy-row/org ask; defers on
+      unabsorbed steers, reads absorbed ones), ask_user forged-answer strip,
+      child screen-hit evidence carry-back (enforce + shadow), parallel-batch
+      failure parity, steer auth tightening + single-txn idempotency +
+      run_id-stamped Message, Inbox answer box + remember suppression,
+      SteerStrip park gating + draft retention, proposal-note pre-wrap,
+      export newline 500, honest effort ladder under anthropic.
+      Final gate: ruff ✓ mypy ✓ full pytest exit 0 ✓ alembic up/down/up ✓
+      vitest 612/612 ✓ eslint 0 errors ✓ next build ✓ e2e approvals 6/6 ✓;
+      symbol-survival check vs 10 concurrent peer sessions ✓
+
+- [x] 10. Browser proof (2026-08-23): e2e/harness-features.spec.ts — ask_user
+      question card with options → typed answer round-trips through the
+      amendment into the recorded result; delegate runs a real scripted child
+      ("Research partner") and its words surface in the parent card; guardian
+      mode selectable, bypass banner up, and fails closed to a human park on
+      a scripted deployment (no reviewer). 4 script entries added to
+      e2e/agent-script.json. Steer-strip visibility extracted to
+      views/steer-format.ts (pure module, 7 tests) per repo convention.
+      3/3 specs green first run; screenshots inspected by eye (options render
+      as lines — pre-wrap fix visible; answer text in RESULT). Full e2e suite
+      queued as the phase gate.
+
+- Full-suite e2e gate (2026-08-23, harness session): 65 passed incl. the 3 new
+  harness-features specs. 4 red in the full run: palette rename + workflows ×2
+  PASS in isolation (ordering/load, not code); dashboards.spec beforeAll fails
+  deterministically — the Sources-view CSV upload never becomes a dataset
+  (spec:94), 5 dashboard tests skipped. That surface is the in-flight
+  Knowledge cross-links work (uncommitted sources.tsx/use-workspace edits), so
+  it was flagged to dashbored-2e rather than patched from here.
+
+- [x] 11. Anthropic harness completed (2026-08-23): effort now maps onto the
+      Messages API's OWN ladder (output_config.effort is literally
+      low/medium/high/xhigh/max; "none" → thinking disabled; unset falls back
+      to openai_reasoning_effort as the deployment reasoning default), and
+      thinking/redacted_thinking blocks round-trip through LoopState history
+      (_ThinkingItem — required for tool-use continuations with thinking on).
+      Bootstrap's effort ladder restored for anthropic since every choice now
+      does something. 12 harness tests green incl. 3 new; ruff+mypy clean;
+      gap-study artifact updated with the shipped-status addendum.
+
+# Harness open-list build (2026-08-23, "implement everything on the list")
+
+The gap study's deliberately-open items. The org agent registry stays with the
+marketplace epic (still plan-only, verified — no Listing code in tree); its
+non-overlapping org piece, audit export, ships here instead.
+
+- [x] A. Best-of-N: `delegate(attempts=N)` — N parallel children of one agent,
+      all answers labelled back to the parent model to judge
+- [x] B. Guardian under the Anthropic provider (anthropic_context_model,
+      messages.create JSON verdict, billed provider=anthropic)
+- [x] C. Audit export: GET /api/admin/audit-events/export — keyset cursor
+      (created_at,id) ascending, since/action filters, no offset cap
+- [x] D. Grain as an MCP server: workspace API tokens (model + 0048) +
+      POST /api/mcp-server JSON-RPC endpoint (initialize/tools list+call,
+      read-only registry only) + api-client + minimal UI if uncontested
+- [x] E. Gates: ruff/mypy/full pytest/alembic round trip; web gates if touched
+
+## Review (open-list build, 2026-08-25)
+
+All five items (A best-of-N, B guardian-on-Anthropic, C audit export, D
+Grain-as-MCP-server, E gates) landed on feat/agentic-workspace.
+
+Adversarial review (a 3-agent lite pass, after the first heavier workflow
+stalled on the loaded box) found 3 real defects, all fixed + regression-tested:
+- MAJOR: a crafted JSON-RPC `id` of NaN/Infinity 500'd POST /api/mcp — json.loads
+  accepts the token, then JSONResponse's allow_nan=False dump raises OUTSIDE the
+  body-parse try. Fixed at the parse boundary (parse_constant raiser + scalar-id
+  guard); test_a_non_finite_or_non_scalar_id_never_500s.
+- MINOR x2: shadow-mode screen excerpts were dropped on a child ABORT (the
+  except handler ignored shadow_hits) and could be clipped off the tail in
+  best-of-N. Fixed by a shared `_notice_first` that LEADS the delegate result
+  with the safety notice (survives clipping) and is used by both the answer and
+  abort paths; test_shadow_hits_survive_a_child_abort_and_lead_the_content.
+
+I also self-verified the three highest-risk surfaces before the review returned:
+MCP offers ONLY read-only tools (empirical registry probe — zero write-capable),
+the audit keyset drains 10 same-timestamp rows exactly once in id order, and the
+JSON-RPC handler survives malformed bodies.
+
+Gate: ruff ✓ mypy ✓ alembic 0048 up/down/up ✓ vitest 663/663 ✓ web lint 0
+errors ✓ next build ✓ full pytest exit 0 except the one pre-existing
+password-timing flake (a constant-time-ratio assertion, load-sensitive, passes
+1/1 in isolation — not this build's code).

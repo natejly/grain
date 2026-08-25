@@ -487,3 +487,64 @@
   by every injected step, including the workflow executor's. The check belonged
   *above* the seam, on the path every turn takes. If a guard has to go inside a
   replaceable seam, ask who replaces it.
+
+- A tool that reads a "user-typed" value out of its own arguments is forgeable
+  by construction: the model authors `arguments_json` end to end, so any
+  in-band key or flag ("answer", "answer_from_user") is the model's to write.
+  The only sound channel for human-typed input is out-of-band — the decision
+  amendment — and the executor's argument surface has to be SANITIZED of the
+  reserved key at the execution boundary, not merely documented as human-only.
+- An auto-approval gate that runs after the policy decision cannot see where
+  the decision came from, and provenance is the whole question: a default
+  "ask" may be softened, a person's or an org's explicit "ask" may not, and
+  the two are the same string by the time they reach the park site. Compute
+  the provenance where the rows and the ceiling are already in hand (a flag on
+  the Verdict), never re-derive it downstream.
+- read-max-then-insert against a unique (parent, sequence) key is fine with
+  one writer and a latent bug with two; a feature that adds a second routine
+  writer (steer, beside the loop's own deltas) is what converts "rare cancel
+  race" into "user action kills the turn". The root fix is making the
+  sequence assignment atomic in the INSERT itself (scalar subquery), which
+  also quietly fixes every pre-existing racer.
+- A worker thread that cannot write the observability record must hand back
+  the EVIDENCE instead of a clean verdict sentence, so the serial path can
+  make the record: a child screen hit that returns only "content failed the
+  screen" erases the detection it is reporting — no event, no escalation, no
+  scorecard count. Carrying the flagged excerpt in the result lets the
+  parent's existing screening write all three.
+- With 10 concurrent sessions in one tree, the discipline that worked: land
+  shared contracts serially yourself, give fan-out agents only new files,
+  Edit (never Write) shared files with freshly-read anchors, and grep your
+  key symbols across every contested file before calling the work done. Two
+  concurrent-session collisions were survived this way; a peer even hardened
+  my migration in place (absent-table guard) — take such edits as current
+  state, not as damage.
+- The e2e/vitest gate in a many-session tree can be red for someone else's
+  half-written test file; re-run it yourself before diagnosing (608/612 with
+  exit 1 became 612/612 exit 0 five minutes later with zero changes of mine).
+
+- `json.loads` accepts NaN/Infinity by default and Starlette's JSONResponse
+  dumps with allow_nan=False, so any value echoed from a request body into a
+  JSON response is a latent 500: the parse succeeds inside your try, the crash
+  happens at render time OUTSIDE it. Reject non-standard constants at the parse
+  boundary (`parse_constant=` raiser) for any endpoint that reflects
+  request-controlled scalars — a robustness test that only tries int/string/null
+  ids sails past it. Found by adversarial review after my own malformed-body
+  test missed exactly this input class.
+- A "carry the evidence back" fix has to cover every EXIT, not just the happy
+  path. The child screen-record fix worked on the clean-answer return and was
+  silently dropped on the abort return, because the two paths built their
+  ToolResult independently. When a value must ride out of a function, route
+  every return through one helper that attaches it — here `_notice_first`, used
+  by both the answer and the abort — rather than remembering to attach it at
+  each `return`.
+- When a downstream stage clips content to a budget, the thing that must
+  survive belongs at the FRONT. The shadow-screen notice sat at the tail of the
+  child result and best-of-N clipping (3600//N chars) truncated it away before
+  the parent re-screened; leading with it makes "the one thing clipping keeps"
+  and "the one thing that must survive" the same thing.
+- A stalled review workflow returns `confirmed: []` that means "never ran", not
+  "clean" — the agents timed out under a loaded box (8 peer sessions). Re-run it
+  smaller (fewer agents, medium effort, no verify fan-out) AND self-verify the
+  highest-risk surfaces by hand in parallel; the lighter re-run then found the
+  real NaN-500 the stall had hidden.
