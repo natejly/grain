@@ -2433,6 +2433,34 @@ class WebhookDelivery(Base):
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
+class InboundAddress(Base):
+    """One mintable email address that lands mail in this workspace.
+
+    The address is `inbox+<token>@<settings.inbound_email_domain>`, and the
+    token is the whole credential: it is shown once at mint time and only its
+    sha256 lands here, exactly as an ApiToken's secret does — the table can
+    recognise a recipient and can never leak an address. `created_by` is the
+    member delivered threads are created AS (their personal, unshared
+    threads); `target_space_id` is a plain column, not a FK, because "" is the
+    common value and a space's deletion must not take the address's row with
+    it. Revocation is a stamp, not a delete, for the same audit reason as the
+    token's.
+    """
+
+    __tablename__ = "inbound_addresses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(120), default="")
+    target_space_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 # ---------------------------------------------------------------------------
 # A human decision on a tool call is written once.
 #

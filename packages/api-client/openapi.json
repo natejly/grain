@@ -4933,6 +4933,182 @@
         "title": "Identity",
         "type": "object"
       },
+      "InboundAddressCreate": {
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "target_space_id": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Target Space Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "InboundAddressCreate",
+        "type": "object"
+      },
+      "InboundAddressMintedOut": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "target_space_id": {
+            "title": "Target Space Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "target_space_id",
+          "created_at",
+          "revoked_at",
+          "address"
+        ],
+        "title": "InboundAddressMintedOut",
+        "type": "object"
+      },
+      "InboundAddressOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "target_space_id": {
+            "title": "Target Space Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "target_space_id",
+          "created_at",
+          "revoked_at"
+        ],
+        "title": "InboundAddressOut",
+        "type": "object"
+      },
+      "InboundEmailIn": {
+        "description": "The generic provider shape: recipient, sender, subject, text, message_id.\n\nEverything defaults to \"\" because providers disagree about which fields a\nbounce or an empty mail carries \u2014 a missing field must never be a 422 the\nprovider retries forever, let alone a 500.",
+        "properties": {
+          "html": {
+            "default": "",
+            "maxLength": 200000,
+            "title": "Html",
+            "type": "string"
+          },
+          "message_id": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "recipient": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Recipient",
+            "type": "string"
+          },
+          "sender": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Sender",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Subject",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 200000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "title": "InboundEmailIn",
+        "type": "object"
+      },
+      "InboundEmailOut": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "conversation_id": {
+            "default": "",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "default": "",
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "title": "InboundEmailOut",
+        "type": "object"
+      },
       "InboxAlertOut": {
         "description": "One open monitor alert. Automation, so member-visible by definition \u2014\nthe query below filters on `target_user_id == ''` (the monitor sweep only\never writes '' -targeted rows), the holds-tab pattern: no conversation\npredicate, every member sees it, and resolving it resolves it for all.",
         "properties": {
@@ -17495,6 +17671,60 @@
         ]
       }
     },
+    "/api/hooks/email/inbound": {
+      "post": {
+        "description": "Land one provider-delivered email as a thread. The tick's auth posture.\n\nThe bearer authenticates the *provider*; the `+token` in the recipient\nroutes to (and authorises) the workspace. Idempotency rides the provider's\nmessage id \u2014 redelivery of the same mail answers the original thread\nrather than posting it twice \u2014 and no agent turn is ever started.",
+        "operationId": "receive_email_api_hooks_email_inbound_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboundEmailIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundEmailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Email",
+        "tags": [
+          "inbound-email"
+        ]
+      }
+    },
     "/api/hooks/workflows/{workflow_id}/trigger": {
       "post": {
         "description": "Start a run of one of the token workspace's own workflows. 202.\n\nThe mirror of `run_workflow` with `trigger=\"webhook\"`: resolve under the\ntoken's workspace FIRST (foreign ids uniformly 404), refuse a disabled\nworkflow, 422 a payload that does not satisfy the declared inputs while\nthe caller is still holding it, then queue the graph on the background\npath every other trigger uses.",
@@ -17555,6 +17785,187 @@
         "summary": "Trigger Workflow",
         "tags": [
           "hooks"
+        ]
+      }
+    },
+    "/api/inbound-addresses": {
+      "get": {
+        "operationId": "list_inbound_addresses_api_inbound_addresses_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InboundAddressOut"
+                  },
+                  "title": "Response List Inbound Addresses Api Inbound Addresses Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Inbound Addresses",
+        "tags": [
+          "inbound-email"
+        ]
+      },
+      "post": {
+        "description": "Mint an address. The full `inbox+<token>@<domain>` appears here only.\n\nThe target space is resolved under the caller's workspace FIRST, so a\nforeign space id is a plain 404 before anything \u2014 the domain check\nincluded \u2014 could say more.",
+        "operationId": "create_inbound_address_api_inbound_addresses_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboundAddressCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundAddressMintedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Inbound Address",
+        "tags": [
+          "inbound-email"
+        ]
+      }
+    },
+    "/api/inbound-addresses/{address_id}/revoke": {
+      "post": {
+        "description": "Stop mail landing through this address, now. Naturally idempotent.",
+        "operationId": "revoke_inbound_address_api_inbound_addresses__address_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "address_id",
+            "required": true,
+            "schema": {
+              "title": "Address Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundAddressOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Inbound Address",
+        "tags": [
+          "inbound-email"
         ]
       }
     },

@@ -357,6 +357,16 @@ class Settings(BaseSettings):
     # inert schedules rather than an endpoint anyone can poke.
     workflow_cron_secret: Optional[SecretStr] = None
 
+    # --- Inbound email -----------------------------------------------------
+    # The domain minted inbound addresses live on (`inbox+<token>@<domain>`).
+    # "" is the honest default: a deployment with no mail routing has no
+    # addresses to mint rather than addresses that can never receive anything.
+    inbound_email_domain: str = ""
+    # The bearer the email provider's webhook presents to POST
+    # /api/hooks/email/inbound — the tick posture exactly: compare_digest
+    # inside the route, and unset means 503, never an open door.
+    inbound_email_webhook_secret: Optional[SecretStr] = None
+
     google_client_id: str = ""
     google_client_secret: Optional[SecretStr] = None
     strava_client_id: str = ""

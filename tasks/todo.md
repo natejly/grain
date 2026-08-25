@@ -48,7 +48,11 @@ cases, unit tests, and its own commit.
       get_actor; /api/hooks trigger runs at WORKFLOW scope; deliveries
       claimed in tick, sent signed on background tasks, 3 attempts;
       "API & Webhooks" settings view)
-- [ ] 12. Inbound email → thread (provider-webhook endpoint, pairs with Rules)
+- [x] 12. Inbound email → thread (provider-webhook endpoint, pairs with Rules)
+      (0054_inbound_email; POST /api/hooks/email/inbound on the tick's
+      bearer posture, hashed inbox+token@domain routing addresses minted
+      owner-only, delivery = personal thread + user message with NO agent
+      turn, message_id idempotency; "Email in" card in API & Webhooks)
 - [ ] 13. Notification digests: daily pending-approvals email per member
 - [ ] Full gate: make lint, pytest, pnpm test, pnpm build, e2e
 

@@ -78,6 +78,7 @@ from app.models import (
     GraphEdge,
     GraphEntity,
     GraphProjection,
+    InboundAddress,
     IntegrationAccount,
     McpServer,
     McpTool,
@@ -125,6 +126,7 @@ from app.services.api_tokens import SECRET_PREFIX
 from app.services.api_tokens import _digest as api_token_digest
 from app.services.auth.invites import hash_token as invite_hash
 from app.services.crypto import encrypt_secret
+from app.services.inbound_email import hash_token as inbound_address_hash
 from app.services.ingestion import object_path
 from app.services.share_links import hash_token as share_link_hash
 
@@ -714,6 +716,24 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["api_token"] = api_token.id
         ids["api_token_secret"] = api_token_secret
+
+        # A live inbound email address, its raw routing token kept beside the
+        # row's id exactly as the api token's secret is: the token is the whole
+        # credential for landing mail in this workspace, so storing it under an
+        # id kind makes the leak scan prove no response — the address list
+        # above all — ever echoes it back.
+        inbound_address_token = f"{label.lower()}-isolation-inbound-token"
+        inbound_address = InboundAddress(
+            workspace_id=workspace_id,
+            token_hash=inbound_address_hash(inbound_address_token),
+            label=f"{label} secret inbound address",
+            target_space_id="",
+            created_by=user_id,
+        )
+        db.add(inbound_address)
+        db.flush()
+        ids["inbound_address"] = inbound_address.id
+        ids["inbound_address_token"] = inbound_address_token
 
         # An outbound webhook endpoint and one delivery on its trail. The URL
         # is owner-chosen data, so the marker lives in the *name*; the
@@ -2221,6 +2241,42 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"conversation_id": "conversation"},
         body={"content": "external note"},
         note="cookie-only caller holds no bearer token",
+    ),
+    # -- inbound email ------------------------------------------------------
+    # The provider webhook is PUBLIC on the tick's posture: with no
+    # `inbound_email_webhook_secret` configured (the suite's default) it is a
+    # deliberate 503, and the full open-door behaviour — wrong secret 401,
+    # unknown token writes nothing, foreign probes cannot land rows — is
+    # pinned in test_inbound_email.py. The management routes are the api-token
+    # posture: mint names a *space* in the body, and planting another tenant's
+    # space id must 404 before the domain check could say anything else.
+    RouteCase(
+        "POST",
+        "/api/hooks/email/inbound",
+        PUBLIC,
+        body={
+            "recipient": "inbox+not-a-real-token-at-all@mail.grain.test",
+            "sender": "probe@example.com",
+            "subject": "isolation probe",
+            "text": "probe body",
+            "message_id": "<isolation-probe@example.com>",
+        },
+    ),
+    RouteCase("GET", "/api/inbound-addresses", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/inbound-addresses",
+        DENY,
+        body={"label": "isolation probe", "target_space_id": ""},
+        body_ids={"target_space_id": "space"},
+        note="files another tenant's space as a mail target",
+    ),
+    RouteCase(
+        "POST",
+        "/api/inbound-addresses/{address_id}/revoke",
+        DENY,
+        path_ids={"address_id": "inbound_address"},
+        note="silences (and confirms) another tenant's mail-in address",
     ),
     # -- outbound webhooks --------------------------------------------------
     # Create takes no foreign id (the URL is the owner's own choice — a DNS

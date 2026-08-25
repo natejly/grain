@@ -28,6 +28,7 @@ from .api import (
     generated_apps,
     graph,
     hooks,
+    inbound_email,
     inbox,
     integrations,
     latex,
@@ -140,6 +141,7 @@ app.include_router(share_links.router)
 app.include_router(api_tokens.router)
 app.include_router(webhooks.router)
 app.include_router(hooks.router)
+app.include_router(inbound_email.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)
 app.include_router(templates.router)

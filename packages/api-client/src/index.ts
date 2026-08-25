@@ -1366,6 +1366,29 @@ export type WebhookUpdateInput = {
   enabled?: boolean;
 };
 
+/**
+ * One mintable email address that lands mail as a new thread. The address
+ * itself (`inbox+<token>@<domain>`) exists raw in exactly one response —
+ * `InboundAddressMinted`, at mint time; the server stores only a hash.
+ */
+export type InboundAddressRow = {
+  id: string;
+  label: string;
+  target_space_id: string;
+  created_at: string;
+  revoked_at: string | null;
+};
+
+/**
+ * The 201 body, and the only time the full address is ever available. Show
+ * it, let the person copy it, do not persist it; an idempotent replay
+ * answers with `address` blank because it cannot be re-derived from the
+ * stored hash.
+ */
+export type InboundAddressMinted = InboundAddressRow & {
+  address: string;
+};
+
 export type AppRelease = {
   id: string;
   version: number;
@@ -3514,6 +3537,43 @@ export class WorkspaceApi {
   /** The recent delivery trail, newest first — status chips, not payloads. */
   listWebhookDeliveries(): Promise<WebhookDelivery[]> {
     return this.request("/api/webhooks/deliveries");
+  }
+
+  // --- Inbound email --------------------------------------------------------
+  // Mintable inbox+<token>@<domain> addresses; mail sent to one lands as a
+  // new personal thread. Owner-gated like the tokens beside it.
+
+  /** Every address the workspace has minted, live and revoked. Never a token. */
+  listInboundAddresses(): Promise<InboundAddressRow[]> {
+    return this.request("/api/inbound-addresses");
+  }
+
+  /**
+   * Mint an address. The response is the only place the full address ever
+   * appears — see `InboundAddressMinted`. 503 while the deployment has no
+   * inbound email domain configured.
+   */
+  createInboundAddress(
+    label: string,
+    targetSpaceId = "",
+  ): Promise<InboundAddressMinted> {
+    return this.request(
+      "/api/inbound-addresses",
+      {
+        method: "POST",
+        body: JSON.stringify({ label, target_space_id: targetSpaceId }),
+      },
+      true,
+    );
+  }
+
+  /** Stop mail landing through an address, now. Revocation is a stamp. */
+  revokeInboundAddress(addressId: string): Promise<InboundAddressRow> {
+    return this.request(
+      `/api/inbound-addresses/${addressId}/revoke`,
+      { method: "POST" },
+      true,
+    );
   }
 
   // --- Dashboard templates --------------------------------------------------

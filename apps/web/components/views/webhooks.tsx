@@ -2,11 +2,12 @@
 
 import type {
   ApiTokenRow,
+  InboundAddressRow,
   WebhookDelivery,
   WebhookEndpoint,
   WebhookEvent,
 } from "@workspace/api-client";
-import { Check, Copy, KeyRound, Plus, Trash2, X } from "lucide-react";
+import { Check, Copy, KeyRound, Mail, Plus, Trash2, X } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
 import {
@@ -36,6 +37,7 @@ import { describeError } from "./shared";
  */
 export function WebhooksView({ setError }: { setError: (message: string) => void }) {
   const [tokens, setTokens] = useState<ApiTokenRow[]>([]);
+  const [addresses, setAddresses] = useState<InboundAddressRow[]>([]);
   const [endpoints, setEndpoints] = useState<WebhookEndpoint[]>([]);
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -45,12 +47,14 @@ export function WebhooksView({ setError }: { setError: (message: string) => void
     let cancelled = false;
     Promise.all([
       api.listApiTokens(),
+      api.listInboundAddresses(),
       api.listWebhooks(),
       api.listWebhookDeliveries(),
     ])
-      .then(([tokenRows, endpointRows, deliveryRows]) => {
+      .then(([tokenRows, addressRows, endpointRows, deliveryRows]) => {
         if (cancelled) return;
         setTokens(tokenRows);
+        setAddresses(addressRows);
         setEndpoints(endpointRows);
         setDeliveries(deliveryRows);
         setLoaded(true);
@@ -97,6 +101,12 @@ export function WebhooksView({ setError }: { setError: (message: string) => void
       </div>
 
       <TokensSection tokens={tokens} setTokens={setTokens} setError={setError} />
+
+      <InboundAddressesSection
+        addresses={addresses}
+        setAddresses={setAddresses}
+        setError={setError}
+      />
 
       <EndpointsSection
         endpoints={endpoints}
@@ -233,6 +243,142 @@ function TokensSection({
                     type="button"
                     className="ghost-button"
                     onClick={() => void revoke(token)}
+                  >
+                    <X size={12} /> Revoke
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function InboundAddressesSection({
+  addresses,
+  setAddresses,
+  setError,
+}: {
+  addresses: InboundAddressRow[];
+  setAddresses: (
+    update: (rows: InboundAddressRow[]) => InboundAddressRow[],
+  ) => void;
+  setError: (message: string) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  /** The just-minted address — the one time it exists on this side. */
+  const [minted, setMinted] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  async function mint(event: FormEvent) {
+    event.preventDefault();
+    if (!label.trim()) return;
+    setBusy(true);
+    try {
+      const created = await api.createInboundAddress(label.trim());
+      const { address, ...row } = created;
+      setAddresses((rows) => [...rows, row]);
+      setMinted(address);
+      setCopied(false);
+      setLabel("");
+    } catch (caught) {
+      setError(describeError(caught, "Could not create the address"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(row: InboundAddressRow) {
+    try {
+      const updated = await api.revokeInboundAddress(row.id);
+      setAddresses((rows) =>
+        rows.map((item) => (item.id === updated.id ? updated : item)),
+      );
+    } catch (caught) {
+      setError(describeError(caught, "Could not revoke the address"));
+    }
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard?.writeText(minted);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <section className="mcp-card">
+      <header className="mcp-card-head">
+        <div className="mcp-card-title">
+          <strong>Email in</strong>
+        </div>
+      </header>
+      <p className="field-hint">
+        Mail sent to a minted address lands as a new personal thread of yours
+        — nothing runs on its account until you reply. The address is the
+        secret: revoke it if it leaks.
+      </p>
+
+      <form className="mcp-form-row" onSubmit={(event) => void mint(event)}>
+        <label>
+          Address label
+          <input
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder="e.g. Support inbox"
+            required
+          />
+        </label>
+        <button type="submit" className="primary-button" disabled={busy}>
+          <Mail size={14} /> {busy ? "Minting…" : "Create address"}
+        </button>
+      </form>
+
+      {minted && (
+        <div className="invite-link" role="status">
+          <p className="field-hint">
+            This address is shown once and cannot be read back — copy it now.
+          </p>
+          <div className="invite-link-row">
+            <code>{minted}</code>
+            <button
+              type="button"
+              className="ghost-button"
+              aria-label="Copy inbound address"
+              onClick={() => void copy()}
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {addresses.length === 0 ? (
+        <p className="section-note">No addresses yet — no mail can land.</p>
+      ) : (
+        <ul className="share-link-list">
+          {addresses.map((row) => {
+            const state = tokenState(row);
+            return (
+              <li key={row.id}>
+                <div>
+                  <span className="admin-tag">{state}</span>
+                  <span className="share-link-meta">
+                    {row.label || "Unnamed address"} · created{" "}
+                    {new Date(row.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+                {state === "active" && (
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => void revoke(row)}
                   >
                     <X size={12} /> Revoke
                   </button>
