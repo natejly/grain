@@ -500,3 +500,32 @@ Gate: ruff ✓ mypy ✓ alembic 0048 up/down/up ✓ vitest 663/663 ✓ web lint 
 errors ✓ next build ✓ full pytest exit 0 except the one pre-existing
 password-timing flake (a constant-time-ratio assertion, load-sensitive, passes
 1/1 in isolation — not this build's code).
+
+# Harness parity run (planned 2026-08-25, awaiting sign-off)
+
+Goal: encapsulate Claude-Code-class harness functionality (Claude Code /
+Grok bot). Full plan + inventory baseline: tasks/harness-parity-plan.md;
+presentation detail: tasks/visual-harness-plan.md.
+
+- [ ] Phase 1: file & search surface — fs_glob/fs_grep/multi-read on the
+      project VFS + the same typed fs_* tools targeting the sandbox FS
+      (grep/edit a real tree, diff previews kept)
+- [ ] Phase 2: web_fetch ToolSpec over the existing SSRF-hardened fetcher,
+      injection-screened, default-ask
+- [ ] Phase 3: execution — background run_command + task_output/task_kill,
+      Node in the sandbox image, sandbox default-on in dev only
+- [ ] Phase 4: orchestration — delegate(model?, effort?) validated above the
+      model_step seam; parallel drain for all read-only tool batches
+      (4.3 write-capable children: DECISION PENDING)
+- [ ] Phase 5: session state — in-turn compaction (iterations 6 → ~24),
+      digest-aware cross-turn context, checkpoint rows + revert endpoint
+      (snapshot depth beyond documents: DECISION PENDING)
+- [ ] Phase 6: extensibility — list_skills/use_skill tools + allowed-tools
+      honored; sandbox-executed tighten-only hooks; per-agent
+      model/effort/approval-mode
+- [ ] Phase 7: presentation — typed event union, thinking/guardian/usage
+      events, child-event envelopes, turn-tree reducer, shiki, per-tool
+      renderers, activity timeline, pinned plan panel, nested delegate
+      transcripts, usage meter (screenshot-review every visual change)
+- [ ] Full gate per phase: make lint, pytest, pnpm test, pnpm build, e2e,
+      alembic up/down base on scratch DB for schema phases
