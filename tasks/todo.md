@@ -534,3 +534,13 @@ password-timing flake (a constant-time-ratio assertion, load-sensitive, passes
       and the workflow-scope ToolPolicy deny lever in mcp_server.py's
       docstring; edge ordering got an id tiebreak so equal-weight exports
       are stable across calls.
+- [x] Re-verify round 2: my "graph_path is safe by arithmetic" claim was
+      wrong at schema bounds (6 hops × long names × 9 provenance ids ≈
+      6300 chars; ensure_ascii inflates non-ASCII names ~6x past 14k).
+      graph_path now refits like the others — provenance sheds first, the
+      chain's steps only after, `truncated` owns up to either loss, `hops`
+      keeps naming the real path length. CJK long-name regression test.
+      Declined the optional post-assembly assert: read paths must not
+      crash, and the exact pricing is regression-tested on all three
+      tools; the entities-clip-at-60% remainder is documented as a
+      deliberate cosmetic trade in the ENTITY_BUDGET_SHARE comment.

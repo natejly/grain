@@ -42,7 +42,9 @@ MAX_EXPORT_ENTITIES = 200
 
 # When both lists compete for the character budget, entities get first claim on
 # this share of it — the map matters more than any one link — and whatever they
-# leave unspent flows to the edges.
+# leave unspent flows to the edges. The reverse reclaim deliberately doesn't
+# happen: a sparse edge side can leave its remainder idle rather than buy a
+# second fitting pass.
 ENTITY_BUDGET_SHARE = 0.6
 
 
@@ -156,28 +158,59 @@ def _graph_path(db: Session, context: ToolContext, args: Dict[str, Any]) -> Tool
                 }
             )
         )
-    steps: List[Dict[str, Any]] = [
-        {
-            "from": step.from_name,
-            "relation": step.relation,
-            "to": step.to_name,
-            "weight": step.weight,
-            "confidence": round(step.confidence, 2),
-            "source_ids": step.source_ids[:MAX_PROVENANCE_PER_STEP],
-            "chunk_ids": step.chunk_ids[:MAX_PROVENANCE_PER_STEP],
-            "memory_ids": step.memory_ids[:MAX_PROVENANCE_PER_STEP],
-        }
-        for step in path
-    ]
+    def _step_items(with_provenance: bool) -> List[str]:
+        return [
+            json.dumps(
+                {
+                    "from": step.from_name,
+                    "relation": step.relation,
+                    "to": step.to_name,
+                    "weight": step.weight,
+                    "confidence": round(step.confidence, 2),
+                    "source_ids": (
+                        step.source_ids[:MAX_PROVENANCE_PER_STEP]
+                        if with_provenance
+                        else []
+                    ),
+                    "chunk_ids": (
+                        step.chunk_ids[:MAX_PROVENANCE_PER_STEP]
+                        if with_provenance
+                        else []
+                    ),
+                    "memory_ids": (
+                        step.memory_ids[:MAX_PROVENANCE_PER_STEP]
+                        if with_provenance
+                        else []
+                    ),
+                }
+            )
+            for step in path
+        ]
+
+    # At schema bounds (6 hops of long — or ensure_ascii-inflated — names, 9
+    # provenance ids a step) the full payload outgrows the transport clip, so
+    # it is refitted like the other tools': provenance is the bulk and sheds
+    # first, the chain's own steps only after that, and `truncated` owns up to
+    # either loss. `hops` keeps naming the real path length throughout.
+    envelope: Dict[str, Any] = {
+        "from": start.entity.name,
+        "to": goal.entity.name,
+        "found": True,
+        "hops": len(path),
+        "truncated": False,
+        "path": [],
+    }
+    budget = MAX_RESULT_CHARS - len(json.dumps(envelope))
+    items = _step_items(with_provenance=True)
+    kept, _ = _fit_within(items, budget)
+    shed_provenance = kept < len(items)
+    if shed_provenance:
+        items = _step_items(with_provenance=False)
+        kept, _ = _fit_within(items, budget)
+    envelope["truncated"] = shed_provenance or kept < len(items)
     return ToolResult(
         content=json.dumps(
-            {
-                "from": start.entity.name,
-                "to": goal.entity.name,
-                "found": True,
-                "hops": len(steps),
-                "path": steps,
-            }
+            {**envelope, "path": [json.loads(item) for item in items[:kept]]}
         )
     )
 

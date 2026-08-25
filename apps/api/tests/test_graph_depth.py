@@ -1328,3 +1328,34 @@ def test_neighbors_refit_to_the_clip_and_still_parse(workspace, db):
     payload = json.loads(result.bounded_content())
     assert payload["truncated"] is True
     assert payload["neighbors"], "the refit keeps a payload, not an empty shell"
+
+
+def test_path_refits_to_the_clip_shedding_provenance_before_steps(workspace, db):
+    """Six hops of long names — non-ASCII ones inflate ~6x under ensure_ascii —
+    with three provenance ids a step outgrow the clip. The chain survives whole
+    (provenance sheds first) and the payload owns up with truncated."""
+    from app.services.llm_tools import MAX_RESULT_CHARS
+
+    workspace_id, user_id = workspace
+    names = [f"知識グラフの節点 {i} " * 8 for i in range(7)]
+    entities = {name: _entity(db, workspace_id, name) for name in names}
+    for left, right in zip(names, names[1:], strict=False):
+        edge = _edge(db, workspace_id, entities[left], entities[right])
+        edge.source_ids_json = json.dumps([uuid.uuid4().hex for _ in range(3)])
+        edge.chunk_ids_json = json.dumps([uuid.uuid4().hex for _ in range(3)])
+    db.commit()
+
+    spec = registry_tools(db, _context(workspace_id, user_id))["graph_path"]
+    result = spec.executor(
+        db,
+        _context(workspace_id, user_id),
+        {"from_entity": names[0], "to_entity": names[-1], "max_hops": 6},
+    )
+    assert len(result.content) <= MAX_RESULT_CHARS
+    payload = json.loads(result.bounded_content())
+    assert payload["found"] is True
+    assert payload["truncated"] is True
+    assert payload["hops"] == 6, "hops still names the real path length"
+    assert payload["path"], "the refit keeps a payload, not an empty shell"
+    # The shed is provenance-first: surviving steps carry the chain itself.
+    assert all(step["from"] and step["to"] for step in payload["path"])
