@@ -18,8 +18,13 @@ cases, unit tests, and its own commit.
       by_agent axis; hourly spend watch on the tick claiming via the new
       shared sweep_claims table — reused by F13; anomalies are their own
       Inbox list + badge term, resolved via the shared notification route)
-- [ ] 8. Mail service abstraction (console/dev fallback, SMTP config) — infra
+- [x] 8. Mail service abstraction (console/dev fallback, SMTP config) — infra
       for 9/11/12
+      (HTML support: OutboundEmail.html '' -unset; SMTP sender upgrades to
+      multipart/alternative, console sender stays text-only; pure inline-CSS
+      helpers services/mail_render.py render_table/render_link_button with
+      html.escape on every interpolation — consumed by F10/F13; config
+      guards untouched; tests in test_mail_render.py)
 - [ ] 9. Share links: revocable read-only public URLs (dashboard/document/
       artifact)
 - [ ] 10. Dashboard subscriptions: scheduled snapshot delivery

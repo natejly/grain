@@ -49,6 +49,11 @@ class OutboundEmail:
     to: str
     subject: str
     body: str
+    # Optional HTML alternative. '' means plain-text only (the string-for-unset
+    # convention). When present, the SMTP sender builds multipart/alternative
+    # with `body` as the text part, so a client that cannot render HTML still
+    # gets the full content — every HTML mail must carry a complete text body.
+    html: str = ""
 
 
 class EmailSender(Protocol):
@@ -72,6 +77,8 @@ class ConsoleEmailSender:
                 message.subject,
             )
             return
+        # Deliberately the text part only: the HTML alternative is markup noise
+        # in a terminal, and the text body must carry the full content anyway.
         logger.info("email to %s: %s\n%s", message.to, message.subject, message.body)
         print(f"\n--- email to {message.to} ---\n{message.subject}\n{message.body}\n")
 
@@ -87,6 +94,11 @@ class SmtpEmailSender:
         mime["To"] = message.to
         mime["Subject"] = message.subject
         mime.set_content(message.body)
+        if message.html:
+            # Upgrades the message to multipart/alternative; the plain body
+            # stays first so text-only clients read it, and HTML clients
+            # prefer the last (richest) alternative per RFC 2046.
+            mime.add_alternative(message.html, subtype="html")
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
             if settings.smtp_starttls:
                 smtp.starttls()
