@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlalchemy import func, select
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
@@ -250,7 +251,7 @@ def test_a_note_during_the_final_model_call_still_lands_this_turn(client):
     silently dropped. The loop absorbs it at finish and answers it in the
     same turn rather than filing it away for a turn nobody started."""
     run_id = _make_run(client)
-    prompts_seen: list[int] = []
+    prompts_seen: list[list[Any]] = []
     db = SessionLocal()
     try:
         run = db.get(Run, run_id)
@@ -258,7 +259,7 @@ def test_a_note_during_the_final_model_call_still_lands_this_turn(client):
         workspace_id = run.workspace_id
 
         def model_step(input_items, tools, instructions):
-            prompts_seen.append(len(input_items))
+            prompts_seen.append(list(input_items))
             if len(prompts_seen) == 1:
                 # The steer lands WHILE this call streams: after the loop's
                 # absorb checkpoint, before the response completes.
@@ -289,6 +290,17 @@ def test_a_note_during_the_final_model_call_still_lands_this_turn(client):
     assert len(prompts_seen) == 2
     assert "The rollout is Monday." in result.answer
     assert "The owner is the platform team." in result.answer
+    # And in the right chronology: the second call reads the first answer,
+    # THEN the note — shown the other way round, the model could conclude
+    # the answer had already addressed it.
+    rendered = [json.dumps(item, default=str) for item in prompts_seen[1]]
+    answer_at = next(
+        index for index, item in enumerate(rendered) if "The rollout is Monday." in item
+    )
+    note_at = next(
+        index for index, item in enumerate(rendered) if "Also name the owner." in item
+    )
+    assert answer_at < note_at
 
 
 def test_a_truncated_streams_function_calls_are_dropped_not_executed(client):
@@ -375,6 +387,17 @@ def test_append_event_survives_losing_the_sequence_race(client):
             .all()
         )
         assert [row.sequence for row in rows] == [event.sequence]
+        # The retry landed AFTER the competitor, and the competitor's row
+        # survived — a savepoint that wrongly rolled back the outer
+        # transaction would have taken it too.
+        competitor = db.scalar(
+            select(func.max(RunEvent.sequence)).where(
+                RunEvent.run_id == run_id,
+                RunEvent.event_type == "message.delta",
+            )
+        )
+        assert competitor is not None
+        assert event.sequence > competitor
     finally:
         db.close()
 
