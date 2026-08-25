@@ -563,3 +563,23 @@ the per-turn model/effort controls end to end:
 - [x] 5. Tests: thinking lane events land as thinking.delta with the
       answer untouched; the toggle rides the send onto the run row; both
       harness-forwarding spies extended to pin the new argument.
+
+# The "flaky" e2e trio was two real product bugs (fixed 2026-08-25)
+
+palette:56 + workflows:135/281 failed full runs but passed alone. Neither
+was timing:
+
+- [x] Thread rail: the open row renders four trailing actions (rename +
+      share + split + delete) but `.thread` declared three `auto` columns,
+      so the delete button grid-wrapped onto an implicit row OVER the next
+      thread — unclickable whenever any thread sat below (i.e. exactly in
+      crowded full runs). Fifth column added; thread-rail-css.test.ts pins
+      column-count == action-count so the next added button can't repeat it.
+- [x] Workflows list: a settled run triggers a background `load()`; a
+      delete landing while that fetch is in flight was resurrected by the
+      pre-delete snapshot resolving last, with the poll already torn down
+      so nothing ever corrected it. `listEpoch` ref now invalidates
+      in-flight snapshots on delete/save/status-change, and delete
+      reconverges the waiting strip from fresh truth.
+- [x] Verify: full playwright suite 72 passed / 0 failed (first fully
+      green run; 3.0m, down from 7.4m of timeout stalls).

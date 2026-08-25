@@ -697,10 +697,13 @@ select:focus-visible {
   width: 100%;
   height: 34px;
   display: grid;
-  /* Three trailing action columns: share/unshare (open thread only), open in a
-     new pane, and delete. The share column is `auto`, so it collapses to zero
-     width on every row that does not render the toggle. */
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  /* Four trailing action columns: rename and share/unshare (open thread only),
+     open in a new pane, and delete. The `auto` columns collapse to zero width
+     on rows that do not render them. All four must be declared: a fifth grid
+     item with only three trailing columns wraps onto an implicit row BELOW the
+     34px-high row, overlaying the next thread — which made the open thread's
+     delete button unclickable whenever any thread sat under it. */
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;

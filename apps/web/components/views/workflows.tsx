@@ -742,9 +742,21 @@ export function WorkflowsView({
     }>
   >([]);
 
+  /**
+   * Invalidates in-flight `load()` snapshots. A settled run triggers a
+   * background reload; if a delete (or save) lands while that fetch is in the
+   * air, the pre-mutation snapshot resolves last and would silently resurrect
+   * the deleted row — with the run's poll already torn down, nothing ever
+   * corrected it. Any authoritative local mutation bumps this; a snapshot
+   * fetched under an older value is discarded instead of applied.
+   */
+  const listEpoch = useRef(0);
+
   const load = useCallback(async () => {
+    const epoch = listEpoch.current;
     try {
       const [rows, feed] = await Promise.all([api.listWorkflows(), api.getInbox()]);
+      if (epoch !== listEpoch.current) return;
       setWorkflows(rows);
       const parked = [
         ...feed.approvals
@@ -920,6 +932,7 @@ export function WorkflowsView({
   }
 
   async function saved(workflow: Workflow) {
+    listEpoch.current += 1;
     setWorkflows((rows) => [workflow, ...rows.filter((row) => row.id !== workflow.id)]);
     setRunsByWorkflow((current) => ({ ...current, [workflow.id]: [] }));
     setComposing(false);
@@ -932,6 +945,7 @@ export function WorkflowsView({
     setBusy(true);
     try {
       const updated = await api.updateWorkflow(workflow.id, { status });
+      listEpoch.current += 1;
       setWorkflows((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
     } catch (caught) {
       setError(describeError(caught, "Could not change that workflow"));
@@ -969,6 +983,7 @@ export function WorkflowsView({
     if (!window.confirm(`Delete “${workflow.name}” and its run history?`)) return;
     try {
       await api.deleteWorkflow(workflow.id);
+      listEpoch.current += 1;
       setWorkflows((rows) => rows.filter((row) => row.id !== workflow.id));
       setRunsByWorkflow((current) => {
         const next = { ...current };
@@ -979,6 +994,9 @@ export function WorkflowsView({
         setActiveId("");
         setRunDetail(null);
       }
+      // Reconverge the waiting strip from fresh truth: any snapshot the bump
+      // above discarded also carried feed rows this delete may have retired.
+      void load().catch(() => undefined);
     } catch (caught) {
       setError(describeError(caught, "Could not delete that workflow"));
     }
