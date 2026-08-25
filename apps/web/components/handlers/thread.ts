@@ -319,7 +319,15 @@ export function createThreadHandlers({
         controls && { model: controls.model, effort: controls.effort, fast: controls.fast },
       );
       if (activeConversationRef.current === conversationId) {
-        setMessages((items) => [...items.slice(0, pivotIndex), response.message]);
+        setMessages((items) => {
+          // Re-found by id INSIDE the setter: an aside recorded during the
+          // round trip shifts every index after it, and a slice at the stale
+          // position would take an innocent paragraph with it. The captured
+          // index is only the fallback for a transcript refetch that dropped
+          // the pivot row between capture and resolve.
+          const at = items.findIndex((item) => item.id === messageId);
+          return [...items.slice(0, at >= 0 ? at : pivotIndex), response.message];
+        });
       }
       if (response.run) void followRun(response.run.id, conversationId);
       return true;

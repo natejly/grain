@@ -1162,13 +1162,22 @@ export function ChatView({
   const [approvalCaption, setApprovalCaption] = useState<
     "unseen" | "showing" | "done"
   >(() => (hasSeen("approval-loop") ? "done" : "unseen"));
+  const [editSaving, setEditSaving] = useState(false);
   const submitEdit = async (messageId: string) => {
     // The button is aria-disabled rather than disabled while a run streams —
-    // focus must survive the wait — so the guard lives here too.
-    if (!editMessage || !editDraft.trim() || activeRun) return;
-    const accepted = await editMessage(messageId, editDraft.trim());
-    // Success closes the editor; failure keeps the rewritten words on screen.
-    if (accepted) setEditingId(null);
+    // focus must survive the wait — so the guard lives here too. `editSaving`
+    // is the in-flight half: `activeRun` only becomes true AFTER the edit's
+    // round trip (followRun sets it), so without this a held Enter's key
+    // repeat would fire concurrent truncations at the same pivot.
+    if (!editMessage || !editDraft.trim() || activeRun || editSaving) return;
+    setEditSaving(true);
+    try {
+      const accepted = await editMessage(messageId, editDraft.trim());
+      // Success closes the editor; failure keeps the rewritten words on screen.
+      if (accepted) setEditingId(null);
+    } finally {
+      setEditSaving(false);
+    }
   };
   const slashQuery =
     skills && !skills.attached && draft.startsWith("/") ? draft.slice(1) : null;
@@ -1374,13 +1383,16 @@ export function ChatView({
                         >
                           Cancel
                         </button>
-                        {/* aria-disabled while a run streams (submitEdit
-                            refuses), so focus survives the wait; the empty
-                            draft is guarded there too. */}
+                        {/* aria-disabled while a run streams OR the edit's own
+                            round trip is in flight (submitEdit refuses both),
+                            so focus survives the wait; the empty draft is
+                            guarded there too. */}
                         <button
                           type="button"
                           className="primary-button"
-                          aria-disabled={!editDraft.trim() || Boolean(activeRun)}
+                          aria-disabled={
+                            !editDraft.trim() || Boolean(activeRun) || editSaving
+                          }
                           onClick={() => void submitEdit(message.id)}
                         >
                           Save &amp; re-run

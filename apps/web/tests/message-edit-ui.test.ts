@@ -96,6 +96,32 @@ describe("the message-edit pencil", () => {
     expect(screen.queryByRole("button", { name: /^Edit:/ })).toBeNull();
   });
 
+  it("refuses a second submit while the first is in flight", async () => {
+    // activeRun only becomes true AFTER the edit's round trip, so without an
+    // in-flight flag a held Enter's key repeat fires concurrent truncations
+    // at the same pivot.
+    let release: (value: boolean) => void = () => undefined;
+    const editMessage = vi.fn(
+      () => new Promise<boolean>((resolve) => (release = resolve)),
+    );
+    render(
+      createElement(ChatView, {
+        ...BASE,
+        messages: [message()],
+        editMessage,
+        viewerId: "user-1",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Edit:/ }));
+    const save = screen.getByRole("button", { name: "Save & re-run" });
+    fireEvent.click(save);
+    fireEvent.click(save);
+    fireEvent.click(save);
+    expect(editMessage).toHaveBeenCalledTimes(1);
+    release(true);
+    await Promise.resolve();
+  });
+
   it("keeps the editor open when the server refuses, so the words survive", async () => {
     const editMessage = vi.fn().mockResolvedValue(false);
     render(

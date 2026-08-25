@@ -131,6 +131,18 @@ Goal: complete Phases 3–6 of Foyer + loose ends, production grade.
       716 web unit tests ✓ next build ✓ — final full e2e run + commit + PR in
       flight per the user's ask
 
+Merge notes for other branches (the sessions that owned them have ended;
+this file is the surviving warning):
+- Alembic: this branch's chain is 0044→0045_conversation_defaults→
+  0046_model_usage_agent→0047_favorites (merged to main). Templates/comments
+  (worktree-feature-sweep) and marketplace (bg/marketplace-todo) each hang
+  their own 0045+ off 0044 — re-parent to 0048+ at their merges.
+- .thread rail grid: bg/marketplace-todo's 3067408 pins FOUR trailing columns
+  and a thread-rail-css test whose regex does not know thread-favorite; this
+  branch needs FIVE (the star). At merge take the 5-column union and add
+  favorite to their regex — tests/thread-rail-grid.test.ts on this side fails
+  loudly if the merge resolves the wrong way.
+
 ## Review — finish-the-todo run (2026-08-22 → 2026-08-23)
 
 Everything on the todo shipped, production grade: Phases 3–6 of Foyer complete

@@ -138,10 +138,22 @@ export function useFavorites(onError?: (message: string) => void): FavoritesApi 
 
   const reorder = (entries: FavoriteOrderEntry[]) =>
     enqueue(async () => {
+      // Entries were built from the rows the CLICK saw; by the time the queue
+      // reaches this task an interleaved unstar may have removed one, and the
+      // server 404s an order naming anything unpinned — losing the whole
+      // move. Re-filter against the list as it stands NOW (favoritesRef, the
+      // same execution-time read toggle uses) and re-ordinal the survivors.
+      const pinned = new Set(
+        favoritesRef.current.map((row) => favoriteId(row.kind, row.target_id)),
+      );
+      const kept = entries
+        .filter((entry) => pinned.has(favoriteId(entry.kind, entry.target_id)))
+        .map((entry, ordinal) => ({ ...entry, ordinal }));
+      if (kept.length === 0) return false;
       try {
         // The server echoes the re-resolved list back, and that answer is the
         // state — a row whose target vanished mid-drag drops out here too.
-        setFavorites(await api.saveFavoritesOrder(entries));
+        setFavorites(await api.saveFavoritesOrder(kept));
         return true;
       } catch (caught) {
         onError?.(describeError(caught, "Could not reorder favorites"));
