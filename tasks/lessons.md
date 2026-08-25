@@ -548,3 +548,16 @@
   smaller (fewer agents, medium effort, no verify fan-out) AND self-verify the
   highest-risk surfaces by hand in parallel; the lighter re-run then found the
   real NaN-500 the stall had hidden.
+- Size a tool's payload to ITS transport, not to a lookalike surface's limits.
+  graph_export copied GET /api/graph's row caps (200 entities/800 edges), but
+  tool content rides through bounded_content()'s 4000-char clip that the HTTP
+  route never meets — a full-size export was cut mid-JSON while its head-of-dict
+  `truncated: false` flags survived, lying to the client. Fit the serialized
+  payload to MAX_RESULT_CHARS before returning (drop items, set the flags), and
+  the regression test must round-trip through `bounded_content()` on a graph big
+  enough to overflow — my unit tests called the executor directly and my e2e
+  used a 3-entity graph, so both sailed past the clip. Caught by QA review.
+- A tenant-isolation suite with per-tool cases is a CHECKLIST: adding a tool
+  means adding its two-tenant case in the same commit, and a bulk-read tool
+  (one call = the whole map) needs it most, precisely because the walk-tool
+  cases next to it already existed and made the gap easy to miss.

@@ -611,6 +611,19 @@ def test_graph_tools_cannot_resolve_an_entity_only_the_other_tenant_has(
     assert "No graph entity" in path, path
 
 
+def test_graph_export_ships_only_the_callers_graph(
+    registry_a, tenant_a: Tenant, tenant_b: Tenant
+):
+    """Export is the one-call-bulk tool: a forgotten workspace filter here
+    hands over another tenant's whole entity map at once."""
+    replant_graph(tenant_a)
+    replant_graph(tenant_b)
+    output = run_tool(registry_a, "graph_export", {})
+    assert "Alpha Neighbour" in output
+    assert "Bravo Neighbour" not in output
+    assert_tool_leaked_nothing(output, tenant_b, "graph_export")
+
+
 def test_an_edge_pointing_out_of_the_workspace_resolves_no_foreign_name(
     registry_a, tenant_a: Tenant, tenant_b: Tenant
 ):

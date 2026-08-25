@@ -1280,3 +1280,51 @@ def test_export_truncates_to_the_limit_and_says_so(workspace, db):
         _export(db, workspace_id, user_id, {"limit": "wide"})["entities_truncated"]
         is False
     )
+
+
+def test_export_fits_the_transport_clip_and_still_parses(workspace, db):
+    """Every delivery path clips content to MAX_RESULT_CHARS. A full-size
+    export must arrive under that budget as valid JSON with honest flags —
+    not cut mid-array with `truncated: false` surviving at the head."""
+    from app.services.llm_tools import MAX_RESULT_CHARS
+
+    workspace_id, user_id = workspace
+    _chain(
+        db,
+        workspace_id,
+        [f"Entity {i:03d} With A Deliberately Long Name" for i in range(120)],
+    )
+
+    spec = registry_tools(db, _context(workspace_id, user_id))["graph_export"]
+    result = spec.executor(db, _context(workspace_id, user_id), {"limit": 200})
+    assert len(result.content) <= MAX_RESULT_CHARS
+    # The clip is a no-op, so what the MCP client receives parses.
+    snapshot = json.loads(result.bounded_content())
+    assert snapshot["entities_truncated"] is True
+    assert snapshot["edges_truncated"] is True
+    assert snapshot["entities"], "the refit keeps a payload, not an empty shell"
+    kept = {entity["name"] for entity in snapshot["entities"]}
+    assert all(e["from"] in kept and e["to"] in kept for e in snapshot["edges"])
+
+
+def test_neighbors_refit_to_the_clip_and_still_parse(workspace, db):
+    """The row cap (50) times a long-named neighbor outgrows the clip too."""
+    from app.services.llm_tools import MAX_RESULT_CHARS
+
+    workspace_id, user_id = workspace
+    hub = _entity(db, workspace_id, "Hub")
+    for i in range(60):
+        spoke = _entity(
+            db, workspace_id, f"Spoke {i:03d} With A Deliberately Long Name Attached"
+        )
+        _edge(db, workspace_id, hub, spoke)
+    db.commit()
+
+    spec = registry_tools(db, _context(workspace_id, user_id))["graph_neighbors"]
+    result = spec.executor(
+        db, _context(workspace_id, user_id), {"entity": "Hub", "limit": 50}
+    )
+    assert len(result.content) <= MAX_RESULT_CHARS
+    payload = json.loads(result.bounded_content())
+    assert payload["truncated"] is True
+    assert payload["neighbors"], "the refit keeps a payload, not an empty shell"

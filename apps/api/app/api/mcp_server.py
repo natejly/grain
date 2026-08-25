@@ -24,6 +24,11 @@ The safety posture is the registry's own, applied twice:
   definition of unattended, so a standing chat-scope allow does not authorise
   it, an org ceiling binds it, and anything that resolves to ask or deny is
   refused with a readable error — there is no approval card to park on here.
+
+Tokens are workspace-wide, not scoped per tool: any minted token reaches every
+offered tool, including one-call-bulk reads like ``graph_export``. The lever
+for narrowing a workspace's exposure is a workflow-scope ``ToolPolicy`` deny
+row for the tool in question — that is what the policy check above enforces.
 """
 from __future__ import annotations
 

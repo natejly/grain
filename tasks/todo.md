@@ -515,3 +515,22 @@ password-timing flake (a constant-time-ratio assertion, load-sensitive, passes
       channel. Updated test_walk_tools_are_read_only's exact-set assertion.
 - [x] Gates: ruff ✓ mypy ✓ full pytest (worktree PYTHONPATH override —
       the repo venv's editable install otherwise imports the main checkout).
+
+### Post-review fixes (QA session adversarial review, 2026-08-25)
+
+- [x] HIGH: export payload outgrew bounded_content()'s 4000-char clip (caps
+      were sized to GET /api/graph's HTTP ceiling, which never meets the
+      clip) — cut mid-JSON with head-of-dict truncated:false surviving.
+      Fixed with a budget refit before serializing (`_fit_within`; entities
+      get first claim, edges the remainder, flags recomputed, orphaned
+      edges dropped with their endpoints). Same refit applied to
+      graph_neighbors, whose 50-row cap × long names had the same latent
+      overflow. Regression tests round-trip oversized graphs through
+      `bounded_content()` and json.loads the result.
+- [x] MEDIUM: added the missing two-tenant graph_export case to
+      test_tenant_isolation.py (bulk export is the worst tool to leave out
+      of that checklist).
+- [x] LOW: documented the one-call-bulk exposure of workspace-wide tokens
+      and the workflow-scope ToolPolicy deny lever in mcp_server.py's
+      docstring; edge ordering got an id tiebreak so equal-weight exports
+      are stable across calls.
