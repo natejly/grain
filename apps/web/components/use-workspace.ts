@@ -441,12 +441,17 @@ export function useWorkspace() {
    * is not what "split" is for. Switches to Chat so the new pane is visible even
    * when the action is fired from the rail on another view.
    */
-  const openInNewPane = useCallback((conversationId: string) => {
+  // Returns whether a pane actually opened: with the "threads open in a
+  // split" preference this is the DEFAULT open gesture, and a refusal that
+  // only returned undefined left the caller believing navigation happened —
+  // palette closed, sidebar shut, nothing on screen changed. A false hands
+  // the caller its fallback (open as the primary instead).
+  const openInNewPane = useCallback((conversationId: string): boolean => {
     // The early returns gate the SIDE EFFECTS — a no-op open must not yank the
     // view to Chat or shut the rail. `addPane` re-checks the same guards so it
     // stays a total pure function, but the list decision and the view switch
     // are two separate concerns.
-    if (conversationId === activeConversationRef.current) return;
+    if (conversationId === activeConversationRef.current) return false;
     // At the cap the refusal is SAID, not silent: a button that does nothing
     // reads as broken. The neutral toast, because nothing went wrong. Counted
     // over panes whose conversation still exists — ghost panes from deleted
@@ -463,7 +468,7 @@ export function useWorkspace() {
         text: `Split is full — close a pane first (${MAX_EXTRA_PANES} extra panes max)`,
         at: Date.now(),
       });
-      return;
+      return false;
     }
     setExtraPanes((panes) => {
       // The add must count the same list the cap check counted: `addPane`
@@ -477,6 +482,7 @@ export function useWorkspace() {
     });
     setView("chat");
     setSidebarOpen(false);
+    return true;
   }, []);
 
   const closePane = useCallback((paneId: string) => {
@@ -918,11 +924,25 @@ export function useWorkspace() {
    * Not a useCallback: `selectConversation` is rebuilt every render anyway.
    */
   function applyLayout(panes: ChatPane[], primaryConversationId: string | null) {
-    setExtraPanes(panes.slice(0, MAX_EXTRA_PANES));
+    // A saved layout can outlive its threads. Panes and the primary are both
+    // validated against the conversations the shell knows (when it knows any):
+    // recalling a layout whose primary was deleted must not strand the shell
+    // on a dead active id with a 404 toast and a composer aimed at nothing —
+    // the panes still land, and whatever thread is open stays open.
+    const known = new Set(conversationsRef.current.map((item) => item.id));
+    const live =
+      known.size > 0
+        ? panes.filter((pane) => known.has(pane.conversationId))
+        : panes;
+    setExtraPanes(live.slice(0, MAX_EXTRA_PANES));
     setFocusedPane(null);
     setView("chat");
     setSidebarOpen(false);
-    if (primaryConversationId) void chatHandlers.selectConversation(primaryConversationId);
+    const primary =
+      primaryConversationId && (known.size === 0 || known.has(primaryConversationId))
+        ? primaryConversationId
+        : null;
+    if (primary) void chatHandlers.selectConversation(primary);
   }
 
   const sourceHandlers = createSourceHandlers({

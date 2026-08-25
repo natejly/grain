@@ -39,9 +39,11 @@ export type CommandPaletteProps = {
   /**
    * Open a thread beside the primary instead of as it: ⌘Enter or ⌘click on a
    * thread row. Optional so the palette stands without the split; the rows
-   * only advertise the modifier when it is wired.
+   * only advertise the modifier when it is wired. Returns whether a pane
+   * actually opened — a refusal (already the primary, split full) makes the
+   * palette fall back to the plain open, so the gesture always navigates.
    */
-  openThreadInSplit?: (conversationId: string) => void;
+  openThreadInSplit?: (conversationId: string) => boolean;
   create: (action: CreateAction, name: string, kind: DocumentKind) => Promise<void>;
   /**
    * Deep search: what was SAID, not only what things are named. Optional so
@@ -180,8 +182,13 @@ export function CommandPalette({
       // "split" is already the default. Falls back to the plain open when no
       // split is wired, so neither gesture ever no-ops.
       const inSplit = split !== (extras?.threadOpen === "split");
-      if (inSplit && openThreadInSplit) openThreadInSplit(row.conversationId);
-      else openThread(row.conversationId);
+      // A refused split (already the primary, or the split is full) falls
+      // back to the plain open: the gesture promised NAVIGATION, and a toast
+      // with the palette closing over an unchanged screen keeps neither half.
+      const opened = inSplit && openThreadInSplit
+        ? openThreadInSplit(row.conversationId)
+        : false;
+      if (!opened) openThread(row.conversationId);
       close();
       return;
     }
@@ -189,8 +196,12 @@ export function CommandPalette({
       // ⌘Enter / ⌘click forgets the layout instead of applying it — the same
       // modifier gesture ⌘⌫ offers the keyboard, so a pointer user is not
       // locked out of deletion. The palette stays open so the list is seen
-      // to shrink; a plain activation applies and closes.
-      if (split && deleteLayout) {
+      // to shrink; a plain activation applies and closes. A modified
+      // activation NEVER falls through to apply: in a host without a
+      // deleteLayout handler, replacing the user's split when they asked to
+      // delete a row would be the worst possible reading of the gesture.
+      if (split) {
+        if (!deleteLayout) return;
         deleteLayout(row.name);
         // The list is about to lose a row and the palette stays open: clamp
         // the focus like the ⌘⌫ path does, or deleting the last row leaves
@@ -346,7 +357,7 @@ export function CommandPalette({
                           // always the OTHER way a thread can open.
                           `${row.hint} · ⌘⏎ ${extras?.threadOpen === "split" ? "in place" : "split"}`
                         : row.kind === "layout" && deleteLayout
-                          ? `${row.hint} · ⌘⌫ deletes`
+                          ? `${row.hint} · ⌘⏎ or ⌘⌫ deletes`
                           : row.hint}
                     </span>
                     {row.kind === "view" && row.shortcut && (

@@ -49,7 +49,9 @@ export function parseStoredLayouts(raw: string | null): SavedLayouts {
     for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
       // JSON.parse can hand back an OWN "__proto__" property; assigning it
       // below would rewrite this store's prototype instead of adding a key.
-      if (!name.trim() || name === "__proto__") continue;
+      // "constructor" rides along for the same class of surprise, and both
+      // are refused by upsertLayout so a name cannot save and then vanish.
+      if (!name.trim() || name === "__proto__" || name === "constructor") continue;
       if (!value || typeof value !== "object" || Array.isArray(value)) continue;
       const entry = value as Record<string, unknown>;
       const panes = sanitizePanes(entry.panes);
@@ -84,7 +86,13 @@ export function upsertLayout(
   layout: SavedLayout,
 ): SavedLayouts {
   const trimmed = name.trim();
-  if (!trimmed) return layouts;
+  // The same names the parser refuses on the way back in: accepting one here
+  // stores a layout the next load silently drops — a "Saved" toast over a
+  // vanishing act. Returning the input's identity lets the caller detect the
+  // refusal and say so instead.
+  if (!trimmed || trimmed === "__proto__" || trimmed === "constructor") {
+    return layouts;
+  }
   return { ...layouts, [trimmed]: layout };
 }
 

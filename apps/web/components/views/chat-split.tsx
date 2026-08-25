@@ -52,6 +52,15 @@ export type ChatSplitProps = {
    * NOT change, so an applied layout's ratios still land.
    */
   resetKey?: number;
+  /**
+   * The ratios an applied layout wants for the count it restores, delivered
+   * WITH the `resetKey` bump rather than only through localStorage: in
+   * private mode the storage write is silently swallowed, and a re-read
+   * would land on stale ratios while the shell believed the layout applied.
+   * Consulted only on a forced re-read, and only when the length matches
+   * the rendered column count.
+   */
+  forcedSizes?: number[] | null;
 };
 
 const MIN_PERCENT = 15;
@@ -103,6 +112,7 @@ export function ChatSplit({
   onApprovalChanged,
   pinning,
   resetKey,
+  forcedSizes,
 }: ChatSplitProps) {
   // Only panes whose conversation still exists. A conversation deleted between
   // sessions leaves a persisted pane pointing at nothing; dropping it here keeps
@@ -136,12 +146,22 @@ export function ChatSplit({
   // which the length check alone would never notice; the ref keeps the mount
   // run on the identity-preserving path.
   const appliedReset = useRef(resetKey);
+  const forcedSizesRef = useRef(forcedSizes);
+  useEffect(() => {
+    forcedSizesRef.current = forcedSizes;
+  }, [forcedSizes]);
   useEffect(() => {
     const forced = appliedReset.current !== resetKey;
     appliedReset.current = resetKey;
-    setSizes((current) =>
-      !forced && current.length === columnCount ? current : readStoredSizes(columnCount),
-    );
+    setSizes((current) => {
+      if (!forced && current.length === columnCount) return current;
+      // A forced re-read prefers the sizes the apply handed over directly —
+      // the storage copy is best-effort and vanishes in private mode.
+      const applied = forced ? forcedSizesRef.current : null;
+      return applied && applied.length === columnCount
+        ? applied
+        : readStoredSizes(columnCount);
+    });
   }, [columnCount, resetKey]);
 
   /** Remember `next` as this column count's ratios — on a drag end or a nudge,

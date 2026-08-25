@@ -1162,6 +1162,10 @@ export function ChatView({
   const [approvalCaption, setApprovalCaption] = useState<
     "unseen" | "showing" | "done"
   >(() => (hasSeen("approval-loop") ? "done" : "unseen"));
+  // The one call the caption was shown on. Pinned, not re-derived: without it
+  // the caption migrated to the NEXT proposed call each time one was decided,
+  // turning "shown once, ever" into a tour of every card in the turn.
+  const [captionCallId, setCaptionCallId] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const submitEdit = async (messageId: string) => {
     // The button is aria-disabled rather than disabled while a run streams —
@@ -1254,17 +1258,31 @@ export function ChatView({
       liveCalls.find((call) => call.status === "proposed")?.id ??
       "")
     : "";
+  // Whether the pinned call is still asking; deciding it retires the caption
+  // for good rather than letting it hop to the next proposed card.
+  const captionStillProposed = agentCalls.some(
+    (call) => call.id === captionCallId && call.status === "proposed",
+  );
   useEffect(() => {
     if (approvalCaption === "unseen" && firstProposedId) {
+      // Re-check the persisted mark at show time, not only at mount: with a
+      // split open, two ChatViews seed "unseen" in the same session, and the
+      // second to reach a proposal must find the first's mark and stand down
+      // rather than teach the lesson twice.
+      if (hasSeen("approval-loop")) {
+        setApprovalCaption("done");
+        return;
+      }
       // Only after the caption has actually rendered — a mark written on
       // mount would spend the one showing on a thread where nothing ever
       // asked for approval.
       markSeen("approval-loop");
+      setCaptionCallId(firstProposedId);
       setApprovalCaption("showing");
-    } else if (approvalCaption === "showing" && !firstProposedId) {
+    } else if (approvalCaption === "showing" && !captionStillProposed) {
       setApprovalCaption("done");
     }
-  }, [approvalCaption, firstProposedId]);
+  }, [approvalCaption, firstProposedId, captionStillProposed]);
 
   return (
     <section className="chat-layout">
@@ -1304,7 +1322,9 @@ export function ChatView({
                         todos={call.id === showChecklist ? todos : undefined}
                         pinning={pinning}
                         showApprovalCaption={
-                          approvalCaption !== "done" && call.id === firstProposedId
+                          approvalCaption === "showing"
+                            ? call.id === captionCallId
+                            : approvalCaption === "unseen" && call.id === firstProposedId
                         }
                       />
                     ));
@@ -1437,7 +1457,9 @@ export function ChatView({
                 todos={call.id === checklistCallId(liveCalls) ? todos : undefined}
                 pinning={pinning}
                 showApprovalCaption={
-                  approvalCaption !== "done" && call.id === firstProposedId
+                  approvalCaption === "showing"
+                    ? call.id === captionCallId
+                    : approvalCaption === "unseen" && call.id === firstProposedId
                 }
               />
             ))}

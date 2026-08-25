@@ -79,9 +79,10 @@ export function buildPaletteRows(
           kind: "layout" as const,
           name,
           label: `Layout: ${name}`,
-          // The hint carries the delete gesture because there is no other
-          // chrome to carry it: ⌘⏎ (or ⌘-click, or ⌘⌫ while focused) forgets.
-          hint: "Layout · ⌘⏎ deletes",
+          // The delete gestures are appended by the RENDERER, which knows
+          // whether a deleteLayout handler is actually wired — a hint baked
+          // here would advertise a gesture some hosts cannot honor.
+          hint: "Layout",
         })),
         { kind: "save-layout" as const, label: "Save layout as…", hint: "Layout" },
       ]
@@ -133,7 +134,12 @@ export function matchPalette(
 ): PaletteRow[] {
   const needle = query.trim().toLowerCase();
   if (!needle) {
-    return rows.filter((row) => row.kind !== "thread").slice(0, limit);
+    // Everything navigable and doable, UNSLICED: the empty palette's question
+    // is "what can I even do", and a cap of 12 was silently eating every row
+    // after the ~22 views — creates, layouts and the preference toggles were
+    // undiscoverable from the very surface that exists to surface them. The
+    // list scrolls; a hidden capability does not.
+    return rows.filter((row) => row.kind !== "thread");
   }
   const tiers: PaletteRow[][] = [[], [], []];
   for (const row of rows) {

@@ -317,8 +317,9 @@ export function Workspace() {
     if (kind === "conversation") {
       // The thread-open preference governs here exactly as it does the
       // palette's Enter: "split" means beside the primary, not instead of it.
-      // openInNewPane already answers the already-primary case with a no-op.
-      if (threadOpen === "split") return openInNewPane(targetId);
+      // A refused pane (already the primary, split full) falls back to the
+      // plain open — a favorite click must always land on the thread.
+      if (threadOpen === "split" && openInNewPane(targetId)) return;
       return void selectConversation(targetId);
     }
     if (kind === "document") {
@@ -403,8 +404,11 @@ export function Workspace() {
   const layoutsKey = LAYOUTS_KEY_PREFIX + workspaceId;
   const [layouts, setLayouts] = useState<SavedLayouts>(() => readStoredLayouts(layoutsKey));
   // Bumped after an apply writes ratios on the split's behalf, so ChatSplit
-  // re-reads them even when the column count did not change.
+  // re-reads them even when the column count did not change. The sizes ride
+  // beside it as a prop too: the storage write is best-effort (private mode
+  // swallows it), and the apply must not depend on it having landed.
   const [splitResetKey, setSplitResetKey] = useState(0);
+  const [appliedSizes, setAppliedSizes] = useState<number[] | null>(null);
 
   function persistLayouts(next: SavedLayouts) {
     setLayouts(next);
@@ -414,13 +418,27 @@ export function Workspace() {
   /** Capture the split as it stands: primary thread, extra panes, and the
    *  ratios the current column count last committed. */
   function saveLayoutAs(name: string) {
-    persistLayouts(
-      upsertLayout(layouts, name, {
-        primaryConversationId: activeConversation,
-        panes: extraPanes,
-        sizes: readStoredSizes(1 + extraPanes.length),
-      }),
-    );
+    // As RENDERED, not as stored: ghost panes (deleted conversations the
+    // prune has not caught) are filtered out of what ChatSplit draws, so a
+    // snapshot of the raw list would embalm dead panes and read sizes for a
+    // column count the user never saw.
+    const known = new Set(conversations.map((item) => item.id));
+    const live =
+      known.size > 0
+        ? extraPanes.filter((pane) => known.has(pane.conversationId))
+        : extraPanes;
+    const next = upsertLayout(layouts, name, {
+      primaryConversationId: activeConversation,
+      panes: live,
+      sizes: readStoredSizes(1 + live.length),
+    });
+    if (next === layouts) {
+      // upsertLayout refused the name (blank, or one the parser would drop
+      // on the next load) — saying "saved" here would be a vanishing act.
+      setNotice({ text: "That name can’t be used for a layout", at: Date.now() });
+      return;
+    }
+    persistLayouts(next);
     setNotice({ text: `Saved layout “${name.trim()}”`, at: Date.now() });
   }
 
@@ -444,6 +462,7 @@ export function Workspace() {
       }
     }
     applyLayout(layout.panes, layout.primaryConversationId);
+    setAppliedSizes(layout.sizes.length > 0 ? layout.sizes : null);
     setSplitResetKey((value) => value + 1);
   }
 
@@ -1210,7 +1229,10 @@ export function Workspace() {
             panes={extraPanes}
             // Bumped when a recalled layout writes ratios for an UNCHANGED
             // column count — the one case the count-keyed re-read cannot see.
+            // The sizes ride as a prop so a private-mode storage failure
+            // cannot silently drop them.
             resetKey={splitResetKey}
+            forcedSizes={appliedSizes}
             conversations={conversations}
             bootstrap={bootstrap}
             sources={sources}
@@ -1520,9 +1542,15 @@ export function Workspace() {
         {view === "agents" && (
           <AgentsView
             setError={setError}
-            // "Save & try" seeds the thread's default agent itself; landing on
-            // the chat view only needs the id.
-            openConversation={(id) => void selectConversation(id)}
+            // "Save & try" creates its thread through the raw client, which
+            // the shell's conversations list never hears about — so the list
+            // is re-read alongside the select, or the rail shows no row, the
+            // title falls back to "New conversation", and the approval chip
+            // reads the ask_writes default instead of the thread's own mode.
+            openConversation={(id) => {
+              void refreshConversations().catch(() => undefined);
+              void selectConversation(id);
+            }}
             favorites={favorites}
           />
         )}

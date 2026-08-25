@@ -297,6 +297,14 @@ function CronForm({
                 spellCheck={false}
                 autoCapitalize="none"
               />
+              {/* The zone claim, beside the expression it governs: the field
+                  now defaults to the VIEWER'S zone (right for a typed
+                  sentence), which silently shifted the muscle-memory workflow
+                  of hand-typing a cron that always meant UTC. The sentence
+                  makes the shift visible where the fingers are. */}
+              <span className="cron-zone-note">
+                Fires in {timezone.trim() || "UTC"} — change it beside this field
+              </span>
             </label>
             <label className="cron-field">
               <span>Timezone</span>

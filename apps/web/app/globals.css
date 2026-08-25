@@ -10125,6 +10125,14 @@ select:focus-visible {
 
 /* A refused compile is the row's own news, not the workspace's — it renders
    here, beside the sentence that failed, never in the global error toast. */
+/* The zone the hand-typed expression will fire in, said where it is typed. */
+.cron-zone-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
 .cron-compile-error {
   margin: 0;
   padding: 6px 9px;
