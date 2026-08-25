@@ -15,6 +15,7 @@ import {
   slotFrom,
   writeDrag,
 } from "./board-columns";
+import { FavoriteStar, type FavoritesApi } from "./favorites";
 import { glyphFor, isTodoList } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
 
@@ -28,6 +29,8 @@ export type BoardViewProps = {
   removeBoard: (board: Board) => Promise<void>;
   columnOps?: BoardColumnOps;
   todoOps: TodoOps;
+  /** The shell's one favorites list; without it the headers offer no star. */
+  favorites?: FavoritesApi;
 };
 
 /** The glyph an entry wears — the whole visible difference between the shapes. */
@@ -477,6 +480,7 @@ export function BoardView({
   removeBoard,
   columnOps,
   todoOps,
+  favorites,
 }: BoardViewProps) {
   const [name, setName] = useState("");
   const [shape, setShape] = useState<"board" | "list">("board");
@@ -537,7 +541,22 @@ export function BoardView({
         boards.map((board) =>
           isTodoList(board) ? (
             <section key={board.id} className="board" data-shape={glyphFor(board)}>
-              <TodoChecklist list={board} ops={gatedTodoOps} />
+              <TodoChecklist
+                list={board}
+                ops={gatedTodoOps}
+                // The list IS a board, so its header carries the same star —
+                // threaded in because the checklist's chat mount has none.
+                headerExtra={
+                  favorites && (
+                    <FavoriteStar
+                      kind="board"
+                      targetId={board.id}
+                      label={board.name}
+                      favorites={favorites}
+                    />
+                  )
+                }
+              />
               {/* The graduation affordance: the same Add column a board offers.
                   Grow a second column and this entry redraws as a board — same
                   place, same items, ticks intact. */}
@@ -550,6 +569,14 @@ export function BoardView({
               <header className="board-head">
                 <Glyph board={board} />
                 <h2>{board.name}</h2>
+                {favorites && (
+                  <FavoriteStar
+                    kind="board"
+                    targetId={board.id}
+                    label={board.name}
+                    favorites={favorites}
+                  />
+                )}
                 <button
                   className="icon-button"
                   onClick={() => {

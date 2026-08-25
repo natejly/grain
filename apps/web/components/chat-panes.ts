@@ -22,33 +22,41 @@ export const MAX_EXTRA_PANES = 3;
 export const CHAT_PANES_KEY = "grain.chat-panes";
 
 /**
+ * The pane rules on an already-decoded value: rows that are not
+ * `{ id, conversationId }` strings are dropped, and a hand-edited store can
+ * carry a duplicate id or more panes than the cap, either of which the running
+ * app never produces — a repeated id clashes as a React key, and an over-cap
+ * list defeats the open guard. Keep the first occurrence of each id, then hold
+ * to the cap. Shared with the saved-layouts store, whose panes obey the same
+ * rules under a different key.
+ */
+export function sanitizePanes(value: unknown): ChatPane[] {
+  if (!Array.isArray(value)) return [];
+  const rows = value.filter(
+    (item): item is ChatPane =>
+      Boolean(item) &&
+      typeof (item as ChatPane).id === "string" &&
+      typeof (item as ChatPane).conversationId === "string",
+  );
+  const seen = new Set<string>();
+  const unique: ChatPane[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    unique.push(row);
+  }
+  return unique.slice(0, MAX_EXTRA_PANES);
+}
+
+/**
  * Decode a persisted layout. A missing, malformed, or hostile value is an empty
  * split, never a throw: a broken layout must not take the whole shell down with
- * it, so rows that are not `{ id, conversationId }` strings are dropped.
+ * it, so anything `sanitizePanes` refuses is dropped.
  */
 export function parseStoredPanes(raw: string | null): ChatPane[] {
   if (!raw) return [];
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const rows = parsed.filter(
-      (item): item is ChatPane =>
-        Boolean(item) &&
-        typeof (item as ChatPane).id === "string" &&
-        typeof (item as ChatPane).conversationId === "string",
-    );
-    // A hand-edited store can carry a duplicate id or more panes than the cap,
-    // either of which the running app never produces: a repeated id clashes as a
-    // React key, and an over-cap list defeats the open guard. Keep the first
-    // occurrence of each id, then hold to the cap.
-    const seen = new Set<string>();
-    const unique: ChatPane[] = [];
-    for (const row of rows) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
-      unique.push(row);
-    }
-    return unique.slice(0, MAX_EXTRA_PANES);
+    return sanitizePanes(JSON.parse(raw));
   } catch {
     return [];
   }

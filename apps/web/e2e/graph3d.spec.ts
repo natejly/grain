@@ -43,6 +43,21 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   await page.locator(".graph-3d").screenshot({ path: "test-results/graph3d.png" });
   console.log("page errors:", JSON.stringify(failures));
 
+  // The corner legend names the node colours, one entry per entity type.
+  const legend = page.locator(".graph-3d-legend");
+  for (const label of ["organization", "project", "entity", "concept"]) {
+    await expect(legend).toContainText(label);
+  }
+
+  // List → canvas: clicking a row selects it. The canvas half of that is
+  // WebGL, so the row class is the honest DOM-level check. The click lands on
+  // the row's own title button rather than the row's geometric center — the
+  // center can fall on a nested provenance chip, which stops propagation and
+  // navigates away instead of selecting.
+  const row = page.locator(".entity-row", { hasText: "Project Northstar" }).first();
+  await row.locator(".entity-select").click();
+  await expect(row).toHaveClass(/selected/);
+
   // Leave the shared workspace as we found it. Without this the source lingers
   // and the main spec's "Delete source" lookup matches two buttons.
   await openView(page, "Library", /Sources/);

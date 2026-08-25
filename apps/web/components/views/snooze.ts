@@ -63,7 +63,8 @@ export function addSnooze(map: SnoozeMap, id: string, until: Date): SnoozeMap {
 
 /** A new map without `id`; the input is left untouched. */
 export function removeSnooze(map: SnoozeMap, id: string): SnoozeMap {
-  const { [id]: _dropped, ...rest } = map;
+  const rest = { ...map };
+  delete rest[id];
   return rest;
 }
 

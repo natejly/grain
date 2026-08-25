@@ -22,6 +22,8 @@ export type Graph3DProps = {
   edges: GraphEdge[];
   /** Clicking a node selects it; the panel below the canvas reacts. */
   onSelect?: (entity: GraphEntity | null) => void;
+  /** The row picked in the list beside the canvas; lit like a hover. */
+  selectedId?: string | null;
   className?: string;
 };
 
@@ -63,7 +65,9 @@ const PALETTES: Record<Theme, GraphPalette> = {
       named_entity: 0x64c78d,
       concept: 0x929ba8,
     },
-    fallback: 0x929ba8,
+    // See the light palette's note: the fallback is deliberately not any
+    // type's colour, so "unknown" stays visibly unknown.
+    fallback: 0x5c6672,
     typedEdge: 0x7c9cff,
     looseEdge: 0x6b7684,
     label: "#e7eaf0",
@@ -75,11 +79,17 @@ const PALETTES: Record<Theme, GraphPalette> = {
     fog: 0xfaf7f0,
     types: {
       organization: 0xa87c57,
-      project: 0x2c7454,
+      // Blue, matching the dark theme's hue assignment — the old #2c7454 was
+      // a green a swatch-width away from named_entity's #37784b, so the
+      // legend showed two indistinguishable dots (and collided with the
+      // typed-edge accent line besides).
+      project: 0x3b5fc0,
       named_entity: 0x37784b,
       concept: 0x6b6357,
     },
-    fallback: 0x6b6357,
+    // Its own gray, NOT concept's: a node of an unknown type must not
+    // masquerade as a concept in either theme.
+    fallback: 0x968b7b,
     typedEdge: 0x2c7454,
     looseEdge: 0x83887c,
     label: "#2e2a24",
@@ -95,18 +105,51 @@ function colorFor(palette: GraphPalette, entity: GraphEntity): number {
   return palette.types[entity.entity_type] ?? palette.fallback;
 }
 
+/**
+ * The entity-type half of the on-canvas legend, derived from the same palette
+ * the spheres are coloured from so the swatch and the node it explains can
+ * never disagree. Labels are for people, not the schema: `named_entity` reads
+ * as "entity".
+ */
+export function entityLegend(
+  theme: Theme,
+  /** Include the fallback swatch — the caller says whether any node wears it,
+   *  because a legend row for a colour nothing uses is noise. */
+  includeFallback = false,
+): { type: string; label: string; color: string }[] {
+  const hexOf = (hex: number) => `#${hex.toString(16).padStart(6, "0")}`;
+  const rows = Object.entries(PALETTES[theme].types).map(([type, hex]) => ({
+    type,
+    label: type === "named_entity" ? "entity" : type,
+    color: hexOf(hex),
+  }));
+  if (includeFallback) {
+    rows.push({ type: "fallback", label: "other", color: hexOf(PALETTES[theme].fallback) });
+  }
+  return rows;
+}
+
 /** Node radius grows with mentions, but sublinearly — a hub must not eat the view. */
 function radiusFor(entity: GraphEntity): number {
   return 4.5 + Math.sqrt(Math.max(0, entity.mention_count)) * 2.2;
 }
 
-export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) {
+export function Graph3D({ entities, edges, onSelect, selectedId = null, className }: Graph3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const [failure, setFailure] = useState("");
   // The callback is read from a ref so a caller passing an inline arrow does not
   // tear down and rebuild the whole scene on every render.
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
+  // Same ref treatment for the list-side selection: keying the build effect on
+  // it would tear down and rebuild the whole scene on every row click, so the
+  // scene instead exposes its highlight pass and a selection change replays it.
+  const selectedRef = useRef<string | null>(selectedId);
+  selectedRef.current = selectedId;
+  const highlightRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    highlightRef.current?.();
+  }, [selectedId]);
   // Not a ref: a theme change has to rebuild the scene, because fog, lighting
   // and every instanced colour are baked in at build time.
   const theme = useTheme();
@@ -354,8 +397,11 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
       function applyHighlight() {
         const attribute = mesh.instanceColor;
         if (!attribute) return;
-        const near = hoveredId
-          ? new Set([hoveredId, ...(neighbours.get(hoveredId) ?? [])])
+        // Hover wins while the pointer is on a node; the list selection holds
+        // the highlight the rest of the time.
+        const activeId = hoveredId ?? selectedRef.current;
+        const near = activeId
+          ? new Set([activeId, ...(neighbours.get(activeId) ?? [])])
           : null;
         for (let position = 0; position < entities.length; position += 1) {
           const dim = near !== null && !near.has(entities[position].id);
@@ -369,9 +415,10 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
           const id = sprite.userData.entityId as string;
           sprite.material.opacity = near === null || near.has(id) ? 1 : 0.12;
         }
-        typed.material.opacity = hoveredId ? 0.35 : 0.9;
-        loose.material.opacity = hoveredId ? 0.14 : 0.5;
+        typed.material.opacity = activeId ? 0.35 : 0.9;
+        loose.material.opacity = activeId ? 0.14 : 0.5;
       }
+      highlightRef.current = applyHighlight;
 
       function pick(event: PointerEvent): number | null {
         const rect = renderer.domElement.getBoundingClientRect();
@@ -486,6 +533,7 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
       renderer.domElement.addEventListener("webglcontextlost", onContextLost);
 
       cleanup = () => {
+        highlightRef.current = null;
         cancelAnimationFrame(frame);
         observer.disconnect();
         renderer.domElement.removeEventListener("pointermove", onPointerMove);
@@ -535,6 +583,16 @@ export function Graph3D({ entities, edges, onSelect, className }: Graph3DProps) 
         <div className="graph-3d-failure">{failure}</div>
       ) : null}
       <div className="graph-3d-legend">
+        {entityLegend(
+          theme,
+          // The "other" swatch appears only while some node actually wears the
+          // fallback colour — a row for nothing is noise.
+          entities.some((entity) => !(entity.entity_type in PALETTES[theme].types)),
+        ).map((entry) => (
+          <span key={entry.type}>
+            <i className="swatch node" style={{ background: entry.color }} /> {entry.label}
+          </span>
+        ))}
         <span>
           <i className="swatch typed" /> typed relation
         </span>

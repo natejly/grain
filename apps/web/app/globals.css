@@ -307,14 +307,6 @@ select:focus-visible {
   margin: 0;
 }
 
-/* The drawer's labelled destination list: only where the icon rail is not.
-   Doubled selector on purpose — .primary-nav sets display:flex later in the
-   sheet, and at equal specificity the later rule would win and surface a
-   duplicate destination list on desktop. */
-.primary-nav.mobile-group-nav {
-  display: none;
-}
-
 /* Band 2's section nav: the destination's own map. */
 .section-nav {
   display: flex;
@@ -330,13 +322,30 @@ select:focus-visible {
   gap: 2px;
 }
 
+/* A shelf's heading, which is now also its collapse toggle: the button chrome
+   is stripped so folding a shelf away reads as pressing the heading itself,
+   and the chevron beside the word is the only tell. The unlabelled block
+   renders no heading, so every one of these is a button. */
 .section-heading {
   margin: 0 10px 3px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
   color: var(--text-dim);
+  font-family: inherit;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+
+.section-heading:hover {
+  color: var(--text);
 }
 
 .sidebar-spacer {
@@ -707,13 +716,15 @@ select:focus-visible {
   width: 100%;
   height: 34px;
   display: grid;
-  /* FOUR trailing action columns: rename and share/unshare (open thread only),
-     open in a new pane, and delete. `auto` collapses to zero width on rows
-     that do not render a control — but the column has to EXIST: with three
-     columns, the open row's fifth item wrapped to a second grid row inside
-     this fixed 34px height and bled over the next thread, which then
-     intercepted clicks meant for this row's own delete button. */
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  /* FIVE trailing action columns: favorite star, rename, and share/unshare
+     (open thread only), open in a new pane, and delete. `auto` collapses to
+     zero width on rows that do not render a control — but the column has to
+     EXIST: an action without a column wraps to a second grid row inside this
+     fixed 34px height and bleeds over the next thread, which then intercepts
+     clicks meant for this row's own buttons. This has now bitten twice (the
+     rename button, then the star): any new row action MUST add a column here
+     in the same change. */
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto auto;
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;
@@ -1035,7 +1046,9 @@ select:focus-visible {
    an in-flight reorder does not drop keyboard focus to <body>. It still has
    to look inert. */
 .icon-button[aria-disabled="true"],
-.primary-button[aria-disabled="true"] {
+.primary-button[aria-disabled="true"],
+.ghost-button[aria-disabled="true"],
+.copy-button[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }
@@ -1047,7 +1060,8 @@ select:focus-visible {
 
 .menu-button,
 .mobile-close,
-.sidebar-scrim {
+.sidebar-scrim,
+.mobile-tab-bar {
   display: none;
 }
 
@@ -3784,23 +3798,67 @@ select:focus-visible {
 }
 
 @media (max-width: 900px) {
+  /* One column, two rows: the view above, the tab bar below. minmax(0, 1fr)
+     rather than 1fr because the panel's flex column must be *given* a bounded
+     height to scroll inside — an auto-min row would grow with the transcript
+     and push the bar off screen. */
   .workspace-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+    /* Definite, not just min-height: the 1fr row must be handed exactly the
+       viewport minus the bar, or the panel's own scroll region cannot form.
+       dvh over vh where supported: 100vh is the toolbar-retracted height on
+       mobile browsers, and nothing here scrolls the document to retract it —
+       under plain vh the tab bar's row sat behind the browser chrome. */
+    height: 100vh;
+    height: 100dvh;
   }
 
-  /* The rail cedes to the drawer on mobile; the drawer carries the labelled
-     destination list instead, because it has the width the rail refuses. */
+  /* The rail cedes to the bottom tab bar on mobile; the drawer keeps the
+     rest — switcher, sections, threads, identity. */
   .icon-rail {
     display: none;
   }
 
-  .primary-nav.mobile-group-nav {
+  /* The four doors as a thumb bar. Equal flex shares, and the safe-area inset
+     so a home-indicator phone does not park its pill on the Inbox door. */
+  .mobile-tab-bar {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin-top: 10px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border);
+    gap: 6px;
+    padding: 5px 8px calc(5px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background: var(--sidebar);
+  }
+
+  .mobile-tab-bar .nav-item {
+    position: relative;
+    flex: 1;
+    width: auto;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border-radius: 9px;
+  }
+
+  .mobile-tab-bar .nav-item.active {
+    color: var(--accent);
+  }
+
+  /* The rail badge's treatment: absolute, riding the door's corner, so a
+     two-digit count cannot reshape the bar. */
+  .mobile-tab-bar .approval-count {
+    position: absolute;
+    top: 3px;
+    right: calc(50% - 24px);
+    margin: 0;
+  }
+
+  /* The panel fills the shell's first row instead of claiming the viewport —
+     100vh here would put the composer under the tab bar. */
+  .main-panel {
+    height: 100%;
+    min-height: 0;
   }
 
   .sidebar {
@@ -4209,6 +4267,28 @@ select:focus-visible {
   font-size: 9px;
 }
 
+/* The entity name, a real button so selecting a row works from the keyboard —
+   the row div's own onClick is only the generous pointer target. Unstyled to
+   keep looking like the title it was; the ellipsis chain needs the overflow. */
+.entity-row button.entity-select {
+  min-height: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+/* Inline inside a button, the strong would lose its ellipsis; blockify it. */
+.entity-row button.entity-select strong {
+  display: block;
+}
+
 /* Where the graph read an entity: the first source file, as a chip that lands
    on its row in Sources. Quieter than the Passage button beside it — naming,
    not the primary action. */
@@ -4437,8 +4517,20 @@ select:focus-visible {
   transition: opacity 0.12s ease;
 }
 
-.message:hover .message-author .copy-button {
+/* Hover reveals for the pointer; focus-within reveals for the keyboard — a
+   Tab that lands on an invisible button is a control that does not exist. */
+.message:hover .message-author .copy-button,
+.message:focus-within .message-author .copy-button {
   opacity: 1;
+}
+
+/* No hover, no reveal-on-hover: a touch device would otherwise hide this
+   chrome forever. Capability, not width, is the honest key. The tile chrome
+   has its own twin of this rule beside its fade. */
+@media (hover: none) {
+  .message .message-author .copy-button {
+    opacity: 1;
+  }
 }
 
 /* The pencil while a turn streams: present but inert — the server would 409
@@ -4453,7 +4545,8 @@ select:focus-visible {
   color: var(--text-dim);
 }
 
-.message:hover .message-author .copy-button:disabled {
+.message:hover .message-author .copy-button:disabled,
+.message:hover .message-author .copy-button[aria-disabled="true"] {
   opacity: 0.45;
 }
 
@@ -4475,6 +4568,13 @@ select:focus-visible {
   font-size: 13px;
   font-family: inherit;
   resize: vertical;
+}
+
+/* What saving does — the truncation, said before the button is pressed. */
+.message-edit-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 .message-edit-actions {
@@ -4602,6 +4702,17 @@ select:focus-visible {
   flex-wrap: wrap;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
+}
+
+/* The first-run teaching line: full width of the approval row (it is a flex
+   row, so the basis does the breaking), muted because it explains the
+   controls rather than competing with them. Shown once ever — `grain.seen`
+   holds the mark. */
+.approval-first-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .tool-card-approval .remember {
@@ -6483,6 +6594,16 @@ select:focus-visible {
 
 .graph-3d-legend .swatch.loose {
   border-top: 2px dashed var(--border-strong);
+}
+
+/* Entity-type swatches are filled dots, not line samples. Their colour is
+   inline from the three.js palette — the one place hues live outside the
+   token blocks — so this rule only shapes them. */
+.graph-3d-legend .swatch.node {
+  width: 8px;
+  height: 8px;
+  border-top: 0;
+  border-radius: 50%;
 }
 
 .graph-3d-failure {
@@ -8826,6 +8947,106 @@ select:focus-visible {
    donut's ring is one accent stepped by opacity with the identity carried by
    its legend. */
 
+/* ---- Favorites ----
+   The pin-anything sibling of the pinned-dashboards block below, wearing the
+   same clothes: a quiet heading, rows that read as nav items. The row's
+   controls (move up/down, remove) are dimmed until the row is hovered or
+   holds focus — they are secondary to opening the thing. */
+
+.favorites-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 14px 0 4px;
+}
+
+.favorites-heading {
+  padding: 0 10px 6px;
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.favorite-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.favorite-open {
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.favorite-open > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.favorite-open:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.favorite-action {
+  width: 20px;
+  height: 20px;
+  color: var(--text-dim);
+  opacity: 0;
+}
+
+.favorite-row:hover .favorite-action,
+.favorite-row:focus-within .favorite-action {
+  opacity: 1;
+}
+
+/* aria-disabled rather than disabled so focus survives reaching an edge; the
+   dimming is the visual half of that promise. Scoped to the row so it also
+   outweighs the hover reveal above. */
+.favorite-row .favorite-action[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* The star on the open thread row, dressed like its neighbours. */
+.thread-favorite {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.thread-favorite:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Starred state carries the accent, like `.thread-share.shared`. */
+.thread-favorite.faved,
+.icon-button.faved {
+  color: var(--accent);
+}
+
 .pinned-nav {
   display: flex;
   flex-direction: column;
@@ -9005,6 +9226,34 @@ select:focus-visible {
 .tile-resize:focus-visible {
   border-color: var(--accent);
   background: var(--accent-muted);
+}
+
+/* Tile chrome earns its ink on approach: chat/refresh/unpin and the resize
+   handle fade in when the pointer or focus is on the tile, so a wall of
+   charts reads as charts. Opacity, not display — the buttons keep their
+   geometry and stay tabbable, and :focus-within reveals them the moment
+   keyboard focus arrives. The grip stays visible always: it is the keyboard
+   path to arranging the grid, and an invisible door is a locked one. */
+.dashboard-pin-head .icon-button,
+.tile-resize {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+/* No hover means no reveal-on-hover: an iPad wider than the mobile breakpoint
+   would otherwise hide this chrome forever. Capability, not width. */
+@media (hover: none) {
+  .dashboard-pin-head .icon-button,
+  .tile-resize {
+    opacity: 1;
+  }
+}
+
+.dashboard-pin-tile:hover .dashboard-pin-head .icon-button,
+.dashboard-pin-tile:focus-within .dashboard-pin-head .icon-button,
+.dashboard-pin-tile:hover .tile-resize,
+.dashboard-pin-tile:focus-within .tile-resize {
+  opacity: 1;
 }
 
 /* ---- Charts ---- */
@@ -9370,6 +9619,11 @@ select:focus-visible {
   .tile-grip,
   .tile-resize {
     display: none;
+  }
+
+  /* No hover to approach with on a phone, so the head buttons stay lit. */
+  .dashboard-pin-head .icon-button {
+    opacity: 1;
   }
 
   .donut-layout {
@@ -9838,6 +10092,71 @@ select:focus-visible {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+/* English-first scheduling: the sentence is the input, the cron only the
+   receipt. The chip echoes exactly what submit will post, in the expression's
+   own type — a person checks the "Next:" line, a skeptic checks the cron. */
+.cron-compile-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.cron-compiled {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.cron-compiled-chip {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+/* A refused compile is the row's own news, not the workspace's — it renders
+   here, beside the sentence that failed, never in the global error toast. */
+/* The zone the hand-typed expression will fire in, said where it is typed. */
+.cron-zone-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.cron-compile-error {
+  margin: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--red-border);
+  border-radius: 7px;
+  background: var(--red-muted);
+  color: var(--red);
+  font-size: 12px;
+}
+
+/* The raw cron + timezone fields, folded away for the schedules that do have
+   a sentence — which is most of them. */
+.cron-advanced summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cron-advanced[open] summary {
+  margin-bottom: 8px;
 }
 
 .cron-form-actions {

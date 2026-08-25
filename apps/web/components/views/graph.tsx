@@ -41,6 +41,22 @@ export function GraphView({
 }: GraphViewProps) {
   const [selected, setSelected] = useState<string | null>(null);
   useFocusReveal("entity", focused, setFocused);
+  // Canvas → list: the tint alone is invisible when the picked node's row sits
+  // below the fold of the panel. A plain scrollIntoView rather than a second
+  // useFocusReveal — that hook's self-clearing timer is for arrival rings, and
+  // a selection has to stay put.
+  useEffect(() => {
+    if (!selected) return;
+    document.getElementById(`entity-${selected}`)?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
+  // A rebuild replaces the node set wholesale; a selection whose entity did
+  // not survive would keep the whole canvas dimmed around a highlight that no
+  // longer exists. Cleared, not remapped — the new projection may not hold an
+  // equivalent node at all.
+  useEffect(() => {
+    if (!selected || !graph) return;
+    if (!graph.entities.some((entity) => entity.id === selected)) setSelected(null);
+  }, [graph, selected]);
   const asked = useRef(false);
   // Every memory write marks the projection stale, and until this nothing read
   // that status back: a rebuild only ever ran from source ingest, source
@@ -108,6 +124,7 @@ export function GraphView({
               entities={nodes}
               edges={edges}
               onSelect={(entity) => setSelected(entity?.id ?? null)}
+              selectedId={selected}
             />
           </div>
           <div className="entity-list">
@@ -132,9 +149,15 @@ export function GraphView({
                   .join(" ")}
                 id={`entity-${entity.id}`}
                 key={entity.id}
+                // The whole row is a generous pointer target; the real button
+                // on the name below is what carries keyboard and reader
+                // access, so the div itself takes no role.
+                onClick={() => setSelected(entity.id)}
               >
                 <div>
-                  <strong>{entity.name}</strong>
+                  <button className="entity-select" onClick={() => setSelected(entity.id)}>
+                    <strong>{entity.name}</strong>
+                  </button>
                   <span>
                     {entity.entity_type.replaceAll("_", " ")} · {entity.mention_count} mentions
                     {entity.memory_ids.length > 0 &&
@@ -144,7 +167,12 @@ export function GraphView({
                           <button
                             className="knowledge-link"
                             title="Show the memories behind this"
-                            onClick={() => openMemory(entity.memory_ids[0])}
+                            // The row selects on click now; the buttons that
+                            // walk elsewhere must not double as "select this".
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openMemory(entity.memory_ids[0]);
+                            }}
                           >
                             from {entity.memory_ids.length}{" "}
                             {entity.memory_ids.length === 1 ? "memory" : "memories"}
@@ -159,14 +187,24 @@ export function GraphView({
                   <button
                     className="entity-source-chip"
                     title={`Show ${from[0].filename} in Sources`}
-                    onClick={() => openSource(from[0].id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openSource(from[0].id);
+                    }}
                   >
                     {from[0].filename}
                     {from.length > 1 && ` +${from.length - 1}`}
                   </button>
                 )}
                 {entity.chunk_ids[0] && (
-                  <button onClick={() => void openChunk(entity.chunk_ids[0])}>Passage</button>
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void openChunk(entity.chunk_ids[0]);
+                    }}
+                  >
+                    Passage
+                  </button>
                 )}
               </div>
               );

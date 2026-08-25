@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSubjectThread } from "../use-subject-thread";
 import { SubjectChatPanel } from "./subject-chat";
 import { DashboardCatalog, DashboardTemplates } from "./dashboard-catalog";
+import type { FavoritesApi } from "./favorites";
 import { DashboardGrid, type DashboardResultState } from "./dashboard-grid";
 import type { Tile } from "./dashboard-format";
 
@@ -58,6 +59,8 @@ export type DashboardsViewProps = {
   /** Which pinned tile to reveal, set by the rail. Cleared once revealed. */
   focused: string | null;
   setFocused: (dashboardId: string | null) => void;
+  /** The shell's one favorites list, for the catalog rows' stars. */
+  favorites?: FavoritesApi;
   /**
    * The honest create path, as a button: dashboards are written by the agent,
    * so "new dashboard" means asking for a chart — this prefills the composer
@@ -101,6 +104,7 @@ export function DashboardsView({
   removeDashboard,
   focused,
   setFocused,
+  favorites,
   askForChart,
   chat,
 }: DashboardsViewProps) {
@@ -178,6 +182,7 @@ export function DashboardsView({
         pin={pinDashboard}
         unpin={unpinDashboard}
         remove={removeDashboard}
+        favorites={favorites}
         // Launching *is* pinning: there is no single-dashboard page to
         // send someone to, and a chart you opened once is a chart you
         // wanted on your screen. Already pinned, it is merely revealed.

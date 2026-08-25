@@ -43,8 +43,9 @@ export function applyDelta(
 
 /** A stored ratio list is only trusted whole: right length, every entry a
  *  finite number at least visible-ish, and the sum near enough 100 that the
- *  flex-grow shares mean what they say. */
-function validSizes(value: unknown, count: number): value is number[] {
+ *  flex-grow shares mean what they say. Exported for the saved-layouts store,
+ *  which holds a ratio list of its own to the same standard. */
+export function validSizes(value: unknown, count: number): value is number[] {
   if (!Array.isArray(value) || value.length !== count) return false;
   if (!value.every((entry) => typeof entry === "number" && Number.isFinite(entry) && entry > 0)) {
     return false;

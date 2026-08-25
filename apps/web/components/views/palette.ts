@@ -2,20 +2,27 @@ import type { Conversation } from "@workspace/api-client";
 import { chordHint } from "./chords";
 import { CREATE_ACTIONS, NAV_GROUPS, type CreateAction } from "./navigation";
 import { PAGE_TITLES, type View } from "./shared";
+import type { ThreadOpen } from "./thread-open";
 
 /**
  * The command palette's data model: what ⌘K can reach, flattened into rows a
  * matcher can rank. Pure functions, no React — the shell renders the result
  * and the tests exercise the ranking without a DOM.
  *
- * Three kinds of row, in the order a query resolves them:
+ * The kinds of row, in the order a query resolves them:
  * - "view": every destination in NAV_GROUPS, rail and settings alike. The
  *   palette is how a hidden-but-reachable surface stays reachable.
  * - "create": the same six actions the + Create menu offers, so nothing is
  *   creatable from one surface and not the other.
+ * - "layout" / "save-layout": the saved split layouts by name, and the row
+ *   that names a new one — recall and capture live side by side.
+ * - "toggle": the two preferences the palette owns (where threads open, the
+ *   G-chord kill-switch), labelled by their CURRENT state.
  * - "thread": the rail's conversations, searchable by title — the "find that
  *   chat from Tuesday" the rail's recency sort cannot answer.
  */
+export type PaletteToggle = "thread-open" | "chords";
+
 export type PaletteRow =
   | {
       kind: "view";
@@ -27,9 +34,26 @@ export type PaletteRow =
       shortcut?: string;
     }
   | { kind: "create"; action: CreateAction; label: string; hint: string }
+  | { kind: "layout"; name: string; label: string; hint: string }
+  | { kind: "save-layout"; label: string; hint: string }
+  | { kind: "toggle"; toggle: PaletteToggle; label: string; hint: string }
   | { kind: "thread"; conversationId: string; label: string; hint: string };
 
-export function buildPaletteRows(conversations: Conversation[]): PaletteRow[] {
+/**
+ * The shell state the layout and preference rows are built from. Optional on
+ * `buildPaletteRows` so the palette still stands alone in tests and simpler
+ * hosts; without it only the original three kinds appear.
+ */
+export type PaletteExtras = {
+  layoutNames: string[];
+  threadOpen: ThreadOpen;
+  chordsEnabled: boolean;
+};
+
+export function buildPaletteRows(
+  conversations: Conversation[],
+  extras?: PaletteExtras,
+): PaletteRow[] {
   const views: PaletteRow[] = NAV_GROUPS.flatMap((group) =>
     group.items.map((item) => ({
       kind: "view" as const,
@@ -38,7 +62,9 @@ export function buildPaletteRows(conversations: Conversation[]): PaletteRow[] {
       // says which door it is behind.
       label: PAGE_TITLES[item.view],
       hint: group.surface === "settings" ? "Settings" : group.label,
-      shortcut: chordHint(item.view) ?? undefined,
+      // A chord hint on a disabled chord would teach a key that does nothing.
+      shortcut:
+        extras && !extras.chordsEnabled ? undefined : (chordHint(item.view) ?? undefined),
     })),
   );
   const creates: PaletteRow[] = CREATE_ACTIONS.map((action) => ({
@@ -47,13 +73,50 @@ export function buildPaletteRows(conversations: Conversation[]): PaletteRow[] {
     label: `New ${action.noun}`,
     hint: "Create",
   }));
+  const layouts: PaletteRow[] = extras
+    ? [
+        ...extras.layoutNames.map((name) => ({
+          kind: "layout" as const,
+          name,
+          label: `Layout: ${name}`,
+          // The delete gestures are appended by the RENDERER, which knows
+          // whether a deleteLayout handler is actually wired — a hint baked
+          // here would advertise a gesture some hosts cannot honor.
+          hint: "Layout",
+        })),
+        { kind: "save-layout" as const, label: "Save layout as…", hint: "Layout" },
+      ]
+    : [];
+  // Each toggle row SAYS the current state; Enter flips it. The label changes
+  // with the state, so the row always reads as a fact, never a stale promise.
+  const toggles: PaletteRow[] = extras
+    ? [
+        {
+          kind: "toggle" as const,
+          toggle: "thread-open" as const,
+          label:
+            extras.threadOpen === "split"
+              ? "Threads open: in a split"
+              : "Threads open: in place",
+          hint: "Preference",
+        },
+        {
+          kind: "toggle" as const,
+          toggle: "chords" as const,
+          label: extras.chordsEnabled
+            ? "Keyboard shortcuts: on"
+            : "Keyboard shortcuts: off",
+          hint: "Preference",
+        },
+      ]
+    : [];
   const threads: PaletteRow[] = conversations.map((conversation) => ({
     kind: "thread" as const,
     conversationId: conversation.id,
     label: conversation.title,
     hint: conversation.shared ? "Shared thread" : "Thread",
   }));
-  return [...views, ...creates, ...threads];
+  return [...views, ...creates, ...layouts, ...toggles, ...threads];
 }
 
 /**
@@ -71,7 +134,12 @@ export function matchPalette(
 ): PaletteRow[] {
   const needle = query.trim().toLowerCase();
   if (!needle) {
-    return rows.filter((row) => row.kind !== "thread").slice(0, limit);
+    // Everything navigable and doable, UNSLICED: the empty palette's question
+    // is "what can I even do", and a cap of 12 was silently eating every row
+    // after the ~22 views — creates, layouts and the preference toggles were
+    // undiscoverable from the very surface that exists to surface them. The
+    // list scrolls; a hidden capability does not.
+    return rows.filter((row) => row.kind !== "thread");
   }
   const tiers: PaletteRow[][] = [[], [], []];
   for (const row of rows) {
