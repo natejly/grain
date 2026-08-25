@@ -55,26 +55,101 @@ Goal: complete Phases 3–6 of Foyer + loose ends, production grade.
       unchanged; 12 unit tests
       (also fixed from review: thread-default seeding self-heals a deleted
       agent id through AgentSelect → the thread's remembered default)
-- [ ] Phase 5: unified right split pane (subject chat / artifact peek / extra panes)
-- [ ] Phase 5: message edit (backend DONE 2026-08-22: truncate-and-rerun —
-      conversations.truncate_after + POST /conversations/{id}/messages/{mid}/edit,
-      author-only, 409 over live runs, memory tombstoned, chunk index dropped
-      and rebuilt by the new run's hook; fixed the latent purge leak where a
-      DELETED thread's ConversationChunk rows stayed searchable forever;
-      6 tests in test_message_edit.py; web affordance is the gap)
+- [x] Phase 5: unified right split pane (2026-08-23 wf): split-sizes.ts pure
+      module (per-column-count persisted ratios under grain.split-sizes, 21
+      tests) seeding chat-split's existing drag; pane maximize (ChatPane head
+      button + primary corner button, display:none siblings, Escape restores);
+      cap toast in openInNewPane (addPane stays pure per the identity test);
+      inline close-confirm on a live-run pane (no scrim, auto-dismisses when
+      the run settles); one --split-width var across the three subject-chat
+      grids; palette ⌘Enter/⌘click opens a thread in the split; ⌘\\ cycles
+      pane focus. Listed gap: no automated test on the close-confirm (hook
+      needs network; e2e needs a live run in a pane)
+- [x] Phase 5: message edit (backend 2026-08-22, web 2026-08-23): pencil on
+      the viewer's own prompts (senderIsViewer predicate — asides and
+      teammates excluded, legacy ""-sender editable on personal threads
+      only), inline textarea (Enter/Shift+Enter/Escape, no blur-submit),
+      optimistic truncate + followRun, refused edits keep the words on
+      screen; wired in primary + extra panes, subject panels deferred;
+      message-edit-ui.test.ts (4) + senderIsViewer cases in rail-threads
 - [x] Phase 5: G-chords (G C / G I / G L / G A / G D) — views/chords.ts pure
       module + 9 tests, capture-phase listener in workspace.tsx (stops a
       completed chord reaching the Inbox's A/D triage), palette rows show
       their chord as a kbd hint (e2e pass still owed with the phase gate)
-- [ ] Phase 5: universal Favorites + sidebar pruning
-- [ ] Phase 5: agent editor live try-chat
-- [ ] Phase 5: English-first Schedule composer + next-fire preview
-- [ ] Phase 6: saved named layouts
-- [ ] Phase 6: per-collection open behavior
-- [ ] Phase 6: graph legend + bidirectional selection
-- [ ] Phase 6: onboarding walkthrough (approval loop)
-- [ ] Phase 6: mobile bottom-tab shell
-- [ ] Full gate per phase: make lint, pytest, pnpm test, pnpm build, e2e
+- [x] Phase 5: universal Favorites + sidebar pruning (2026-08-23 wf + fixes):
+      one useFavorites instance feeding the sidebar FavoritesNav (glyphs
+      derived from NAV_GROUPS, keyboard reorder with aria-live announcements,
+      serial-queue race guard) + star mounts on ALL eight kinds (thread row,
+      document header, dashboard catalog, agent cards, cron rows, board
+      headers via TodoChecklist headerExtra, project header, workflow
+      header); unpinned favorited dashboard pins-then-focuses; sections got
+      stable ids + per-section collapse keys (grain.section.*) with the
+      active view auto-expanding its shelf; Pinned-dashboards nav untouched
+- [x] Phase 5: agent editor live try-chat (2026-08-23 wf + fixes): "Save &
+      try" → scratch "Trying <name>" thread with default_agent_id seeded →
+      lands in Chat; both buttons busy through the whole try path (no
+      duplicate-agent window), pressed-button busy copy, partial-failure
+      honesty (opens the thread even when the default couldn't be set)
+- [x] Phase 5: English-first Schedule composer (2026-08-23 wf + fixes):
+      sentence input + Compile → compiled-cron chip + "Next: …" line in the
+      schedule's zone; raw cron/timezone behind Advanced; editing the
+      sentence invalidates the receipt; timezone defaults to the viewer's
+      zone; e2e/schedules.spec.ts (offline-compilable sentence)
+- [x] Phase 6: saved named layouts (2026-08-23 wf; wiring finished inline
+      after a mid-stage connection loss): layouts.ts pure module under
+      grain.layouts.<workspaceId>, palette rows (Layout: X applies; ⌘⏎/⌘-click
+      /⌘⌫ deletes; "Save layout as…" reuses the generalized NamingTask step),
+      applyLayout writes ratios before panes with a ChatSplit resetKey for the
+      unchanged-count case
+- [x] Phase 6: per-collection open behavior (thread instance per research —
+      grain.thread-open preference as a palette toggle, honored by the
+      palette's Enter/⌘⏎ inversion AND favorite thread rows; dashboards/
+      documents deferred with rationale: their second mode would be an
+      invented feature, not a preference)
+- [x] Phase 6: graph legend + bidirectional selection (2026-08-23 wf + review
+      fixes): entity-type legend derived from the canvas PALETTES (light
+      project recolored blue — was a twin of entity green; fallback got its
+      own gray + a conditional "other" row), selectedId highlight via refs
+      (no scene rebuild), row-click select + canvas→list scroll, stale
+      selection cleared on rebuild; graph-legend tests + e2e additions
+- [x] Phase 6 debt: G-chord kill-switch (WCAG 2.1.4) — grain.chords palette
+      toggle folded into chordEligible, palette hints hidden while off
+- [x] Phase 6: onboarding walkthrough (2026-08-23 wf + fixes): one-time
+      approval-loop caption at the top of the first proposed call's card,
+      grain.seen via the first-run.ts total-parser module; excluded from
+      subject panels via the showStarter gate (a narrow panel must not spend
+      the caption's one showing); 10 unit tests
+- [x] Phase 6: mobile bottom-tab shell (2026-08-23 wf + fixes): four doors +
+      badge as a bottom bar under 900px (renderGroupButton reused, drawer's
+      duplicate destination list deleted), 100dvh + viewport-fit=cover so the
+      bar clears mobile browser chrome and the home pill, scrim demoted to a
+      backdrop (duplicate "Close menu" name removed); e2e/mobile-shell.spec
+      at a 390×844 viewport; tile chrome hover/focus-within reveal with an
+      @media (hover:none) capability fallback
+- [x] Full gate (2026-08-23): ruff ✓ mypy ✓ full pytest ✓ eslint 0 errors
+      (6 pre-existing warnings verified define-only at HEAD) ✓ tsc ✓
+      716 web unit tests ✓ next build ✓ — final full e2e run + commit + PR in
+      flight per the user's ask
+
+## Review — finish-the-todo run (2026-08-22 → 2026-08-23)
+
+Everything on the todo shipped, production grade: Phases 3–6 of Foyer complete
+plus the message-edit/favorites/schedule-compile stack. Method: ultracode —
+read-only research agents mapped every seam first; implementation ran as
+serial workflow stages over the shared hub files with adversarial review
+panels after every batch; every finding was adjudicated and fixed same-day
+(three review rounds caught, among others: a wrong-dashboard pin via name
+fallback, a truncation sweep that could delete an overlapping teammate turn,
+a review-interlock bypass through Save/⌘S/Restore, an unwired palette feature
+shipping as dead code, and a 100vh tab bar sitting under mobile browser
+chrome). Two infra hazards shaped the run: workflow agents died to machine
+sleep/session limits three times (recovered from journals; the near-finished
+message-edit stage was completed inline), and a peer session shared the
+checkout throughout — attribution was verified per failure, their broken 0046
+migration guard was fixed from here with notice, and cross-session QA traffic
+was answered and re-routed. The first full e2e run after the phases caught a
+real rail-row grid overflow (four actions in three columns) latent since the
+rename feature shipped — the run that "wasn't needed" found the bug.
 
 Review-debt (phase3 panel, 2026-08-22) — ALL FIXED same day:
 - [x] truncate_after now sweeps by Run.created_at >= the pivot run's start

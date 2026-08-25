@@ -29,14 +29,24 @@ export function collapseKey(pane: string): string {
 }
 
 /**
- * Read one pane's persisted state. Total: anything other than the stored "1"
- * — absent, hand-edited, or unreadable because the origin blocks storage — is
- * "not collapsed", which is the state every pane ships in.
+ * localStorage key for one sidebar section's collapsed state — the sibling of
+ * `collapseKey` for the shelves *inside* a destination's sidebar. Keyed by the
+ * section's stable id (navigation.ts), not its label, so rewording a heading
+ * does not forget who folded it away.
  */
-export function readCollapsed(pane: string): boolean {
+export function sectionCollapseKey(groupId: string, sectionId: string): string {
+  return `grain.section.${groupId}.${sectionId}`;
+}
+
+/**
+ * The one total read both key families share: anything other than the stored
+ * "1" — absent, hand-edited, or unreadable because the origin blocks storage —
+ * is "not collapsed", which is the state everything here ships in.
+ */
+function readFlag(key: string): boolean {
   if (typeof window === "undefined") return false;
   try {
-    return window.localStorage.getItem(collapseKey(pane)) === "1";
+    return window.localStorage.getItem(key) === "1";
   } catch {
     // Private mode or a blocked origin: the pane still collapses for this
     // session, it just will not remember.
@@ -44,14 +54,36 @@ export function readCollapsed(pane: string): boolean {
   }
 }
 
-export function persistCollapsed(pane: string, collapsed: boolean): void {
+function persistFlag(key: string, collapsed: boolean): void {
   if (typeof window === "undefined") return;
   try {
-    if (collapsed) window.localStorage.setItem(collapseKey(pane), "1");
-    else window.localStorage.removeItem(collapseKey(pane));
+    if (collapsed) window.localStorage.setItem(key, "1");
+    else window.localStorage.removeItem(key);
   } catch {
     // As above: the toggle still applies to this tab.
   }
+}
+
+/** Read one pane's persisted state. */
+export function readCollapsed(pane: string): boolean {
+  return readFlag(collapseKey(pane));
+}
+
+export function persistCollapsed(pane: string, collapsed: boolean): void {
+  persistFlag(collapseKey(pane), collapsed);
+}
+
+/** Read one sidebar section's persisted state. */
+export function readSectionCollapsed(groupId: string, sectionId: string): boolean {
+  return readFlag(sectionCollapseKey(groupId, sectionId));
+}
+
+export function persistSectionCollapsed(
+  groupId: string,
+  sectionId: string,
+  collapsed: boolean,
+): void {
+  persistFlag(sectionCollapseKey(groupId, sectionId), collapsed);
 }
 
 /**

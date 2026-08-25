@@ -4,6 +4,7 @@ import type { AgentInfo, ToolInfo } from "@workspace/api-client";
 import { Bot, Check, Pencil, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { FavoriteStar, type FavoritesApi } from "./favorites";
 import { describeError } from "./shared";
 
 /**
@@ -22,6 +23,14 @@ import { describeError } from "./shared";
 
 type AgentsViewProps = {
   setError: (message: string) => void;
+  /**
+   * Land on a conversation, wired from the shell's `selectConversation`.
+   * Optional because the view stands alone in tests; without it "Save & try"
+   * still saves and seeds the thread, it just cannot walk you there.
+   */
+  openConversation?: (conversationId: string) => void;
+  /** The shell's one favorites list; without it the cards offer no star. */
+  favorites?: FavoritesApi;
 };
 
 /** "All tools" / "3 tools" / "No tools" — the card's one-line tool summary. */
@@ -32,7 +41,7 @@ function toolSummary(agent: AgentInfo): string {
   return `${count} ${count === 1 ? "tool" : "tools"}`;
 }
 
-export function AgentsView({ setError }: AgentsViewProps) {
+export function AgentsView({ setError, openConversation, favorites }: AgentsViewProps) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -85,6 +94,45 @@ export function AgentsView({ setError }: AgentsViewProps) {
 
   const open = editing === "" ? null : agents.find((row) => row.id === editing);
 
+  /**
+   * "Save & try": the agent is already saved when this runs, so everything
+   * here is conveniences on top of a done deal — a fresh personal thread named
+   * for the trial, the agent seeded as its composer default, and the walk to
+   * Chat. When any of that fails the error copy must not un-tell the truth:
+   * the agent WAS saved, only the try-chat is missing.
+   */
+  const tryAgent = async (agentId: string, agentName: string) => {
+    let thread: { id: string };
+    try {
+      thread = await api.createConversation(`Trying ${agentName}`);
+    } catch (caught) {
+      setEditing(null);
+      void reload();
+      const detail = describeError(caught, "");
+      setError(
+        detail
+          ? `Saved — but the try-chat could not be opened: ${detail}`
+          : "Saved — but the try-chat could not be opened.",
+      );
+      return;
+    }
+    setEditing(null);
+    void reload();
+    try {
+      await api.setConversationDefaults(thread.id, { default_agent_id: agentId });
+    } catch {
+      // The thread exists and is usable, so the walk still happens — the error
+      // must not un-tell that. Only the seeded default is missing.
+      openConversation?.(thread.id);
+      setError(
+        "Saved and opened the try-chat — but the agent could not be set as " +
+          "its default; pick it in the composer.",
+      );
+      return;
+    }
+    openConversation?.(thread.id);
+  };
+
   return (
     <div className="content-page">
       <div className="page-heading">
@@ -114,6 +162,14 @@ export function AgentsView({ setError }: AgentsViewProps) {
                   {!agent.enabled && <span className="status-pill">disabled</span>}
                 </div>
                 <div className="mcp-card-actions">
+                  {favorites && (
+                    <FavoriteStar
+                      kind="agent"
+                      targetId={agent.id}
+                      label={agent.name}
+                      favorites={favorites}
+                    />
+                  )}
                   <button
                     className="ghost-button"
                     onClick={() => setEditing(agent.id)}
@@ -156,6 +212,7 @@ export function AgentsView({ setError }: AgentsViewProps) {
             setEditing(null);
             void reload();
           }}
+          onTry={tryAgent}
         />
       )}
     </div>
@@ -169,13 +226,24 @@ type AgentEditorProps = {
   setError: (message: string) => void;
   onClose: () => void;
   onSaved: () => void;
+  /** After "Save & try" lands the save: take the saved agent to a chat. */
+  onTry: (agentId: string, agentName: string) => void | Promise<void>;
 };
 
 /**
  * The drawer. Its state lives here, inside the component that only renders
  * while the drawer is open, so closing it resets a half-filled form for free.
+ *
+ * Exported for its unit test; the view above is its only product consumer.
  */
-function AgentEditor({ agent, tools, setError, onClose, onSaved }: AgentEditorProps) {
+export function AgentEditor({
+  agent,
+  tools,
+  setError,
+  onClose,
+  onSaved,
+  onTry,
+}: AgentEditorProps) {
   const [name, setName] = useState(agent?.name ?? "");
   const [description, setDescription] = useState(agent?.description ?? "");
   const [instructions, setInstructions] = useState(agent?.instructions ?? "");
@@ -184,6 +252,13 @@ function AgentEditor({ agent, tools, setError, onClose, onSaved }: AgentEditorPr
     () => new Set(agent?.allowed_tools ?? []),
   );
   const [saving, setSaving] = useState(false);
+  /**
+   * "Save & try" busy through the WHOLE walk — save, thread, defaults, the
+   * open. `saving` clears after the save alone, and a second click in the gap
+   * before the try-chat settles would create the agent twice.
+   */
+  const [trying, setTrying] = useState(false);
+  const busy = saving || trying;
 
   const families = useMemo(() => {
     const grouped = new Map<string, ToolInfo[]>();
@@ -215,31 +290,51 @@ function AgentEditor({ agent, tools, setError, onClose, onSaved }: AgentEditorPr
     });
   };
 
-  const save = async () => {
+  /**
+   * The one save path both buttons share. Returns what the server stored —
+   * "Save & try" needs the id (fresh on a create) and the name as the server
+   * kept it — or null on a refusal, which is already on the toast by then.
+   */
+  const save = async (): Promise<AgentInfo | null> => {
     setSaving(true);
     try {
       if (agent === null) {
-        await api.createAgent({
+        return await api.createAgent({
           name,
           description,
           instructions,
           allowed_tools: scoped ? [...selected].sort() : null,
         });
-      } else {
-        await api.updateAgent(agent.id, {
-          name,
-          description,
-          instructions,
-          ...(scoped
-            ? { allowed_tools: [...selected].sort() }
-            : { clear_allowed_tools: true }),
-        });
       }
-      onSaved();
+      return await api.updateAgent(agent.id, {
+        name,
+        description,
+        instructions,
+        ...(scoped
+          ? { allowed_tools: [...selected].sort() }
+          : { clear_allowed_tools: true }),
+      });
     } catch (caught) {
       setError(describeError(caught, "Could not save the agent"));
+      return null;
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveOnly = async () => {
+    if (busy) return;
+    if (await save()) onSaved();
+  };
+
+  const saveAndTry = async () => {
+    if (busy) return;
+    setTrying(true);
+    try {
+      const saved = await save();
+      if (saved) await onTry(saved.id, saved.name);
+    } finally {
+      setTrying(false);
     }
   };
 
@@ -364,12 +459,31 @@ function AgentEditor({ agent, tools, setError, onClose, onSaved }: AgentEditorPr
             <button className="ghost-button" onClick={onClose}>
               Cancel
             </button>
+            {/* Empty-form keeps the real disabled (the button cannot hold
+                focus before the form is fillable); the in-flight state is
+                aria-disabled — the favorites-chevron convention — so focus
+                survives the round trip. Each button wears only its own busy
+                copy. Save is the ghost: one primary action per drawer, and
+                the walk-you-there button is the one being taught. */}
+            <button
+              className="ghost-button"
+              onClick={() => void saveOnly()}
+              disabled={!ready}
+              aria-disabled={!ready || busy}
+            >
+              {saving && !trying
+                ? "Saving…"
+                : agent === null
+                  ? "Create agent"
+                  : "Save changes"}
+            </button>
             <button
               className="primary-button"
-              onClick={() => void save()}
-              disabled={!ready || saving}
+              onClick={() => void saveAndTry()}
+              disabled={!ready}
+              aria-disabled={!ready || busy}
             >
-              {saving ? "Saving…" : agent === null ? "Create agent" : "Save changes"}
+              {trying ? "Trying…" : "Save & try"}
             </button>
           </div>
         </div>

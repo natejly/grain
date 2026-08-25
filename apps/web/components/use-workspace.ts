@@ -448,17 +448,33 @@ export function useWorkspace() {
     // are two separate concerns.
     if (conversationId === activeConversationRef.current) return;
     // At the cap the refusal is SAID, not silent: a button that does nothing
-    // reads as broken. The neutral toast, because nothing went wrong.
-    if (extraPanesRef.current.length >= MAX_EXTRA_PANES) {
+    // reads as broken. The neutral toast, because nothing went wrong. Counted
+    // over panes whose conversation still exists — ghost panes from deleted
+    // threads are about to be pruned and must not wedge the cap shut. Before
+    // the list's first load, every pane counts: an empty list is not yet
+    // evidence a thread is gone.
+    const known = new Set(conversationsRef.current.map((item) => item.id));
+    const livePanes =
+      known.size > 0
+        ? extraPanesRef.current.filter((pane) => known.has(pane.conversationId))
+        : extraPanesRef.current;
+    if (livePanes.length >= MAX_EXTRA_PANES) {
       setNotice({
         text: `Split is full — close a pane first (${MAX_EXTRA_PANES} extra panes max)`,
         at: Date.now(),
       });
       return;
     }
-    setExtraPanes((panes) =>
-      addPane(panes, conversationId, activeConversationRef.current, newPaneId()),
-    );
+    setExtraPanes((panes) => {
+      // The add must count the same list the cap check counted: `addPane`
+      // refuses at the RAW length, so ghost panes (deleted conversations the
+      // prune has not caught yet) would make the click do nothing after the
+      // toast stayed quiet — the exact silent-button state the toast exists
+      // to prevent. Dropping ghosts here is the prune, just earlier.
+      const live =
+        known.size > 0 ? panes.filter((pane) => known.has(pane.conversationId)) : panes;
+      return addPane(live, conversationId, activeConversationRef.current, newPaneId());
+    });
     setView("chat");
     setSidebarOpen(false);
   }, []);
@@ -893,6 +909,22 @@ export function useWorkspace() {
     activeDocumentRef,
   });
 
+  /**
+   * Land a SAVED layout in one commit: the extra panes wholesale (capped, like
+   * any other write to the list), focus back on the primary — the saved focus
+   * id names a pane that no longer exists — and the chat view on screen with
+   * the rail shut, exactly as `openInNewPane` leaves it. The primary thread
+   * switches only when the layout named one; a null keeps whatever is open.
+   * Not a useCallback: `selectConversation` is rebuilt every render anyway.
+   */
+  function applyLayout(panes: ChatPane[], primaryConversationId: string | null) {
+    setExtraPanes(panes.slice(0, MAX_EXTRA_PANES));
+    setFocusedPane(null);
+    setView("chat");
+    setSidebarOpen(false);
+    if (primaryConversationId) void chatHandlers.selectConversation(primaryConversationId);
+  }
+
   const sourceHandlers = createSourceHandlers({
     setError,
     setUploading,
@@ -967,6 +999,7 @@ export function useWorkspace() {
     openInNewPane,
     closePane,
     focusPane,
+    applyLayout,
     refreshConversations,
     patchConversation,
     renameConversation,

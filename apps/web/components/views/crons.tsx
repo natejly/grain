@@ -1,6 +1,6 @@
 "use client";
 
-import type { Cron, CronKind } from "@workspace/api-client";
+import type { Cron, CronKind, ScheduleCompileResult } from "@workspace/api-client";
 import {
   Bot,
   Check,
@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { formatNextFires } from "./cron-compile-format";
+import { FavoriteStar, type FavoritesApi } from "./favorites";
 import { describeError, formatRelative } from "./shared";
 import type { ScheduleNote } from "./workflow-format";
 
@@ -37,6 +39,8 @@ import type { ScheduleNote } from "./workflow-format";
  */
 export type CronsViewProps = {
   setError: (message: string) => void;
+  /** The shell's one favorites list; without it the rows offer no star. */
+  favorites?: FavoritesApi;
 };
 
 const TIMELINE_PLACEHOLDER = "0 9 * * 1";
@@ -112,13 +116,52 @@ function CronForm({
   const [name, setName] = useState("");
   const [kind, setKind] = useState<CronKind>("task");
   const [scheduleCron, setScheduleCron] = useState("");
-  const [timezone, setTimezone] = useState("UTC");
+  // The viewer's own zone, not UTC: "every weekday at 9am" means THEIR 9am
+  // unless they say otherwise. The compiled receipt names the zone either way,
+  // and the Advanced field still takes any zone by hand.
+  const [timezone, setTimezone] = useState(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+      return "UTC";
+    }
+  });
   const [prompt, setPrompt] = useState("");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
+  /** The English sentence, and what the compiler last said it means. */
+  const [scheduleText, setScheduleText] = useState("");
+  const [compiled, setCompiled] = useState<ScheduleCompileResult | null>(null);
+  const [compileError, setCompileError] = useState("");
+  const [compiling, setCompiling] = useState(false);
 
   const payloadText = kind === "message" ? body : prompt;
   const ready = Boolean(name.trim() && scheduleCron.trim() && payloadText.trim());
+
+  /**
+   * Turn the sentence into a cron and let it fill the real fields: submit posts
+   * `scheduleCron`/`timezone` verbatim, so a successful compile writes into
+   * exactly that state and the saved schedule is the previewed one, always. A
+   * refused compile (422, a human sentence) is this row's problem, not the
+   * workspace's — it renders beside the input and never in the global toast.
+   */
+  async function compile() {
+    const text = scheduleText.trim();
+    if (!text || compiling) return;
+    setCompiling(true);
+    setCompileError("");
+    try {
+      const result = await api.compileSchedule(text, timezone.trim() || "UTC");
+      setCompiled(result);
+      setScheduleCron(result.schedule_cron);
+      setTimezone(result.schedule_timezone);
+    } catch (caught) {
+      setCompiled(null);
+      setCompileError(describeError(caught, "Could not compile that schedule"));
+    } finally {
+      setCompiling(false);
+    }
+  }
 
   async function submit() {
     if (!ready || busy) return;
@@ -179,30 +222,97 @@ function CronForm({
           </select>
         </label>
 
-        <div className="cron-field-row">
-          <label className="cron-field">
-            <span>Schedule</span>
+        {/* The schedule is written in English and compiled, not typed in cron.
+            A div rather than a label: a label wrapping both the input and the
+            Compile button would forward clicks on the button to the input. */}
+        <div className="cron-field">
+          <span>Schedule</span>
+          <div className="cron-compile-row">
             <input
-              value={scheduleCron}
-              onChange={(event) => setScheduleCron(event.target.value)}
-              placeholder={TIMELINE_PLACEHOLDER}
-              // A 5-field cron expression, shown and stored verbatim. Validation
-              // is the server's — it refuses a malformed one with a 422.
-              spellCheck={false}
-              autoCapitalize="none"
+              value={scheduleText}
+              onChange={(event) => {
+                setScheduleText(event.target.value);
+                // Editing the sentence after a compile voids the receipt AND
+                // the cron it wrote: submit must never post a schedule the
+                // sentence on screen no longer describes. A hand-typed
+                // Advanced expression (compiled already null) is left alone.
+                if (compiled) {
+                  setCompiled(null);
+                  setScheduleCron("");
+                }
+              }}
+              placeholder="every weekday at 9am"
+              aria-label="Describe the schedule"
             />
-          </label>
-          <label className="cron-field">
-            <span>Timezone</span>
-            <input
-              value={timezone}
-              onChange={(event) => setTimezone(event.target.value)}
-              placeholder="UTC"
-              spellCheck={false}
-              autoCapitalize="none"
-            />
-          </label>
+            {/* aria-disabled while compiling (compile() refuses re-entry), so
+                the button keeps focus through the round trip; the empty
+                sentence keeps the real disabled — the button cannot hold
+                focus before there is anything to compile. */}
+            <button
+              type="button"
+              className="ghost-button"
+              disabled={!scheduleText.trim()}
+              aria-disabled={compiling || !scheduleText.trim()}
+              onClick={() => void compile()}
+            >
+              {compiling ? <LoaderCircle size={14} className="spin" /> : null}
+              {compiling ? "Compiling…" : "Compile"}
+            </button>
+          </div>
+          {compileError && <p className="cron-compile-error">{compileError}</p>}
+          {compiled && (
+            <p className="cron-compiled">
+              <code className="cron-compiled-chip" aria-label="Compiled schedule">
+                {compiled.schedule_cron}
+              </code>
+              <span>{compiled.schedule_timezone}</span>
+              {compiled.next_fires.length > 0 && (
+                <span className="cron-next-fires">
+                  Next:{" "}
+                  {formatNextFires(compiled.next_fires, compiled.schedule_timezone)}
+                </span>
+              )}
+            </p>
+          )}
         </div>
+
+        {/* The raw fields still exist — some schedules have no sentence — but
+            behind a disclosure. Hand-typing here drops the compiled preview:
+            the chip echoes what submit will post, and a preview that could
+            disagree with the save is worse than none. */}
+        <details className="cron-advanced">
+          <summary>Advanced</summary>
+          <div className="cron-field-row">
+            <label className="cron-field">
+              <span>Cron expression</span>
+              <input
+                value={scheduleCron}
+                onChange={(event) => {
+                  setScheduleCron(event.target.value);
+                  setCompiled(null);
+                }}
+                placeholder={TIMELINE_PLACEHOLDER}
+                // A 5-field cron expression, shown and stored verbatim. Validation
+                // is the server's — it refuses a malformed one with a 422.
+                spellCheck={false}
+                autoCapitalize="none"
+              />
+            </label>
+            <label className="cron-field">
+              <span>Timezone</span>
+              <input
+                value={timezone}
+                onChange={(event) => {
+                  setTimezone(event.target.value);
+                  setCompiled(null);
+                }}
+                placeholder="UTC"
+                spellCheck={false}
+                autoCapitalize="none"
+              />
+            </label>
+          </div>
+        </details>
 
         {kind === "message" ? (
           <label className="cron-field">
@@ -237,7 +347,7 @@ function CronForm({
   );
 }
 
-export function CronsView({ setError }: CronsViewProps) {
+export function CronsView({ setError, favorites }: CronsViewProps) {
   const [crons, setCrons] = useState<Cron[]>([]);
   const [activeId, setActiveId] = useState("");
   const [composing, setComposing] = useState(false);
@@ -382,6 +492,18 @@ export function CronsView({ setError }: CronsViewProps) {
                       ? formatRelative(cron.last_dispatched_at)
                       : "never fired"}
                   </span>
+                  {/* Beside the row rather than inside its open button —
+                      starring must not also open the automation, and a button
+                      may not nest one. */}
+                  {favorites && (
+                    <FavoriteStar
+                      kind="cron"
+                      targetId={cron.id}
+                      label={cron.name}
+                      favorites={favorites}
+                      size={12}
+                    />
+                  )}
                 </div>
               </li>
             ))}

@@ -55,6 +55,7 @@ import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
 import { ProposalDiff } from "./proposal-diff";
 import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
+import { hasSeen, markSeen } from "./first-run";
 import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel } from "./shared";
 import { steerStripVisible } from "./steer-format";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
@@ -929,11 +930,18 @@ function ToolCallCard({
   decide,
   todos,
   pinning,
+  showApprovalCaption,
 }: {
   call: AgentToolCall;
   decide: ToolDecision;
   todos?: { lists: Board[]; ops: TodoOps };
   pinning?: DashboardPinning;
+  /**
+   * The first-run teaching line above the Approve/Deny pair. ChatView decides
+   * — it alone can see both card sites and the `grain.seen` mark — so the
+   * card just wears it; true on at most one card per transcript.
+   */
+  showApprovalCaption?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -1036,6 +1044,12 @@ function ToolCallCard({
       )}
       {pending && (
         <div className="tool-card-approval">
+          {showApprovalCaption && (
+            <p className="approval-first-note">
+              The agent wants to run a tool. Nothing happens until you decide —
+              this is the approval loop.
+            </p>
+          )}
           {asking && (
             <textarea
               className="ask-user-answer"
@@ -1139,8 +1153,19 @@ export function ChatView({
   // stray click.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  // The approval-loop teaching caption: once, ever. "unseen" until the first
+  // proposed call actually renders it; the effect below then writes the
+  // `grain.seen` mark and holds the caption on screen ("showing") until that
+  // call is decided — re-reading the mark per render would blink the line
+  // away on the first unrelated re-render, mid-read; "done" thereafter, for
+  // this session by state and for every later one by the persisted mark.
+  const [approvalCaption, setApprovalCaption] = useState<
+    "unseen" | "showing" | "done"
+  >(() => (hasSeen("approval-loop") ? "done" : "unseen"));
   const submitEdit = async (messageId: string) => {
-    if (!editMessage || !editDraft.trim()) return;
+    // The button is aria-disabled rather than disabled while a run streams —
+    // focus must survive the wait — so the guard lives here too.
+    if (!editMessage || !editDraft.trim() || activeRun) return;
     const accepted = await editMessage(messageId, editDraft.trim());
     // Success closes the editor; failure keeps the rewritten words on screen.
     if (accepted) setEditingId(null);
@@ -1205,6 +1230,32 @@ export function ChatView({
           ),
       )
     : [];
+  // The caption's anchor: the first proposed call in transcript order, found
+  // once here because the cards render from two sites — the per-message loop
+  // first, then the trailing live loop — and each site alone cannot know it
+  // holds the first. Gated EXACTLY as the starter is — approval bundle
+  // present AND the mount did not opt out of teaching — because subject
+  // panels carry the approval control now, and a first-ever proposal in a
+  // narrow document panel must not spend the one teaching this caption gets.
+  const firstProposedId = approval && showStarter !== false
+    ? (messages
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => callsForRun(message.run_id))
+        .find((call) => call.status === "proposed")?.id ??
+      liveCalls.find((call) => call.status === "proposed")?.id ??
+      "")
+    : "";
+  useEffect(() => {
+    if (approvalCaption === "unseen" && firstProposedId) {
+      // Only after the caption has actually rendered — a mark written on
+      // mount would spend the one showing on a thread where nothing ever
+      // asked for approval.
+      markSeen("approval-loop");
+      setApprovalCaption("showing");
+    } else if (approvalCaption === "showing" && !firstProposedId) {
+      setApprovalCaption("done");
+    }
+  }, [approvalCaption, firstProposedId]);
 
   return (
     <section className="chat-layout">
@@ -1243,6 +1294,9 @@ export function ChatView({
                         decide={decideAgentCall}
                         todos={call.id === showChecklist ? todos : undefined}
                         pinning={pinning}
+                        showApprovalCaption={
+                          approvalCaption !== "done" && call.id === firstProposedId
+                        }
                       />
                     ));
                   })()}
@@ -1261,18 +1315,20 @@ export function ChatView({
                   {message.role === "assistant" && message.content && (
                     <CopyButton value={message.content} label="Copy message" />
                   )}
-                  {/* Disabled rather than hidden while a run streams: the
-                      server would 409 an edit over a live turn, and a control
-                      that vanishes and reappears reads as a bug. The name
-                      quotes the prompt so each row's pencil is distinct to a
-                      screen reader. */}
+                  {/* Inert rather than hidden while a run streams: the server
+                      would 409 an edit over a live turn, and a control that
+                      vanishes and reappears reads as a bug. aria-disabled, not
+                      disabled — the favorites-chevron convention — so focus
+                      survives the wait. The name quotes the prompt so each
+                      row's pencil is distinct to a screen reader. */}
                   {editable && (
                     <button
                       type="button"
                       className="copy-button"
                       aria-label={`Edit: ${message.content.slice(0, 40)}`}
-                      disabled={Boolean(activeRun)}
+                      aria-disabled={Boolean(activeRun)}
                       onClick={() => {
+                        if (activeRun) return;
                         setEditingId(message.id);
                         setEditDraft(message.content);
                       }}
@@ -1303,9 +1359,14 @@ export function ChatView({
                           }
                         }}
                       />
+                      {/* Saving IS the truncation, so the editor says so
+                          before the button is pressed — a destructive act must
+                          not be discovered from its result. */}
+                      <p className="message-edit-note">
+                        Saving re-runs the thread from here — the old answer and
+                        everything after it are deleted.
+                      </p>
                       <div className="message-edit-actions">
-                        {/* Save is the truncation: the old turn and everything
-                            after it go, and the fresh turn streams in. */}
                         <button
                           type="button"
                           className="ghost-button"
@@ -1313,13 +1374,16 @@ export function ChatView({
                         >
                           Cancel
                         </button>
+                        {/* aria-disabled while a run streams (submitEdit
+                            refuses), so focus survives the wait; the empty
+                            draft is guarded there too. */}
                         <button
                           type="button"
                           className="primary-button"
-                          disabled={!editDraft.trim() || Boolean(activeRun)}
+                          aria-disabled={!editDraft.trim() || Boolean(activeRun)}
                           onClick={() => void submitEdit(message.id)}
                         >
-                          Save
+                          Save &amp; re-run
                         </button>
                       </div>
                     </div>
@@ -1360,6 +1424,9 @@ export function ChatView({
                 decide={decideAgentCall}
                 todos={call.id === checklistCallId(liveCalls) ? todos : undefined}
                 pinning={pinning}
+                showApprovalCaption={
+                  approvalCaption !== "done" && call.id === firstProposedId
+                }
               />
             ))}
             {/* The flagged turn's mark while it is still live: a run that parked

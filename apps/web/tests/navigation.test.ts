@@ -46,6 +46,24 @@ describe("navigation model", () => {
     }
   });
 
+  it("gives every section a stable id, unique within its group", () => {
+    // The sidebar's collapse state persists under
+    // `grain.section.<groupId>.<sectionId>`, so a duplicated id would fold two
+    // shelves with one press, and a renamed one would forget who folded it.
+    // The label is deliberately NOT the key — headings get reworded.
+    for (const group of NAV_GROUPS) {
+      const ids = group.sections.map((section) => section.id);
+      expect(ids.every((id) => id.length > 0)).toBe(true);
+      expect(new Set(ids).size).toBe(ids.length);
+      // The unlabelled block a destination's primary views sit in is always
+      // "main" — it renders no heading, so it is the one shelf that never
+      // collapses.
+      for (const section of group.sections) {
+        expect(section.id === "main").toBe(section.label === "");
+      }
+    }
+  });
+
   it("has no sandbox destination, because a sandbox is not a place", () => {
     // The product decision this encodes: capabilities are not destinations. You
     // ask for a chart and get one on the tool card that drew it; you do not go
@@ -106,25 +124,28 @@ describe("navigation model", () => {
     // flat seven-tab strip could not be.
     const library = NAV_GROUPS.find((group) => group.id === "files");
     expect(library?.label).toBe("Library");
+    // The id is pinned alongside the label: it is what the collapse state
+    // persists under, so changing one silently forgets every fold.
     expect(
       library?.sections.map((section) => [
+        section.id,
         section.label,
         section.items.map((item) => item.view),
       ]),
     ).toEqual([
-      ["", ["documents", "projects"]],
+      ["main", "", ["documents", "projects"]],
       // One destination for both: a list is a board with one column, and that
       // is an implementation detail nobody should have to know to find their
       // checklist. Two entries here used to make a list teleport the moment it
       // grew a second column; now the object stays put and changes its glyph.
-      ["Boards & todos", ["boards"]],
+      ["boards", "Boards & todos", ["boards"]],
       // Data beside the things drawn from it — Databases moved here from the
       // Settings menu, ending the connect-data → chart-it trek.
-      ["Data", ["datasets", "data"]],
-      ["Dashboards", ["dashboards", "apps"]],
+      ["data", "Data", ["datasets", "data"]],
+      ["dashboards", "Dashboards", ["dashboards", "apps"]],
       // Inside Library, one always-visible click from anywhere in it — nearer
       // than the old rail seat, which existed only to outrun a Settings menu.
-      ["Knowledge", ["sources", "memory", "graph"]],
+      ["knowledge", "Knowledge", ["sources", "memory", "graph"]],
     ]);
     expect(library?.items[0].label).toBe("Documents");
     expect(PAGE_TITLES.documents).toBe("Documents");

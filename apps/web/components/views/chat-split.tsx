@@ -45,6 +45,13 @@ export type ChatSplitProps = {
   /** The shell's one pin bundle, handed to every extra pane — a dashboard
    *  made in a side pane deserves the same finish-the-job bar. */
   pinning?: DashboardPinning;
+  /**
+   * Bumped by the shell after it writes ratios to storage on the split's
+   * behalf (applying a saved layout). The split re-reads the store when the
+   * column count changes; a bump forces the same re-read when the count did
+   * NOT change, so an applied layout's ratios still land.
+   */
+  resetKey?: number;
 };
 
 const MIN_PERCENT = 15;
@@ -54,8 +61,10 @@ const MIN_PERCENT = 15;
  * private-mode / server render like the pane layout itself: a throwing or
  * absent store is simply the even share, never a crash. The decode lives in
  * `split-sizes` so it can be tested without a DOM; this only adds the guard.
+ * Exported for the shell, which snapshots the current ratios into a saved
+ * layout with the same read the split itself trusts.
  */
-function readStoredSizes(count: number): number[] {
+export function readStoredSizes(count: number): number[] {
   if (typeof window === "undefined") return equalSizes(count);
   try {
     return parseStoredSizes(window.localStorage.getItem(SPLIT_SIZES_KEY), count);
@@ -93,6 +102,7 @@ export function ChatSplit({
   onSettled,
   onApprovalChanged,
   pinning,
+  resetKey,
 }: ChatSplitProps) {
   // Only panes whose conversation still exists. A conversation deleted between
   // sessions leaves a persisted pane pointing at nothing; dropping it here keeps
@@ -121,10 +131,18 @@ export function ChatSplit({
   );
   // A count change lands on the ratios this count last held, not on a blind
   // even reset: the store is keyed per column count, so closing a third pane
-  // restores the drag the user made at two.
+  // restores the drag the user made at two. A `resetKey` bump re-reads
+  // unconditionally — an applied layout may write this SAME count's ratios,
+  // which the length check alone would never notice; the ref keeps the mount
+  // run on the identity-preserving path.
+  const appliedReset = useRef(resetKey);
   useEffect(() => {
-    setSizes((current) => (current.length === columnCount ? current : readStoredSizes(columnCount)));
-  }, [columnCount]);
+    const forced = appliedReset.current !== resetKey;
+    appliedReset.current = resetKey;
+    setSizes((current) =>
+      !forced && current.length === columnCount ? current : readStoredSizes(columnCount),
+    );
+  }, [columnCount, resetKey]);
 
   /** Remember `next` as this column count's ratios — on a drag end or a nudge,
    *  never per pointer-move. Private mode just does not survive a reload. */
@@ -174,7 +192,12 @@ export function ChatSplit({
     if (!state) return;
     drag.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
-    if (state.latest) persistSizes(state.latest);
+    // Only if the split still has the shape the drag was over: a pane pruned
+    // mid-drag changes columnCount, and persisting the stale ratios would
+    // store one count's drag under another count's key.
+    if (state.latest && state.latest.length === columnCount) {
+      persistSizes(state.latest);
+    }
   }
 
   /** Keyboard resize: a separator is focusable, so arrow keys nudge the split. */
@@ -253,7 +276,9 @@ export function ChatSplit({
             className="pane-divider"
             role="separator"
             aria-orientation="vertical"
-            aria-label="Resize panes"
+            // Per-index, so a three-pane split's separators are distinct to a
+            // screen reader rather than three controls answering to one name.
+            aria-label={`Resize panes ${index + 1} and ${index + 2}`}
             // Window-splitter pattern: the value is the left pane's width percent,
             // bounded by the same MIN_PERCENT the drag refuses to cross.
             aria-valuemin={MIN_PERCENT}

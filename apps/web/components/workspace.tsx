@@ -1,12 +1,18 @@
 "use client";
 
-import type { Conversation, DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, Columns2, LogOut, Menu, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
+import type { Conversation, DocumentKind, FavoriteKind } from "@workspace/api-client";
+import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, LogOut, Menu, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
-import { PaneToggle, useCollapsiblePane } from "./collapsible-pane";
+import {
+  PaneToggle,
+  collapseLabel,
+  persistSectionCollapsed,
+  readSectionCollapsed,
+  useCollapsiblePane,
+} from "./collapsible-pane";
 import { CommandPalette } from "./command-palette";
 import { CreateMenu } from "./create-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
@@ -21,7 +27,7 @@ import { spaceNameOf } from "./views/space-threads";
 import { AppsView } from "./views/apps";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
-import { ChatSplit } from "./views/chat-split";
+import { ChatSplit, readStoredSizes } from "./views/chat-split";
 import type { DashboardPinning } from "./views/dashboard-pin-bar";
 import { DashboardEditor } from "./views/dashboard-editor";
 import { DashboardsView } from "./views/dashboards";
@@ -31,9 +37,30 @@ import { GraphView } from "./views/graph";
 import { IntegrationsView } from "./views/integrations";
 import { McpView } from "./views/mcp";
 import { MemoryView } from "./views/memory";
-import { CHORD_WINDOW_MS, chordEligible, chordTarget } from "./views/chords";
+import {
+  CHORDS_KEY,
+  CHORD_WINDOW_MS,
+  chordEligible,
+  chordTarget,
+  parseChordsEnabled,
+  serializeChordsEnabled,
+} from "./views/chords";
+import {
+  LAYOUTS_KEY_PREFIX,
+  layoutNames,
+  parseStoredLayouts,
+  removeLayout,
+  serializeStoredLayouts,
+  upsertLayout,
+  type SavedLayouts,
+} from "./views/layouts";
+import { SPLIT_SIZES_KEY, serializeStoredSizes } from "./views/split-sizes";
+import { THREAD_OPEN_KEY, parseThreadOpen, type ThreadOpen } from "./views/thread-open";
+import type { PaletteToggle } from "./views/palette";
+import { FAVORITE_VIEW, FavoriteStar, FavoritesNav, useFavorites } from "./views/favorites";
 import {
   DEFAULT_GROUP_VIEW,
+  NAV_GROUPS,
   RAIL_GROUPS,
   groupForView,
   type CreateAction,
@@ -55,7 +82,50 @@ import { SourcesView } from "./views/sources";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
 import { CronsView } from "./views/crons";
-import { WorkspaceSwitcher } from "./workspace-selection";
+import { WorkspaceSwitcher, useWorkspaceSelection } from "./workspace-selection";
+
+/**
+ * The saved-layouts store for one workspace, and the two palette preferences.
+ * Guarded for private-mode / server render like every other `grain.*` read:
+ * a throwing or absent store is simply the default, never a crash. The
+ * decodes live in their pure modules; these wrappers only add the guard.
+ */
+function readStoredLayouts(key: string): SavedLayouts {
+  if (typeof window === "undefined") return {};
+  try {
+    return parseStoredLayouts(window.localStorage.getItem(key));
+  } catch {
+    return {};
+  }
+}
+
+function readThreadOpen(): ThreadOpen {
+  if (typeof window === "undefined") return "primary";
+  try {
+    return parseThreadOpen(window.localStorage.getItem(THREAD_OPEN_KEY));
+  } catch {
+    return "primary";
+  }
+}
+
+function readChordsEnabled(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return parseChordsEnabled(window.localStorage.getItem(CHORDS_KEY));
+  } catch {
+    return true;
+  }
+}
+
+/** Persist one `grain.*` key, shrugging in private mode like every other write. */
+function writeStored(key: string, value: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Private mode: the choice just does not survive a reload.
+  }
+}
 
 export function Workspace() {
   const {
@@ -92,6 +162,7 @@ export function Workspace() {
     openInNewPane,
     closePane,
     focusPane,
+    applyLayout,
     refreshConversations,
     patchConversation,
     shareConversation,
@@ -229,6 +300,46 @@ export function Workspace() {
   // dot both read it, so they cannot disagree for a poll cycle.
   const health = useApiHealth(api, loadWorkspace);
 
+  // The ONE favorites list, instantiated here and passed down: the sidebar
+  // block, the thread row's star, the Documents header and the dashboard
+  // catalog all read and write this same state, so no two of them can drift.
+  const favorites = useFavorites(setError);
+
+  /**
+   * Where a favorite lands, per kind. Conversations, documents, projects and
+   * dashboards have focus plumbing, so their rows open the thing itself.
+   * Boards, workflows, agents and schedules do not yet — for those, landing on
+   * the view that lists them is the honest v1 rather than a focus we would
+   * have to fake.
+   */
+  function openFavorite(kind: FavoriteKind, targetId: string) {
+    setSidebarOpen(false);
+    if (kind === "conversation") {
+      // The thread-open preference governs here exactly as it does the
+      // palette's Enter: "split" means beside the primary, not instead of it.
+      // openInNewPane already answers the already-primary case with a no-op.
+      if (threadOpen === "split") return openInNewPane(targetId);
+      return void selectConversation(targetId);
+    }
+    if (kind === "document") {
+      setView("documents");
+      return void openDocument(targetId);
+    }
+    if (kind === "project") {
+      setView("projects");
+      return void openProject(targetId);
+    }
+    if (kind === "dashboard") {
+      setView("dashboards");
+      // Launching IS pinning — the catalog's own precedent — so an unpinned
+      // favorite pins on open rather than focusing a tile the grid never
+      // renders.
+      if (!pinnedIds.has(targetId)) void pinDashboard(targetId);
+      return setFocusedDashboard(targetId);
+    }
+    setView(FAVORITE_VIEW[kind]);
+  }
+
   // The open thread's own row, which is where its approval mode lives. Read
   // from the rail's list rather than held separately, so the picker and the
   // bypass indicator cannot disagree about which mode is in force.
@@ -284,6 +395,88 @@ export function Workspace() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Saved layouts: named snapshots of the whole split, per workspace — the
+  // switcher REMOUNTS this shell, so the key is read once per mount and never
+  // goes stale. Write-through rather than an effect: only a save or delete
+  // changes the store, and each already knows the next value whole.
+  const { currentId: workspaceId } = useWorkspaceSelection();
+  const layoutsKey = LAYOUTS_KEY_PREFIX + workspaceId;
+  const [layouts, setLayouts] = useState<SavedLayouts>(() => readStoredLayouts(layoutsKey));
+  // Bumped after an apply writes ratios on the split's behalf, so ChatSplit
+  // re-reads them even when the column count did not change.
+  const [splitResetKey, setSplitResetKey] = useState(0);
+
+  function persistLayouts(next: SavedLayouts) {
+    setLayouts(next);
+    writeStored(layoutsKey, serializeStoredLayouts(next));
+  }
+
+  /** Capture the split as it stands: primary thread, extra panes, and the
+   *  ratios the current column count last committed. */
+  function saveLayoutAs(name: string) {
+    persistLayouts(
+      upsertLayout(layouts, name, {
+        primaryConversationId: activeConversation,
+        panes: extraPanes,
+        sizes: readStoredSizes(1 + extraPanes.length),
+      }),
+    );
+    setNotice({ text: `Saved layout “${name.trim()}”`, at: Date.now() });
+  }
+
+  /** Recall a saved layout: ratios into the store first (so the split's forced
+   *  re-read finds them), then panes and primary in one commit. */
+  function applySavedLayout(name: string) {
+    const layout = layouts[name];
+    if (!layout) return;
+    if (layout.sizes.length === layout.panes.length + 1 && typeof window !== "undefined") {
+      try {
+        writeStored(
+          SPLIT_SIZES_KEY,
+          serializeStoredSizes(
+            window.localStorage.getItem(SPLIT_SIZES_KEY),
+            layout.panes.length + 1,
+            layout.sizes,
+          ),
+        );
+      } catch {
+        // Private mode: the ratios just do not land; the panes still do.
+      }
+    }
+    applyLayout(layout.panes, layout.primaryConversationId);
+    setSplitResetKey((value) => value + 1);
+  }
+
+  function deleteSavedLayout(name: string) {
+    persistLayouts(removeLayout(layouts, name));
+    setNotice({ text: `Deleted layout “${name}”`, at: Date.now() });
+  }
+
+  // The two palette preferences: where a thread opens, and whether the
+  // G-chords listen at all. Read once (any earlier choice), written on flip.
+  const [threadOpen, setThreadOpen] = useState<ThreadOpen>(() => readThreadOpen());
+  const [chordsEnabled, setChordsEnabled] = useState<boolean>(() => readChordsEnabled());
+
+  function togglePreference(toggle: PaletteToggle) {
+    if (toggle === "thread-open") {
+      const next: ThreadOpen = threadOpen === "split" ? "primary" : "split";
+      setThreadOpen(next);
+      writeStored(THREAD_OPEN_KEY, next);
+      setNotice({
+        text: next === "split" ? "Threads now open in a split" : "Threads now open in place",
+        at: Date.now(),
+      });
+    } else {
+      const next = !chordsEnabled;
+      setChordsEnabled(next);
+      writeStored(CHORDS_KEY, serializeChordsEnabled(next));
+      setNotice({
+        text: next ? "Keyboard shortcuts on" : "Keyboard shortcuts off",
+        at: Date.now(),
+      });
+    }
+  }
+
   // ⌘\ / Ctrl+\ — the split's own key. With extra panes open it cycles the
   // split's focus (primary → pane 1 → … → primary); with none it says where a
   // split comes from rather than silently doing nothing. Window-level and live
@@ -319,7 +512,7 @@ export function Workspace() {
   useEffect(() => {
     let armedAt = 0;
     const onKey = (event: KeyboardEvent) => {
-      if (!chordEligible(event)) return;
+      if (!chordEligible(chordsEnabled, event)) return;
       const now = Date.now();
       if (armedAt && now - armedAt <= CHORD_WINDOW_MS) {
         // A second G re-arms rather than lapsing, so "g g c" still lands.
@@ -341,7 +534,7 @@ export function Workspace() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [setView, setSidebarOpen]);
+  }, [setView, setSidebarOpen, chordsEnabled]);
 
   async function submitRename(conversation: Conversation) {
     const title = renameDraft.trim();
@@ -390,6 +583,19 @@ export function Workspace() {
         )}
         <time>{formatRelative(conversation.updated_at)}</time>
       </button>
+      {/* The star rides only the OPEN thread, beside rename, for the same
+          noise argument. The list is the shell's one favorites state, so the
+          sidebar block above updates in the same render. */}
+      {activeConversation === conversation.id && (
+        <FavoriteStar
+          kind="conversation"
+          targetId={conversation.id}
+          label={conversation.title}
+          favorites={favorites}
+          className="thread-favorite"
+          size={13}
+        />
+      )}
       {/* Rename rides only the OPEN thread, like share: an affordance on every
           row is sidebar noise. Subject threads are named by what they hang
           off, so they never offer it — the server refuses anyway. */}
@@ -482,6 +688,53 @@ export function Workspace() {
    */
   const [railCollapsed, toggleRail] = useCollapsiblePane("rail");
 
+  /**
+   * Which sidebar shelves are folded away, keyed "<groupId>.<sectionId>" and
+   * persisted per section like the panes. One state object rather than a hook
+   * per section, because the section count changes with the active group and
+   * hooks may not come and go. Read once in the initialiser — same
+   * no-hydration argument as `useCollapsiblePane` — and written through on
+   * each toggle. The unlabelled "main" block has no heading to press, so it
+   * is never collapsible and never read here.
+   */
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(
+    () => {
+      const initial: Record<string, boolean> = {};
+      for (const group of NAV_GROUPS) {
+        for (const section of group.sections) {
+          if (!section.label) continue;
+          initial[`${group.id}.${section.id}`] = readSectionCollapsed(group.id, section.id);
+        }
+      }
+      return initial;
+    },
+  );
+  function toggleSection(groupId: GroupId, sectionId: string) {
+    const key = `${groupId}.${sectionId}`;
+    const next = !collapsedSections[key];
+    persistSectionCollapsed(groupId, sectionId, next);
+    setCollapsedSections((current) => ({ ...current, [key]: next }));
+  }
+
+  // Landing on a view whose shelf is folded unfolds it (and persists the
+  // unfold): the sidebar must always show an aria-current row for where you
+  // are, and a route that arrives sideways — the palette, a G-chord, an
+  // upload landing on Sources — must not strand you in an unmarked map.
+  useEffect(() => {
+    const group = groupForView(view);
+    const section = group.sections.find(
+      (candidate) =>
+        candidate.label && candidate.items.some((item) => item.view === view),
+    );
+    if (!section) return;
+    const key = `${group.id}.${section.id}`;
+    setCollapsedSections((current) => {
+      if (!current[key]) return current;
+      persistSectionCollapsed(group.id, section.id, false);
+      return { ...current, [key]: false };
+    });
+  }, [view]);
+
   const [groupHome, setGroupHome] = useState<Record<GroupId, View>>(DEFAULT_GROUP_VIEW);
   useEffect(() => {
     const group = groupForView(view).id;
@@ -549,14 +802,13 @@ export function Workspace() {
     );
   useEffect(() => {
     rereadSnoozes();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inbox, view]);
   const waitingRows = inbox
     ? inbox.approvals.filter((row) => !snoozedApprovals.has(row.id))
     : [];
 
-  /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
-  const renderGroupButton = (group: (typeof RAIL_GROUPS)[number], wide: boolean) => {
+  /** One icon-only destination button, shared by the rail and the tab bar. */
+  const renderGroupButton = (group: (typeof RAIL_GROUPS)[number]) => {
     const Icon = group.icon;
     const badge = group.id === "inbox" ? inboxBadge : 0;
     return (
@@ -567,14 +819,11 @@ export function Workspace() {
         // The badge joins the accessible name (an icon-only button's aria-label
         // REPLACES its content for assistive tech, so a bare label would read
         // "Inbox" over three waiting requests).
-        aria-label={
-          wide ? undefined : badge > 0 ? `${group.label} ${badge}` : group.label
-        }
-        title={wide ? undefined : group.label}
+        aria-label={badge > 0 ? `${group.label} ${badge}` : group.label}
+        title={group.label}
         onClick={() => openGroup(group.id)}
       >
-        <Icon size={wide ? 17 : 19} />
-        {wide && group.label}
+        <Icon size={19} />
         {badge > 0 && <span className="approval-count">{badge}</span>}
       </button>
     );
@@ -594,6 +843,19 @@ export function Workspace() {
         openThreadInSplit={openInNewPane}
         create={create}
         searchTranscripts={(q) => api.searchConversations(q)}
+        // The Phase-6 rows: saved layouts by name, and the two preference
+        // toggles. All of it exists only through here — zero resident chrome
+        // is the point — so an unwired palette would make the whole feature
+        // dead code.
+        extras={{
+          layoutNames: layoutNames(layouts),
+          threadOpen,
+          chordsEnabled,
+        }}
+        applyLayout={applySavedLayout}
+        saveLayout={saveLayoutAs}
+        deleteLayout={deleteSavedLayout}
+        togglePreference={togglePreference}
       />
 
       {/* Band 1: the icon rail — four doors, always visible on desktop. The
@@ -601,13 +863,13 @@ export function Workspace() {
           the top-right, and everything deeper is summoned per destination in
           the contextual sidebar beside this. */}
       <nav className="icon-rail" aria-label="Workspace">
-        {RAIL_GROUPS.map((group) => renderGroupButton(group, false))}
+        {RAIL_GROUPS.map((group) => renderGroupButton(group))}
       </nav>
 
       {/* Band 2: the contextual sidebar — what the chosen door opens onto.
           Collapsible to nothing (the icon rail keeps you oriented); on mobile
-          it is the drawer, and carries the destinations itself because the
-          icon rail is hidden there. */}
+          it is the drawer, holding everything but the destinations — those
+          ride the bottom tab bar there. */}
       <aside id="workspace-rail" className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-top">
           <button
@@ -621,13 +883,6 @@ export function Workspace() {
 
         {/* Above everything else because everything else is scoped to it. */}
         <WorkspaceSwitcher />
-
-        {/* The icon rail is hidden under the drawer breakpoint, so the drawer
-            carries the destinations itself — labelled, because a drawer has
-            the width the rail deliberately does not. */}
-        <nav className="primary-nav mobile-group-nav" aria-label="Destinations">
-          {RAIL_GROUPS.map((group) => renderGroupButton(group, true))}
-        </nav>
 
         {activeGroup.id === "chat" && (
           <button
@@ -645,32 +900,62 @@ export function Workspace() {
             say what each shelf holds. What the seven-tab strip grew into. */}
         {showSections && (
           <nav className="section-nav" aria-label={`${activeGroup.label} views`}>
-            {activeGroup.sections.map((section, index) => (
-              <div className="section-block" key={section.label || index}>
-                {section.label && (
-                  <span className="section-heading">{section.label}</span>
-                )}
-                {section.items.map((item) => {
-                  const Icon = item.icon;
-                  const count = viewCounts[item.view];
-                  return (
-                    <button
-                      key={item.view}
-                      className={view === item.view ? "nav-item active" : "nav-item"}
-                      aria-current={view === item.view ? "page" : undefined}
-                      onClick={() => {
-                        setView(item.view);
-                        setSidebarOpen(false);
-                      }}
-                    >
-                      <Icon size={15} />
-                      {item.label}
-                      {count !== undefined && <span className="nav-count">{count}</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+            {activeGroup.sections.map((section) => {
+              const collapsed = Boolean(
+                collapsedSections[`${activeGroup.id}.${section.id}`],
+              );
+              const rows = section.items.map((item) => {
+                const Icon = item.icon;
+                const count = viewCounts[item.view];
+                return (
+                  <button
+                    key={item.view}
+                    className={view === item.view ? "nav-item active" : "nav-item"}
+                    aria-current={view === item.view ? "page" : undefined}
+                    onClick={() => {
+                      setView(item.view);
+                      setSidebarOpen(false);
+                    }}
+                  >
+                    <Icon size={15} />
+                    {item.label}
+                    {count !== undefined && <span className="nav-count">{count}</span>}
+                  </button>
+                );
+              });
+              // The unlabelled block is never collapsible: it holds the
+              // destination's primary views, and it has no heading to press.
+              if (!section.label) {
+                return (
+                  <div className="section-block" key={section.id}>
+                    {rows}
+                  </div>
+                );
+              }
+              const Chevron = collapsed ? ChevronRight : ChevronDown;
+              return (
+                <div className="section-block" key={section.id}>
+                  {/* The heading is its own collapse toggle. The accessible
+                      name carries the outcome and keeps the visible label in
+                      it ("Hide the Data section"), same contract as the pane
+                      toggles; aria-expanded carries the state. Deliberately
+                      NOT named "<label>" bare — the entry buttons below are,
+                      and two controls answering to one name is ambiguity the
+                      specs would trip over before a screen reader did. */}
+                  <button
+                    type="button"
+                    className="section-heading"
+                    aria-expanded={!collapsed}
+                    aria-label={collapseLabel(`${section.label} section`, collapsed)}
+                    onClick={() => toggleSection(activeGroup.id, section.id)}
+                  >
+                    {section.label}
+                    <Chevron size={12} aria-hidden="true" />
+                  </button>
+                  {!collapsed && rows}
+                </div>
+              );
+            })}
           </nav>
         )}
 
@@ -734,6 +1019,13 @@ export function Workspace() {
             )}
           </div>
         )}
+
+        {/* In every destination's sidebar for the pinned-dashboards reason
+            below: a favorite is a thing *this user* wanted in reach wherever
+            they are. Above the pins, and a separate nav — the pinned block is
+            dashboards-only and stays exactly as it is. Renders nothing while
+            the list is empty. */}
+        <FavoritesNav favorites={favorites} onOpen={openFavorite} />
 
         {/* In every destination's sidebar, deliberately: a pin is not a place
             the product has, it is a chart *this user* wanted where they could
@@ -834,9 +1126,14 @@ export function Workspace() {
       </aside>
 
       {sidebarOpen && (
-        <button
+        // A backdrop, not a control: the drawer's X is the accessible close —
+        // giving this the same name put two "Close menu" buttons on screen at
+        // once, a strict-mode ambiguity for tests and a duplicate stop for
+        // AT. Pointer-only dismiss is what a scrim is; keyboard users have
+        // the X and Escape-adjacent focus order inside the drawer.
+        <div
           className="sidebar-scrim"
-          aria-label="Close menu"
+          aria-hidden="true"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -911,6 +1208,9 @@ export function Workspace() {
           // renders the primary alone with no wrapper — the no-regression path.
           <ChatSplit
             panes={extraPanes}
+            // Bumped when a recalled layout writes ratios for an UNCHANGED
+            // column count — the one case the count-keyed re-read cannot see.
+            resetKey={splitResetKey}
             conversations={conversations}
             bootstrap={bootstrap}
             sources={sources}
@@ -1090,6 +1390,7 @@ export function Workspace() {
             removeDashboard={removeDashboard}
             focused={focusedDashboard}
             setFocused={setFocusedDashboard}
+            favorites={favorites}
             chat={{
               agentId: bootstrap?.default_agent_id,
               sources,
@@ -1137,6 +1438,7 @@ export function Workspace() {
             removeDocument={removeDocument}
             pendingEdits={pendingEdits}
             decidePendingEdit={decidePendingEdit}
+            favorites={favorites}
             chat={{
               agentId: bootstrap?.default_agent_id,
               sources,
@@ -1163,6 +1465,7 @@ export function Workspace() {
             removeBoard={removeBoard}
             columnOps={boardColumnOps}
             todoOps={todoOps}
+            favorites={favorites}
           />
         )}
 
@@ -1186,6 +1489,7 @@ export function Workspace() {
             removeFile={removeProjectFile}
             setEntry={setProjectEntry}
             removeProject={removeProject}
+            favorites={favorites}
             chat={{
               agentId: bootstrap?.default_agent_id,
               sources,
@@ -1213,7 +1517,15 @@ export function Workspace() {
             onNewThread={(spaceId) => void newConversation(spaceId)}
           />
         )}
-        {view === "agents" && <AgentsView setError={setError} />}
+        {view === "agents" && (
+          <AgentsView
+            setError={setError}
+            // "Save & try" seeds the thread's default agent itself; landing on
+            // the chat view only needs the id.
+            openConversation={(id) => void selectConversation(id)}
+            favorites={favorites}
+          />
+        )}
 
         {/* Self-contained like AgentsView: the skill list is nobody's business
             until they open this or type "/" in the composer. */}
@@ -1227,13 +1539,14 @@ export function Workspace() {
             composeRequested={workflowRequested}
             onComposeHandled={() => setWorkflowRequested(false)}
             onWorkspaceChanged={() => void refreshOffScreenWork().catch(() => undefined)}
+            favorites={favorites}
           />
         )}
 
         {/* Self-contained like WorkflowsView: a cron's schedule and last-fired
             state are nobody's business until they open this, so the list is
             fetched here rather than at page load. */}
-        {view === "crons" && <CronsView setError={setError} />}
+        {view === "crons" && <CronsView setError={setError} favorites={favorites} />}
 
         {view === "mcp" && (
           <McpView
@@ -1275,6 +1588,16 @@ export function Workspace() {
             riding along with every page load. */}
         {view === "admin" && <AdminView setError={setError} />}
       </main>
+
+      {/* The four doors again, as a thumb-height bottom bar — mobile only.
+          The icon rail hides under the drawer breakpoint, and a drawer is a
+          place destinations go to be forgotten; the bar keeps them one tap
+          away while the drawer keeps what a drawer is for (the switcher,
+          sections, threads, identity). Same buttons as the rail — badge
+          included — so the two surfaces cannot drift apart. */}
+      <nav className="mobile-tab-bar" aria-label="Destinations">
+        {RAIL_GROUPS.map((group) => renderGroupButton(group))}
+      </nav>
 
       {editing && (
         <DashboardEditor

@@ -82,6 +82,13 @@ export type NavItem = {
  * — the unlabelled block a destination's primary views sit in.
  */
 export type NavSection = {
+  /**
+   * Stable name for this shelf, unique within its group. The sidebar's
+   * collapse state persists under `grain.section.<groupId>.<sectionId>`, so
+   * this must not change when a label is reworded — "main" for the unlabelled
+   * block, which never collapses.
+   */
+  id: string;
   label: string;
   items: NavItem[];
 };
@@ -114,6 +121,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
      */
     sections: [
       {
+        id: "main",
         label: "",
         items: [
           { view: "chat", label: "Chat", icon: MessageSquare },
@@ -138,6 +146,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
     surface: "rail",
     sections: [
       {
+        id: "main",
         label: "",
         items: [
           { view: "activity", label: "Inbox", icon: Inbox },
@@ -163,6 +172,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
     surface: "rail",
     sections: [
       {
+        id: "main",
         label: "",
         items: [
           { view: "documents", label: "Documents", icon: FileText },
@@ -177,6 +187,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
          * *teleport* to the other row the moment it grew a second column;
          * now the object stays put in one listing and only its glyph changes.
          */
+        id: "boards",
         label: "Boards & todos",
         items: [{ view: "boards", label: "Boards & todos", icon: KanbanSquare }],
       },
@@ -187,6 +198,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
          * chart-it trek crossed the whole shell. Now the pipeline reads top to
          * bottom: connect or upload, dataset, dashboard.
          */
+        id: "data",
         label: "Data",
         items: [
           { view: "datasets", label: "Datasets", icon: Table2 },
@@ -194,6 +206,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
         ],
       },
       {
+        id: "dashboards",
         label: "Dashboards",
         items: [
           { view: "dashboards", label: "Dashboards", icon: BarChart3 },
@@ -214,6 +227,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
          * are in Library. The rail seat existed to keep them out of a Settings
          * menu, and that threat is gone with the menu.
          */
+        id: "knowledge",
         label: "Knowledge",
         items: [
           { view: "sources", label: "Sources", icon: Library },
@@ -242,6 +256,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
     surface: "rail",
     sections: [
       {
+        id: "main",
         label: "",
         items: [
           { view: "workflows", label: "Workflows", icon: Workflow },
@@ -257,6 +272,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
     surface: "settings",
     sections: [
       {
+        id: "main",
         label: "",
         items: [
           { view: "mcp", label: "MCP", icon: Blocks },
@@ -274,7 +290,9 @@ const GROUP_SPECS: NavGroupSpec[] = [
     label: "Admin",
     icon: ShieldCheck,
     surface: "settings",
-    sections: [{ label: "", items: [{ view: "admin", label: "Admin", icon: ShieldCheck }] }],
+    sections: [
+      { id: "main", label: "", items: [{ view: "admin", label: "Admin", icon: ShieldCheck }] },
+    ],
   },
 ];
 

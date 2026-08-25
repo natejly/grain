@@ -8,6 +8,7 @@ import type {
 import { Pin, PinOff, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { describeDashboard, refusalLines } from "./dashboard-format";
+import { FavoriteStar, type FavoritesApi } from "./favorites";
 
 /**
  * The two surfaces that are *not* the home screen: everything this workspace
@@ -26,6 +27,8 @@ export type DashboardCatalogProps = {
   unpin: (dashboardId: string) => Promise<void>;
   remove: (dashboard: Dashboard) => Promise<void>;
   open: (dashboardId: string) => void;
+  /** The shell's one favorites list; without it the rows offer no star. */
+  favorites?: FavoritesApi;
 };
 
 /**
@@ -43,6 +46,7 @@ export function DashboardCatalog({
   unpin,
   remove,
   open,
+  favorites,
 }: DashboardCatalogProps) {
   return (
     <section className="dashboard-catalog" aria-label="All dashboards">
@@ -66,6 +70,17 @@ export function DashboardCatalog({
                   <strong>{dashboard.name}</strong>
                   <span>{describeDashboard(dashboard)}</span>
                 </button>
+                {/* Beside Pin, wearing its aria pattern: the verb is the
+                    outcome, aria-pressed is the state. Pin is "on my home
+                    screen"; the star is "in my sidebar, from anywhere". */}
+                {favorites && (
+                  <FavoriteStar
+                    kind="dashboard"
+                    targetId={dashboard.id}
+                    label={dashboard.name}
+                    favorites={favorites}
+                  />
+                )}
                 <button
                   type="button"
                   className="icon-button"

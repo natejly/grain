@@ -182,12 +182,18 @@ describe("attributing a message's name", () => {
 });
 
 describe("whose messages the viewer may edit", () => {
-  it("allows every user message on a personal thread, legacy ''-sender included", () => {
-    // The server never returns another member's personal thread, so on one the
-    // caller wrote every user message — including rows predating the sender
-    // column, which carry sender_id "".
+  it("allows the caller's own prompts on a personal thread, legacy ''-sender included", () => {
+    // Rows predating the sender column carry sender_id "", and on a personal
+    // thread those can only be the caller's own.
     expect(senderIsViewer(message({ sender_id: "user-1" }), false, "user-1")).toBe(true);
     expect(senderIsViewer(message({ sender_id: "" }), false, "user-1")).toBe(true);
+  });
+
+  it("refuses a teammate's historic prompt on an unshared thread", () => {
+    // Unsharing keeps the transcript: an attributed teammate prompt survives
+    // the flip to personal, and the server 403s an edit of it — the pencil
+    // must not offer what the save would refuse.
+    expect(senderIsViewer(message({ sender_id: "user-2" }), false, "user-1")).toBe(false);
   });
 
   it("requires an exact attribution match on a shared thread", () => {

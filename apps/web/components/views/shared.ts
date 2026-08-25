@@ -230,9 +230,12 @@ export function senderInitial(message: Message, sharedThread: boolean): string {
 /**
  * Whether a message is the viewer's own to edit.
  *
- * On a personal thread every user message is the caller's — including rows
- * written before the sender column existed (`sender_id === ""`) — so all of
- * them are editable. On a shared thread only an exact attribution match will
+ * On a personal thread the caller's own prompts are editable — including rows
+ * written before the sender column existed (`sender_id === ""`), which on a
+ * personal thread can only be the caller's. NOT every user message, though: a
+ * thread unshared after teammates spoke in it keeps their attributed prompts,
+ * and the server 403s an edit of those — the pencil must not offer what the
+ * save would refuse. On a shared thread only an exact attribution match will
  * do: an edit truncates everything after the message, and rewriting a
  * teammate's prompt would delete their turn out from under them (the server
  * 409s that case; this keeps the pencil off it in the first place). A legacy
@@ -244,7 +247,9 @@ export function senderIsViewer(
   viewerId: string,
 ): boolean {
   if (message.role !== "user") return false;
-  if (!sharedThread) return true;
+  if (!sharedThread) {
+    return message.sender_id === "" || message.sender_id === viewerId;
+  }
   return viewerId !== "" && message.sender_id === viewerId;
 }
 

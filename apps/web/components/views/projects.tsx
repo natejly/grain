@@ -24,6 +24,7 @@ import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
 import { LatexPreview } from "../latex-compiler";
 import { ProjectPreview } from "../project-bundler";
 import { useSubjectThread } from "../use-subject-thread";
+import { FavoriteStar, type FavoritesApi } from "./favorites";
 import { SubjectChatPanel } from "./subject-chat";
 
 // Re-exported rather than redeclared: a locally-duplicated copy silently drifts
@@ -40,6 +41,8 @@ export type ProjectsViewProps = {
   /** Point the preview at another file — the only way to preview an .html page. */
   setEntry: (projectId: string, path: string) => Promise<void>;
   removeProject: (project: ProjectSummary) => Promise<void>;
+  /** The shell's one favorites list; without it the header offers no star. */
+  favorites?: FavoritesApi;
   /** What the side chat needs to be the same chat as the rail's. */
   chat?: ProjectChatDeps;
 };
@@ -91,6 +94,7 @@ export function ProjectsView({
   removeFile,
   setEntry,
   removeProject,
+  favorites,
   chat,
 }: ProjectsViewProps) {
   const [creating, setCreating] = useState(false);
@@ -313,6 +317,14 @@ export function ProjectsView({
               <span className="project-path">{selected || "no file selected"}</span>
             </div>
             <div className="project-editor-actions">
+              {favorites && (
+                <FavoriteStar
+                  kind="project"
+                  targetId={active.id}
+                  label={active.name}
+                  favorites={favorites}
+                />
+              )}
               <button className="primary-button" disabled={!dirty} onClick={() => void save()}>
                 <Save size={14} /> {dirty ? "Save" : "Saved"}
               </button>

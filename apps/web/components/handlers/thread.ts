@@ -297,6 +297,10 @@ export function createThreadHandlers({
    */
   async function editMessage(messageId: string, content: string): Promise<boolean> {
     if (!content.trim() || activeRun || !activeConversation) return false;
+    // The thread this edit belongs to, captured before the await: a resolve
+    // landing after a switch must not cut the NEW thread's transcript with the
+    // old thread's pivot — the same stillOpen discipline followRun keeps.
+    const conversationId = activeConversation;
     // The pivot, captured before the await: the truncation must cut the
     // transcript as it stood when the edit was submitted, not as it stands
     // after a slow round trip.
@@ -305,7 +309,7 @@ export function createThreadHandlers({
     setError("");
     try {
       const response = await api.editMessage(
-        activeConversation,
+        conversationId,
         messageId,
         content.trim(),
         agentId,
@@ -314,8 +318,10 @@ export function createThreadHandlers({
         // is exactly the surprise the per-turn attachment exists to avoid.
         controls && { model: controls.model, effort: controls.effort, fast: controls.fast },
       );
-      setMessages((items) => [...items.slice(0, pivotIndex), response.message]);
-      if (response.run) void followRun(response.run.id, activeConversation);
+      if (activeConversationRef.current === conversationId) {
+        setMessages((items) => [...items.slice(0, pivotIndex), response.message]);
+      }
+      if (response.run) void followRun(response.run.id, conversationId);
       return true;
     } catch (caught) {
       // An agent deleted out from under a thread leaves the picker on a
