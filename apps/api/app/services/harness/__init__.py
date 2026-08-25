@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Dict
 
 from ...config import Settings
+from .anthropic import AnthropicHarness
 from .base import Harness, ModelStep
 from .openai import OpenAIHarness
 from .scripted import ScriptedHarness
@@ -24,6 +25,7 @@ from .scripted import ScriptedHarness
 # through `build_step(settings, ...)` — so module-level instantiation is safe.
 HARNESSES: Dict[str, Harness] = {
     "openai": OpenAIHarness(),
+    "anthropic": AnthropicHarness(),
     "scripted": ScriptedHarness(),
 }
 

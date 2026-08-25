@@ -354,6 +354,25 @@ class Conversation(Base):
     space_id: Mapped[str] = mapped_column(
         String(36), default="", server_default="", index=True
     )
+    #: The composer's remembered choices for this thread — which authored agent
+    #: answers, and the model/effort overrides — with "" meaning "the
+    #: deployment's own default", same convention as `Run.requested_model`.
+    #:
+    #: Deliberately NOT consulted by the run path: every turn still carries its
+    #: controls explicitly (`MessageControls`), so what reached the provider
+    #: stays answerable from the Run row alone and a thread default can never
+    #: silently steer a turn the client did not ask it to. These columns exist
+    #: so the composer can seed its pickers when the thread reopens — per-pane
+    #: session state used to evaporate — not to add a fourth resolution layer.
+    default_agent_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    default_model: Mapped[str] = mapped_column(
+        String(120), default="", server_default=""
+    )
+    default_effort: Mapped[str] = mapped_column(
+        String(24), default="", server_default=""
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -1140,6 +1159,30 @@ class SandboxTool(Base):
     )
 
 
+class ApiToken(Base):
+    """A bearer credential for the workspace's own MCP server surface.
+
+    The secret is shown once at mint time and only its sha256 lands here —
+    the table can authenticate a presented secret (hash it, look it up) and
+    can never leak one. `user_id` is the member the token acts AS: every call
+    made with it resolves tools and policy as that person, so revoking their
+    membership revokes what their tokens could reach. Revocation is a stamp,
+    not a delete — a dead token's row is the audit answer to "what was this
+    credential, and when did it stop working".
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(80), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class McpServer(Base):
     """A configured MCP server: a stdio subprocess or a streamable HTTP endpoint."""
 
@@ -1661,6 +1704,42 @@ class DashboardPin(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class Favorite(Base):
+    """One entry in one person's sidebar Favorites block.
+
+    Per *user*, not per workspace, for `DashboardPin`'s exact reason: the
+    workspace's named things are shared, but which of them you keep in reach is
+    a personal arrangement — two people watching the same workspace must not
+    fight over one sidebar, and one of them tidying theirs must not rearrange
+    everybody else's.
+
+    `kind` + `target_id` name anything with a name; the closed set of kinds is
+    `services/favorites.FAVORITE_KINDS`, and that module owns turning the pair
+    back into a label under each kind's own visibility rule. `target_id` is
+    deliberately not a ForeignKey: one column cannot reference eight tables,
+    and a favorite must survive its target's deletion the way `Run.skill_id`
+    survives a skill's — a row whose target no longer resolves simply drops out
+    of the listing (`services/favorites.list_favorites`).
+    """
+
+    __tablename__ = "favorites"
+    __table_args__ = (
+        # Favoriting is a fact, not a log: a second favorite of the same thing
+        # has to update the first row rather than double the sidebar entry.
+        UniqueConstraint("user_id", "kind", "target_id"),
+        Index("ix_favorites_workspace_user", "workspace_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    target_id: Mapped[str] = mapped_column(String(36))
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class GeneratedApp(Base):
     __tablename__ = "generated_apps"
     __table_args__ = (UniqueConstraint("slug"),)
@@ -1911,6 +1990,8 @@ class ModelUsage(Base):
         Index("ix_model_usage_workspace_created", "workspace_id", "created_at"),
         # "What did this run cost" — the runaway-loop question, asked by run.
         Index("ix_model_usage_workspace_run", "workspace_id", "run_id"),
+        # "What does this agent cost" — the per-agent scorecard's axis.
+        Index("ix_model_usage_workspace_agent", "workspace_id", "agent_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -1918,6 +1999,9 @@ class ModelUsage(Base):
     run_id: Mapped[str] = mapped_column(String(36), default="")
     conversation_id: Mapped[str] = mapped_column(String(36), default="")
     user_id: Mapped[str] = mapped_column(String(36), default="")
+    # Plain column like run_id, and for the same reason: the ledger must outlive
+    # a retired agent. "" = the call had no agent (embeddings, compiles).
+    agent_id: Mapped[str] = mapped_column(String(36), default="")
     # What caused the call: chat | workflow_node | embedding | codegen |
     # context_blurb | memory_extraction | graph_extraction | workflow_compile.
     # Free text rather than an enum so a new caller records something honest

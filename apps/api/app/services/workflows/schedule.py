@@ -38,7 +38,7 @@ from sqlalchemy.orm import Session
 from ...clock import utcnow
 from ...models import Workflow, WorkflowRun
 from . import executor
-from .validate import cron_matches
+from .validate import cron_error, cron_matches
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,68 @@ def local_moment(moment: datetime, zone: str) -> Optional[datetime]:
     except (ZoneInfoNotFoundError, ValueError, KeyError):
         return None
     return moment.replace(tzinfo=timezone.utc).astimezone(target).replace(tzinfo=None)
+
+
+#: How far ahead `next_fires` will look. A 5-field cron that recurs at all
+#: recurs within a year — except a Feb 29 schedule, whose next fire can be four
+#: years out; previewing that as "no upcoming fires" is honest, and cheaper than
+#: teaching every caller to wait out a four-year scan.
+SCAN_DAYS = 370
+
+
+def next_fires(
+    expression: str,
+    timezone_name: str,
+    *,
+    count: int = 3,
+    now: Optional[datetime] = None,
+) -> List[datetime]:
+    """The next `count` UTC minutes this cron fires in `timezone_name`.
+
+    A preview, so it answers exactly as the ticker would: step forward through
+    UTC minutes and ask whether each minute's *local* wall clock matches — which
+    is how a spring-forward gap skips a fire and a fall-back hour fires twice,
+    here as in dispatch. Returns naive-UTC datetimes (the storage convention),
+    and fewer than `count` — possibly none — when the horizon runs out first.
+    An invalid cron or unknown timezone answers [] rather than raising: the
+    validator owns the refusal and its message; this function only knows time.
+    """
+    if count <= 0 or cron_error(expression) is not None:
+        return []
+    fields = expression.strip().split()
+    # The cron grammar factors: fields 1-2 constrain the wall *clock*, fields
+    # 3-5 the wall *date* (including the POSIX dom/dow OR, which lives wholly
+    # inside the date fields), and a minute fires iff both halves match. Split
+    # the expression so a dead day is dismissed with one call at whatever time
+    # the scan happens to hold, instead of 1440 — the difference between an
+    # impossible cron costing a few hundred matches and half a million —
+    # while `cron_matches` stays the only code that knows what a field means.
+    day_expr = " ".join(("*", "*", fields[2], fields[3], fields[4]))
+    time_expr = " ".join((fields[0], fields[1], "*", "*", "*"))
+    candidate = floor_minute(now if now is not None else utcnow()) + timedelta(
+        minutes=1
+    )
+    horizon = candidate + timedelta(days=SCAN_DAYS)
+    fires: List[datetime] = []
+    while candidate < horizon and len(fires) < count:
+        local = local_moment(candidate, timezone_name)
+        if local is None:
+            return []
+        if not cron_matches(day_expr, local):
+            # Jump toward the next local midnight, stopping 61 minutes short: a
+            # DST shift in between makes the UTC jump overshoot the local date
+            # line by up to an hour, and overshooting would skip real fires.
+            # The tail is walked minute by minute, which is cheap and exact.
+            next_midnight = local.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) + timedelta(days=1)
+            skip = int((next_midnight - local).total_seconds() // 60) - 61
+            candidate += timedelta(minutes=max(skip, 1))
+            continue
+        if cron_matches(time_expr, local):
+            fires.append(candidate)
+        candidate += timedelta(minutes=1)
+    return fires
 
 
 def due(workflow: Workflow, *, moment: datetime) -> bool:

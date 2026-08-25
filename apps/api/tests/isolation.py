@@ -55,6 +55,7 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.models import (
     AgentToolCall,
+    ApiToken,
     AppRelease,
     AuditEvent,
     Board,
@@ -300,6 +301,16 @@ def build_tenant(label: str) -> Tenant:
         db.add(grant)
         db.flush()
         ids["tool_grant"] = grant.id
+
+        api_token = ApiToken(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            name=f"{label} token",
+            token_hash=f"hash-{workspace_id}",
+        )
+        db.add(api_token)
+        db.flush()
+        ids["api_token"] = api_token.id
 
         tool_call = ToolCall(
             workspace_id=workspace_id,
@@ -1237,6 +1248,24 @@ ROUTE_CASES: List[RouteCase] = [
         note="Turning off another tenant's approval park is the worst of these.",
     ),
     RouteCase(
+        "POST",
+        "/api/conversations/{conversation_id}/messages/{message_id}/edit",
+        DENY,
+        path_ids={"conversation_id": "conversation", "message_id": "message"},
+        body={"content": "rewritten"},
+        note="An edit is a truncation: another tenant's transcript must 404 "
+        "on the workspace filter before anything is deleted.",
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/conversations/{conversation_id}/defaults",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"default_model": "smuggled-model"},
+        note="Preferences, not policy — but still another tenant's row, so the "
+        "workspace filter must 404 before anything is written.",
+    ),
+    RouteCase(
         "PUT",
         "/api/conversations/{conversation_id}/share",
         DENY,
@@ -1254,6 +1283,13 @@ ROUTE_CASES: List[RouteCase] = [
     ),
     RouteCase(
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
+    ),
+    RouteCase(
+        "POST",
+        "/api/runs/{run_id}/steer",
+        DENY,
+        path_ids={"run_id": "run"},
+        body={"content": "leaked steer"},
     ),
     RouteCase(
         "GET", "/api/runs/{run_id}/events", DENY, path_ids={"run_id": "run"}
@@ -1423,6 +1459,21 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/skills/{skill_id}/versions/{version_id}/restore",
         DENY,
         path_ids={"skill_id": "skill", "version_id": "skill_version"},
+    ),
+    # SKILL.md interop. Import takes no foreign id — the sweep proves the
+    # created row lands in the caller's workspace and echoes nothing of B's;
+    # export names a skill id and must refuse a foreign one.
+    RouteCase(
+        "POST",
+        "/api/skills/import",
+        SCOPED,
+        body={"markdown": "---\nname: sweep-import\ndescription: sweep\n---\nBody."},
+    ),
+    RouteCase(
+        "GET",
+        "/api/skills/{skill_id}/export",
+        DENY,
+        path_ids={"skill_id": "skill"},
     ),
     # -- audit / graph / memory -------------------------------------------
     RouteCase("GET", "/api/audit-events", SCOPED),
@@ -1774,6 +1825,38 @@ ROUTE_CASES: List[RouteCase] = [
         body_ids={"tiles.0.dashboard_id": "dashboard"},
         note="moves a tile on another tenant's home screen",
     ),
+    # -- favorites (per user, not per workspace) ----------------------------
+    RouteCase("GET", "/api/favorites", SCOPED),
+    RouteCase(
+        "PUT",
+        "/api/favorites/{kind}/{target_id}",
+        DENY,
+        path_literals={"kind": "conversation"},
+        path_ids={"target_id": "conversation"},
+        note="the subtle one: the PUT proves visibility BEFORE storing, so a "
+        "foreign id must 404 with no row written. `conversation` is the kind "
+        "under test because it has the extra personal/shared axis — the "
+        "harness's id maps to tenant B's own rail thread, unshared, and "
+        "resolve_visible's never-removed workspace filter refuses it before "
+        "the shared/personal question is even asked",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/favorites/{kind}/{target_id}",
+        DENY,
+        path_literals={"kind": "conversation"},
+        path_ids={"target_id": "conversation"},
+        note="'Not a favorite': foreign, missing and never-favorited are the "
+        "same 404 from this side of the workspace wall",
+    ),
+    RouteCase(
+        "PUT",
+        "/api/favorites/order",
+        DENY,
+        body={"entries": [{"kind": "conversation", "target_id": "", "ordinal": 0}]},
+        body_ids={"entries.0.target_id": "conversation"},
+        note="reorders an entry the caller never favorited",
+    ),
     # -- database connections ---------------------------------------------
     RouteCase("GET", "/api/db/connections", SCOPED),
     RouteCase(
@@ -1992,6 +2075,15 @@ ROUTE_CASES: List[RouteCase] = [
     # cron cannot be fired. Dispatch has no route of its own — the shared
     # /api/workflows/tick claims and enqueues due crons.
     RouteCase("GET", "/api/crons", SCOPED),
+    # Same classification as POST /api/workflows/compile: it stores nothing and
+    # names no resource, but it spends model budget on the caller's ledger, so
+    # it still requires an authenticated actor — SCOPED, not PUBLIC.
+    RouteCase(
+        "POST",
+        "/api/crons/compile-schedule",
+        SCOPED,
+        body={"text": "every weekday at 9am"},
+    ),
     RouteCase(
         "POST",
         "/api/crons",
@@ -2169,6 +2261,25 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"invite_id": "workspace_invite"},
     ),
     RouteCase("GET", "/api/admin/audit-events", SCOPED),
+    # The SIEM export walks the same table forward on a keyset cursor; like
+    # /usage it takes no foreign id, so the leak scan over the victim's ids and
+    # markers is what proves its filter holds.
+    RouteCase("GET", "/api/admin/audit-events/export", SCOPED),
+    # -- API tokens (owner-gated bearer credentials for the MCP surface) -----
+    RouteCase("GET", "/api/api-tokens", SCOPED),
+    RouteCase("POST", "/api/api-tokens", SCOPED, body={"name": "sweep token"}),
+    RouteCase(
+        "DELETE",
+        "/api/api-tokens/{token_id}",
+        DENY,
+        path_ids={"token_id": "api_token"},
+    ),
+    # The MCP server surface authenticates by BEARER, not the cookie the sweep
+    # carries, so a cookie-only caller is refused 401 before any tenant lookup.
+    # PUBLIC (bearer-gated, not cookie-scoped): the 500 guard and the fact that
+    # a wrong-credential caller sees nothing are the whole contract here; its
+    # per-workspace scoping is proved by test_mcp_server.py.
+    RouteCase("POST", "/api/mcp", PUBLIC),
     RouteCase("GET", "/api/admin/activity", SCOPED),
     RouteCase("GET", "/api/admin/storage", SCOPED),
     RouteCase("GET", "/api/admin/mcp-servers", SCOPED),
@@ -2178,6 +2289,10 @@ ROUTE_CASES: List[RouteCase] = [
     # aggregating rows it should not see, which is exactly what the leak scan
     # over every id and marker string catches.
     RouteCase("GET", "/api/admin/usage", SCOPED),
+    # The per-agent scorecard. Like /usage it takes no id, only a window; the
+    # leak scan over the victim's agent id and marker strings proves its five
+    # GROUP BYs aggregate only the caller's rows.
+    RouteCase("GET", "/api/admin/agents", SCOPED),
     # Latency/throughput/error/liveness/retention rollups. Like /usage it takes
     # no id, only a window, so the only cross-tenant risk is aggregating rows it
     # should not see — the leak scan over the victim's run/conversation ids and

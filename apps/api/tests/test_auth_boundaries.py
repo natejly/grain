@@ -58,6 +58,13 @@ PUBLIC_UNSAFE_ROUTES = {
     # workflow id, no timestamp — so it can only fire what a workspace's own cron
     # expression already said to fire. Unset secret means 503, not open.
     "/api/workflows/tick",
+    # Grain's own MCP server. An external agent holds no cookie session, so it
+    # authenticates with a workspace bearer token resolved INSIDE the route
+    # (services/api_tokens.resolve), the same class as the ticker's shared
+    # secret. Bearer-only is itself the CSRF defense — a browser cannot be made
+    # to attach one — which is exactly why it must not depend on the cookie
+    # actor. Its per-workspace scoping is proved by test_mcp_server.py.
+    "/api/mcp",
 }
 
 

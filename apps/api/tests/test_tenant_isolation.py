@@ -790,6 +790,16 @@ def test_create_by_name_does_not_collide_across_workspaces(
 
 DB_GET_ALLOWLIST = {
     # (file, symbol fetched): why fetching by primary key alone is safe here.
+    ("app/api/api_tokens.py", "ApiToken"): (
+        "both fetches (create-replay, revoke) are immediately followed by an "
+        "explicit `token.workspace_id != actor.workspace_id` check that 404s a "
+        "cross-tenant row; the owner gate on the route is the outer bound"
+    ),
+    ("app/services/delegation.py", "Run"): (
+        "id comes from ToolContext.run_id, stamped by subjects.tool_context "
+        "from the turn's own run; the fetch is followed by an explicit "
+        "workspace check that nulls a cross-tenant row"
+    ),
     ("app/auth.py", "Workspace"): "id comes from the caller's own membership row",
     ("app/auth.py", "User"): "id comes from the caller's own session row",
     ("app/auth.py", "Agent"): "dev seed only; guarded by is_dev_env",

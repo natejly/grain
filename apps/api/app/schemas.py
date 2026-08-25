@@ -28,7 +28,7 @@ class ModelProviderStatus(BaseModel):
     read it, and is now simply "a real provider is behind this".
     """
 
-    provider: Literal["openai", "scripted"]
+    provider: Literal["openai", "anthropic", "scripted"]
     configured: bool
     model: str
     # The per-turn controls the composer offers. `selectable_models` is the
@@ -330,7 +330,7 @@ class ConversationCreate(BaseModel):
 #: imported from `services.agent_loop`, matching `ToolPolicyRequest.scope`: the
 #: wire contract and the policy engine are allowed to be described twice, and
 #: schemas do not reach into services.
-ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes", "plan"]
+ApprovalMode = Literal["ask_writes", "ask_all", "auto_writes", "plan", "guardian"]
 
 
 class ConversationOut(ApiModel):
@@ -356,8 +356,30 @@ class ConversationOut(ApiModel):
     #: The space this thread lives in; "" for none. Space threads stay in the
     #: rail with ordinary personal/shared semantics — see `models.Conversation`.
     space_id: str = ""
+    #: The composer's remembered choices for this thread, "" meaning "the
+    #: deployment's default". Seeds for the pickers when the thread reopens —
+    #: the run path never reads them (see `models.Conversation`).
+    default_agent_id: str = ""
+    default_model: str = ""
+    default_effort: str = ""
     created_at: datetime
     updated_at: datetime
+
+
+class ConversationDefaultsRequest(BaseModel):
+    """The body of `PATCH /api/conversations/{id}/defaults`.
+
+    Every field optional: a PATCH names only what it changes, and "" is a real
+    value ("back to the deployment's default"), so None-means-untouched and
+    empty-means-clear are two different statements. Values are stored, not
+    validated against the provider's allow-lists — the composer only ever
+    *seeds* its pickers from them, and a picker ignores a value the deployment
+    no longer offers, so a stale default degrades to the default default.
+    """
+
+    default_agent_id: Optional[str] = Field(default=None, max_length=36)
+    default_model: Optional[str] = Field(default=None, max_length=120)
+    default_effort: Optional[str] = Field(default=None, max_length=24)
 
 
 class ConversationTitleRequest(BaseModel):
@@ -484,6 +506,30 @@ class SendMessageRequest(BaseModel):
     #: set, every per-turn field above is ignored and the response carries no
     #: run.
     aside: bool = False
+
+
+class SkillImportRequest(BaseModel):
+    """A SKILL.md file's raw text (`POST /skills/import`).
+
+    The open agent-skills format: `---` frontmatter with `name` and
+    `description`, then a markdown body. Parsed by
+    `services/skill_markdown.parse_skill_markdown`; its bounds (kebab name,
+    20k body) are the same ones `SkillCreate` enforces, surfaced as 422s with
+    the parser's own messages.
+    """
+
+    markdown: str = Field(min_length=1, max_length=30000)
+
+
+class SteerRequest(BaseModel):
+    """A mid-turn message for a run already in flight (`POST /runs/{id}/steer`).
+
+    Not a new turn: the text is appended to the running turn's transcript at the
+    head of its next iteration, so it shapes the very next model step. Runs that
+    are parked or finished refuse it — the composer is the right channel there.
+    """
+
+    content: str = Field(min_length=1, max_length=4000)
 
 
 class RunOut(ApiModel):
@@ -653,6 +699,10 @@ class ToolPolicyOut(ApiModel):
     #: knowing how old it is, not just that it exists.
     created_at: datetime
     updated_at: datetime
+    #: Who made the grant — the Rules ledger's "origin" column. A user id, not a
+    #: name: the client already holds the member list, and a name copied onto
+    #: the row would go stale on rename.
+    created_by: str = ""
 
 
 class ToolPolicyRequest(BaseModel):
@@ -1187,6 +1237,34 @@ class DashboardLayoutUpdate(BaseModel):
     """
 
     tiles: List[DashboardLayoutTile] = Field(max_length=60)
+
+
+class FavoriteOut(ApiModel):
+    """One sidebar Favorites entry, already resolved.
+
+    `label` is the target's current name, read at listing time under the
+    target kind's own visibility rule — never stored, so a rename anywhere
+    shows up here without a write.
+    """
+
+    kind: str
+    target_id: str
+    label: str
+    ordinal: int
+
+
+class FavoriteOrderEntry(BaseModel):
+    kind: str = Field(max_length=24)
+    target_id: str = Field(max_length=36)
+    ordinal: int = Field(ge=0, le=10_000)
+
+
+class FavoriteOrderUpdate(BaseModel):
+    """The whole Favorites block in one write — `DashboardLayoutUpdate`'s
+    reasoning: dragging one entry moves its neighbours, and a save that failed
+    halfway would leave two entries claiming one slot."""
+
+    entries: List[FavoriteOrderEntry] = Field(max_length=200)
 
 
 class GeneratedAppCreate(BaseModel):

@@ -41,6 +41,11 @@ class ToolContext:
     #: the memory tools carry into retrieval and recall, resolved once per turn
     #: from the conversation (never from a tool's arguments).
     space_id: str = ""
+    #: Which turn this is. Not a scope — nothing narrows on it — but the handle
+    #: a long-running tool needs to observe its own run: the delegate tool reads
+    #: `cancel_requested` off it between child iterations, and screens child
+    #: output against it, so "stop" reaches work happening inside one tool call.
+    run_id: str = ""
 
 
 @dataclass
@@ -277,6 +282,38 @@ def _search_conversations(db: Session, context: ToolContext, args: Dict[str, Any
     return ToolResult(content=json.dumps(payload))
 
 
+#: The blocking-question tool. One name: the spec below, the decision
+#: endpoint's answer bridge, and the web's answer card all key on it.
+ASK_USER = "ask_user"
+
+
+def _ask_user(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    # Only ever executed with a decision already on the call (force_ask parks
+    # it unconditionally). An approval may carry the typed answer, merged into
+    # the arguments as an amendment by the decision endpoint — the same channel
+    # a reviewer's accepted hunks ride — so the model's own `arguments_json`
+    # stays the record of what was asked.
+    answer = str(args.get("answer") or "").strip()
+    if answer:
+        return ToolResult(content=f"The user answered:\n\n{answer}")
+    return ToolResult(
+        content=(
+            "The user approved the question without typing an answer. Proceed "
+            "with your best judgment and say which assumption you made."
+        )
+    )
+
+
+def _preview_ask_user(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
+    """The approval card for this call is the question itself."""
+    question = str(args.get("question") or "")
+    options = args.get("options")
+    if isinstance(options, list) and options:
+        rendered = "\n".join(f"- {str(option)}" for option in options[:8])
+        return f"{question}\n\n{rendered}"
+    return question
+
+
 def registry_families(
     db: Session, context: ToolContext
 ) -> List[Tuple[str, Dict[str, ToolSpec]]]:
@@ -341,6 +378,40 @@ def registry_families(
             },
             executor=_recall_memory,
         ),
+        ASK_USER: ToolSpec(
+            name=ASK_USER,
+            description=(
+                "Ask the user one blocking question and wait for their answer. "
+                "Use it when you cannot proceed without a decision only they "
+                "can make — a choice between real alternatives, a missing "
+                "fact, an ambiguous instruction. Do not use it for questions "
+                "you can answer with the other tools, and never more than "
+                "once per turn unless the answer raises a new question."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question, phrased so a one-line answer resolves it.",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional suggested answers, if the choice is enumerable.",
+                    },
+                },
+                "required": ["question"],
+            },
+            executor=_ask_user,
+            # Reading nothing and writing nothing, so read_only is literally
+            # true; force_ask is what makes it park — the park IS the feature,
+            # and no standing allow, bypass mode, or guardian may pre-answer a
+            # question addressed to a person.
+            read_only=True,
+            preview=_preview_ask_user,
+            force_ask=True,
+        ),
         "search_conversations": ToolSpec(
             name="search_conversations",
             description=(
@@ -359,8 +430,14 @@ def registry_families(
             executor=_search_conversations,
         ),
     }
+    # Imported here rather than at module top: delegation builds child
+    # registries through `build_registry`, so a top-level import in each
+    # direction would be a cycle. Same pattern as the loop's workflow import.
+    from .delegation import delegation_tools
+
     return [
         ("core", core),
+        ("delegation", delegation_tools(db, context)),
         ("memory", agentic_memory_tools(db, context)),
         ("graph", graph_walk_tools(db, context)),
         ("artifacts", artifact_tools(db, context)),

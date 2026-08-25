@@ -16,9 +16,10 @@ stays on the axes ADR 0010 gave it. Deletion is destructive — see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..models import Conversation, MemoryItem, Run, Source, Space
@@ -197,15 +198,18 @@ def delete_space(db: Session, *, workspace_id: str, space_id: str) -> SpaceTeard
     # Hard delete, not the user-facing tombstone: `status="deleted"` exists so
     # a person's "forget that" is auditable, but these rows are structural
     # casualties — already unreachable to recall the moment the space is gone.
-    teardown.memory_count = (
+    # Session.execute is typed as the generic Result, which has no rowcount;
+    # a bulk DELETE always answers with a CursorResult, which does.
+    deleted_memories = cast(
+        "CursorResult[Any]",
         db.execute(
             delete(MemoryItem).where(
                 MemoryItem.workspace_id == workspace_id,
                 MemoryItem.space_id == space.id,
             )
-        ).rowcount
-        or 0
+        ),
     )
+    teardown.memory_count = deleted_memories.rowcount or 0
 
     db.delete(space)
     return teardown

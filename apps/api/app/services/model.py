@@ -472,6 +472,12 @@ def extract_memories(
         # The script is a fixture file rather than a model, but it reaches
         # storage down the same path, so its claim keys get the same validation.
         return [_with_claim_key(item) for item in scripted_memories(settings, prompt)]
+    if settings.active_model_provider != "openai":
+        # Same degradation the blurb/summary/graph chokepoints choose: a
+        # non-OpenAI harness serves the chat turn, and the auxiliary extractors
+        # skip rather than crash the post-turn hook. Teaching each one a second
+        # provider is its own change, not a side effect of adding a harness.
+        return []
     client = _openai_client(settings)
     response = call_responses(
         client,

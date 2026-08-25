@@ -24,13 +24,30 @@ def append_event(
     event_type: str,
     payload: Dict[str, Any],
 ) -> RunEvent:
-    latest = db.scalar(
-        select(func.max(RunEvent.sequence)).where(RunEvent.run_id == run_id)
-    )
+    """Append one event, with its sequence computed *inside* the INSERT.
+
+    `run_events` is unique on (run_id, sequence), and two writers race it in
+    production: the loop's own DeltaBuffer/tool events, and request threads —
+    cancel, and now steer, which made the collision a routine user action. A
+    read-max-then-insert here would hand both writers the same number and fail
+    whichever inserts second, and the loop side has no retry: an IntegrityError
+    there fails the whole turn. The scalar subquery makes the assignment atomic
+    on SQLite (one writer at a time under WAL; the subquery evaluates inside
+    the insert's own write transaction), which is the shipped backend.
+
+    On backends with snapshot-isolated concurrent writers (Postgres) two
+    simultaneous inserts can still compute the same max — callers that write
+    from a request thread keep their one-shot IntegrityError retry as the
+    belt to this suspenders.
+    """
     event = RunEvent(
         workspace_id=workspace_id,
         run_id=run_id,
-        sequence=(latest or 0) + 1,
+        sequence=(
+            select(func.coalesce(func.max(RunEvent.sequence), 0) + 1)
+            .where(RunEvent.run_id == run_id)
+            .scalar_subquery()
+        ),
         event_type=event_type,
         payload_json=json.dumps(payload, separators=(",", ":"), default=str),
     )

@@ -12,6 +12,7 @@ from .api import (
     admin,
     agents,
     analytics,
+    api_tokens,
     artifacts,
     audit,
     bibliography,
@@ -21,6 +22,7 @@ from .api import (
     dashboards,
     dbconnect,
     doc_pending,
+    favorites,
     folders,
     generated_apps,
     graph,
@@ -28,6 +30,7 @@ from .api import (
     integrations,
     latex,
     mcp,
+    mcp_server,
     memory,
     org,
     projects,
@@ -126,8 +129,11 @@ app.include_router(sandbox.router)
 app.include_router(sandbox_tools.router)
 app.include_router(analytics.router)
 app.include_router(dashboards.router)
+app.include_router(favorites.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)
 app.include_router(crons.router)
 app.include_router(admin.router)
 app.include_router(org.router)
+app.include_router(api_tokens.router)
+app.include_router(mcp_server.router)

@@ -31,6 +31,7 @@ from ..schemas import (
     ApprovalModeRequest,
     CitationCheck,
     ConversationCreate,
+    ConversationDefaultsRequest,
     ConversationOut,
     ConversationShareRequest,
     ConversationTitleRequest,
@@ -38,6 +39,7 @@ from ..schemas import (
     RunOut,
     SendMessageRequest,
     SendMessageResponse,
+    SteerRequest,
 )
 from ..services import conversation_index, conversations, orgs, subjects
 from ..services import skills as skills_service
@@ -109,6 +111,9 @@ def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationO
         owned=conversation.created_by == actor.user_id,
         can_share=_can_share(conversation, actor),
         space_id=conversation.space_id,
+        default_agent_id=conversation.default_agent_id,
+        default_model=conversation.default_model,
+        default_effort=conversation.default_effort,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -426,6 +431,43 @@ def set_approval_mode(
     return _conversation_out(conversation, actor)
 
 
+@router.patch(
+    "/conversations/{conversation_id}/defaults", response_model=ConversationOut
+)
+def set_conversation_defaults(
+    conversation_id: str,
+    payload: ConversationDefaultsRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    """Remember the composer's choices — agent, model, effort — on the thread.
+
+    A PATCH of preferences, not policy: the run path never reads these (every
+    turn still names its controls explicitly), so there is nothing here to
+    audit and no gate beyond visibility. Any member a shared thread is visible
+    to may set them — they are the thread's working setup, like its title.
+
+    No `Idempotency-Key`: a retry lands on the same state by construction.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.default_agent_id is not None:
+        conversation.default_agent_id = payload.default_agent_id
+    if payload.default_model is not None:
+        conversation.default_model = payload.default_model
+    if payload.default_effort is not None:
+        conversation.default_effort = payload.default_effort
+    db.commit()
+    db.refresh(conversation)
+    return _conversation_out(conversation, actor)
+
+
 @router.put("/conversations/{conversation_id}/title", response_model=ConversationOut)
 def rename_conversation(
     conversation_id: str,
@@ -613,6 +655,105 @@ def list_messages(
     ]
 
 
+def _stage_turn(
+    db: Session,
+    *,
+    actor: Actor,
+    settings: Settings,
+    conversation: Conversation,
+    payload: SendMessageRequest,
+) -> tuple[Run, Message]:
+    """Resolve the agent, model and skill, then stage the run and its user
+    message — everything a new turn needs short of idempotency, audit and
+    commit, which differ between the callers (send vs edit)."""
+    # "The default agent" is now per workspace — every account gets one at
+    # signup — because a global id would point a new tenant at the dev seed's
+    # agent, or at nothing at all.
+    agent_query = select(Agent).where(
+        Agent.workspace_id == actor.workspace_id, Agent.enabled.is_(True)
+    )
+    if payload.agent_id:
+        agent_query = agent_query.where(Agent.id == payload.agent_id)
+    else:
+        agent_query = agent_query.order_by(Agent.created_at, Agent.id)
+    agent = db.scalar(agent_query)
+    if agent is None:
+        raise HTTPException(status_code=400, detail="Agent is not available")
+    # A per-turn model override must be on the deployment allow-list *as narrowed
+    # by the organization*; an arbitrary string would reach the provider unpriced,
+    # and one the org has excluded would reach it against policy. `allowed_models`
+    # intersects the two, so this refusal and the list `/api/bootstrap` offers the
+    # composer are the same list — a dropdown cannot show a choice this 422s.
+    # (An off-ladder `effort` is already refused by the `ReasoningEffort` Literal.)
+    if payload.model and payload.model not in orgs.allowed_models(
+        db, workspace_id=actor.workspace_id, settings=settings
+    ):
+        raise HTTPException(status_code=422, detail="Model is not selectable")
+    # `fast` maps to "low", not "none" — the honest lowest-latency effort every
+    # model accepts — and an explicit `effort` always wins over it.
+    requested_effort = payload.effort or ("low" if payload.fast else "")
+    # A skill invoked for this turn must be visible to the caller (own or shared,
+    # same-workspace) and its args must validate now, so the refusal lands at send
+    # time rather than inside the turn. The resolved args are stored on the run and
+    # the body is spliced into the instructions in `resolve_directives`.
+    skill_id = ""
+    skill_args_json = ""
+    skill_version = 0
+    if payload.skill_id:
+        skill = skills_service.resolve_visible(
+            db,
+            workspace_id=actor.workspace_id,
+            user_id=actor.user_id,
+            skill_id=payload.skill_id,
+        )
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Skill not available")
+        skill_id = skill.id
+        skill_args_json = skills_service.validate_args(skill, payload.skill_args or {})
+        # Pin the version so a run parked over a later edit resumes with this body.
+        skill_version = skill.version
+    run = Run(
+        id=new_id(),
+        workspace_id=actor.workspace_id,
+        conversation_id=conversation.id,
+        agent_id=agent.id,
+        created_by=actor.user_id,
+        status="queued",
+        prompt=payload.content,
+        requested_model=payload.model or "",
+        requested_effort=requested_effort,
+        skill_id=skill_id,
+        skill_args_json=skill_args_json,
+        skill_version=skill_version,
+        # What was on screen when this was typed — the file the project editor
+        # had open. Stored, not acted on: `subjects.resolve` reads it back on
+        # every entry into the loop, so a turn that parks for an approval comes
+        # back to the file it was asked about rather than to whatever is open an
+        # hour later.
+        subject_focus=(payload.subject_focus or "")[:400],
+    )
+    message = Message(
+        id=new_id(),
+        workspace_id=actor.workspace_id,
+        conversation_id=conversation.id,
+        run_id=run.id,
+        role="user",
+        # Attribute the message to the member who sent it, so a shared thread
+        # shows who said what. `Run.created_by` is already `actor.user_id`.
+        created_by=actor.user_id,
+        content=payload.content,
+    )
+    db.add_all([run, message])
+    append_event(
+        db,
+        workspace_id=actor.workspace_id,
+        run_id=run.id,
+        event_type="run.queued",
+        payload={"status": "queued", "message_id": message.id},
+    )
+    return run, message
+
+
 @router.post(
     "/conversations/{conversation_id}/messages",
     response_model=SendMessageResponse,
@@ -708,90 +849,8 @@ def send_message(
             run=RunOut.model_validate(run),
             replayed=True,
         )
-    # "The default agent" is now per workspace — every account gets one at
-    # signup — because a global id would point a new tenant at the dev seed's
-    # agent, or at nothing at all.
-    agent_query = select(Agent).where(
-        Agent.workspace_id == actor.workspace_id, Agent.enabled.is_(True)
-    )
-    if payload.agent_id:
-        agent_query = agent_query.where(Agent.id == payload.agent_id)
-    else:
-        agent_query = agent_query.order_by(Agent.created_at, Agent.id)
-    agent = db.scalar(agent_query)
-    if agent is None:
-        raise HTTPException(status_code=400, detail="Agent is not available")
-    # A per-turn model override must be on the deployment allow-list *as narrowed
-    # by the organization*; an arbitrary string would reach the provider unpriced,
-    # and one the org has excluded would reach it against policy. `allowed_models`
-    # intersects the two, so this refusal and the list `/api/bootstrap` offers the
-    # composer are the same list — a dropdown cannot show a choice this 422s.
-    # (An off-ladder `effort` is already refused by the `ReasoningEffort` Literal.)
-    if payload.model and payload.model not in orgs.allowed_models(
-        db, workspace_id=actor.workspace_id, settings=settings
-    ):
-        raise HTTPException(status_code=422, detail="Model is not selectable")
-    # `fast` maps to "low", not "none" — the honest lowest-latency effort every
-    # model accepts — and an explicit `effort` always wins over it.
-    requested_effort = payload.effort or ("low" if payload.fast else "")
-    # A skill invoked for this turn must be visible to the caller (own or shared,
-    # same-workspace) and its args must validate now, so the refusal lands at send
-    # time rather than inside the turn. The resolved args are stored on the run and
-    # the body is spliced into the instructions in `resolve_directives`.
-    skill_id = ""
-    skill_args_json = ""
-    skill_version = 0
-    if payload.skill_id:
-        skill = skills_service.resolve_visible(
-            db,
-            workspace_id=actor.workspace_id,
-            user_id=actor.user_id,
-            skill_id=payload.skill_id,
-        )
-        if skill is None:
-            raise HTTPException(status_code=404, detail="Skill not available")
-        skill_id = skill.id
-        skill_args_json = skills_service.validate_args(skill, payload.skill_args or {})
-        # Pin the version so a run parked over a later edit resumes with this body.
-        skill_version = skill.version
-    run = Run(
-        id=new_id(),
-        workspace_id=actor.workspace_id,
-        conversation_id=conversation.id,
-        agent_id=agent.id,
-        created_by=actor.user_id,
-        status="queued",
-        prompt=payload.content,
-        requested_model=payload.model or "",
-        requested_effort=requested_effort,
-        skill_id=skill_id,
-        skill_args_json=skill_args_json,
-        skill_version=skill_version,
-        # What was on screen when this was typed — the file the project editor
-        # had open. Stored, not acted on: `subjects.resolve` reads it back on
-        # every entry into the loop, so a turn that parks for an approval comes
-        # back to the file it was asked about rather than to whatever is open an
-        # hour later.
-        subject_focus=(payload.subject_focus or "")[:400],
-    )
-    message = Message(
-        id=new_id(),
-        workspace_id=actor.workspace_id,
-        conversation_id=conversation.id,
-        run_id=run.id,
-        role="user",
-        # Attribute the message to the member who sent it, so a shared thread
-        # shows who said what. `Run.created_by` is already `actor.user_id`.
-        created_by=actor.user_id,
-        content=payload.content,
-    )
-    db.add_all([run, message])
-    append_event(
-        db,
-        workspace_id=actor.workspace_id,
-        run_id=run.id,
-        event_type="run.queued",
-        payload={"status": "queued", "message_id": message.id},
+    run, message = _stage_turn(
+        db, actor=actor, settings=settings, conversation=conversation, payload=payload
     )
     record_key(
         db,
@@ -809,7 +868,138 @@ def send_message(
         action="run.created",
         resource_type="run",
         resource_id=run.id,
-        detail={"conversation_id": conversation.id, "agent_id": agent.id},
+        detail={"conversation_id": conversation.id, "agent_id": run.agent_id},
+    )
+    db.commit()
+    background_tasks.add_task(process_run, run.id)
+    return SendMessageResponse(
+        message=_message_out(message, actor.user_name),
+        run=RunOut.model_validate(run),
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/edit",
+    response_model=SendMessageResponse,
+    status_code=202,
+)
+def edit_message(
+    conversation_id: str,
+    message_id: str,
+    payload: SendMessageRequest,
+    background_tasks: BackgroundTasks,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> SendMessageResponse:
+    """Rewrite one of your prompts and re-run the conversation from there.
+
+    The edit IS a truncation: the old turn's messages, tool cards and runs are
+    deleted — not superseded — and a fresh turn is queued with the new words.
+    History reaches the model rebuilt from `messages` on every turn, so what
+    remains after the cut is exactly the context the re-run sees; keeping the
+    old answer around would leave the transcript contradicting itself.
+
+    Only the author may edit (a shared thread must not let one member rewrite
+    another's words), only a `user` message that started a turn qualifies (an
+    assistant message is not yours to put words into; an aside never ran), and
+    a turn that is still running or parked refuses with a 409 — deciding or
+    cancelling it comes first.
+
+    Same idempotency shape as `message.send`, its own operation: the resource
+    a replay must return is the NEW run.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.aside:
+        raise HTTPException(status_code=422, detail="An aside is added, not edited into")
+    replay = find_replay(
+        db, workspace_id=actor.workspace_id, operation="message.edit", key=key
+    )
+    if replay:
+        run = db.scalar(
+            select(Run).where(
+                Run.id == replay.resource_id,
+                Run.workspace_id == actor.workspace_id,
+            )
+        )
+        message = db.scalar(
+            select(Message).where(Message.run_id == replay.resource_id, Message.role == "user")
+        )
+        if run is None or message is None:
+            raise replayed_resource_gone()
+        return SendMessageResponse(
+            message=_message_out(message, actor.user_name),
+            run=RunOut.model_validate(run),
+            replayed=True,
+        )
+    pivot = db.scalar(
+        select(Message).where(
+            Message.id == message_id,
+            Message.conversation_id == conversation.id,
+            Message.workspace_id == actor.workspace_id,
+        )
+    )
+    if pivot is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if pivot.role != "user" or pivot.run_id == "":
+        raise HTTPException(
+            status_code=422,
+            detail="Only a prompt that started a turn can be edited",
+        )
+    if pivot.created_by != actor.user_id:
+        raise HTTPException(
+            status_code=403, detail="Only the author may edit their message"
+        )
+    try:
+        removed_runs = conversations.truncate_after(
+            db,
+            workspace_id=actor.workspace_id,
+            conversation_id=conversation.id,
+            message_id=pivot.id,
+            # On a shared thread the sweep must not take a teammate's turn with
+            # it; on a personal thread every run is the caller's anyway.
+            only_runs_by=actor.user_id if conversation.shared else None,
+        )
+    except conversations.TruncationBlocked as blocked:
+        raise HTTPException(status_code=409, detail=str(blocked)) from blocked
+    run, message = _stage_turn(
+        db, actor=actor, settings=settings, conversation=conversation, payload=payload
+    )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="message.edit",
+        key=key,
+        resource_id=run.id,
+    )
+    # The destructive half gets its own audit row, before the routine
+    # `run.created` one: "who cut this transcript, where, and which runs went"
+    # must have an answer that is not implied by a run appearing.
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="message.edited",
+        resource_type="message",
+        resource_id=pivot.id,
+        detail={"conversation_id": conversation.id, "removed_runs": removed_runs},
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="run.created",
+        resource_type="run",
+        resource_id=run.id,
+        detail={"conversation_id": conversation.id, "agent_id": run.agent_id},
     )
     db.commit()
     background_tasks.add_task(process_run, run.id)
@@ -878,6 +1068,117 @@ def cancel_run(
         resource_id=run.id,
     )
     db.commit()
+    return run
+
+
+@router.post("/runs/{run_id}/steer", response_model=RunOut)
+def steer_run(
+    run_id: str,
+    payload: SteerRequest,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> Run:
+    """Inject a mid-turn user message into a run that is still working.
+
+    The message rides `run_events` — the channel the loop already polls for
+    cancellation — as a `steer.requested` event the loop folds into the
+    transcript at the head of its next iteration (`_absorb_steering`). Only a
+    queued or running turn accepts one: a parked run is waiting on a decision,
+    not on words, and a finished run has a composer for the next turn.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from ..services.agent_loop import STEER_REQUESTED
+
+    run = db.scalar(
+        select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    # Stricter than cancel's gate, on purpose. Cancel only stops work, so every
+    # member may cancel an automation; steer INJECTS instructions into a turn
+    # and writes a user message into its conversation, so it demands the same
+    # authority sending a message there would: the run is the caller's own, or
+    # its conversation is one the caller could post to (shared, or their own).
+    # A cron run targeting another member's personal thread refuses — without
+    # this, a member could write into (and redirect) a thread they cannot open.
+    conversation = (
+        db.get(Conversation, run.conversation_id) if run.conversation_id else None
+    )
+    if conversation is not None and conversation.workspace_id != actor.workspace_id:
+        conversation = None
+    may_steer = run.created_by == actor.user_id or (
+        conversation is not None
+        and (bool(conversation.shared) or conversation.created_by == actor.user_id)
+    )
+    if not may_steer:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if find_replay(
+        db, workspace_id=actor.workspace_id, operation="run.steer", key=key
+    ):
+        return run
+    if run.status not in {"queued", "running"}:
+        raise HTTPException(
+            status_code=409, detail="Run is not in flight; send a message instead"
+        )
+    # One transaction for all four writes, so the idempotency key covers
+    # exactly what it makes replayable: a crash after the commit replays as
+    # "already steered", a crash before it left nothing to duplicate. The
+    # steer's Message carries `run_id=run.id` like the turn's own prompt
+    # message does — `_transcript` excludes the current run's messages, so a
+    # queued run that starts later, or a lease-recovery re-run that rebuilds
+    # its LoopState from scratch, re-absorbs the steer from its events without
+    # ALSO meeting it in the transcript; later turns see it as ordinary
+    # history.
+    #
+    # `append_event` assigns the sequence atomically, but a snapshot-isolated
+    # backend can still collide with the loop's own writer; one retry
+    # recomputes it, and losing twice means something is genuinely wrong.
+    for attempt in (1, 2):
+        try:
+            append_event(
+                db,
+                workspace_id=actor.workspace_id,
+                run_id=run.id,
+                event_type=STEER_REQUESTED,
+                payload={"content": payload.content, "user_id": actor.user_id},
+            )
+            db.add(
+                Message(
+                    id=new_id(),
+                    workspace_id=actor.workspace_id,
+                    conversation_id=run.conversation_id,
+                    run_id=run.id,
+                    role="user",
+                    created_by=actor.user_id,
+                    content=payload.content,
+                )
+            )
+            record_key(
+                db,
+                workspace_id=actor.workspace_id,
+                operation="run.steer",
+                key=key,
+                resource_id=run.id,
+            )
+            record_audit(
+                db,
+                workspace_id=actor.workspace_id,
+                actor_id=actor.user_id,
+                action="run.steered",
+                resource_type="run",
+                resource_id=run.id,
+                detail={"chars": len(payload.content)},
+            )
+            db.commit()
+            break
+        except IntegrityError:
+            db.rollback()
+            if attempt == 2:
+                raise HTTPException(
+                    status_code=409, detail="The run is busy; try steering again"
+                ) from None
     return run
 
 

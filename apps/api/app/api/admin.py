@@ -50,6 +50,7 @@ from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import (
+    Agent,
     AgentToolCall,
     AuditEvent,
     Chunk,
@@ -571,6 +572,115 @@ def list_audit_log(
         limit=limit,
         offset=offset,
         has_more=offset + len(entries) < total,
+    )
+
+
+class AdminAuditExportEntryOut(ApiModel):
+    """One raw trail row for an external ingester. No user join on purpose:
+    an exporter pulling thousands of rows resolves actors once from the
+    members list, not once per row."""
+
+    id: str
+    action: str
+    resource_type: str
+    resource_id: str
+    actor_id: str
+    detail: Dict[str, Any]
+    created_at: datetime
+
+
+class AdminAuditExportPage(ApiModel):
+    events: List[AdminAuditExportEntryOut]
+    #: Pass back to continue exactly where this page ended; null when the
+    #: trail is drained. Stable under concurrent writes: keyset, not offset.
+    next_cursor: Optional[str]
+
+
+def _encode_audit_cursor(created_at: datetime, event_id: str) -> str:
+    import base64
+
+    raw = f"{created_at.isoformat()}|{event_id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_audit_cursor(cursor: str) -> Tuple[datetime, str]:
+    import base64
+
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+        stamp, _, event_id = raw.partition("|")
+        if not event_id:
+            raise ValueError
+        return datetime.fromisoformat(stamp), event_id
+    except (ValueError, UnicodeDecodeError) as error:
+        raise HTTPException(
+            status_code=422, detail="The export cursor is not one this API issued"
+        ) from error
+
+
+@router.get("/audit-events/export", response_model=AdminAuditExportPage)
+def export_audit_log(
+    cursor: Optional[str] = Query(default=None, max_length=200),
+    limit: int = Query(default=500, ge=1, le=1000),
+    since: Optional[datetime] = Query(default=None),
+    action: Optional[str] = Query(default=None, max_length=100),
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> AdminAuditExportPage:
+    """The whole trail, oldest first, for SIEM ingestion and archival.
+
+    The UI page above is capped-offset and newest-first — right for reading,
+    structurally unable to drain a long trail. This one walks forward on a
+    keyset cursor over (created_at, id): no offset cap, stable under
+    concurrent writes (a row inserted behind the cursor is never skipped and
+    never repeated), and `since` makes incremental pulls cheap. `action`
+    filters by prefix, matching how the actions namespace themselves
+    ("agent_tool.", "skill.", "run."). The keyset predicate is spelled as the
+    two-clause OR rather than a row-value comparison so it runs identically
+    on SQLite and Postgres.
+    """
+    conditions: List[ColumnElement[bool]] = [
+        AuditEvent.workspace_id == actor.workspace_id
+    ]
+    if since is not None:
+        conditions.append(AuditEvent.created_at >= since)
+    if action:
+        conditions.append(AuditEvent.action.like(f"{action}%"))
+    if cursor:
+        after_at, after_id = _decode_audit_cursor(cursor)
+        conditions.append(
+            (AuditEvent.created_at > after_at)
+            | ((AuditEvent.created_at == after_at) & (AuditEvent.id > after_id))
+        )
+    rows = list(
+        db.scalars(
+            select(AuditEvent)
+            .where(*conditions)
+            .order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc())
+            .limit(limit + 1)
+        )
+    )
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    events = [
+        AdminAuditExportEntryOut(
+            id=event.id,
+            action=event.action,
+            resource_type=event.resource_type,
+            resource_id=event.resource_id,
+            actor_id=event.actor_id,
+            detail=_detail(event.detail_json),
+            created_at=event.created_at,
+        )
+        for event in rows
+    ]
+    return AdminAuditExportPage(
+        events=events,
+        next_cursor=(
+            _encode_audit_cursor(rows[-1].created_at, rows[-1].id)
+            if has_more and rows
+            else None
+        ),
     )
 
 
@@ -1700,3 +1810,155 @@ def get_observability(
             mau=_active_members(30),
         ),
     )
+
+
+# --------------------------------------------------------------------------
+# Per-agent scorecard
+# --------------------------------------------------------------------------
+
+
+class AdminAgentStatsOut(ApiModel):
+    """One authored agent's window: what it ran, what it spent, what it asked.
+
+    The trust columns are the point. `denied_calls` and `mode_approved_calls`
+    say how often this agent's writes met a human "no" or rode a bypass, and
+    `flagged_runs` counts turns the injection screen flagged — the three
+    numbers an org admin reads before widening an agent's tool subset.
+    """
+
+    agent_id: str
+    name: str
+    enabled: bool
+    runs: int
+    completed_runs: int
+    failed_runs: int
+    tool_calls: int
+    denied_calls: int
+    #: Calls that executed on a mode's say-so (`decided_by` = "mode:…" —
+    #: auto_writes bypasses and guardian approvals alike), i.e. writes no
+    #: person reviewed before they ran.
+    mode_approved_calls: int
+    flagged_runs: int
+    usage_calls: int
+    total_tokens: int
+    cost_usd: float
+    unpriced_calls: int
+
+
+class AdminAgentsOut(ApiModel):
+    window_days: int
+    since: datetime
+    agents: List[AdminAgentStatsOut]
+
+
+@router.get("/agents", response_model=AdminAgentsOut)
+def get_agent_stats(
+    days: int = Query(default=30, ge=1, le=MAX_USAGE_WINDOW_DAYS),
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> AdminAgentsOut:
+    """Every authored agent's activity, cost, and trust posture in one window.
+
+    Five GROUP BYs over indexed windows — runs by status, tool calls by
+    status, mode-approved calls, screen-flagged runs, and the usage ledger by
+    its own `agent_id` column (0046) — so the route's cost tracks the window,
+    not the workspace. Retired (disabled) agents stay on the list: their
+    history is exactly what retirement preserves.
+    """
+    since = utcnow() - timedelta(days=days)
+    agents = list(
+        db.scalars(
+            select(Agent)
+            .where(Agent.workspace_id == actor.workspace_id)
+            .order_by(Agent.created_at, Agent.id)
+        )
+    )
+
+    run_counts: Dict[str, Dict[str, int]] = {}
+    for agent_id, status, count in db.execute(
+        select(Run.agent_id, Run.status, func.count())
+        .where(Run.workspace_id == actor.workspace_id, Run.created_at >= since)
+        .group_by(Run.agent_id, Run.status)
+    ):
+        run_counts.setdefault(str(agent_id), {})[str(status)] = int(count)
+
+    call_counts: Dict[str, Dict[str, int]] = {}
+    for agent_id, status, count in db.execute(
+        select(Run.agent_id, AgentToolCall.status, func.count())
+        .select_from(AgentToolCall)
+        .join(Run, AgentToolCall.run_id == Run.id)
+        .where(
+            AgentToolCall.workspace_id == actor.workspace_id,
+            AgentToolCall.created_at >= since,
+        )
+        .group_by(Run.agent_id, AgentToolCall.status)
+    ):
+        call_counts.setdefault(str(agent_id), {})[str(status)] = int(count)
+
+    mode_approved: Dict[str, int] = {
+        str(agent_id): int(count)
+        for agent_id, count in db.execute(
+            select(Run.agent_id, func.count())
+            .select_from(AgentToolCall)
+            .join(Run, AgentToolCall.run_id == Run.id)
+            .where(
+                AgentToolCall.workspace_id == actor.workspace_id,
+                AgentToolCall.created_at >= since,
+                AgentToolCall.decided_by.like("mode:%"),
+            )
+            .group_by(Run.agent_id)
+        )
+    }
+
+    flagged: Dict[str, int] = {
+        str(agent_id): int(count)
+        for agent_id, count in db.execute(
+            select(Run.agent_id, func.count(func.distinct(RunEvent.run_id)))
+            .select_from(RunEvent)
+            .join(Run, RunEvent.run_id == Run.id)
+            .where(
+                RunEvent.workspace_id == actor.workspace_id,
+                RunEvent.event_type == "screen.flagged",
+                RunEvent.created_at >= since,
+            )
+            .group_by(Run.agent_id)
+        )
+    }
+
+    usage_by_agent: Dict[str, Sequence[Any]] = {
+        key: sums
+        for key, sums in _usage_groups(
+            db,
+            ModelUsage.agent_id,
+            ModelUsage.workspace_id == actor.workspace_id,
+            ModelUsage.created_at >= since,
+            limit=1000,
+        )
+        if key
+    }
+
+    rows: List[AdminAgentStatsOut] = []
+    for agent in agents:
+        runs = run_counts.get(agent.id, {})
+        calls = call_counts.get(agent.id, {})
+        sums = usage_by_agent.get(agent.id)
+        usage_calls, _i, _c, _o, _r, total, cost, priced = sums or (0,) * 8
+        rows.append(
+            AdminAgentStatsOut(
+                agent_id=agent.id,
+                name=agent.name,
+                enabled=bool(agent.enabled),
+                runs=sum(runs.values()),
+                completed_runs=runs.get("completed", 0),
+                failed_runs=runs.get("failed", 0),
+                tool_calls=sum(calls.values()),
+                denied_calls=calls.get("denied", 0),
+                mode_approved_calls=mode_approved.get(agent.id, 0),
+                flagged_runs=flagged.get(agent.id, 0),
+                usage_calls=int(usage_calls),
+                total_tokens=int(total),
+                cost_usd=float(cost or 0.0),
+                unpriced_calls=int(usage_calls) - int(priced),
+            )
+        )
+    return AdminAgentsOut(window_days=days, since=since, agents=rows)

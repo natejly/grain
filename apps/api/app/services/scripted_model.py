@@ -38,6 +38,7 @@ here is reachable outside a development/test app_env.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -314,6 +315,114 @@ def scripted_workflow_graph(input_text: str) -> str:
             "edges": [{"from": "gather", "to": "summarise"}],
         }
     )
+
+
+_SCHEDULE_TIME_RE = re.compile(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b")
+_SCHEDULE_INTERVAL_RE = re.compile(r"\bevery\s+(\d+)\s+(minute|hour)s?\b")
+_SCHEDULE_ORDINAL_RE = re.compile(r"\bthe\s+(\d{1,2})(?:st|nd|rd|th)\b")
+_SCHEDULE_CUE_RE = re.compile(
+    r"\b(every|each|daily|hourly|nightly|weekly|monthly|weekdays?|weekends?)\b"
+)
+#: Cron's Sunday=0 convention, same as `validate._CRON_NAMES`.
+_SCHEDULE_WEEKDAYS = {
+    "sunday": 0,
+    "monday": 1,
+    "tuesday": 2,
+    "wednesday": 3,
+    "thursday": 4,
+    "friday": 5,
+    "saturday": 6,
+}
+
+
+def scripted_schedule_json(input_text: str) -> str:
+    """Stand in for the schedule compiler's model call.
+
+    Not a canned answer, unlike `scripted_workflow_graph`: the composer's whole
+    surface is "type any sentence", so a single fixed reply would make every
+    offline test assert the same string. Instead: a small deterministic parser
+    for the shapes people actually type — intervals, dailies, weekday lists,
+    month ordinals. A sentence outside those shapes answers `{"cron": ""}`,
+    which the route turns into an honest 422 rather than a fake success.
+
+    Times are translated, never range-checked — "at 99:00" becomes an hour of
+    99 on purpose, so the offline path still proves the *validator* is what
+    holds a model's answer to the hand-typed standard.
+    """
+    body, _, tail = input_text.partition("Default timezone:")
+    text = body.replace("Schedule to express:", " ").strip().lower()
+    tail = tail.strip()
+    zone = tail.splitlines()[0].strip() if tail else "UTC"
+
+    interval = _SCHEDULE_INTERVAL_RE.search(text)
+    if interval:
+        value = int(interval.group(1))
+        if interval.group(2) == "minute":
+            return json.dumps({"cron": f"*/{value} * * * *", "timezone": zone})
+        return json.dumps({"cron": f"0 */{value} * * *", "timezone": zone})
+    if re.search(r"\bevery minute\b", text):
+        return json.dumps({"cron": "* * * * *", "timezone": zone})
+    if re.search(r"\bhourly\b|\bevery hour\b", text):
+        return json.dumps({"cron": "0 * * * *", "timezone": zone})
+
+    hour: Optional[int] = None
+    minute = 0
+    clock = _SCHEDULE_TIME_RE.search(text)
+    if clock:
+        hour = int(clock.group(1))
+        minute = int(clock.group(2) or 0)
+        meridiem = clock.group(3)
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        elif meridiem == "am" and hour == 12:
+            hour = 0
+    elif "noon" in text:
+        hour = 12
+    elif "midnight" in text:
+        hour = 0
+    elif "morning" in text:
+        hour = 9
+    elif "afternoon" in text:
+        hour = 15
+    elif "evening" in text:
+        hour = 18
+    elif "night" in text:
+        hour = 22
+
+    dow = "*"
+    named = sorted(
+        {
+            value
+            for name, value in _SCHEDULE_WEEKDAYS.items()
+            if re.search(rf"\b{name}s?\b", text)
+        }
+    )
+    if re.search(r"\bweek\s?days?\b", text):
+        dow = "1-5"
+    elif re.search(r"\bweekends?\b", text):
+        dow = "0,6"
+    elif named:
+        dow = ",".join(str(value) for value in named)
+    elif re.search(r"\bweekly\b|\bevery week\b", text):
+        dow = "1"
+
+    dom = "*"
+    ordinal = _SCHEDULE_ORDINAL_RE.search(text)
+    if ordinal:
+        dom = ordinal.group(1)
+    elif re.search(r"\bfirst of (?:the|every) month\b", text):
+        dom = "1"
+    elif re.search(r"\bmonthly\b|\bevery month\b", text):
+        dom = "1"
+
+    if dow == "*" and dom == "*" and not _SCHEDULE_CUE_RE.search(text):
+        # No recurrence in the sentence at all. "" is the parser saying so; the
+        # compiler turns it into the 422 the real model would earn for prose.
+        return json.dumps({"cron": "", "timezone": ""})
+    if hour is None:
+        # "every monday", "monthly on the 1st": mornings are the default reading.
+        hour = 9
+    return json.dumps({"cron": f"{minute} {hour} {dom} * {dow}", "timezone": zone})
 
 
 def scripted_model_step(

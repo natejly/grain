@@ -27,13 +27,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
+from ..config import Settings, get_settings
 from ..database import get_db
 from ..models import Cron
 from ..schemas import ApiModel
 from ..services import crons as cron_service
 from ..services.audit import record_audit
 from ..services.runs import process_run
-from ..services.workflows.validate import cron_error
+from ..services.workflows.compiler import compile_schedule
+from ..services.workflows.schedule import next_fires
+from ..services.workflows.validate import WorkflowCompileError, cron_error
 
 router = APIRouter(prefix="/api/crons", tags=["crons"])
 
@@ -76,6 +79,20 @@ class CronUpdateRequest(BaseModel):
     prompt: Optional[str] = Field(default=None, max_length=8000)
     body: Optional[str] = Field(default=None, max_length=8000)
     enabled: Optional[bool] = None
+
+
+class ScheduleCompileRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    timezone: str = Field(default="UTC", max_length=64)
+
+
+class ScheduleCompileOut(ApiModel):
+    schedule_cron: str
+    schedule_timezone: str
+    #: The next few fire minutes as UTC instants — the sanity check a person
+    #: reads before saving ("Mon 24 Aug, 09:00" three times means the cron says
+    #: what the sentence said).
+    next_fires: List[datetime]
 
 
 class CronRunNowOut(ApiModel):
@@ -178,6 +195,49 @@ def create_cron(
     )
     db.commit()
     return _out(cron)
+
+
+@router.post("/compile-schedule", response_model=ScheduleCompileOut)
+def compile_schedule_preview(
+    payload: ScheduleCompileRequest,
+    actor: Actor = Depends(get_actor),
+    settings: Settings = Depends(get_settings),
+) -> ScheduleCompileOut:
+    """English to a validated cron schedule, without saving anything.
+
+    The composer's preview: "every weekday at 9am" in; a cron, its timezone and
+    the next three fire times out. It stores nothing and grants nothing, which
+    is why there is no Idempotency-Key — same reasoning as
+    `POST /api/workflows/compile`. The model's answer goes through the same
+    `_validate_schedule` a hand-typed cron does, so a compiled schedule is never
+    held to a lower standard than a typed one, and every 422 is one sentence a
+    person can act on.
+    """
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(
+            status_code=422,
+            detail="describe the schedule in a sentence, e.g. “every weekday at 9am”",
+        )
+    try:
+        cron, zone = compile_schedule(
+            text=text,
+            timezone=payload.timezone or "UTC",
+            user_id=actor.user_id,
+            workspace_id=actor.workspace_id,
+            settings=settings,
+        )
+    except WorkflowCompileError as exc:
+        detail = "; ".join(item.message for item in exc.report.errors)
+        raise HTTPException(
+            status_code=422, detail=detail or "could not compile that schedule"
+        ) from exc
+    _validate_schedule(cron, zone)
+    return ScheduleCompileOut(
+        schedule_cron=cron,
+        schedule_timezone=zone,
+        next_fires=next_fires(cron, zone, count=3),
+    )
 
 
 @router.get("/{cron_id}", response_model=CronOut)

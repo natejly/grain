@@ -17,6 +17,9 @@ dependencies = [
   "python-multipart>=0.0.9,<1",
   "httpx>=0.27,<1",
   "openai>=1.55,<3",
+  # Second first-party harness (services/harness/anthropic.py). Imported only
+  # when MODEL_PROVIDER=anthropic.
+  "anthropic>=0.40,<2",
   "pypdf>=5,<7",
   "duckdb>=1.2,<2",
   "cryptography>=42,<46",

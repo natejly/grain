@@ -331,4 +331,5 @@ def tool_context(
         project_id=subject.id if subject and kind == PROJECT else "",
         dashboard_id=subject.id if subject and kind == DASHBOARD else "",
         space_id=space_id,
+        run_id=run.id,
     )
