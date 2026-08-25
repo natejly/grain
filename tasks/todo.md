@@ -501,8 +501,8 @@ two branches use overlapping 0045+ numbers of their own. Resolution is
 merge-order re-parenting, not slot reservation: whichever branch merges
 second (and third) renumbers its whole chain onto the then-current head
 and retargets the down_revisions. If this branch is not first in, re-parent
-0045_marketplace/0046_listing_installs onto the merge-time head; do not
-pre-claim numbers.
+this branch's whole chain — 0045_marketplace → 0046_listing_installs →
+0047_run_thinking — onto the merge-time head; do not pre-claim numbers.
 
 # Steering + graceful incomplete streams (planned 2026-08-23)
 
