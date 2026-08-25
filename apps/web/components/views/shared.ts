@@ -19,12 +19,12 @@ export type View =
   | "integrations"
   | "documents"
   | "boards"
-  | "todos"
   | "data"
   | "projects"
   | "mcp"
   | "sandbox-tools"
   | "activity"
+  | "policies"
   | "admin"
   | "workflows"
   | "crons"
@@ -98,8 +98,10 @@ export const PAGE_TITLES: Record<View, string> = {
   // the app editor's binding chips.
   datasets: "Datasets",
   documents: "Documents",
-  boards: "Boards",
-  todos: "Lists",
+  // One destination for boards and lists both: a list is a board with one
+  // column, and splitting them into "Boards"/"Lists" pages made an object
+  // teleport between them when its column count crossed 1.
+  boards: "Boards & todos",
   data: "Databases",
   projects: "Projects",
   integrations: "Integrations",
@@ -113,6 +115,9 @@ export const PAGE_TITLES: Record<View, string> = {
   // The approval queue. "Activity" described the audit half of the page; the
   // half a user actually comes for is the requests waiting on them.
   activity: "Inbox",
+  // The standing-grant ledger, with the org posture under it. Member-readable
+  // on purpose: a rule you cannot see is indistinguishable from a bug.
+  policies: "Rules & policies",
   admin: "Admin",
   workflows: "Workflows",
   // A cron is a schedule. Its old title, "Automations", is the *group* now.
@@ -220,6 +225,27 @@ export function senderInitial(message: Message, sharedThread: boolean): string {
   if (message.role !== "user") return "A";
   const source = sharedThread && message.sender_name ? message.sender_name : "U";
   return source.slice(0, 1).toUpperCase();
+}
+
+/**
+ * Whether a message is the viewer's own to edit.
+ *
+ * On a personal thread every user message is the caller's — including rows
+ * written before the sender column existed (`sender_id === ""`) — so all of
+ * them are editable. On a shared thread only an exact attribution match will
+ * do: an edit truncates everything after the message, and rewriting a
+ * teammate's prompt would delete their turn out from under them (the server
+ * 409s that case; this keeps the pencil off it in the first place). A legacy
+ * ""-sender on a shared thread is unattributable, so nobody gets its pencil.
+ */
+export function senderIsViewer(
+  message: Message,
+  sharedThread: boolean,
+  viewerId: string,
+): boolean {
+  if (message.role !== "user") return false;
+  if (!sharedThread) return true;
+  return viewerId !== "" && message.sender_id === viewerId;
 }
 
 export function statusLabel(status: Source["status"]): string {

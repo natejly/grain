@@ -1,10 +1,12 @@
 "use client";
 
 import { ExternalLink, File, Plus, Trash2, UploadCloud } from "lucide-react";
-import type { Source } from "@workspace/api-client";
+import type { KnowledgeGraph, Source, Space } from "@workspace/api-client";
 import { useState } from "react";
 import { api } from "../api";
 import { describeError, formatBytes, formatRelative, statusLabel } from "./shared";
+import { spaceNameForId } from "./space-threads";
+import { useFocusReveal } from "./use-focus-reveal";
 
 /**
  * Open a stored original in a new tab.
@@ -62,7 +64,17 @@ export type SourcesViewProps = {
   uploadFiles: (files: FileList | File[]) => Promise<unknown>;
   removeSource: (source: Source) => Promise<void>;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
+  // The cross-link surface, optional so the view still stands alone (tests
+  // mount it bare): the graph tells a row how far it reached, the spaces list
+  // names its scope, and openEntity/focus are the two directions of travel.
+  graph?: KnowledgeGraph | null;
+  spaces?: Space[];
+  openEntity?: (entityId: string) => void;
+  focused?: string | null;
+  setFocused?: (id: string | null) => void;
 };
+
+const noFocus = () => undefined;
 
 export function SourcesView({
   sources,
@@ -73,12 +85,20 @@ export function SourcesView({
   uploadFiles,
   removeSource,
   fileInputRef,
+  graph = null,
+  spaces = [],
+  openEntity,
+  focused = null,
+  setFocused = noFocus,
 }: SourcesViewProps) {
+  useFocusReveal("source", focused, setFocused);
+  const entities = graph?.entities ?? [];
   return (
     <section className="content-page">
       <div className="page-heading">
         <div>
           <h1>Sources</h1>
+          <p>The files the agent quotes from — indexed into passages, projected into the graph.</p>
         </div>
         <button className="primary-button" onClick={() => fileInputRef.current?.click()}>
           <Plus size={16} />
@@ -129,14 +149,29 @@ export function SourcesView({
             <strong>No sources yet</strong>
           </div>
         ) : (
-          sources.map((source) => (
-            <div className="source-row" key={source.id}>
+          sources.map((source) => {
+            // How far this file reached: the graph entities it projected into.
+            // Zero is normal (stored figures, files still indexing), so the
+            // link only appears when there is somewhere to land.
+            const reach = entities.filter((entity) =>
+              entity.source_ids.includes(source.id),
+            );
+            const spaceName = spaceNameForId(source.space_id, spaces);
+            return (
+            <div
+              className={focused === source.id ? "source-row focused" : "source-row"}
+              id={`source-${source.id}`}
+              key={source.id}
+            >
               <div className="source-name">
                 <div className="file-icon">
                   <File size={17} />
                 </div>
                 <span>
-                  <strong>{source.filename}</strong>
+                  <strong>
+                    {source.filename}
+                    {spaceName && <span className="source-space">{spaceName}</span>}
+                  </strong>
                   <small>{formatBytes(source.byte_size)}</small>
                 </span>
               </div>
@@ -147,7 +182,20 @@ export function SourcesView({
                 </span>
                 {source.error && <small className="source-error">{source.error}</small>}
               </div>
-              <span className="muted-cell">{source.chunk_count || "—"}</span>
+              <span className="muted-cell">
+                {reach.length > 0 && openEntity ? (
+                  <button
+                    className="knowledge-link"
+                    title="See this file's entities in the graph"
+                    onClick={() => openEntity(reach[0].id)}
+                  >
+                    {source.chunk_count} passages · {reach.length}{" "}
+                    {reach.length === 1 ? "entity" : "entities"}
+                  </button>
+                ) : (
+                  source.chunk_count || "—"
+                )}
+              </span>
               <span className="muted-cell">{formatRelative(source.created_at)}</span>
               <div className="source-row-actions">
                 <OpenSourceButton source={source} setError={setError} />
@@ -161,7 +209,8 @@ export function SourcesView({
                 </button>
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>

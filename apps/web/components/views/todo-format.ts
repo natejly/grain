@@ -24,6 +24,54 @@ export function todoListsFrom(boards: Board[]): Board[] {
   return boards.filter(isTodoList);
 }
 
+/**
+ * Which glyph a board wears in the one merged listing. A discriminant rather
+ * than an icon component, so this file stays free of React and the rule stays
+ * testable beside the predicate it restates: crossing one column flips the
+ * glyph, and *only* the glyph — the object itself never moves.
+ */
+export function glyphFor(board: Board): "list" | "board" {
+  return isTodoList(board) ? "list" : "board";
+}
+
+/**
+ * The toast lines earned by a boards refresh, given the shapes the previous
+ * refresh had.
+ *
+ * This is the merge's contract made visible: the object stays put when its
+ * column count crosses 1, so *something* has to say the presentation changed
+ * or the checkboxes silently become columns. Diffing state is the only seam
+ * every mutation path shares — column ops patch a Board back, list creation
+ * refetches, agent tools replace the array wholesale.
+ *
+ * An id absent from `previous` says nothing changed — it is a first load or a
+ * creation, and a thing being seen for the first time has not graduated.
+ */
+export function graduationNotices(
+  previous: Map<string, boolean>,
+  boards: Board[],
+): string[] {
+  const notices: string[] = [];
+  for (const board of boards) {
+    const wasList = previous.get(board.id);
+    if (wasList === undefined || wasList === isTodoList(board)) continue;
+    notices.push(isTodoList(board) ? "Now showing as a list" : "Now showing as a board");
+  }
+  return notices;
+}
+
+/**
+ * The one toast line for a refresh, "" when nothing graduated. There is one
+ * toast slot, so several flips in one refresh — a workflow reshaping two
+ * boards at once — share the line rather than the last flip silently winning.
+ */
+export function graduationNotice(
+  previous: Map<string, boolean>,
+  boards: Board[],
+): string {
+  return graduationNotices(previous, boards).join(" · ");
+}
+
 /** A list's items, in board order. Its sole column is the list. */
 export function itemsOf(board: Board): BoardCard[] {
   return board.columns[0]?.cards ?? [];

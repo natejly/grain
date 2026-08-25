@@ -206,16 +206,38 @@ export function createThreadHandlers({
     call: AgentToolCall,
     decision: "approved" | "denied",
     remember: boolean,
+    inputs?: Record<string, unknown>,
   ) {
     setError("");
     try {
-      await api.decideAgentToolCall(call.id, decision, remember);
+      await api.decideAgentToolCall(
+        call.id,
+        decision,
+        remember,
+        inputs ? { inputs } : {},
+      );
       setAgentCalls((items) =>
         items.map((item) => (item.id === call.id ? { ...item, status: decision } : item)),
       );
       setRunStatus(decision === "approved" ? "Resuming" : "Continuing without the tool");
     } catch (caught) {
       setError(describeError(caught, "Could not record that decision"));
+    }
+  }
+
+  async function steerActiveRun(content: string): Promise<boolean> {
+    if (!activeRun || !content.trim()) return false;
+    setError("");
+    try {
+      await api.steerRun(activeRun, content.trim());
+      // No optimistic transcript row: the server writes the Message, and the
+      // settle-time refetch renders it. The strip's own feedback is enough.
+      setRunStatus("Heard — folding that in");
+      return true;
+    } catch (caught) {
+      setError(describeError(caught, "Could not steer the run"));
+      // False keeps the strip's draft: the error banner is not a clipboard.
+      return false;
     }
   }
 
@@ -259,6 +281,51 @@ export function createThreadHandlers({
         onAgentUnavailable?.();
       }
       setError(describeError(caught, "Could not regenerate"));
+    }
+  }
+
+  /**
+   * Rewrite one of the caller's prompts and re-run the thread from there.
+   *
+   * The edit IS a truncation: the server deletes the old turn and everything
+   * after it, then queues a fresh turn with the new words. The optimistic cut
+   * here covers only the streaming window — `followRun`'s settle-time refetch
+   * is the authoritative reconciliation, exactly as it is for a send. Returns
+   * whether the edit was accepted, so the editor can keep the rewritten words
+   * on screen when it was not: an error banner is not a place to lose a
+   * paragraph to.
+   */
+  async function editMessage(messageId: string, content: string): Promise<boolean> {
+    if (!content.trim() || activeRun || !activeConversation) return false;
+    // The pivot, captured before the await: the truncation must cut the
+    // transcript as it stood when the edit was submitted, not as it stands
+    // after a slow round trip.
+    const pivotIndex = messages.findIndex((item) => item.id === messageId);
+    if (pivotIndex < 0) return false;
+    setError("");
+    try {
+      const response = await api.editMessage(
+        activeConversation,
+        messageId,
+        content.trim(),
+        agentId,
+        // Model/effort/fast only: a skill attached to the composer governs the
+        // composer's next turn, and silently riding a rewrite of an old prompt
+        // is exactly the surprise the per-turn attachment exists to avoid.
+        controls && { model: controls.model, effort: controls.effort, fast: controls.fast },
+      );
+      setMessages((items) => [...items.slice(0, pivotIndex), response.message]);
+      if (response.run) void followRun(response.run.id, activeConversation);
+      return true;
+    } catch (caught) {
+      // An agent deleted out from under a thread leaves the picker on a
+      // dead id, and every later send fails identically. Clear it so the
+      // next attempt falls back to the default instead of repeating.
+      if (caught instanceof Error && caught.message.includes("Agent is not available")) {
+        onAgentUnavailable?.();
+      }
+      setError(describeError(caught, "Could not edit that message"));
+      return false;
     }
   }
 
@@ -491,8 +558,10 @@ export function createThreadHandlers({
   return {
     upsertAgentCall,
     decideAgentCall,
+    steerActiveRun,
     cancelActiveRun,
     regenerate,
+    editMessage,
     submitPrompt,
     followRun,
   };

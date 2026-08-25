@@ -299,7 +299,7 @@ export function SpacesView({
             </div>
             {spaceThreads.length === 0 ? (
               <div className="empty-state">
-                <p>No threads yet. A new thread here carries the space's instructions and knowledge.</p>
+                <p>No threads yet. A new thread here carries the space&apos;s instructions and knowledge.</p>
               </div>
             ) : (
               (["personal", "shared"] as const).map((bucket) =>

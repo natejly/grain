@@ -1,6 +1,6 @@
 "use client";
 
-import type { AgentToolCall, Message } from "@workspace/api-client";
+import type { AgentToolCall, ApprovalMode, Message } from "@workspace/api-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { createThreadHandlers } from "./handlers/thread";
@@ -58,6 +58,11 @@ export function useSubjectThread({
   onToolProposed,
 }: SubjectThreadDeps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // The subject thread's approval mode — a real Conversation column, so the
+  // panel can carry the same control the rail composer does. Subject panels
+  // used to HIDE the control, which meant a subject thread's mode was
+  // unreadable and unchangeable from the one surface that uses it.
+  const [approvalMode, setApprovalModeState] = useState<ApprovalMode>("ask_writes");
   const [messages, setMessages] = useState<Message[]>([]);
   const [agentCalls, setAgentCalls] = useState<AgentToolCall[]>([]);
   const [draft, setDraft] = useState("");
@@ -84,6 +89,7 @@ export function useSubjectThread({
     loadingFor.current = key;
     setConversationId(null);
     conversationRef.current = null;
+    setApprovalModeState("ask_writes");
     setMessages([]);
     setAgentCalls([]);
     setDraft("");
@@ -103,6 +109,9 @@ export function useSubjectThread({
         if (loadingFor.current !== key) return;
         setConversationId(conversation.id);
         conversationRef.current = conversation.id;
+        // The whole row was always coming back; only the id used to be kept,
+        // which is why the panel could not show its own thread's mode.
+        setApprovalModeState(conversation.approval_mode);
         setMessages(history);
       } catch (caught) {
         if (loadingFor.current !== key) return;
@@ -147,8 +156,29 @@ export function useSubjectThread({
     onRunSettled: settled,
   });
 
+  /**
+   * Change how much this subject's thread asks before acting. The server is
+   * the row's one home; the panel keeps only the mode it answered with, and
+   * discards a reply that lands after the panel moved to another subject.
+   */
+  const setApprovalMode = useCallback(async (mode: ApprovalMode) => {
+    const id = conversationRef.current;
+    if (!id) return;
+    setError("");
+    try {
+      const updated = await api.setApprovalMode(id, mode);
+      if (conversationRef.current === id) {
+        setApprovalModeState(updated.approval_mode);
+      }
+    } catch (caught) {
+      setError(describeError(caught, "Could not change the approval mode"));
+    }
+  }, []);
+
   return {
     conversationId,
+    approvalMode,
+    setApprovalMode,
     messages,
     agentCalls,
     draft,

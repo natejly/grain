@@ -3,7 +3,7 @@
 import type { AuthSession } from "@workspace/api-client";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { ApiHealthBanner } from "../api-health-banner";
+import { ApiHealthBanner, useApiHealth } from "../api-health-banner";
 import { AuthPanel } from "./auth-panel";
 
 /**
@@ -42,6 +42,8 @@ export type AuthScreenProps = {
 
 export function AuthScreen({ offline, onSignedIn, onRecovered }: AuthScreenProps) {
   const [notice, setNotice] = useState("");
+  // The banner's poll loop, held here since the hook moved out of the banner.
+  const health = useApiHealth(api, onRecovered);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -54,7 +56,7 @@ export function AuthScreen({ offline, onSignedIn, onRecovered }: AuthScreenProps
 
   return (
     <div className="auth-shell">
-      <ApiHealthBanner api={api} onRecovered={onRecovered} />
+      <ApiHealthBanner api={api} health={health} />
       <div className="auth-stage">
         <div className="auth-brand">Grain <span className="auth-brand-byline">by Rice Labs</span></div>
         {offline ? (

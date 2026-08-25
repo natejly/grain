@@ -4,12 +4,20 @@ import type { WorkspaceApi } from "@workspace/api-client";
 import { RefreshCw, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 
-type ApiHealthBannerProps = {
-  api: WorkspaceApi;
-  onRecovered: () => void;
+/** What one poll loop knows: is the API down, and a hand-cranked re-check. */
+export type ApiHealth = {
+  down: boolean;
+  retry: () => void;
 };
 
-export function ApiHealthBanner({ api, onRecovered }: ApiHealthBannerProps) {
+/**
+ * The health poll, hoisted out of the banner so one loop can feed every
+ * surface that states the API's reachability — the banner and the system
+ * status popover must be the same truth, not two pollers that disagree for a
+ * cycle. Slow cadence while healthy, fast while down, `onRecovered` fired on
+ * the first healthy answer after a failure.
+ */
+export function useApiHealth(api: WorkspaceApi, onRecovered: () => void): ApiHealth {
   const [down, setDown] = useState(false);
   const [nonce, setNonce] = useState(0);
 
@@ -35,7 +43,16 @@ export function ApiHealthBanner({ api, onRecovered }: ApiHealthBannerProps) {
     };
   }, [api, onRecovered, nonce]);
 
-  if (!down) return null;
+  return { down, retry: () => setNonce((value) => value + 1) };
+}
+
+type ApiHealthBannerProps = {
+  api: WorkspaceApi;
+  health: ApiHealth;
+};
+
+export function ApiHealthBanner({ api, health }: ApiHealthBannerProps) {
+  if (!health.down) return null;
   return (
     <div className="api-down-banner" role="alert">
       <WifiOff size={15} />
@@ -43,7 +60,7 @@ export function ApiHealthBanner({ api, onRecovered }: ApiHealthBannerProps) {
         The Grain API is unreachable at {api.baseUrl}. Start it with{" "}
         <code>make dev</code>.
       </span>
-      <button onClick={() => setNonce((value) => value + 1)}>
+      <button onClick={health.retry}>
         <RefreshCw size={14} />
         Retry
       </button>

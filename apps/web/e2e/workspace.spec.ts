@@ -391,6 +391,18 @@ test("a chart the agent draws is visible in the conversation", async ({ page }) 
   await expect(figure).toHaveAttribute("alt", /Figure 1 of 1 produced by run_python/);
   await page.screenshot({ path: "test-results/chat-artifact.png", fullPage: true });
 
+  // The finish-the-job bar. A sandbox PNG has no query behind it, so the card
+  // offers the honest next step: hand the composer the sentence that asks the
+  // agent for the pinnable version. (The direct pin path needs a scripted
+  // create_dashboard turn, which agent-script.json does not carry.)
+  const makeDashboard = card.getByRole("button", { name: "Make this a dashboard" });
+  await expect(makeDashboard).toBeVisible();
+  await makeDashboard.click();
+  await expect(composer).toHaveValue(
+    "Turn the chart the run_python call above drew into a dashboard I can pin: ",
+  );
+  await composer.fill("");
+
   // Still there after a reload: the descriptors are on the tool call row, not
   // only on the event that streamed past.
   await page.reload();

@@ -1,4 +1,5 @@
 import type { Conversation } from "@workspace/api-client";
+import { chordHint } from "./chords";
 import { CREATE_ACTIONS, NAV_GROUPS, type CreateAction } from "./navigation";
 import { PAGE_TITLES, type View } from "./shared";
 
@@ -16,7 +17,15 @@ import { PAGE_TITLES, type View } from "./shared";
  *   chat from Tuesday" the rail's recency sort cannot answer.
  */
 export type PaletteRow =
-  | { kind: "view"; view: View; label: string; hint: string }
+  | {
+      kind: "view";
+      view: View;
+      label: string;
+      hint: string;
+      /** The "G C"-style chord, on the rows that have one — each row teaches
+       *  the faster path to itself. */
+      shortcut?: string;
+    }
   | { kind: "create"; action: CreateAction; label: string; hint: string }
   | { kind: "thread"; conversationId: string; label: string; hint: string };
 
@@ -29,6 +38,7 @@ export function buildPaletteRows(conversations: Conversation[]): PaletteRow[] {
       // says which door it is behind.
       label: PAGE_TITLES[item.view],
       hint: group.surface === "settings" ? "Settings" : group.label,
+      shortcut: chordHint(item.view) ?? undefined,
     })),
   );
   const creates: PaletteRow[] = CREATE_ACTIONS.map((action) => ({

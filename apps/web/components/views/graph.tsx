@@ -1,15 +1,27 @@
 "use client";
 
 import { RefreshCw } from "lucide-react";
-import type { KnowledgeGraph } from "@workspace/api-client";
+import type { KnowledgeGraph, Source } from "@workspace/api-client";
 import { useEffect, useRef, useState } from "react";
 import { Graph3D } from "../graph-3d";
+import { useFocusReveal } from "./use-focus-reveal";
 
 export type GraphViewProps = {
   graph: KnowledgeGraph | null;
   rebuild: () => Promise<void>;
   openChunk: (chunkId: string) => Promise<void>;
+  // The cross-link surface, optional so the view still stands alone (tests
+  // mount it with exactly the three above): sources name where an entity was
+  // read from, and the two open* callbacks walk back to the inputs — the file
+  // rows and the memory rows this projection was built over.
+  sources?: Source[];
+  openSource?: (sourceId: string) => void;
+  openMemory?: (memoryId: string) => void;
+  focused?: string | null;
+  setFocused?: (id: string | null) => void;
 };
+
+const noFocus = () => undefined;
 
 /**
  * The projection over indexed sources *and* long-term memory. Memory used to
@@ -17,8 +29,18 @@ export type GraphViewProps = {
  * (views/memory.tsx), and an entity that came from a memory still says so in
  * its row.
  */
-export function GraphView({ graph, rebuild, openChunk }: GraphViewProps) {
+export function GraphView({
+  graph,
+  rebuild,
+  openChunk,
+  sources = [],
+  openSource,
+  openMemory,
+  focused = null,
+  setFocused = noFocus,
+}: GraphViewProps) {
   const [selected, setSelected] = useState<string | null>(null);
+  useFocusReveal("entity", focused, setFocused);
   const asked = useRef(false);
   // Every memory write marks the projection stale, and until this nothing read
   // that status back: a rebuild only ever ran from source ingest, source
@@ -56,7 +78,8 @@ export function GraphView({ graph, rebuild, openChunk }: GraphViewProps) {
     <section className="content-page graph-page">
       <div className="page-heading">
         <div>
-          <h1>Knowledge graph</h1>
+          <h1>Graph</h1>
+          <p>One projection over your sources and memories — what they mention, connected.</p>
         </div>
         <button className="secondary-button" onClick={() => void rebuild()} disabled={rebuilding}>
           <RefreshCw size={15} className={rebuilding ? "spin" : ""} />
@@ -92,25 +115,62 @@ export function GraphView({ graph, rebuild, openChunk }: GraphViewProps) {
               <strong>Entities</strong>
               <span className="panel-count">{graph?.entities.length || 0}</span>
             </div>
-            {nodes.map((entity) => (
+            {nodes.map((entity) => {
+              // Resolved rows only: an id whose source was deleted since the
+              // last rebuild names nothing the Sources page could land on.
+              const from = entity.source_ids
+                .map((id) => sources.find((source) => source.id === id))
+                .filter((source): source is Source => Boolean(source));
+              return (
               <div
-                className={
-                  selected === entity.id ? "entity-row selected" : "entity-row"
-                }
+                className={[
+                  "entity-row",
+                  selected === entity.id ? "selected" : "",
+                  focused === entity.id ? "focused" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                id={`entity-${entity.id}`}
                 key={entity.id}
               >
                 <div>
                   <strong>{entity.name}</strong>
                   <span>
                     {entity.entity_type.replaceAll("_", " ")} · {entity.mention_count} mentions
-                    {entity.memory_ids.length > 0 && " · from memory"}
+                    {entity.memory_ids.length > 0 &&
+                      (openMemory ? (
+                        <>
+                          {" · "}
+                          <button
+                            className="knowledge-link"
+                            title="Show the memories behind this"
+                            onClick={() => openMemory(entity.memory_ids[0])}
+                          >
+                            from {entity.memory_ids.length}{" "}
+                            {entity.memory_ids.length === 1 ? "memory" : "memories"}
+                          </button>
+                        </>
+                      ) : (
+                        " · from memory"
+                      ))}
                   </span>
                 </div>
+                {from.length > 0 && openSource && (
+                  <button
+                    className="entity-source-chip"
+                    title={`Show ${from[0].filename} in Sources`}
+                    onClick={() => openSource(from[0].id)}
+                  >
+                    {from[0].filename}
+                    {from.length > 1 && ` +${from.length - 1}`}
+                  </button>
+                )}
                 {entity.chunk_ids[0] && (
                   <button onClick={() => void openChunk(entity.chunk_ids[0])}>Passage</button>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

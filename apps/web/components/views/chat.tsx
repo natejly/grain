@@ -9,6 +9,7 @@ import {
   Copy,
   FileText,
   Paperclip,
+  Pencil,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
@@ -53,7 +54,9 @@ import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
 import { ProposalDiff } from "./proposal-diff";
-import { baseName, isTabular, senderInitial, senderLabel } from "./shared";
+import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
+import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel } from "./shared";
+import { steerStripVisible } from "./steer-format";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
 
@@ -61,6 +64,13 @@ export type ToolDecision = (
   call: AgentToolCall,
   decision: "approved" | "denied",
   remember: boolean,
+  /**
+   * The human's typed contribution to the approval, when the card collects
+   * one — today the `ask_user` card's answer, `{ answer: string }`. Rides the
+   * decision's amendment channel; the server merges it into the executor's
+   * arguments without rewriting the model's own `arguments_json`.
+   */
+  inputs?: Record<string, unknown>,
 ) => Promise<void>;
 
 export type ChatViewProps = {
@@ -100,7 +110,32 @@ export type ChatViewProps = {
   sharedThread?: boolean;
   submitPrompt: (event?: FormEvent) => Promise<void>;
   cancelActiveRun: () => Promise<void>;
+  /**
+   * Add a mid-turn note to the run that is streaming right now. Resolves true
+   * when the note was delivered — the strip keeps the draft on failure, since
+   * an error banner far from the input is not a place to lose a sentence to.
+   * Optional: panels that mount ChatView without it show no steer strip, and
+   * the strip hides while the run is parked in ANY way — on an approval, on
+   * the spend ceiling, or with its card decided elsewhere — because a parked
+   * run wants a decision, not more words, and the server refuses with a 409.
+   */
+  steer?: (content: string) => Promise<boolean>;
   regenerate: () => Promise<void>;
+  /**
+   * Rewrite one of the viewer's own prompts and re-run the thread from there.
+   * The edit is a truncation — everything after the message is deleted server-
+   * side — so the pencil rides only messages `senderIsViewer` allows. Resolves
+   * true when the edit was accepted; false keeps the editor open, because the
+   * rewritten words are not the error banner's to lose. Optional: the subject
+   * panels mount ChatView without it and show no pencil.
+   */
+  editMessage?: (messageId: string, content: string) => Promise<boolean>;
+  /**
+   * The signed-in member's id, matched against `message.sender_id` so a shared
+   * thread offers the pencil only on the viewer's own prompts. Optional with
+   * `editMessage`; absent means no shared-thread message is editable.
+   */
+  viewerId?: string;
   decideAgentCall: ToolDecision;
   openCitation: (citation: Citation) => Promise<void>;
   /**
@@ -136,6 +171,14 @@ export type ChatViewProps = {
     conversationTitle: string;
   };
   /**
+   * Whether an empty transcript teaches with starter cards. Defaults to
+   * following `approval` (the rail chat and extra panes teach); the subject
+   * panels pass false — they now carry the approval control too, but an empty
+   * panel beside a document is scoped to that document and the product-verbs
+   * lesson would be the wrong lesson there.
+   */
+  showStarter?: boolean;
+  /**
    * The deployment is running with `DEV_UNRESTRICTED_AGENT`: nothing parks and
    * the per-subject tool scoping is off. Carries the thread's conversation id
    * because the indicator names what the bypass actually let through, and the
@@ -152,6 +195,14 @@ export type ChatViewProps = {
    * checkboxes here instead of sending the reader to another page.
    */
   todos?: { lists: Board[]; ops: TodoOps };
+  /**
+   * The finish-the-job bar on a chart-shaped tool card: pin the dashboard the
+   * turn authored without leaving the thread, or — for a chart that is only a
+   * picture — ask the agent for the pinnable version. Optional like `todos`:
+   * the panels beside a document or dashboard mount ChatView without it and
+   * show no bar.
+   */
+  pinning?: DashboardPinning;
   endRef: React.RefObject<HTMLDivElement | null>;
   /** "" means the workspace default agent; otherwise an authored agent's id. */
   // Optional: the document panel mounts ChatView without an agent picker,
@@ -216,15 +267,29 @@ function AgentSelect({
       cancelled = true;
     };
   }, []);
+  // A remembered agent that no longer exists (deleted, disabled) must not
+  // stick: the select would render blank while every send still carried the
+  // dead id into "Agent is not available". Clearing through onSelectAgent
+  // also clears the THREAD's remembered default, so the thread self-heals
+  // rather than resurrecting the ghost on every reopen. Skipped while the
+  // list is empty — a failed fetch is not evidence the agent is gone.
+  useEffect(() => {
+    if (agents.length === 0 || !selectedAgentId) return;
+    if (!agents.some((agent) => agent.id === selectedAgentId)) onSelectAgent("");
+  }, [agents, selectedAgentId, onSelectAgent]);
   if (agents.length < 2) return null;
   return (
     <label className="composer-chip agent-chip">
       <Bot size={14} aria-hidden="true" />
+      {/* The scope is part of the name: the pick is remembered on this thread
+          (Conversation.default_agent_id), not on the session or the account,
+          and a menu that names its scope is the Foyer trust rule. */}
       <select
         className="agent-select"
         value={selectedAgentId}
         onChange={(event) => onSelectAgent(event.target.value)}
-        aria-label="Agent"
+        aria-label="Agent · this thread"
+        title="Remembered on this thread"
       >
         <option value="">Default agent</option>
         {agents.map((agent) => (
@@ -263,7 +328,8 @@ function TurnControls({
           value={model}
           onChange={(event) => setModel(event.target.value)}
           disabled={disabled}
-          aria-label="Model"
+          aria-label="Model · this thread"
+          title="Remembered on this thread"
         >
           <option value="">Default model</option>
           {models.map((name) => (
@@ -280,7 +346,8 @@ function TurnControls({
             value={effort}
             onChange={(event) => setEffort(event.target.value)}
             disabled={disabled || fast}
-            aria-label="Reasoning effort"
+            aria-label="Reasoning effort · this thread"
+            title="Remembered on this thread"
           >
             {efforts.map((name) => (
               <option key={name} value={name}>
@@ -805,18 +872,76 @@ function ToolStatus({ call }: { call: AgentToolCall }) {
   );
 }
 
+/**
+ * The mid-turn steering strip: a one-line note into the run as it works.
+ *
+ * Its own component so the draft's state mounts and unmounts with the strip —
+ * the same rule the attach popover follows: state that only makes sense while
+ * the surface is visible lives inside it, and the unmount is the reset.
+ */
+function SteerStrip({ steer }: { steer: (content: string) => Promise<boolean> }) {
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function send() {
+    const content = note.trim();
+    if (!content || sending) return;
+    setSending(true);
+    try {
+      // Only a delivered note clears the box: a 409 (the run parked or
+      // finished in the race) or a network failure keeps the user's sentence
+      // where they can resend or copy it into the composer.
+      if (await steer(content)) setNote("");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="steer-strip">
+      <input
+        type="text"
+        aria-label="Add a note to the running turn"
+        placeholder="Add a note mid-task — it reaches the assistant before its next step"
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void send();
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="ghost-button"
+        disabled={sending || !note.trim()}
+        onClick={() => void send()}
+      >
+        Steer
+      </button>
+    </div>
+  );
+}
+
 function ToolCallCard({
   call,
   decide,
   todos,
+  pinning,
 }: {
   call: AgentToolCall;
   decide: ToolDecision;
   todos?: { lists: Board[]; ops: TodoOps };
+  pinning?: DashboardPinning;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The ask_user card's answer box. Local to the card like `expanded`: the
+  // draft belongs to this one question and dies with it.
+  const [answer, setAnswer] = useState("");
+  const asking = call.name === "ask_user";
   const pending = call.status === "proposed";
   const args = prettyArguments(call.arguments_json);
   // A pending write shows what it will do; the raw arguments stay one click away.
@@ -835,7 +960,13 @@ function ToolCallCard({
   async function choose(decision: "approved" | "denied") {
     setBusy(true);
     try {
-      await decide(call, decision, remember);
+      const typed = answer.trim();
+      await decide(
+        call,
+        decision,
+        remember,
+        asking && decision === "approved" && typed ? { answer: typed } : undefined,
+      );
     } finally {
       setBusy(false);
     }
@@ -878,6 +1009,10 @@ function ToolCallCard({
           }
         />
       )}
+      {/* Above the figure, so the offer is read before the scroll past it.
+          Renders nothing for calls that are not chart-shaped, and nothing at
+          all on the panels that mount ChatView without a `pinning` bundle. */}
+      <DashboardPinBar call={call} pinning={pinning} />
       {/* Outside the disclosure, deliberately. A chart behind a closed triangle
           is as invisible as a chart that was never rendered — which is the bug
           this is fixing, arriving one click later. */}
@@ -901,18 +1036,32 @@ function ToolCallCard({
       )}
       {pending && (
         <div className="tool-card-approval">
+          {asking && (
+            <textarea
+              className="ask-user-answer"
+              aria-label="Answer the assistant's question"
+              placeholder="Type your answer (optional — Approve sends it)"
+              value={answer}
+              rows={2}
+              onChange={(event) => setAnswer(event.target.value)}
+            />
+          )}
           {/* No "always allow" on the plan-review card: the server never
               consults a standing grant for it (approving the card IS approving
               this plan), so the checkbox would promise a skip that cannot
-              happen. */}
-          {call.name !== "exit_plan_mode" && (
+              happen. Same for ask_user, which parks by construction — a
+              standing allow could never pre-answer a question to a person. */}
+          {call.name !== "exit_plan_mode" && !asking && (
             <label className="remember">
               <input
                 type="checkbox"
                 checked={remember}
                 onChange={(event) => setRemember(event.target.checked)}
               />
-              Always allow {call.name}
+              {/* "For me", because that is the grant's true width: it writes a
+                  caller-personal, chat-scope rule — never the workspace's. */}
+              Always allow {call.name} for me
+              <span className="field-hint">Manage in Inbox → Rules</span>
             </label>
           )}
           <div className="tool-card-actions">
@@ -930,7 +1079,7 @@ function ToolCallCard({
               disabled={busy}
               onClick={() => void choose("approved")}
             >
-              <Check size={14} /> Approve
+              <Check size={14} /> {asking && answer.trim() ? "Answer" : "Approve"}
             </button>
           </div>
         </div>
@@ -953,13 +1102,18 @@ export function ChatView({
   sharedThread,
   submitPrompt,
   cancelActiveRun,
+  steer,
   regenerate,
+  editMessage,
+  viewerId,
   decideAgentCall,
   openCitation,
   attach,
   approval,
+  showStarter,
   unrestricted,
   todos,
+  pinning,
   endRef,
   selectedAgentId,
   onSelectAgent,
@@ -978,6 +1132,19 @@ export function ChatView({
   // card: nothing outside the composer cares, and closing must not re-render
   // the transcript.
   const [attachOpen, setAttachOpen] = useState(false);
+  // Which message is an editor right now, and what it says. View state (not
+  // row state) so exactly one edit can be open at a time — the rail's rename
+  // pattern. Deliberately no on-blur submit anywhere below: an edit deletes
+  // everything after the message, and a destructive act must never ride a
+  // stray click.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const submitEdit = async (messageId: string) => {
+    if (!editMessage || !editDraft.trim()) return;
+    const accepted = await editMessage(messageId, editDraft.trim());
+    // Success closes the editor; failure keeps the rewritten words on screen.
+    if (accepted) setEditingId(null);
+  };
   const slashQuery =
     skills && !skills.attached && draft.startsWith("/") ? draft.slice(1) : null;
   const skillMatches = slashQuery === null ? [] : matchSkills(skillList, slashQuery);
@@ -1045,18 +1212,25 @@ export function ChatView({
         {/* Only the primary chat teaches; the panels beside a document or
             dashboard are scoped to a subject and have no `approval` prop, so
             they keep their quiet empty state. */}
-        {messages.length === 0 && approval && <ChatStarter setDraft={setDraft} />}
+        {messages.length === 0 && approval && showStarter !== false && (
+          <ChatStarter setDraft={setDraft} />
+        )}
         {messages.length > 0 && (
           <div className="message-column">
-            {messages.map((message) => (
+            {messages.map((message) => {
+              // An aside ("/btw") is a user message with no run — a note the
+              // agent will read later, not a prompt it answered — so it wears
+              // a quieter treatment than a turn, and it never grows a pencil:
+              // there is no turn after it to re-run.
+              const aside = message.role === "user" && message.run_id === "";
+              const editable =
+                Boolean(editMessage) &&
+                !aside &&
+                senderIsViewer(message, Boolean(sharedThread), viewerId ?? "");
+              return (
               <article
                 key={message.id}
-                // An aside ("/btw") is a user message with no run — a note the
-                // agent will read later, not a prompt it answered — so it wears
-                // a quieter treatment than a turn.
-                className={`message ${message.role}${
-                  message.role === "user" && message.run_id === "" ? " aside" : ""
-                }`}
+                className={`message ${message.role}${aside ? " aside" : ""}`}
               >
                 {message.role === "assistant" &&
                   (() => {
@@ -1068,6 +1242,7 @@ export function ChatView({
                         call={call}
                         decide={decideAgentCall}
                         todos={call.id === showChecklist ? todos : undefined}
+                        pinning={pinning}
                       />
                     ));
                   })()}
@@ -1086,10 +1261,68 @@ export function ChatView({
                   {message.role === "assistant" && message.content && (
                     <CopyButton value={message.content} label="Copy message" />
                   )}
+                  {/* Disabled rather than hidden while a run streams: the
+                      server would 409 an edit over a live turn, and a control
+                      that vanishes and reappears reads as a bug. The name
+                      quotes the prompt so each row's pencil is distinct to a
+                      screen reader. */}
+                  {editable && (
+                    <button
+                      type="button"
+                      className="copy-button"
+                      aria-label={`Edit: ${message.content.slice(0, 40)}`}
+                      disabled={Boolean(activeRun)}
+                      onClick={() => {
+                        setEditingId(message.id);
+                        setEditDraft(message.content);
+                      }}
+                    >
+                      <Pencil size={13} /> Edit
+                    </button>
+                  )}
                 </div>
                 <div className="message-body">
                   {message.role === "assistant" ? (
                     <MarkdownBody content={message.content} />
+                  ) : editingId === message.id ? (
+                    <div className="message-edit">
+                      <textarea
+                        value={editDraft}
+                        onChange={(event) => setEditDraft(event.target.value)}
+                        aria-label="Edit message"
+                        rows={3}
+                        autoFocus
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            void submitEdit(message.id);
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            setEditingId(null);
+                          }
+                        }}
+                      />
+                      <div className="message-edit-actions">
+                        {/* Save is the truncation: the old turn and everything
+                            after it go, and the fresh turn streams in. */}
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => setEditingId(null)}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="primary-button"
+                          disabled={!editDraft.trim() || Boolean(activeRun)}
+                          onClick={() => void submitEdit(message.id)}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <p>{message.content}</p>
                   )}
@@ -1118,13 +1351,15 @@ export function ChatView({
                   </div>
                 )}
               </article>
-            ))}
+              );
+            })}
             {liveCalls.map((call) => (
               <ToolCallCard
                 key={call.id}
                 call={call}
                 decide={decideAgentCall}
                 todos={call.id === checklistCallId(liveCalls) ? todos : undefined}
+                pinning={pinning}
               />
             ))}
             {/* The flagged turn's mark while it is still live: a run that parked
@@ -1153,6 +1388,14 @@ export function ChatView({
                 {runStatus}
               </div>
             )}
+            {steer &&
+              steerStripVisible({
+                activeRun,
+                hasSteer: true,
+                budgetPark,
+                runStatus,
+                agentCalls,
+              }) && <SteerStrip steer={steer} />}
             {!activeRun && lastAssistant && (
               <div className="turn-actions">
                 <button type="button" className="ghost-button" onClick={() => void regenerate()}>

@@ -33,7 +33,7 @@ export const rail = (page: Page) => page.getByRole("navigation", { name: "Worksp
  */
 export async function newThread(page: Page) {
   // "New thread" lives in Chat's contextual sidebar now — a spec standing on
-  // Lists or Sources has to walk through the Chat door first, same as a user.
+  // Boards or Sources has to walk through the Chat door first, same as a user.
   await openView(page, "Chat");
   await page.getByRole("button", { name: "New thread" }).click();
   // No counting: every count-based signal tried here raced the rail's first

@@ -113,3 +113,55 @@ describe("the inline reviewer inside the document editor", () => {
     ).toBe("true");
   });
 });
+
+/**
+ * "Later": review is the DEFAULT for a newly-arrived proposal — the e2e specs
+ * pin that the region appears without a click — but it is no longer a cell the
+ * user cannot leave. The exit parks the proposal behind a banner over the
+ * editor, and the banner has to make the interlock honest: the textarea comes
+ * back read-only, because the swap always prevented a concurrent edit and the
+ * parked state must not silently allow a race the server would reject.
+ */
+describe("parking the reviewer with Later", () => {
+  it("returns a read-only editor under a banner that counts the changes", () => {
+    render(view([edit("call-1")]));
+    act(() => {
+      screen.getByRole("button", { name: "Later" }).click();
+    });
+
+    // The reviewer is parked, not decided: no region, editor back on screen.
+    expect(screen.queryByRole("region", { name: "Proposed changes" })).toBeNull();
+    const source = screen.getByLabelText("Document source") as HTMLTextAreaElement;
+    expect(source.readOnly).toBe(true);
+    // Two decidable hunks (the third segment is context), counted honestly.
+    expect(screen.getByText("The agent proposed 2 changes")).toBeTruthy();
+    expect(screen.getByText(/Editing is paused while changes are pending/)).toBeTruthy();
+  });
+
+  it("reopens through the banner's Review button", () => {
+    render(view([edit("call-1")]));
+    act(() => {
+      screen.getByRole("button", { name: "Later" }).click();
+    });
+    act(() => {
+      screen.getByRole("button", { name: "Review" }).click();
+    });
+    expect(screen.getByRole("region", { name: "Proposed changes" })).toBeTruthy();
+    expect(screen.queryByLabelText("Document source")).toBeNull();
+  });
+
+  it("mounts review afresh when a new proposal id arrives while parked", () => {
+    const { rerender } = render(view([edit("call-1")]));
+    act(() => {
+      screen.getByRole("button", { name: "Later" }).click();
+    });
+    expect(screen.queryByRole("region", { name: "Proposed changes" })).toBeNull();
+
+    // The first proposal was decided elsewhere; a second arrives. "Later"
+    // answered the old proposal's nag, not the new one's.
+    rerender(view([edit("call-2")]));
+    expect(screen.getByRole("region", { name: "Proposed changes" })).toBeTruthy();
+    // And fresh: every hunk starts accepted, nothing carried from call-1.
+    expect(screen.getByRole("button", { name: /^Apply 2 of 2 changes/ })).toBeTruthy();
+  });
+});

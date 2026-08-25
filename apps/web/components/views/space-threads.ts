@@ -33,3 +33,13 @@ export function spaceNameOf(conversation: Conversation, spaces: Space[]): string
   if (!conversation.space_id) return "";
   return spaces.find((space) => space.id === conversation.space_id)?.name ?? "";
 }
+
+/**
+ * The same contract for anything that carries a bare `space_id` — source rows
+ * and memory rows wear the chip too, and they hold the id without a
+ * Conversation around it. "" degrades identically: no chip, never a blank row.
+ */
+export function spaceNameForId(spaceId: string, spaces: Space[]): string {
+  if (!spaceId) return "";
+  return spaces.find((space) => space.id === spaceId)?.name ?? "";
+}

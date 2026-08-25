@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Conversation, Source, Space } from "@workspace/api-client";
 import {
   sourcesInSpace,
+  spaceNameForId,
   spaceNameOf,
   threadsInSpace,
 } from "../components/views/space-threads";
@@ -13,6 +14,9 @@ function conversation(overrides: Partial<Conversation> = {}): Conversation {
     subject_kind: "",
     subject_id: "",
     space_id: "",
+    default_agent_id: "",
+    default_model: "",
+    default_effort: "",
     approval_mode: "ask_writes",
     shared: false,
     owned: true,
@@ -101,5 +105,19 @@ describe("spaceNameOf", () => {
   it("is empty — not a crash — when the space is gone or not yet loaded", () => {
     expect(spaceNameOf(conversation({ space_id: "deleted" }), spaces)).toBe("");
     expect(spaceNameOf(conversation({ space_id: "space-1" }), [])).toBe("");
+  });
+});
+
+describe("spaceNameForId", () => {
+  const spaces = [space({ id: "space-1", name: "Research" })];
+
+  it("names the space for a bare id — source and memory rows hold no Conversation", () => {
+    expect(spaceNameForId("space-1", spaces)).toBe("Research");
+  });
+
+  it('degrades to "" the same way: unspaced, deleted, or not yet loaded', () => {
+    expect(spaceNameForId("", spaces)).toBe("");
+    expect(spaceNameForId("deleted", spaces)).toBe("");
+    expect(spaceNameForId("space-1", [])).toBe("");
   });
 });

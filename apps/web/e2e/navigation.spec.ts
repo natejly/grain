@@ -68,16 +68,16 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
   await expect(page.locator(".documents-layout")).toBeVisible();
   // The group is Library, and its sidebar is what it holds, shelved under
   // section headings. The first entry is Documents — not "Files", which
-  // doubled the group's old name into a "Files / Files" breadcrumb. Lists sit
-  // beside Boards under one heading — a todo list is a one-column board, and
-  // that is a detail nobody should have to know to find their checklist.
-  // Databases moved here from the Settings menu, beside the Datasets they
-  // feed; Knowledge folded in from the rail, one always-visible click away.
+  // doubled the group's old name into a "Files / Files" breadcrumb. Boards and
+  // lists are ONE entry — a todo list is a one-column board, and two entries
+  // made an object teleport between them the moment its column count crossed
+  // 1; now it stays put and changes its glyph. Databases moved here from the
+  // Settings menu, beside the Datasets they feed; Knowledge folded in from the
+  // rail, one always-visible click away.
   for (const entry of [
     "Documents",
     "Projects",
-    "Boards",
-    "Lists",
+    "Boards & todos",
     "Datasets",
     "Databases",
     "Dashboards",
@@ -91,7 +91,9 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
     await expect(tabs(page, "Library").getByRole("button", { name: new RegExp(`^${entry}`) }))
       .toBeVisible();
   }
-  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(11);
+  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(10);
+  // The retired "Lists" entry stays gone: one destination, one listing.
+  await expect(tabs(page, "Library").getByRole("button", { name: /^Lists/ })).toHaveCount(0);
   await expect(tabs(page, "Library").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
   // The shelves say their names.
   for (const heading of ["Boards & todos", "Data", "Dashboards", "Knowledge"]) {
@@ -120,12 +122,16 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
 
   await shot(page, "connections");
 
-  // Single-view destinations get no section nav — a list with one row is noise.
+  // Inbox carries a section nav now that the Rules ledger lives beside the
+  // queue — and the queue is still what the door lands on.
   await openView(page, "Inbox");
-  await expect(page.locator(".section-nav")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+  for (const entry of [/^Inbox/, /^Rules/]) {
+    await expect(tabs(page, "Inbox").getByRole("button", { name: entry })).toBeVisible();
+  }
   await shot(page, "inbox");
 
+  // Single-view destinations get no section nav — a list with one row is noise.
   await openSettings(page, "Admin");
   await expect(page.locator(".section-nav")).toHaveCount(0);
   // Either the caller owns this workspace and gets the panels, or the API says

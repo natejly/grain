@@ -2,6 +2,9 @@ import type { AgentToolCall, Board } from "@workspace/api-client";
 import { describe, expect, it } from "vitest";
 import {
   describeProgress,
+  glyphFor,
+  graduationNotice,
+  graduationNotices,
   isTodoList,
   itemsOf,
   listForTodoCall,
@@ -57,8 +60,14 @@ describe("a list is a board with one column", () => {
     expect(isTodoList(board("b2", "Sprint", ["Todo", "Doing", "Done"]))).toBe(false);
   });
 
-  it("partitions boards so a thing is a list or a board, never both", () => {
-    const all = [board("b1", "Groceries", ["To do"]), board("b2", "Sprint", ["A", "B"])];
+  it("flips only the glyph at the threshold — the object never leaves the listing", () => {
+    // The merged page renders ALL boards in one stable order; crossing one
+    // column changes what an entry wears, not where it sits. `todoListsFrom`
+    // is still the filter chat draws its checklists from.
+    const groceries = board("b1", "Groceries", ["To do"]);
+    expect(glyphFor(groceries)).toBe("list");
+    expect(glyphFor(board("b1", "Groceries", ["To do", "Doing"]))).toBe("board");
+    const all = [groceries, board("b2", "Sprint", ["A", "B"])];
     expect(todoListsFrom(all).map((item) => item.id)).toEqual(["b1"]);
   });
 
@@ -73,6 +82,59 @@ describe("a list is a board with one column", () => {
     expect(describeProgress(board("b1", "Groceries", ["To do"], []))).toBe(
       "Nothing on this list yet",
     );
+  });
+});
+
+describe("the graduation notice", () => {
+  const shapes = (boards: Board[]) =>
+    new Map(boards.map((item) => [item.id, isTodoList(item)]));
+
+  it("announces a list growing into a board, and a board shrinking into a list", () => {
+    const before = shapes([board("b1", "Groceries", ["To do"])]);
+    expect(graduationNotices(before, [board("b1", "Groceries", ["To do", "Doing"])])).toEqual([
+      "Now showing as a board",
+    ]);
+    const sprint = shapes([board("b2", "Sprint", ["A", "B", "C"])]);
+    expect(graduationNotices(sprint, [board("b2", "Sprint", ["A"])])).toEqual([
+      "Now showing as a list",
+    ]);
+  });
+
+  it("says nothing while nothing crosses the threshold", () => {
+    const all = [board("b1", "Groceries", ["To do"]), board("b2", "Sprint", ["A", "B"])];
+    expect(graduationNotices(shapes(all), all)).toEqual([]);
+    // Growing a three-column board to four is not a graduation.
+    const grown = shapes([board("b2", "Sprint", ["A", "B", "C"])]);
+    expect(graduationNotices(grown, [board("b2", "Sprint", ["A", "B", "C", "D"])])).toEqual([]);
+  });
+
+  it("ignores ids the previous refresh never saw — first load and creations", () => {
+    expect(graduationNotices(new Map(), [board("b1", "Groceries", ["To do"])])).toEqual([]);
+    const before = shapes([board("b1", "Groceries", ["To do"])]);
+    expect(
+      graduationNotices(before, [
+        board("b1", "Groceries", ["To do"]),
+        board("b3", "New board", ["A", "B", "C"]),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("joins several flips into the one toast line rather than keeping only the last", () => {
+    // One toast slot: a refresh that reshapes two boards at once — a workflow
+    // can — must say so about both.
+    const before = shapes([
+      board("b1", "Groceries", ["To do"]),
+      board("b2", "Sprint", ["A", "B", "C"]),
+    ]);
+    const after = [
+      board("b1", "Groceries", ["To do", "Doing"]),
+      board("b2", "Sprint", ["A"]),
+    ];
+    expect(graduationNotice(before, after)).toBe(
+      "Now showing as a board · Now showing as a list",
+    );
+    // And "" — not a toast — while nothing crossed the threshold.
+    expect(graduationNotice(shapes(after), after)).toBe("");
   });
 });
 

@@ -45,6 +45,15 @@ export const APPROVAL_MODES: ApprovalModeInfo[] = [
       "Research only — nothing changes until you approve the plan it proposes.",
     bypass: false,
   },
+  {
+    mode: "guardian",
+    label: "Guardian auto-approve",
+    detail:
+      "A reviewer model approves routine writes; anything surprising still waits for you.",
+    // A bypass in the honest sense the trail tracks: a write can run without a
+    // person seeing it first. The reviewer narrows how often, not whether.
+    bypass: true,
+  },
 ];
 
 /**

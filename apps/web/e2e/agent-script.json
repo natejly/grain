@@ -33,7 +33,7 @@
       },
       {
         "text": "Tightened step two of the Launch Runbook.",
-        "denied_text": "Understood — I left the Launch Runbook untouched."
+        "denied_text": "Understood \u2014 I left the Launch Runbook untouched."
       }
     ]
   },
@@ -71,7 +71,7 @@
       },
       {
         "text": "Named the payments rotation in the Rollback Playbook.",
-        "denied_text": "Understood — I left the Rollback Playbook untouched."
+        "denied_text": "Understood \u2014 I left the Rollback Playbook untouched."
       }
     ]
   },
@@ -98,7 +98,7 @@
       },
       {
         "text": "Filed the summary as a document.",
-        "denied_text": "Understood — I wrote nothing."
+        "denied_text": "Understood \u2014 I wrote nothing."
       }
     ]
   },
@@ -125,7 +125,7 @@
       },
       {
         "text": "Tracking two things on the Launch checklist.",
-        "denied_text": "Understood — I added nothing."
+        "denied_text": "Understood \u2014 I added nothing."
       }
     ]
   },
@@ -143,7 +143,7 @@
       },
       {
         "text": "Ticked off Run the migrations.",
-        "denied_text": "Understood — I left the checklist alone."
+        "denied_text": "Understood \u2014 I left the checklist alone."
       }
     ]
   },
@@ -161,7 +161,7 @@
       },
       {
         "text": "Added the smoke test.",
-        "denied_text": "I could not add that — the tool is not allowed here."
+        "denied_text": "I could not add that \u2014 the tool is not allowed here."
       }
     ]
   },
@@ -186,7 +186,7 @@
       },
       {
         "text": "Plotted it. The figure is saved to this workspace.",
-        "denied_text": "Understood — I drew nothing."
+        "denied_text": "Understood \u2014 I drew nothing."
       }
     ]
   },
@@ -206,7 +206,7 @@
       },
       {
         "text": "Swept the review notes.",
-        "denied_text": "Understood — I left the notes alone."
+        "denied_text": "Understood \u2014 I left the notes alone."
       }
     ]
   },
@@ -224,7 +224,7 @@
       },
       {
         "text": "Added Banner.tsx to the project.",
-        "denied_text": "Understood — I left the project untouched."
+        "denied_text": "Understood \u2014 I left the project untouched."
       }
     ]
   },
@@ -241,7 +241,7 @@
       },
       {
         "text": "Switched it to a line chart.",
-        "denied_text": "Understood — I left the dashboard as it was."
+        "denied_text": "Understood \u2014 I left the dashboard as it was."
       }
     ]
   },
@@ -259,6 +259,70 @@
       {
         "text": "Plan approved - starting with the release freeze.",
         "denied_text": "Understood - I'll revise the plan and propose again."
+      }
+    ]
+  },
+  {
+    "match": "which region should we deploy",
+    "steps": [
+      {
+        "call": {
+          "name": "ask_user",
+          "arguments": {
+            "question": "Which region should we deploy to?",
+            "options": [
+              "us-east",
+              "eu-west"
+            ]
+          }
+        }
+      },
+      {
+        "text": "Deploying as instructed.",
+        "denied_text": "Understood, holding off on the deploy."
+      }
+    ]
+  },
+  {
+    "match": "delegate the atlas research",
+    "steps": [
+      {
+        "call": {
+          "name": "delegate",
+          "arguments": {
+            "agent": "Research partner",
+            "prompt": "e2e-child-atlas-briefing"
+          }
+        }
+      },
+      {
+        "text": "Per the sub-agent, Atlas is fully covered."
+      }
+    ]
+  },
+  {
+    "match": "e2e-child-atlas-briefing",
+    "steps": [
+      {
+        "text": "Atlas is the demo corpus; nothing else to report."
+      }
+    ]
+  },
+  {
+    "match": "track the guarded checklist",
+    "steps": [
+      {
+        "call": {
+          "name": "add_todo",
+          "arguments": {
+            "list": "Guarded checklist",
+            "title": "Freeze the release branch"
+          }
+        }
+      },
+      {
+        "text": "Tracked it.",
+        "denied_text": "Understood \u2014 not tracking that."
       }
     ]
   }

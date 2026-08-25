@@ -1,6 +1,13 @@
 "use client";
 
-import type { AgentToolCall, ApprovalMode, Conversation, Message, Skill } from "@workspace/api-client";
+import type {
+  AgentToolCall,
+  ApprovalMode,
+  Conversation,
+  ConversationDefaults,
+  Message,
+  Skill,
+} from "@workspace/api-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { createThreadHandlers } from "./handlers/thread";
@@ -14,6 +21,13 @@ export type ConversationThreadDeps = {
   defaultAgentId?: string;
   /** The deployment's default reasoning effort, seeded into this pane's composer once. */
   defaultEffort?: string;
+  /**
+   * What the bound thread remembers (Conversation.default_*), seeding this
+   * pane's pickers when it opens — and a pick here writes back through
+   * `setConversationDefaults`, so the pane and the rail remember the same
+   * thing. Absent means "seed nothing", which is the old per-pane behaviour.
+   */
+  threadDefaults?: { agentId: string; model: string; effort: string };
   /**
    * The pane's own run finished. It refreshes its own transcript and tool cards
    * itself; this is only the workspace-wide catch-up it cannot do alone — a
@@ -45,6 +59,7 @@ export function useConversationThread({
   conversationId,
   defaultAgentId,
   defaultEffort,
+  threadDefaults,
   onSettled,
   onApprovalChanged,
 }: ConversationThreadDeps) {
@@ -72,8 +87,9 @@ export function useConversationThread({
   const loadingFor = useRef("");
 
   // Per-turn composer controls, this pane's own — a model, effort, fast or skill
-  // picked in pane A must never touch pane B. Session state, like the shell's own
-  // per-turn controls: a conversation does not remember them.
+  // picked in pane A must never touch pane B. Agent/model/effort seed from what
+  // the bound THREAD remembers (`threadDefaults`) and a pick writes back, so
+  // pane and rail agree; fast and the skill stay per-turn session state.
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedEffort, setSelectedEffort] = useState("");
@@ -88,12 +104,37 @@ export function useConversationThread({
     if (defaultEffort) setSelectedEffort((current) => current || defaultEffort);
   }, [defaultEffort]);
 
+  // The row's defaults, readable by the id-keyed effect below without joining
+  // its dependencies: the rail refreshes the row often, and re-seeding on every
+  // refresh would stomp a pick made after the pane opened. Declared before that
+  // effect so the first seed reads a current value.
+  const threadDefaultsRef = useRef(threadDefaults);
+  useEffect(() => {
+    threadDefaultsRef.current = threadDefaults;
+  }, [threadDefaults]);
+  // Same ref treatment for the deployment default: the reset effect below must
+  // key on the conversation id ALONE — bootstrap arriving late must not wipe a
+  // pane's live transcript just to reconsider an effort fallback.
+  const defaultEffortRef = useRef(defaultEffort);
+  useEffect(() => {
+    defaultEffortRef.current = defaultEffort;
+  }, [defaultEffort]);
+
   useEffect(() => {
     loadingFor.current = conversationId;
     conversationRef.current = conversationId;
     setMessages([]);
     setAgentCalls([]);
     setError("");
+    // Seed the pickers from what this thread remembers — once per binding,
+    // exactly like the transcript reset around it.
+    const remembered = threadDefaultsRef.current;
+    if (remembered) {
+      setSelectedAgentId(remembered.agentId);
+      setSelectedModel(remembered.model);
+      setSelectedEffort(remembered.effort || defaultEffortRef.current || "");
+      setFast(false);
+    }
     // The run belonged to the id we just left; leaving it set would wire this
     // pane's Stop to somebody else's run and strand a budget hold on screen.
     setActiveRun(null);
@@ -215,6 +256,45 @@ export function useConversationThread({
     [conversationId, onApprovalChanged],
   );
 
+  /**
+   * A pick is remembered on the thread, exactly as the shell composer does it;
+   * the response row rides the same channel the approval mode uses back to the
+   * shell's list — one home for the row, so pane and rail cannot disagree.
+   * Best-effort on the wire: the pick already governs this pane either way.
+   */
+  const rememberThreadDefault = useCallback(
+    (patch: ConversationDefaults) => {
+      const id = conversationRef.current;
+      if (!id) return;
+      void api
+        .setConversationDefaults(id, patch)
+        .then((updated) => onApprovalChanged?.(updated))
+        .catch(() => undefined);
+    },
+    [onApprovalChanged],
+  );
+  const pickAgent = useCallback(
+    (value: string) => {
+      setSelectedAgentId(value);
+      rememberThreadDefault({ default_agent_id: value });
+    },
+    [rememberThreadDefault],
+  );
+  const pickModel = useCallback(
+    (value: string) => {
+      setSelectedModel(value);
+      rememberThreadDefault({ default_model: value });
+    },
+    [rememberThreadDefault],
+  );
+  const pickEffort = useCallback(
+    (value: string) => {
+      setSelectedEffort(value);
+      rememberThreadDefault({ default_effort: value });
+    },
+    [rememberThreadDefault],
+  );
+
   return {
     messages,
     agentCalls,
@@ -226,11 +306,11 @@ export function useConversationThread({
     error,
     endRef,
     selectedAgentId,
-    setSelectedAgentId,
+    setSelectedAgentId: pickAgent,
     selectedModel,
-    setSelectedModel,
+    setSelectedModel: pickModel,
     selectedEffort,
-    setSelectedEffort,
+    setSelectedEffort: pickEffort,
     fast,
     setFast,
     attachedSkill,

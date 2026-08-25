@@ -21,7 +21,6 @@ import { ObservabilityPanel } from "./admin-observability";
 import { UsagePanel } from "./admin-usage";
 import { BudgetPanel } from "./budget";
 import { InvitesPanel, MembersPanel } from "./members";
-import { OrganizationPanel } from "./organization";
 import { describeError, formatBytes, formatRelative } from "./shared";
 
 /**
@@ -293,12 +292,10 @@ export function AdminView({ setError }: AdminViewProps) {
           onHoursChange={setObsHours}
         />
 
-        {/* Above the roster, because it is the answer to the question the roster
-            raises next: these are the people you can promote, and this is the
-            authority you cannot promote them past. It owns its own fetch — an
-            org read is not owner-gated, so folding it into the load above would
-            make its failure look like the owner-only refusal, which it is not. */}
-        <OrganizationPanel setError={setError} />
+        {/* The organization panel moved to Rules & policies (views/policies.tsx):
+            its reads were never owner-gated, but mounting it here put it behind
+            this view's owner-only Promise.all — 403-walling the posture for
+            exactly the members it governs. */}
 
         {/* The roster and the queue feeding it, side by side: an owner opens
             this view to answer "who is here and who is arriving", and reading

@@ -87,11 +87,22 @@ test.describe("dashboards", () => {
     });
     await expect(page.getByText("Indexed").last()).toBeVisible({ timeout: 30_000 });
 
-    const { json: datasets } = await callApi(page, "GET", "/api/datasets");
-    const dataset = (datasets as { id: string; name: string }[]).find((item) =>
-      item.name.includes("dashboards-e2e"),
-    );
-    expect(dataset, "the uploaded CSV did not become a dataset").toBeTruthy();
+    // The dataset is created by a client-side effect AFTER the source reads
+    // "Indexed" — an async POST this page fires on its own schedule — so the
+    // lookup has to poll rather than race it with a single read.
+    let dataset: { id: string; name: string } | undefined;
+    await expect
+      .poll(
+        async () => {
+          const { json: datasets } = await callApi(page, "GET", "/api/datasets");
+          dataset = (datasets as { id: string; name: string }[]).find((item) =>
+            item.name.includes("dashboards-e2e"),
+          );
+          return dataset;
+        },
+        { timeout: 15_000, message: "the uploaded CSV did not become a dataset" },
+      )
+      .toBeTruthy();
 
     await callApi(
       page,

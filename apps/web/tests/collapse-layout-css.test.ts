@@ -107,9 +107,20 @@ describe("the collapsed list panes", () => {
   it("re-state the laptop projects grid inside its own media block", () => {
     // A plain rule after the 1500px block would win at every width and put four
     // columns back on a laptop, which is the bug that block exists to fix.
+    // The chat track is the shared `--split-width` token now, not a literal:
+    // every subject-chat band reads the one width, so the three cannot drift.
     const narrow = css.slice(at(".projects-layout.with-chat.list-collapsed"));
     expect(narrow).toMatch(
-      /@media \(max-width: 1500px\) \{\s*\.projects-layout\.with-chat\.list-collapsed \{\s*grid-template-columns:\s*44px minmax\(0, 1fr\) 320px/,
+      /@media \(max-width: 1500px\) \{\s*\.projects-layout\.with-chat\.list-collapsed \{\s*grid-template-columns:\s*44px minmax\(0, 1fr\) var\(--split-width\)/,
     );
+  });
+
+  it("sizes every subject-chat band from the one shared width token", () => {
+    // The point of the token: a hand-tuned literal on one of the three grids
+    // is exactly how they drifted to two widths before.
+    expect(css).toMatch(/:root \{[^}]*--split-width:\s*340px/);
+    for (const layout of [".documents-layout", ".projects-layout", ".dashboards-layout"]) {
+      expect(ruleBody(`${layout}.with-chat`)).toMatch(/var\(--split-width\)/);
+    }
   });
 });

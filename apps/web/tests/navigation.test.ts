@@ -65,6 +65,15 @@ describe("navigation model", () => {
     // where the count of runs parked on a human read as configuration noise.
     expect(groupForView("activity").id).toBe("inbox");
     expect(groupForView("activity").surface).toBe("rail");
+    // The Rules ledger sits beside the queue that writes into it: the
+    // "always allow" checkbox on an approval files a standing grant, and the
+    // page it is taken back on must not be a different door. The queue stays
+    // first — it is what the badge counts, and the group's landing view.
+    const inbox = NAV_GROUPS.find((group) => group.id === "inbox");
+    expect(inbox?.items.map((item) => [item.view, item.label])).toEqual([
+      ["activity", "Inbox"],
+      ["policies", "Rules"],
+    ]);
     // And the settings surface holds only what really is configuration — no
     // group behind it may contain a surface that waits on a person.
     expect(SETTINGS_GROUPS.map((group) => group.label)).toEqual(["Connections", "Admin"]);
@@ -104,10 +113,11 @@ describe("navigation model", () => {
       ]),
     ).toEqual([
       ["", ["documents", "projects"]],
-      // One heading for both: a list is a board with one column, and that is
-      // an implementation detail nobody should have to know to find their
-      // checklist.
-      ["Boards & todos", ["boards", "todos"]],
+      // One destination for both: a list is a board with one column, and that
+      // is an implementation detail nobody should have to know to find their
+      // checklist. Two entries here used to make a list teleport the moment it
+      // grew a second column; now the object stays put and changes its glyph.
+      ["Boards & todos", ["boards"]],
       // Data beside the things drawn from it — Databases moved here from the
       // Settings menu, ending the connect-data → chart-it trek.
       ["Data", ["datasets", "data"]],

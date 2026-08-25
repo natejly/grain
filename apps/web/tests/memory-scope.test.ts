@@ -18,6 +18,7 @@ function memory(overrides: Partial<MemoryItem> = {}): MemoryItem {
   return {
     id: "m1",
     conversation_id: null,
+    space_id: "",
     kind: "fact",
     content: "The API deploys on Railway.",
     entity_names: [],

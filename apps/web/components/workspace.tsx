@@ -1,15 +1,16 @@
 "use client";
 
 import type { Conversation, DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, Columns2, LogOut, Menu, Pencil, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
+import { BarChart3, CircleDot, Columns2, LogOut, Menu, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { ApiHealthBanner } from "./api-health-banner";
+import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
 import { PaneToggle, useCollapsiblePane } from "./collapsible-pane";
 import { CommandPalette } from "./command-palette";
 import { CreateMenu } from "./create-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
+import { SystemStatus } from "./system-status";
 import { useWorkspace } from "./use-workspace";
 import { InboxView, asCall } from "./views/inbox";
 import { AdminView } from "./views/admin";
@@ -21,6 +22,7 @@ import { AppsView } from "./views/apps";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
 import { ChatSplit } from "./views/chat-split";
+import type { DashboardPinning } from "./views/dashboard-pin-bar";
 import { DashboardEditor } from "./views/dashboard-editor";
 import { DashboardsView } from "./views/dashboards";
 import { DataView } from "./views/data";
@@ -29,6 +31,7 @@ import { GraphView } from "./views/graph";
 import { IntegrationsView } from "./views/integrations";
 import { McpView } from "./views/mcp";
 import { MemoryView } from "./views/memory";
+import { CHORD_WINDOW_MS, chordEligible, chordTarget } from "./views/chords";
 import {
   DEFAULT_GROUP_VIEW,
   RAIL_GROUPS,
@@ -36,6 +39,7 @@ import {
   type CreateAction,
   type GroupId,
 } from "./views/navigation";
+import { PoliciesView } from "./views/policies";
 import { ProjectsView } from "./views/projects";
 import { SandboxToolsView } from "./views/sandbox-tools";
 import {
@@ -46,8 +50,8 @@ import {
   type View,
 } from "./views/shared";
 import { SkillsView } from "./views/skills";
+import { SNOOZE_KEY, parseSnoozes, snoozedIds } from "./views/snooze";
 import { SourcesView } from "./views/sources";
-import { TodosView } from "./views/todos";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
 import { CronsView } from "./views/crons";
@@ -123,6 +127,8 @@ export function Workspace() {
     setSidebarOpen,
     error,
     setError,
+    notice,
+    setNotice,
     endRef,
     fileInputRef,
     pendingApprovals,
@@ -134,6 +140,12 @@ export function Workspace() {
     pinnedIds,
     focusedDashboard,
     setFocusedDashboard,
+    focusedSource,
+    setFocusedSource,
+    focusedMemory,
+    setFocusedMemory,
+    focusedEntity,
+    setFocusedEntity,
     loadWorkspace,
     refreshOffScreenWork,
     refreshSecondary,
@@ -158,7 +170,7 @@ export function Workspace() {
     removeBoardCard,
     removeBoard,
     boardColumnOps,
-    kanbanBoards,
+    boards,
     todoLists,
     todoOps,
     addDbConnection,
@@ -183,9 +195,11 @@ export function Workspace() {
     newConversation,
     removeConversation,
     decideAgentCall,
+    steerActiveRun,
     setApprovalMode,
     cancelActiveRun,
     regenerate,
+    editMessage,
     submitPrompt,
     uploadFiles,
     removeSource,
@@ -211,11 +225,33 @@ export function Workspace() {
   // Always present: this component only renders inside the authenticated gate.
   const { session, signOut } = useSession();
 
+  // The one health loop the shell runs: the red banner and the system-status
+  // dot both read it, so they cannot disagree for a poll cycle.
+  const health = useApiHealth(api, loadWorkspace);
+
   // The open thread's own row, which is where its approval mode lives. Read
   // from the rail's list rather than held separately, so the picker and the
   // bypass indicator cannot disagree about which mode is in force.
   const activeThread = conversations.find((item) => item.id === activeConversation);
   const activeTitle = activeThread?.title || "New conversation";
+
+  // The one pin bundle, shared by the primary chat and every extra pane — a
+  // dashboard made in a side pane gets the same finish-the-job bar.
+  const pinning: DashboardPinning = {
+    dashboards,
+    pinnedIds,
+    pin: pinDashboard,
+    // "Show me" lands on the Dashboards view focused on the one the turn
+    // made — the same landing the sidebar's pin rows use.
+    open: (id) => {
+      setView("dashboards");
+      setSidebarOpen(false);
+      setFocusedDashboard(id);
+    },
+    // Appended rather than assigned: a half-written message in the composer
+    // is not this button's to discard.
+    askForChart: (seed) => setDraft((current) => (current ? `${current}\n${seed}` : seed)),
+  };
 
   // The rail's two audiences. A thread is shared with the whole workspace or it
   // is the caller's own — the server never returns another member's personal
@@ -247,6 +283,65 @@ export function Workspace() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // ⌘\ / Ctrl+\ — the split's own key. With extra panes open it cycles the
+  // split's focus (primary → pane 1 → … → primary); with none it says where a
+  // split comes from rather than silently doing nothing. Window-level and live
+  // in typing contexts too, like ⌘K: the modifier is what keeps it out of the
+  // text's way, and the preventDefault keeps it from the browser.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key !== "\\") return;
+      event.preventDefault();
+      if (extraPanes.length === 0) {
+        setNotice({
+          text: "Open a thread in a split from its rail row, or ⌘⏎ in the palette",
+          at: Date.now(),
+        });
+        return;
+      }
+      const order: (string | null)[] = [null, ...extraPanes.map((pane) => pane.id)];
+      // A focused id no longer in the order lands at -1, so the cycle starts
+      // over from the primary rather than throwing.
+      const next = order[(order.indexOf(focusedPane) + 1) % order.length];
+      focusPane(next);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [extraPanes, focusedPane, focusPane, setNotice]);
+
+  // G-chords: G then a letter jumps to a destination (G C chat, G I inbox,
+  // G L library, G A automations, G D dashboards). Bare letters only, and
+  // never from a field — anything that edits text keeps its keys, so the
+  // chord cannot yank the view mid-sentence. The armed G lives in a local
+  // variable rather than state: it re-renders nothing and dies with the
+  // listener.
+  useEffect(() => {
+    let armedAt = 0;
+    const onKey = (event: KeyboardEvent) => {
+      if (!chordEligible(event)) return;
+      const now = Date.now();
+      if (armedAt && now - armedAt <= CHORD_WINDOW_MS) {
+        // A second G re-arms rather than lapsing, so "g g c" still lands.
+        armedAt = event.key.toLowerCase() === "g" ? now : 0;
+        const target = chordTarget(event.key);
+        if (target) {
+          event.preventDefault();
+          // A completed chord is spoken for: without this, "G A" would also
+          // reach the Inbox's bubble-phase A/D triage listener and approve
+          // whatever row it had focused. Capture phase (below) is what puts
+          // this handler ahead of that one regardless of mount order.
+          event.stopPropagation();
+          setView(target);
+          setSidebarOpen(false);
+        }
+        return;
+      }
+      if (event.key.toLowerCase() === "g") armedAt = now;
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [setView, setSidebarOpen]);
 
   async function submitRename(conversation: Conversation) {
     const title = renameDraft.trim();
@@ -361,10 +456,9 @@ export function Workspace() {
     memory: memories.length,
     documents: documents.length,
     projects: projects.length,
-    // Each tab counts what that tab shows: a one-column board is on Lists,
-    // not here, so counting it twice would make both numbers wrong.
-    boards: kanbanBoards.length,
-    todos: todoLists.length,
+    // One merged destination, so it counts everything it shows: boards and
+    // one-column lists live in the same listing now.
+    boards: boards.length,
     datasets: datasets.length,
     dashboards: dashboards.length,
     apps: dashboardApps.length,
@@ -435,9 +529,31 @@ export function Workspace() {
   // the fifty-row call window — the window is how this number used to read
   // zero over a real backlog. Until the feed's first read lands, the window
   // count stands in rather than showing a zero not yet known to be true.
+  // Snoozes deliberately do NOT subtract from it: the badge counts facts
+  // (requests waiting on a human), and sleeping through one does not make it
+  // stop waiting. Only the nag surfaces — the strip below and the Inbox's
+  // approvals tab — honour a snooze.
   const inboxBadge = inbox
     ? inbox.approvals.length + inbox.budget_holds.length
     : pendingApprovals.length;
+
+  // The Inbox's "Later" schedule, re-read whenever the feed refreshes, the
+  // user moves between views, or the Inbox reports a change — same-tab state,
+  // so no storage event fires and these are the sync points. The callback
+  // matters when the Inbox and this strip are on screen together: a snooze
+  // written there must leave the doorbell in the same render cycle.
+  const [snoozedApprovals, setSnoozedApprovals] = useState<Set<string>>(new Set());
+  const rereadSnoozes = () =>
+    setSnoozedApprovals(
+      snoozedIds(parseSnoozes(window.localStorage.getItem(SNOOZE_KEY)), new Date()),
+    );
+  useEffect(() => {
+    rereadSnoozes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inbox, view]);
+  const waitingRows = inbox
+    ? inbox.approvals.filter((row) => !snoozedApprovals.has(row.id))
+    : [];
 
   /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
   const renderGroupButton = (group: (typeof RAIL_GROUPS)[number], wide: boolean) => {
@@ -475,6 +591,7 @@ export function Workspace() {
           setSidebarOpen(false);
         }}
         openThread={(id) => void selectConversation(id)}
+        openThreadInSplit={openInNewPane}
         create={create}
         searchTranscripts={(q) => api.searchConversations(q)}
       />
@@ -560,11 +677,13 @@ export function Workspace() {
         {/* Waiting-on-you: the top of the Inbox, rendered where the eye lands
             first. A run that parked overnight greets the user before they open
             anything; each row is decidable in place, and the strip caps at two
-            because it is a doorbell, not the door — the Inbox is one click up. */}
-        {inbox && inbox.approvals.length > 0 && (
+            because it is a doorbell, not the door — the Inbox is one click up.
+            Snoozed rows stay out of it: this is a nag surface, and "Later"
+            means later here too. The rail badge above still counts them. */}
+        {waitingRows.length > 0 && (
           <div className="waiting-strip" role="group" aria-label="Waiting on you">
             <span className="waiting-strip-title">Waiting on you</span>
-            {inbox.approvals.slice(0, 2).map((row) => (
+            {waitingRows.slice(0, 2).map((row) => (
               <div key={row.id} className="waiting-strip-item">
                 <button
                   className="waiting-strip-open"
@@ -608,9 +727,9 @@ export function Workspace() {
                 </button>
               </div>
             ))}
-            {inbox.approvals.length > 2 && (
+            {waitingRows.length > 2 && (
               <button className="waiting-strip-more" onClick={() => openGroup("inbox")}>
-                {inbox.approvals.length - 2} more in Inbox
+                {waitingRows.length - 2} more in Inbox
               </button>
             )}
           </div>
@@ -723,7 +842,7 @@ export function Workspace() {
       )}
 
       <main className="main-panel">
-        <ApiHealthBanner api={api} onRecovered={loadWorkspace} />
+        <ApiHealthBanner api={api} health={health} />
         <header className="topbar">
           <button
             className="icon-button menu-button"
@@ -751,29 +870,10 @@ export function Workspace() {
             <CreateMenu create={create} />
             <WorkspaceSettingsMenu activeGroup={activeGroup.id} open={openGroup} />
             <ThemeToggle />
-            {/* The prompt-injection screen's posture, shown only when it is on:
-                a status indicator, not a control. "enforce" is the mode that
-                actually escalates a flagged turn, so it reads as active; shadow
-                reads as watching. The proxy URL never reaches the client. */}
-            {bootstrap?.screen.enabled && (
-              <div
-                className={`screen-pill ${bootstrap.screen.mode}`}
-                title={`Prompt-injection screen: ${bootstrap.screen.mode} mode, ${bootstrap.screen.backend} backend`}
-              >
-                <ShieldAlert size={13} aria-hidden="true" />
-                Screen: {bootstrap.screen.mode}
-              </div>
-            )}
-            <div
-              className="agent-pill"
-              title={
-                bootstrap?.model_provider.provider === "openai"
-                  ? "OpenAI provider"
-                  : "Deterministic local provider"
-              }
-            >
-              {bootstrap?.model_provider.model || "Loading provider"}
-            </div>
+            {/* The screen and provider pills, folded into one popover: the
+                facts they spelt out are posture, not news, and belong behind a
+                dot that only colours when something is actually wrong. */}
+            <SystemStatus bootstrap={bootstrap} apiDown={health.down} />
           </div>
         </header>
 
@@ -786,6 +886,19 @@ export function Workspace() {
             <CircleDot size={15} />
             <span>{error}</span>
             <button onClick={() => setError("")} aria-label="Dismiss">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* The neutral toast — a presentation change (a list graduating to a
+            board), never a failure. Its own class and role="status", because
+            the red toast is role="alert" and pinned absent by specs that
+            expect nothing to have gone wrong. */}
+        {notice && (
+          <div className="notice-toast" role="status">
+            <span>{notice.text}</span>
+            <button onClick={() => setNotice(null)} aria-label="Dismiss notice">
               <X size={14} />
             </button>
           </div>
@@ -808,6 +921,7 @@ export function Workspace() {
             focusPane={focusPane}
             onSettled={refreshConversations}
             onApprovalChanged={patchConversation}
+            pinning={pinning}
             primary={
               <ChatView
                 messages={messages}
@@ -823,7 +937,12 @@ export function Workspace() {
                 sharedThread={activeThread?.shared}
                 submitPrompt={submitPrompt}
                 cancelActiveRun={cancelActiveRun}
+                steer={steerActiveRun}
                 regenerate={regenerate}
+                editMessage={editMessage}
+                // The signed-in member, so a shared thread offers the pencil
+                // only on their own prompts.
+                viewerId={session?.user_id}
                 decideAgentCall={decideAgentCall}
                 openCitation={openCitation}
                 attach={{
@@ -838,6 +957,7 @@ export function Workspace() {
                   conversationTitle: activeTitle,
                 }}
                 todos={{ lists: todoLists, ops: todoOps }}
+                pinning={pinning}
                 endRef={endRef}
                 selectedAgentId={selectedAgentId}
                 onSelectAgent={setSelectedAgentId}
@@ -873,15 +993,52 @@ export function Workspace() {
             uploadFiles={uploadFiles}
             removeSource={removeSource}
             fileInputRef={fileInputRef}
+            graph={graph}
+            spaces={spaces}
+            openEntity={(id) => {
+              setView("graph");
+              setFocusedEntity(id);
+            }}
+            focused={focusedSource}
+            setFocused={setFocusedSource}
           />
         )}
 
         {view === "memory" && (
-          <MemoryView memories={memories} forgetMemory={forgetMemory} />
+          <MemoryView
+            memories={memories}
+            forgetMemory={forgetMemory}
+            conversations={conversations}
+            spaces={spaces}
+            graph={graph}
+            // Already lands on the chat view; the id is enough.
+            openConversation={(id) => void selectConversation(id)}
+            openEntity={(id) => {
+              setView("graph");
+              setFocusedEntity(id);
+            }}
+            focused={focusedMemory}
+            setFocused={setFocusedMemory}
+          />
         )}
 
         {view === "graph" && (
-          <GraphView graph={graph} rebuild={rebuildKnowledgeGraph} openChunk={openChunk} />
+          <GraphView
+            graph={graph}
+            rebuild={rebuildKnowledgeGraph}
+            openChunk={openChunk}
+            sources={sources}
+            openSource={(id) => {
+              setView("sources");
+              setFocusedSource(id);
+            }}
+            openMemory={(id) => {
+              setView("memory");
+              setFocusedMemory(id);
+            }}
+            focused={focusedEntity}
+            setFocused={setFocusedEntity}
+          />
         )}
 
         {view === "datasets" && (
@@ -998,17 +1155,16 @@ export function Workspace() {
 
         {view === "boards" && (
           <BoardView
-            boards={kanbanBoards}
+            boards={boards}
             createBoard={createBoard}
             addCard={addBoardCard}
             moveCard={moveBoardCard}
             removeCard={removeBoardCard}
             removeBoard={removeBoard}
             columnOps={boardColumnOps}
+            todoOps={todoOps}
           />
         )}
-
-        {view === "todos" && <TodosView lists={todoLists} ops={todoOps} />}
 
         {view === "data" && (
           <DataView
@@ -1107,8 +1263,13 @@ export function Workspace() {
             decide={decideAgentCall}
             activeRun={activeRun}
             openConversation={(id) => void selectConversation(id)}
+            onSnoozesChanged={rereadSnoozes}
           />
         )}
+
+        {/* Member-readable by design — the rules ledger and the org posture
+            both fetch for any caller, so this mounts with no role gate. */}
+        {view === "policies" && <PoliciesView setError={setError} />}
 
         {/* Owner-only and workspace-wide, so it is fetched on open rather than
             riding along with every page load. */}

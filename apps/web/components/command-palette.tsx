@@ -30,6 +30,12 @@ export type CommandPaletteProps = {
   conversations: Conversation[];
   openView: (view: View) => void;
   openThread: (conversationId: string) => void;
+  /**
+   * Open a thread beside the primary instead of as it: ⌘Enter or ⌘click on a
+   * thread row. Optional so the palette stands without the split; the rows
+   * only advertise the modifier when it is wired.
+   */
+  openThreadInSplit?: (conversationId: string) => void;
   create: (action: CreateAction, name: string, kind: DocumentKind) => Promise<void>;
   /**
    * Deep search: what was SAID, not only what things are named. Optional so
@@ -45,6 +51,7 @@ export function CommandPalette({
   conversations,
   openView,
   openThread,
+  openThreadInSplit,
   create,
   searchTranscripts,
 }: CommandPaletteProps) {
@@ -123,14 +130,17 @@ export function CommandPalette({
 
   if (!open) return null;
 
-  async function run(row: PaletteRow) {
+  async function run(row: PaletteRow, split = false) {
     if (row.kind === "view") {
       openView(row.view);
       close();
       return;
     }
     if (row.kind === "thread") {
-      openThread(row.conversationId);
+      // ⌘Enter / ⌘click: beside the primary, not instead of it. Falls back to
+      // the plain open when no split is wired, so the modifier never no-ops.
+      if (split && openThreadInSplit) openThreadInSplit(row.conversationId);
+      else openThread(row.conversationId);
       close();
       return;
     }
@@ -200,7 +210,7 @@ export function CommandPalette({
               } else if (event.key === "Enter") {
                 event.preventDefault();
                 const row = matches[index];
-                if (row) void run(row);
+                if (row) void run(row, event.metaKey || event.ctrlKey);
               }
             }}
           />
@@ -225,7 +235,7 @@ export function CommandPalette({
                     data-focused={rowIndex === index || undefined}
                     className={rowIndex === index ? "palette-row focused" : "palette-row"}
                     onMouseEnter={() => setIndex(rowIndex)}
-                    onClick={() => void run(row)}
+                    onClick={(event) => void run(row, event.metaKey || event.ctrlKey)}
                   >
                     {row.kind === "thread" ? (
                       <MessageSquare size={14} aria-hidden="true" />
@@ -235,7 +245,14 @@ export function CommandPalette({
                       <Search size={14} aria-hidden="true" />
                     )}
                     <span className="palette-row-label">{row.label}</span>
-                    <span className="palette-row-hint">{row.hint}</span>
+                    <span className="palette-row-hint">
+                      {row.kind === "thread" && openThreadInSplit
+                        ? `${row.hint} · ⌘⏎ split`
+                        : row.hint}
+                    </span>
+                    {row.kind === "view" && row.shortcut && (
+                      <kbd className="palette-row-shortcut">{row.shortcut}</kbd>
+                    )}
                   </button>
                 </li>
               ))

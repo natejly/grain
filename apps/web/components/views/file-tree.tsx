@@ -46,6 +46,9 @@ export type FileTreeProps = {
   ops: FolderOps;
   /** Called with the folder the user was pointing at when they asked for a file. */
   onNewDocument: (folderId: string) => void;
+  /** Documents with an agent write parked on them, marked with a dot so the
+      queue is visible from the tree rather than only inside each document. */
+  pendingIds?: Set<string>;
 };
 
 function FileRow({
@@ -55,6 +58,7 @@ function FileRow({
   openDocument,
   ops,
   indent,
+  pendingIds,
 }: {
   file: DocumentSummary;
   folders: Folder[];
@@ -62,6 +66,7 @@ function FileRow({
   openDocument: (documentId: string) => Promise<void>;
   ops: FolderOps;
   indent: number;
+  pendingIds?: Set<string>;
 }) {
   return (
     <li className="tree-row" style={{ paddingInlineStart: `${indent * 12}px` }}>
@@ -71,6 +76,9 @@ function FileRow({
       >
         <FileText size={14} />
         <span className="doc-title">{file.title}</span>
+        {pendingIds?.has(file.id) && (
+          <span className="tree-dot" aria-label="Has proposed changes" />
+        )}
         <span className="doc-kind">{DOCUMENT_KIND_LABELS[file.kind]}</span>
       </button>
       <DisclosureMenu
@@ -116,6 +124,7 @@ function FolderRow({
   onNewDocument,
   expanded,
   toggle,
+  pendingIds,
 }: {
   node: FolderNode;
   folders: Folder[];
@@ -125,6 +134,7 @@ function FolderRow({
   onNewDocument: (folderId: string) => void;
   expanded: Set<string>;
   toggle: (folderId: string) => void;
+  pendingIds?: Set<string>;
 }) {
   const open = expanded.has(node.folder.id);
   const contents = contentsLabel(node);
@@ -254,6 +264,7 @@ function FolderRow({
               onNewDocument={onNewDocument}
               expanded={expanded}
               toggle={toggle}
+              pendingIds={pendingIds}
             />
           ))}
           {node.files.map((file) => (
@@ -265,6 +276,7 @@ function FolderRow({
               openDocument={openDocument}
               ops={ops}
               indent={node.depth}
+              pendingIds={pendingIds}
             />
           ))}
           {node.total === 0 && node.folders.length === 0 && (
@@ -288,6 +300,7 @@ export function FileTree({
   openDocument,
   ops,
   onNewDocument,
+  pendingIds,
 }: FileTreeProps) {
   // Collapsed by default, and remembered per mount. A tree that reopens itself
   // fully on every refetch throws the user back to the top of a long list.
@@ -356,6 +369,7 @@ export function FileTree({
               onNewDocument={onNewDocument}
               expanded={expanded}
               toggle={toggle}
+              pendingIds={pendingIds}
             />
           ))}
           {tree.files.map((file) => (
@@ -367,6 +381,7 @@ export function FileTree({
               openDocument={openDocument}
               ops={ops}
               indent={0}
+              pendingIds={pendingIds}
             />
           ))}
         </ul>

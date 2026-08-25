@@ -13,7 +13,6 @@ import {
   LayoutGrid,
   Library,
   LibraryBig,
-  ListChecks,
   MessageSquare,
   Network,
   Plug,
@@ -137,7 +136,20 @@ const GROUP_SPECS: NavGroupSpec[] = [
     label: "Inbox",
     icon: Inbox,
     surface: "rail",
-    sections: [{ label: "", items: [{ view: "activity", label: "Inbox", icon: Inbox }] }],
+    sections: [
+      {
+        label: "",
+        items: [
+          { view: "activity", label: "Inbox", icon: Inbox },
+          // The ledger of standing grants beside the queue that writes them:
+          // an "always allow" ticked on an approval card lands here, and here
+          // is where it is taken back. The org ceilings render on the same
+          // page — the rule that denies you belongs next to the rules you
+          // wrote yourself.
+          { view: "policies", label: "Rules", icon: ShieldCheck },
+        ],
+      },
+    ],
   },
   /**
    * "Library", because that is what it holds — and held under headings,
@@ -159,17 +171,14 @@ const GROUP_SPECS: NavGroupSpec[] = [
       },
       {
         /**
-         * One heading for both, because a list is a board with one column and
-         * that is an implementation detail nobody should have to know to find
-         * their checklist. Two entries under it so the graduation stays
-         * legible: grow a second column and the object moves one row, same
-         * id, same items, ticks intact.
+         * One destination, because a list is a board with one column and that
+         * is an implementation detail nobody should have to know to find
+         * their checklist. Two entries used to sit here, which made a list
+         * *teleport* to the other row the moment it grew a second column;
+         * now the object stays put in one listing and only its glyph changes.
          */
         label: "Boards & todos",
-        items: [
-          { view: "boards", label: "Boards", icon: KanbanSquare },
-          { view: "todos", label: "Lists", icon: ListChecks },
-        ],
+        items: [{ view: "boards", label: "Boards & todos", icon: KanbanSquare }],
       },
       {
         /**
