@@ -86,14 +86,28 @@ def test_no_network_is_reserved_even_though_it_only_exists_under_none() -> None:
 
 
 @pytest.mark.parametrize(
-    "dangerous", ["PATH", "PYTHONPATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES"]
+    "dangerous",
+    [
+        "PATH",
+        "PYTHONPATH",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        # The prefix rule, not enumeration: these dynamic-loader fallbacks are
+        # exactly what an exact-match list quietly misses.
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+        "LD_AUDIT",
+        "GCONV_PATH",
+    ],
 )
 def test_validate_name_refuses_process_steering_env_names(dangerous: str) -> None:
     """These are not policy keys, so the policy-derived reserved set would let them
     through — but a run's env is `{**base, **secrets}`, so a secret named `PATH` or
     `LD_PRELOAD` *wins* the merge and can redirect which binary or shared object the
     interpreter loads. That is code execution wearing a credential's clothes, so the
-    name is refused outright."""
+    name is refused outright — the loader families by `LD_`/`DYLD_` prefix so a
+    fallback variant cannot slip past an exact-match list."""
     with pytest.raises(SecretError, match="reserved"):
         secrets_service.validate_name(dangerous)
 

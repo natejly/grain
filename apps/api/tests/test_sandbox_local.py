@@ -245,6 +245,15 @@ def test_kill_deletes_the_plaintext_secret_sidecar(
     local.kill(handle)  # idempotent even with the sidecar already gone
 
 
+def test_kill_with_a_malformed_id_does_not_raise(local: SubprocessProvider) -> None:
+    """A NUL in the id makes Path operations raise ValueError, not OSError — which
+    would sail past remove_session_env's handlers and escape kill(), skipping the
+    session-root cleanup. The id guard must reject it as a SandboxError instead, so
+    kill() stays total. (Ids are driver-generated UUIDs; this defends the seam.)"""
+    handle = SandboxHandle(provider="subprocess", external_id="abc\x00def")
+    local.kill(handle)  # must not raise
+
+
 def test_the_secret_sidecar_is_written_0600(
     local: SubprocessProvider, workdir: Path
 ) -> None:

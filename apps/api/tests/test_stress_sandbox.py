@@ -206,23 +206,17 @@ def test_a_session_id_with_a_separator_is_refused(workdir: Path) -> None:
             local_exec.session_root(workdir, bad)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: session_root (local_exec.py:68-73) screens for '/', '\\\\' and a "
-        "leading dot, then calls Path.resolve(), which raises a bare ValueError "
-        "on an embedded NUL. ValueError is not SandboxError, so it escapes every "
-        "`except SandboxError` in tools.py and api/sandbox.py and surfaces as a "
-        "500 instead of a refusal. external_id is driver-generated today, but it "
-        "is a plain unconstrained string column that is read back out of the "
-        "database and fed to this function on every later request. Remove the "
-        "xfail when the guard rejects control characters."
-    ),
-)
 @pytest.mark.parametrize("bad", ["a\x00b", "\x00"])
 def test_a_session_id_holding_a_null_byte_is_refused_as_a_sandbox_error(
     workdir: Path, bad: str
 ) -> None:
+    """Once a defect: `session_root` screened for '/', '\\' and a leading dot,
+    then called `Path.resolve()`, which raises a bare ValueError on an embedded
+    NUL — not a SandboxError, so it escaped every `except SandboxError` in
+    tools.py and api/sandbox.py and surfaced as a 500. `external_id` is
+    driver-generated today, but it is an unconstrained string column read back
+    out of the database on every later request. The id guard (`_bad_id`) now
+    rejects the NUL up front, so this is a refusal rather than a 500."""
     with pytest.raises(SandboxError):
         local_exec.session_root(workdir, bad)
 

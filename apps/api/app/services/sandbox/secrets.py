@@ -57,17 +57,20 @@ NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 #: or `LD_PRELOAD` *wins* the merge and can redirect which binary or shared
 #: object the interpreter loads. That is code execution dressed as a credential,
 #: so the name is refused outright, independent of the network policy.
+#:
+#: The dynamic-loader knobs are matched by *prefix*, not enumerated: `LD_` and
+#: `DYLD_` each front a whole family (`DYLD_FALLBACK_LIBRARY_PATH`,
+#: `DYLD_FRAMEWORK_PATH`, …) that an exact-match list quietly misses. A prefix
+#: rule blocks the family and any member the platform adds later.
+DANGEROUS_PREFIXES = ("LD_", "DYLD_")
 DANGEROUS_NAMES = frozenset(
     {
         "PATH",
         "PYTHONPATH",
         "PYTHONHOME",
         "PYTHONSTARTUP",
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "LD_AUDIT",
-        "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH",
+        "GCONV_PATH",  # glibc: loads a converter module — container side
+        "LOCPATH",  # glibc: loads a locale object — container side
         "IFS",
         "BASH_ENV",
         "ENV",
@@ -112,6 +115,7 @@ def validate_name(name: str) -> str:
     if (
         cleaned in _reserved_names()
         or cleaned in DANGEROUS_NAMES
+        or cleaned.startswith(DANGEROUS_PREFIXES)
         or cleaned.startswith("GRAIN_")
     ):
         raise SecretError(f"“{cleaned}” is reserved by the sandbox and cannot be used.")
@@ -159,7 +163,11 @@ def set_secret(
             # wins rather than one caller getting a 500.
             db.rollback()
             row = _find(db, workspace_id=workspace_id, name=clean)
-            if row is None:  # pragma: no cover — the row must exist post-conflict
+            if row is None:  # pragma: no cover
+                # Normally the conflicting row is right there; the only way it is
+                # gone is a delete landing between our rollback and this re-select.
+                # Re-raise the IntegrityError rather than inventing a recovery for
+                # a race this narrow — the caller sees the original 500.
                 raise
             row.value_enc = ciphertext
             row.updated_at = utcnow()
@@ -232,9 +240,9 @@ def secret_env(db: Session, *, workspace_id: str, settings: Settings) -> Dict[st
             env[row.name] = decrypt_secret(row.value_enc, settings)
         except EncryptionNotConfiguredError:
             # The key that stored these is gone entirely: every row will fail, so
-            # the whole workspace's secrets silently vanish from the session. That
-            # is a configuration problem, not a per-row one — surface it once, by
-            # name, so it is diagnosable rather than a mystery empty environment.
+            # the whole workspace's secrets silently vanish from the session. A
+            # distinct message from the per-row case (and by name) so the log
+            # reads as a configuration problem, not one bad credential.
             logger.warning(
                 "sandbox secret %r for workspace %s skipped: encryption key not "
                 "configured",

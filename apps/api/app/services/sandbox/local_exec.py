@@ -65,12 +65,28 @@ def session_root(base: Path, external_id: str) -> Path:
     filesystem path, and every such function in this codebase is one traversal
     bug away from being the interesting one in an incident report.
     """
-    if not external_id or "/" in external_id or "\\" in external_id or external_id.startswith("."):
+    if _bad_id(external_id):
         raise SandboxError("invalid sandbox id")
     path = (base / external_id).resolve()
     if not str(path).startswith(str(base.resolve()) + os.sep):
         raise SandboxError("invalid sandbox id")
     return path
+
+
+def _bad_id(external_id: str) -> bool:
+    """A driver id that must not be turned into a path. A NUL is in here beside
+    the traversal characters because it fails *differently*: `Path` operations on
+    a NUL-bearing string raise `ValueError`, not `OSError`, so an unlink or
+    resolve would throw straight past the `OSError` handlers a caller like
+    `remove_session_env` relies on — turning a bad id into an escaped exception
+    that skips the rest of teardown."""
+    return (
+        not external_id
+        or "\x00" in external_id
+        or "/" in external_id
+        or "\\" in external_id
+        or external_id.startswith(".")
+    )
 
 
 def ensure_session_root(base: Path, external_id: str, *, mode: int = 0) -> Path:
@@ -106,7 +122,7 @@ def _session_sidecar(base: Path, external_id: str, suffix: str) -> Path:
     driver-generated, but the same containment check `session_root` applies is
     applied here too, because this turns a string into a filesystem path.
     """
-    if not external_id or "/" in external_id or "\\" in external_id or external_id.startswith("."):
+    if _bad_id(external_id):
         raise SandboxError("invalid sandbox id")
     return base / f".{external_id}{suffix}"
 
