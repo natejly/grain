@@ -164,7 +164,11 @@ cases, unit tests, and its own commit.
       period-start UPDATE, render/send on background tasks per the F5 QA
       note; PUT /api/me/digest + bootstrap exposure; settings-menu toggle
       and hour picker)
-- [ ] Full gate: make lint, pytest, pnpm test, pnpm build, e2e
+- [x] Full gate: make lint, pytest, pnpm test, pnpm build, e2e (2026-08-25 on
+      sweep-qa-fixes after the QA fix pass: lint/mypy clean, full pytest green,
+      749 web unit tests, build clean, e2e 76 passed / 1 skipped / 0 failed —
+      the first post-merge e2e run surfaced two pieces of four-branch-merge
+      fallout, fixed in their own commit and recorded under "QA fix pass")
 
 ## Later in line (explicitly deferred by user 2026-08-22)
 
@@ -1059,6 +1063,17 @@ was timing:
   built: SPF/DKIM verdict surfacing (QA 8 half) — the generic provider
   payload carries no verdict field yet; add one when a concrete provider is
   wired.
+- Full-gate rerun (2026-08-25, after the fix commits): lint/mypy/typecheck
+  clean, full pytest green, vitest 749, build clean, e2e 76/1 skipped/0
+  failed. The FIRST post-merge e2e run found two pieces of merge fallout
+  (pre-existing on main at 462f03c, not from the fix commits), both fixed
+  here: (a) the thread row's pinned four-column grid met a fifth action
+  (mainline rename + sweep comments on one row) and Delete grid-wrapped onto
+  the row below, eating clicks in three specs — .thread now auto-flows
+  implicit columns and thread-rail-css.test.ts pins the mechanism, not a
+  count; (b) navigation.spec's Library count kept the losing side's 12 past
+  the Boards&todos fusion, and its Connections block never learned Sandbox
+  secrets (now 11 and 5, entries named).
 - Cross-cutting (QA 13, RECORDED): neither machine door (hooks trigger,
   inbound mail beyond the new per-address cap) is rate limited per
   credential — a leaked API token can queue workflow runs bounded only by
