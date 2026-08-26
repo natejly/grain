@@ -395,22 +395,6 @@ def stream_agent_response(
             response = getattr(event, "response", None)
             error = getattr(response, "error", None)
             detail = getattr(error, "message", None) or event_type
-            reason = str(
-                getattr(getattr(response, "incomplete_details", None), "reason", "")
-                or ""
-            )
-            if reason == "max_output_tokens":
-                # Name the knob rather than echo the provider's reason code. The
-                # one cause that produces this is a turn that spent its whole
-                # output budget on reasoning tokens before the first visible
-                # character, and a reader can only act on that if told which
-                # setting bounds it.
-                raise RuntimeError(
-                    "Model stream ended early: the turn used its entire "
-                    f"{settings.openai_max_output_tokens}-token output budget "
-                    "on reasoning and produced no answer. Raise "
-                    "OPENAI_MAX_OUTPUT_TOKENS, or lower OPENAI_REASONING_EFFORT."
-                )
             raise RuntimeError("Model stream ended early: " + str(detail))
 
 

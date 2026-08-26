@@ -67,20 +67,12 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 10 * 1024 * 1024
     max_tool_response_bytes: int = 256 * 1024
     model_provider: Literal["openai", "anthropic", "scripted"] = "openai"
-
     # Path to a JSON script for MODEL_PROVIDER=scripted. See services/scripted_model.py.
     scripted_model_script: Optional[Path] = None
     openai_api_key: Optional[SecretStr] = None
     anthropic_api_key: Optional[SecretStr] = None
     anthropic_model: str = "claude-sonnet-5"
-    # Sized for a thinking model, not a plain completion. `max_tokens` is a
-    # CEILING, not a reservation - a generous value costs nothing on a short
-    # answer, while a small one is billed in full and then truncated. Thinking
-    # blocks are drawn from this same budget, so the old 1200 could be spent
-    # entirely on reasoning and leave no text at all, surfacing as
-    # "Model stream ended early: max_output_tokens". Both provider paths
-    # stream, which is what makes a ceiling this size safe against timeouts.
-    anthropic_max_output_tokens: int = 32000
+    anthropic_max_output_tokens: int = 1200
     anthropic_timeout_seconds: float = 60.0
     # The cheap-model counterpart to `openai_context_model`: small auxiliary
     # calls (today the guardian reviewer) on an Anthropic deployment.
@@ -93,11 +85,7 @@ class Settings(BaseSettings):
     # want user-selectable, or wants to offer one it has not priced.
     selectable_models_raw: str = ""
     openai_timeout_seconds: float = 60.0
-    # See `anthropic_max_output_tokens`: same ceiling-not-reservation reasoning
-    # and the same failure it fixes. Reasoning tokens count against this budget
-    # on a reasoning model, so 1200 was routinely exhausted before the first
-    # visible character - a hard error on a turn with nothing wrong with it.
-    openai_max_output_tokens: int = 32000
+    openai_max_output_tokens: int = 1200
     openai_embedding_model: str = "text-embedding-3-small"
     openai_codegen_max_output_tokens: int = 16000
 

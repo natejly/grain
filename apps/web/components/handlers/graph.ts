@@ -40,28 +40,7 @@ export function createGraphHandlers({
     }
   }
 
-  /**
-   * Follow a citation to whatever its provenance actually is.
-   *
-   * A workspace citation names an indexed Chunk, and the drawer shows the
-   * passage. A WEB citation does not: `chunk_id` is a synthetic "web:<digest>"
-   * that names no row, and GET /api/chunks/{id} answers 404 by design, because
-   * synthesising a passage there would mean inventing `content` and character
-   * offsets for text this system never held. That 404 used to surface as the
-   * error banner "A web citation has no indexed passage. Open its url to check
-   * it." - a correct sentence telling the reader to go do by hand the one thing
-   * a click should have done. The citation carries the `url`; following it IS
-   * the check, so do that instead of narrating it.
-   *
-   * `noopener,noreferrer` because the destination is an arbitrary page the
-   * model chose, not somewhere this app vouches for: it must not get a handle
-   * on the opener window, and it must not be told where the visit came from.
-   */
   async function openCitation(citation: Citation) {
-    if (citation.url) {
-      window.open(citation.url, "_blank", "noopener,noreferrer");
-      return;
-    }
     await openChunk(citation.chunk_id);
   }
 
