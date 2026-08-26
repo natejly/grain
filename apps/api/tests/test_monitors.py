@@ -414,6 +414,68 @@ def test_one_open_alert_per_monitor_even_when_evaluations_race(
     assert len(alerts_for(db, monitor_id)) == 1
 
 
+def test_the_database_itself_refuses_a_second_open_alert_for_one_monitor(
+    db: Any, identity_client: Callable[..., Any]
+) -> None:
+    """`_open_alert_exists` is a check-then-insert; the partial unique index
+    (0064) is what actually closes the race. A second OPEN monitor_alert row
+    for the same monitor is refused by the database — while other monitors,
+    resolved rows, and every ''-monitor_id notification kind are untouched."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services.notifications import notify, resolve
+
+    client = identity_client(name="Index owner", workspace_name="Index workspace")
+    boot = client.get("/api/bootstrap").json()
+    workspace_id = boot["identity"]["workspace_id"]
+
+    first = notify(
+        db,
+        workspace_id=workspace_id,
+        kind="monitor_alert",
+        title="first crossing",
+        monitor_id="idx-monitor-a",
+    )
+    db.commit()
+    with pytest.raises(IntegrityError):
+        notify(
+            db,
+            workspace_id=workspace_id,
+            kind="monitor_alert",
+            title="racing duplicate",
+            monitor_id="idx-monitor-a",
+        )
+    db.rollback()
+
+    # The index is exactly as narrow as the contract: a different monitor's
+    # open alert, and any number of ''-monitor_id rows (mentions and their
+    # kin), coexist freely.
+    notify(
+        db,
+        workspace_id=workspace_id,
+        kind="monitor_alert",
+        title="another monitor",
+        monitor_id="idx-monitor-b",
+    )
+    notify(db, workspace_id=workspace_id, kind="mention", title="hey")
+    notify(db, workspace_id=workspace_id, kind="mention", title="hey again")
+    db.commit()
+
+    # Resolving the open row vacates the slot: the next genuine crossing may
+    # alert again.
+    first = db.scalar(select(Notification).where(Notification.id == first.id))
+    resolve(db, notification=first, resolved_by=boot["identity"]["user_id"])
+    db.commit()
+    notify(
+        db,
+        workspace_id=workspace_id,
+        kind="monitor_alert",
+        title="re-crossed after ack",
+        monitor_id="idx-monitor-a",
+    )
+    db.commit()
+
+
 def test_a_nan_metric_is_a_skip_not_an_alert_or_an_invalid_json_write(
     db: Any, identity_client: Callable[..., Any], monkeypatch: Any
 ) -> None:

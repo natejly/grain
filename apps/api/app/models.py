@@ -18,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
     false,
+    text,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -2564,6 +2565,24 @@ class Notification(Base):
             "workspace_id",
             "status",
             "created_at",
+        ),
+        # One OPEN alert per monitor, enforced by the database: the tick and a
+        # claim-free run-now can evaluate the same crossing concurrently, and
+        # `monitors._open_alert_exists` is a check-then-insert — this partial
+        # unique index is what actually closes that race (the loser's commit
+        # raises and its evaluation lands as a skip). Scoped to real monitor
+        # ids so every other notification kind, whose monitor_id is '', is
+        # untouched.
+        Index(
+            "uq_notifications_open_monitor_alert",
+            "monitor_id",
+            unique=True,
+            sqlite_where=text(
+                "kind = 'monitor_alert' AND status = 'open' AND monitor_id != ''"
+            ),
+            postgresql_where=text(
+                "kind = 'monitor_alert' AND status = 'open' AND monitor_id != ''"
+            ),
         ),
     )
 

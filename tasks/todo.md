@@ -961,6 +961,17 @@ was timing:
       reconverges the waiting strip from fresh truth.
 - [x] Verify: full playwright suite 72 passed / 0 failed (first fully
       green run; 3.0m, down from 7.4m of timeout stalls).
+## QA fix pass (branch sweep-qa-fixes, 2026-08-25)
+
+- Monitors duplicate-alert race closed at the database: migration
+  0064_open_alert_unique adds a partial unique index (one OPEN monitor_alert
+  row per monitor). RIDE-ALONG SEMANTIC, deliberate: an open alert nobody has
+  acknowledged now suppresses re-alerting even after a genuine
+  recover-and-recross — the monitor recovers to ok, crosses again, and the
+  insert of the second alert loses to the still-open first one, landing as a
+  skip. One un-acked Inbox card per monitor is the contract; ack (resolve) the
+  alert to re-arm the page.
+
 ## Merge notes (feature-sweep, 2026-08-23)
 
 - MIGRATION RENUMBERING (QA finding #1, do at merge time): this branch's
