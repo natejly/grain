@@ -1146,6 +1146,7 @@ def execute_agent_tool_call(
                             tool_call_id=record.id,
                             name=name,
                             pending=pending,
+                            result=result,
                         )
                     except Exception:
                         logger.warning(

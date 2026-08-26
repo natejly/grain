@@ -8,8 +8,12 @@ calls on either side of the executor:
   current content, the board's full snapshot, the project file's bytes) into a
   `PendingCapture`, *before* anything runs;
 - `record_checkpoint` finalizes it after a successful execution (creations
-  learn the created id here, by diffing the id set captured before) and adds a
-  `RunCheckpoint` row for the run's undo trail.
+  learn the created id from the executor's own `ToolResult.created_ids` — never
+  by set-diffing workspace ids, which would attribute a concurrent creation by
+  someone else to this run) and adds a `RunCheckpoint` row for the run's undo
+  trail. For the destructively-restored families it also snapshots the
+  *after*-state, so `revert_run` can refuse to clobber work that landed on the
+  same resource after the run.
 
 The capture is deliberately NOT built on `AgentToolCall.arguments_json`: that
 column is truncated to 4000 characters at write time, which makes it an
@@ -40,11 +44,12 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..clock import utcnow
@@ -64,7 +69,7 @@ from ..models import (
 )
 from . import memory as memory_service
 from .artifacts import boards, documents, todos
-from .llm_tools import ToolContext
+from .llm_tools import ToolContext, ToolResult
 from .projects import store as project_store
 
 # The dashboards package pulls in the workflow compiler, which imports
@@ -92,12 +97,23 @@ class PendingCapture:
     kind: str
     reversible: bool = True
     before: Optional[Dict[str, Any]] = None
-    #: For creations: runs after the executor to learn the created id by
-    #: diffing against the id set captured before. Returns the final `before`
-    #: dict, or None to record nothing (the create visibly did not happen).
-    finalize: Optional[Callable[[Session], Optional[Dict[str, Any]]]] = None
-    #: Id sets captured before execution, for the finalizers above.
-    seen: Dict[str, Any] = field(default_factory=dict)
+    #: For creations: runs after the executor to learn the created id from the
+    #: executor's own result (`ToolResult.created_ids`). Returns the final
+    #: `before` dict, or None to record nothing (the create visibly did not
+    #: happen — or did not say what it made, which must not become a guess).
+    finalize: Optional[Callable[[Session, ToolResult], Optional[Dict[str, Any]]]] = None
+    #: Runs after the executor to snapshot the state the tool left behind.
+    #: Stored under `before["after"]`, it is the undo's clobber guard: at
+    #: revert time the resource must still look exactly like this, or the
+    #: restore is skipped rather than destroying work that landed since.
+    after: Optional[Callable[[Session], Optional[Dict[str, Any]]]] = None
+
+
+def _created_id(result: Optional[ToolResult]) -> str:
+    """The one row the executor reported creating, or ''."""
+    if result is None or not result.created_ids:
+        return ""
+    return str(result.created_ids[0])
 
 
 # --------------------------------------------------------------------------
@@ -109,22 +125,28 @@ def _text(args: Dict[str, Any], key: str, default: str = "") -> str:
     return value.strip() if isinstance(value, str) else default
 
 
-def _document_ids(db: Session, workspace_id: str) -> set[str]:
-    return set(
-        db.scalars(select(Document.id).where(Document.workspace_id == workspace_id))
-    )
-
-
 def _capture_create_document(
     db: Session, context: ToolContext, args: Dict[str, Any]
 ) -> PendingCapture:
-    seen = _document_ids(db, context.workspace_id)
-
-    def finalize(db: Session) -> Optional[Dict[str, Any]]:
-        created = _document_ids(db, context.workspace_id) - seen
-        if not created:
+    def finalize(db: Session, result: ToolResult) -> Optional[Dict[str, Any]]:
+        document_id = _created_id(result)
+        if not document_id:
             return None
-        return {"existed": False, "document_id": sorted(created)[0]}
+        document = db.scalar(
+            select(Document).where(
+                Document.id == document_id,
+                Document.workspace_id == context.workspace_id,
+            )
+        )
+        if document is None:
+            return None
+        return {
+            "existed": False,
+            "document_id": document.id,
+            # Undoing this create is a hard delete (versions included), so the
+            # guard snapshot must prove nobody touched it since.
+            "after": {"title": document.title, "content": document.content},
+        }
 
     return PendingCapture(kind="document", finalize=finalize)
 
@@ -180,20 +202,28 @@ def _board_state(db: Session, board: Board) -> Dict[str, Any]:
     }
 
 
-def _board_ids(db: Session, workspace_id: str) -> set[str]:
-    return set(db.scalars(select(Board.id).where(Board.workspace_id == workspace_id)))
+def _board_after(
+    db: Session, workspace_id: str, board_id: str
+) -> Optional[Dict[str, Any]]:
+    board = db.scalar(
+        select(Board).where(Board.id == board_id, Board.workspace_id == workspace_id)
+    )
+    if board is None:
+        return None
+    return {"board": _board_state(db, board)}
 
 
 def _capture_create_board(
     db: Session, context: ToolContext, args: Dict[str, Any]
 ) -> PendingCapture:
-    seen = _board_ids(db, context.workspace_id)
-
-    def finalize(db: Session) -> Optional[Dict[str, Any]]:
-        created = _board_ids(db, context.workspace_id) - seen
-        if not created:
+    def finalize(db: Session, result: ToolResult) -> Optional[Dict[str, Any]]:
+        board_id = _created_id(result)
+        if not board_id:
             return None
-        return {"existed": False, "board_id": sorted(created)[0]}
+        after = _board_after(db, context.workspace_id, board_id)
+        if after is None:
+            return None
+        return {"existed": False, "board_id": board_id, "after": after}
 
     return PendingCapture(kind="board", finalize=finalize)
 
@@ -214,6 +244,7 @@ def _capture_board_write(
             "board_id": board.id,
             "board": _board_state(db, board),
         },
+        after=lambda db: _board_after(db, context.workspace_id, board.id),
     )
 
 
@@ -226,13 +257,15 @@ def _capture_add_todo(
         list_id=_text(args, "list_id"),
         name=_text(args, "list"),
     )
+    board_id = board.id
     return PendingCapture(
         kind="todo",
         before={
             "existed": True,
-            "board_id": board.id,
+            "board_id": board_id,
             "board": _board_state(db, board),
         },
+        after=lambda db: _board_after(db, context.workspace_id, board_id),
     )
 
 
@@ -248,32 +281,50 @@ def _capture_todo_check(
     board = boards.get_board(
         db, workspace_id=context.workspace_id, board_id=card.board_id
     )
+    board_id = board.id
     return PendingCapture(
         kind="todo",
         before={
             "existed": True,
-            "board_id": board.id,
+            "board_id": board_id,
             "board": _board_state(db, board),
         },
+        after=lambda db: _board_after(db, context.workspace_id, board_id),
     )
 
 
-def _project_ids(db: Session, workspace_id: str) -> set[str]:
-    return set(
-        db.scalars(select(Project.id).where(Project.workspace_id == workspace_id))
-    )
+def _project_files(db: Session, project_id: str) -> Dict[str, str]:
+    """Every file of the project, path → content — the create-undo guard."""
+    return {
+        file.path: file.content
+        for file in db.scalars(
+            select(ProjectFile).where(ProjectFile.project_id == project_id)
+        )
+    }
 
 
 def _capture_create_project(
     db: Session, context: ToolContext, args: Dict[str, Any]
 ) -> PendingCapture:
-    seen = _project_ids(db, context.workspace_id)
-
-    def finalize(db: Session) -> Optional[Dict[str, Any]]:
-        created = _project_ids(db, context.workspace_id) - seen
-        if not created:
+    def finalize(db: Session, result: ToolResult) -> Optional[Dict[str, Any]]:
+        project_id = _created_id(result)
+        if not project_id:
             return None
-        return {"existed": False, "project_id": sorted(created)[0]}
+        project = db.scalar(
+            select(Project).where(
+                Project.id == project_id,
+                Project.workspace_id == context.workspace_id,
+            )
+        )
+        if project is None:
+            return None
+        return {
+            "existed": False,
+            "project_id": project_id,
+            # Undoing this create deletes the whole project; the guard snapshot
+            # is every seeded file, so a file added or edited since refuses it.
+            "after": {"files": _project_files(db, project_id)},
+        }
 
     return PendingCapture(kind="project_file", finalize=finalize)
 
@@ -302,7 +353,13 @@ def _capture_project_file(
             "project_id": project.id,
             "files": {path: file.content if file is not None else None},
         },
+        after=lambda db: _file_after(db, project.id, path),
     )
+
+
+def _file_after(db: Session, project_id: str, path: str) -> Dict[str, Any]:
+    file = project_store.find_file(db, project_id=project_id, path=path)
+    return {"files": {path: file.content if file is not None else None}}
 
 
 def _capture_bib_add(
@@ -330,25 +387,45 @@ def _capture_bib_add(
             "project_id": project.id,
             "files": {plan.path: file.content if file is not None else None},
         },
+        after=lambda db: _file_after(db, project.id, plan.path),
     )
 
 
-def _dashboard_ids(db: Session, workspace_id: str) -> set[str]:
-    return set(
-        db.scalars(select(Dashboard.id).where(Dashboard.workspace_id == workspace_id))
+def _dashboard_fields(dashboard: Dashboard) -> Dict[str, Any]:
+    return {
+        "name": dashboard.name,
+        "description": dashboard.description,
+        "dataset_id": dashboard.dataset_id,
+        "spec_json": dashboard.spec_json,
+        "bindings_json": dashboard.bindings_json,
+        "template_id": dashboard.template_id,
+    }
+
+
+def _dashboard_after(
+    db: Session, workspace_id: str, dashboard_id: str
+) -> Optional[Dict[str, Any]]:
+    dashboard = db.scalar(
+        select(Dashboard).where(
+            Dashboard.id == dashboard_id, Dashboard.workspace_id == workspace_id
+        )
     )
+    if dashboard is None:
+        return None
+    return _dashboard_fields(dashboard)
 
 
 def _capture_create_dashboard(
     db: Session, context: ToolContext, args: Dict[str, Any]
 ) -> PendingCapture:
-    seen = _dashboard_ids(db, context.workspace_id)
-
-    def finalize(db: Session) -> Optional[Dict[str, Any]]:
-        created = _dashboard_ids(db, context.workspace_id) - seen
-        if not created:
+    def finalize(db: Session, result: ToolResult) -> Optional[Dict[str, Any]]:
+        dashboard_id = _created_id(result)
+        if not dashboard_id:
             return None
-        return {"existed": False, "dashboard_id": sorted(created)[0]}
+        after = _dashboard_after(db, context.workspace_id, dashboard_id)
+        if after is None:
+            return None
+        return {"existed": False, "dashboard_id": dashboard_id, "after": after}
 
     return PendingCapture(kind="dashboard", finalize=finalize)
 
@@ -371,41 +448,44 @@ def _capture_update_dashboard(
     dashboard = db.scalar(query)
     if dashboard is None:
         return None
+    dashboard_id = dashboard.id
     return PendingCapture(
         kind="dashboard",
         before={
             "existed": True,
-            "dashboard_id": dashboard.id,
-            "name": dashboard.name,
-            "description": dashboard.description,
-            "dataset_id": dashboard.dataset_id,
-            "spec_json": dashboard.spec_json,
-            "bindings_json": dashboard.bindings_json,
-            "template_id": dashboard.template_id,
+            "dashboard_id": dashboard_id,
+            **_dashboard_fields(dashboard),
         },
-    )
-
-
-def _template_ids(db: Session, workspace_id: str) -> set[str]:
-    return set(
-        db.scalars(
-            select(DashboardTemplate.id).where(
-                DashboardTemplate.workspace_id == workspace_id
-            )
-        )
+        after=lambda db: _dashboard_after(db, context.workspace_id, dashboard_id),
     )
 
 
 def _capture_create_dashboard_template(
     db: Session, context: ToolContext, args: Dict[str, Any]
 ) -> PendingCapture:
-    seen = _template_ids(db, context.workspace_id)
-
-    def finalize(db: Session) -> Optional[Dict[str, Any]]:
-        created = _template_ids(db, context.workspace_id) - seen
-        if not created:
+    def finalize(db: Session, result: ToolResult) -> Optional[Dict[str, Any]]:
+        template_id = _created_id(result)
+        if not template_id:
             return None
-        return {"existed": False, "template": True, "template_id": sorted(created)[0]}
+        template = db.scalar(
+            select(DashboardTemplate).where(
+                DashboardTemplate.id == template_id,
+                DashboardTemplate.workspace_id == context.workspace_id,
+            )
+        )
+        if template is None:
+            return None
+        return {
+            "existed": False,
+            "template": True,
+            "template_id": template_id,
+            "after": {
+                "name": template.name,
+                "description": template.description,
+                "required_columns_json": template.required_columns_json,
+                "spec_json": template.spec_json,
+            },
+        }
 
     return PendingCapture(kind="dashboard", finalize=finalize)
 
@@ -454,7 +534,9 @@ def _capture_remember(
             before={"existed": True, "item": _memory_row(existing)},
         )
 
-    def finalize(db: Session) -> Optional[Dict[str, Any]]:
+    def finalize(db: Session, result: ToolResult) -> Optional[Dict[str, Any]]:
+        # No id from the result needed here: the (owner, space, kind, key)
+        # lookup is exact, so it can only name the row this call upserted.
         created = lookup(db)
         if created is None:
             return None
@@ -492,22 +574,14 @@ def _capture_forget(
     )
 
 
-def _source_ids(db: Session, workspace_id: str) -> set[str]:
-    return set(
-        db.scalars(select(Source.id).where(Source.workspace_id == workspace_id))
-    )
-
-
 def _capture_sandbox_download(
     db: Session, context: ToolContext, args: Dict[str, Any]
 ) -> PendingCapture:
-    seen = _source_ids(db, context.workspace_id)
-
-    def finalize(db: Session) -> Optional[Dict[str, Any]]:
-        created = _source_ids(db, context.workspace_id) - seen
+    def finalize(db: Session, result: ToolResult) -> Optional[Dict[str, Any]]:
+        created = [str(source_id) for source_id in (result.created_ids if result else [])]
         if not created:
             return None
-        return {"existed": False, "source_ids": sorted(created)}
+        return {"existed": False, "source_ids": created}
 
     return PendingCapture(kind="source", finalize=finalize)
 
@@ -573,7 +647,13 @@ def capture_before(
 
 
 def record_checkpoint(
-    db: Session, *, run: Run, tool_call_id: str, name: str, pending: PendingCapture
+    db: Session,
+    *,
+    run: Run,
+    tool_call_id: str,
+    name: str,
+    pending: PendingCapture,
+    result: ToolResult,
 ) -> None:
     """Finalize a capture after a successful execution and add its row.
 
@@ -582,11 +662,22 @@ def record_checkpoint(
     """
     before = pending.before
     if pending.finalize is not None:
-        before = pending.finalize(db)
+        before = pending.finalize(db, result)
         if before is None:
             # The create this capture waited on visibly did not happen (the
-            # executor answered with an error sentence): nothing to undo.
+            # executor answered with an error sentence, or did not report what
+            # it made): nothing this undo could honestly claim.
             return
+    if before is not None and pending.after is not None:
+        try:
+            after = pending.after(db)
+        except Exception:
+            # A guard snapshot is a convenience on top of a convenience; a
+            # failure records the checkpoint unguarded rather than losing it.
+            logger.info("checkpoint after-state skipped for %s", name, exc_info=True)
+            after = None
+        if after is not None:
+            before = {**before, "after": after}
     reversible = pending.reversible
     before_json = ""
     if reversible and before is not None:
@@ -615,6 +706,32 @@ def record_checkpoint(
 # Restore
 
 
+def _changed_since(current: Any, recorded: Any) -> bool:
+    """Does the live state no longer match the checkpoint's after-snapshot?
+
+    Both sides are JSON-safe dicts; the round-trip normalizes the live side the
+    same way the snapshot was normalized when it was stored.
+    """
+    return bool(json.loads(json.dumps(current)) != recorded)
+
+
+def _refuse_if_changed(current: Any, recorded: Any, what: str) -> None:
+    """The clobber guard: a restore only applies to the state the run left.
+
+    `recorded` is the checkpoint's after-snapshot, or None for a row written
+    before the guard existed (restore proceeds unguarded, as it always did).
+    A mismatch means later runs or humans wrote to the same resource; restoring
+    over them would destroy work this run never touched, so the row is skipped
+    with an honest reason instead.
+    """
+    if recorded is None:
+        return
+    if _changed_since(current, recorded):
+        raise ValueError(
+            f"the {what} changed after this run; skipped to protect the later edits"
+        )
+
+
 def _parse_done_at(raw: Any) -> Optional[datetime]:
     if not raw:
         return None
@@ -631,7 +748,20 @@ def _revert_document(
     if not document_id:
         raise ValueError("checkpoint names no document")
     if not before.get("existed"):
-        # Undo a creation by deleting it; already gone is already undone.
+        # Undo a creation by deleting it; already gone is already undone. The
+        # delete is hard (versions included), so it only applies while the
+        # document still looks exactly as the run left it.
+        created = db.scalar(
+            select(Document).where(
+                Document.id == document_id, Document.workspace_id == workspace_id
+            )
+        )
+        if created is not None:
+            _refuse_if_changed(
+                {"title": created.title, "content": created.content},
+                before.get("after"),
+                "document",
+            )
         try:
             documents.delete_document(
                 db, workspace_id=workspace_id, document_id=document_id
@@ -676,6 +806,15 @@ def _revert_board(db: Session, *, workspace_id: str, before: Dict[str, Any]) -> 
     if not board_id:
         raise ValueError("checkpoint names no board")
     if not before.get("existed"):
+        created = db.scalar(
+            select(Board).where(
+                Board.id == board_id, Board.workspace_id == workspace_id
+            )
+        )
+        if created is not None:
+            _refuse_if_changed(
+                {"board": _board_state(db, created)}, before.get("after"), "board"
+            )
         try:
             boards.delete_board(db, workspace_id=workspace_id, board_id=board_id)
         except boards.BoardError:
@@ -685,6 +824,13 @@ def _revert_board(db: Session, *, workspace_id: str, before: Dict[str, Any]) -> 
     board = db.scalar(
         select(Board).where(Board.id == board_id, Board.workspace_id == workspace_id)
     )
+    # The restore below is delete-and-recreate — the one family whose restore
+    # destroys whatever is on the board NOW — so it only applies while the
+    # board still matches the state this run left it in.
+    if board is not None:
+        _refuse_if_changed(
+            {"board": _board_state(db, board)}, before.get("after"), "board"
+        )
     if board is None:
         board = Board(
             id=board_id,
@@ -732,6 +878,20 @@ def _revert_project_file(
     if not project_id:
         raise ValueError("checkpoint names no project")
     if not before.get("existed"):
+        # Undo a create by deleting the whole project — but only while it still
+        # holds exactly the files the create seeded. A file added or edited
+        # since belongs to someone else's work, not to this run's undo.
+        created = db.scalar(
+            select(Project).where(
+                Project.id == project_id, Project.workspace_id == workspace_id
+            )
+        )
+        if created is not None:
+            _refuse_if_changed(
+                {"files": _project_files(db, project_id)},
+                before.get("after"),
+                "project",
+            )
         try:
             project_store.delete_project(
                 db, workspace_id=workspace_id, project_id=project_id
@@ -747,6 +907,17 @@ def _revert_project_file(
     if project is None:
         raise ValueError("the project no longer exists")
     files = before.get("files") or {}
+    # Guard before any write, so a refusal leaves every file untouched.
+    after_files = (before.get("after") or {}).get("files")
+    if isinstance(after_files, dict):
+        for path in files:
+            file = project_store.find_file(db, project_id=project_id, path=path)
+            current = file.content if file is not None else None
+            if path in after_files and current != after_files[path]:
+                raise ValueError(
+                    f"the file {path} changed after this run; "
+                    "skipped to protect the later edits"
+                )
     for path, content in files.items():
         file = project_store.find_file(db, project_id=project_id, path=path)
         if content is None:
@@ -778,6 +949,16 @@ def _revert_dashboard(
                 )
             )
             if template is not None:
+                _refuse_if_changed(
+                    {
+                        "name": template.name,
+                        "description": template.description,
+                        "required_columns_json": template.required_columns_json,
+                        "spec_json": template.spec_json,
+                    },
+                    before.get("after"),
+                    "dashboard template",
+                )
                 _dashboard_store().delete_template(db, template)
                 db.flush()
             return
@@ -788,6 +969,9 @@ def _revert_dashboard(
             )
         )
         if dashboard is not None:
+            _refuse_if_changed(
+                _dashboard_fields(dashboard), before.get("after"), "dashboard"
+            )
             _dashboard_store().delete_dashboard(db, dashboard)
             db.flush()
         return
@@ -799,6 +983,7 @@ def _revert_dashboard(
     )
     if dashboard is None:
         raise ValueError("the dashboard no longer exists")
+    _refuse_if_changed(_dashboard_fields(dashboard), before.get("after"), "dashboard")
     dashboard.name = str(before.get("name") or dashboard.name)[:160]
     dashboard.description = str(before.get("description") or "")
     dashboard.dataset_id = str(before.get("dataset_id") or dashboard.dataset_id)
@@ -884,19 +1069,41 @@ def revert_run(
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     """Apply `rows` (this run's checkpoints, newest first) and consume them.
 
-    Returns (reverted, skipped). Every row is stamped `reverted_at` whether it
-    restored or was skipped — consumption is about the *undo*, which happens
-    once, not about each row's individual fortunes. Irreversible rows and rows
-    whose restore fails land in `skipped` with a reason; a failure never
-    aborts the rest of the undo. Flushes only; the route commits (though the
-    document and project services this calls commit internally, per their own
-    house style).
+    Returns (reverted, skipped). Each row is consumed by a conditional UPDATE
+    on `reverted_at IS NULL` — the `consume_email_token` shape — *immediately
+    before its restore*: two concurrent undos of the same run cannot both
+    apply a row (the loser sees rowcount 0 and skips), and a crash mid-undo
+    leaves at most the row in flight stamped, with every later row untouched
+    for a retry to pick up. Irreversible rows and rows whose restore fails
+    land in `skipped` with a reason but are still consumed — consumption is
+    about the undo, which happens once, not about each row's fortunes. A
+    failure never aborts the rest of the undo. Flushes only; the route commits
+    (though the document and project services this calls commit internally,
+    per their own house style).
     """
     reverted: List[Dict[str, str]] = []
     skipped: List[Dict[str, str]] = []
     moment = utcnow()
     for row in rows:
-        row.reverted_at = moment
+        claimed = cast(
+            "CursorResult[Any]",
+            db.execute(
+                update(RunCheckpoint)
+                .where(
+                    RunCheckpoint.id == row.id,
+                    RunCheckpoint.reverted_at.is_(None),
+                )
+                .values(reverted_at=moment)
+            ),
+        ).rowcount
+        if claimed != 1:
+            skipped.append(
+                {
+                    "tool_name": row.tool_name,
+                    "reason": "already consumed by a concurrent undo",
+                }
+            )
+            continue
         if not row.reversible or not row.before_json:
             skipped.append({"tool_name": row.tool_name, "reason": _skip_reason(row)})
             continue

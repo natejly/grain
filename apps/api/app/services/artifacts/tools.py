@@ -107,7 +107,8 @@ def _create_document(db: Session, context: ToolContext, args: Dict[str, Any]) ->
     except documents.DocumentError as exc:
         return ToolResult(content=f"Error: {exc}")
     return ToolResult(
-        content=f"Created “{document.title}” ({document.kind}, id {document.id})."
+        content=f"Created “{document.title}” ({document.kind}, id {document.id}).",
+        created_ids=[document.id],
     )
 
 
@@ -215,7 +216,8 @@ def _create_board(db: Session, context: ToolContext, args: Dict[str, Any]) -> To
         return ToolResult(content=f"Error: {exc}")
     names = [column.name for column in boards.columns_for(db, board.id)]
     return ToolResult(
-        content=f"Created board “{board.name}” with columns: {', '.join(names)}."
+        content=f"Created board “{board.name}” with columns: {', '.join(names)}.",
+        created_ids=[board.id],
     )
 
 

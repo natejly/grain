@@ -298,7 +298,8 @@ def _create_dashboard(
     # the card's pin bar parses it to know which dashboard it is offering.
     return ToolResult(
         content=f"Created dashboard “{dashboard.name}” (id {dashboard.id}) showing "
-        f"{_describe(spec)}. A pin control appears on this card to keep it in view."
+        f"{_describe(spec)}. A pin control appears on this card to keep it in view.",
+        created_ids=[dashboard.id],
     )
 
 
@@ -409,7 +410,8 @@ def _create_template(
     shape = ", ".join(f"{item.name}:{item.type}" for item in required)
     return ToolResult(
         content=f"Created template “{template.name}” (id {template.id}) showing "
-        f"{_describe(spec)}. It requires a dataset with {shape}."
+        f"{_describe(spec)}. It requires a dataset with {shape}.",
+        created_ids=[template.id],
     )
 
 
@@ -460,7 +462,8 @@ def _bind_template(db: Session, context: ToolContext, args: Dict[str, Any]) -> T
         )
     return ToolResult(
         content=f"Bound “{template.name}” to that dataset as dashboard "
-        f"“{dashboard.name}” (id {dashboard.id})."
+        f"“{dashboard.name}” (id {dashboard.id}).",
+        created_ids=[dashboard.id],
     )
 
 

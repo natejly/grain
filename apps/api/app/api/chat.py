@@ -1321,15 +1321,18 @@ def undo_run(
     Gated exactly as the stream and cancel are: resolve under the workspace,
     then `run_activity_visible`, so a foreign or invisible run is uniformly a
     404 before any state question is answered. Only terminal runs can be
-    undone (409 otherwise — a live run is still writing), and only once: the
-    first undo stamps every checkpoint's `reverted_at`, so a second answers
-    409 instead of double-applying. No Idempotency-Key: the consumed marker
-    *is* the natural guard, the same shape as the assign endpoint's upsert.
+    undone (409 otherwise — a live run is still writing), and only once: each
+    checkpoint is consumed by a conditional UPDATE on `reverted_at IS NULL`
+    inside `revert_run` (never a check-then-act here), so two concurrent
+    undos cannot double-apply a row, and a run whose rows are all consumed
+    answers 409. Rows an interrupted earlier undo left unconsumed are picked
+    up rather than stranded. No Idempotency-Key: the consumed marker *is* the
+    natural guard, the same shape as the assign endpoint's upsert.
 
     Checkpoints apply newest-first, so a resource created and then written to
     is unwound in the only order that works. Irreversible rows — external
-    effects, clipped captures — come back in `skipped` with a reason rather
-    than pretending.
+    effects, clipped captures, resources someone else changed after the run —
+    come back in `skipped` with a reason rather than pretending.
     """
     run = db.scalar(
         select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)
@@ -1357,12 +1360,17 @@ def undo_run(
             .order_by(RunCheckpoint.created_at.desc(), RunCheckpoint.id.desc())
         )
     )
-    if any(row.reverted_at is not None for row in rows):
+    # The friendly refusal for the common case; the *guard* is revert_run's
+    # per-row conditional UPDATE. Rows an interrupted undo never consumed
+    # (reverted_at still NULL after a mid-undo crash) stay eligible, so a
+    # retry repairs the remainder instead of 409ing forever.
+    pending_rows = [row for row in rows if row.reverted_at is None]
+    if rows and not pending_rows:
         raise HTTPException(
             status_code=409, detail="This run's changes were already undone"
         )
     reverted, skipped = checkpoints.revert_run(
-        db, run=run, actor_id=actor.user_id, rows=rows
+        db, run=run, actor_id=actor.user_id, rows=pending_rows
     )
     append_event(
         db,

@@ -160,7 +160,8 @@ def _create_project(db: Session, context: ToolContext, args: Dict[str, Any]) -> 
         content=(
             f"Created project “{project.name}” (id {project.id}) with "
             f"{', '.join(paths)}. Entry point: {project.entry_path}."
-        )
+        ),
+        created_ids=[project.id],
     )
 
 

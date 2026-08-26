@@ -58,6 +58,12 @@ class ToolResult:
     #: a sentence a language model can act on, and is clipped to a character
     #: budget that would silently drop the last chart from a chatty run.
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    #: Ids of the workspace rows this call itself created, reported by the
+    #: executor. The undo trail's creation checkpoints read these instead of
+    #: set-diffing workspace-wide id sets around the call, so a row someone
+    #: else created concurrently can never be attributed to this run — and
+    #: later deleted by its undo.
+    created_ids: List[str] = field(default_factory=list)
 
     def bounded_content(self) -> str:
         return self.content[:MAX_RESULT_CHARS]

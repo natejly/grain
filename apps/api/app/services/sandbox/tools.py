@@ -663,7 +663,8 @@ def _sandbox_download(db: Session, context: ToolContext, args: Dict[str, Any]) -
         content=(
             f"Saved {remote} to the workspace as “{filename}” "
             f"({len(data):,} bytes), source id {source.id}."
-        )
+        ),
+        created_ids=[source.id],
     )
 
 
