@@ -650,6 +650,27 @@ broke the whole stylesheet. `vitest` and `tsc --noEmit` both passed; only
 `next build` failed. When a union touches CSS, build it — a structural break
 in a stylesheet is invisible to every other gate.
 
+To prove a stylesheet actually parses to the end, assert `getComputedStyle`
+on a rule near EOF resolves to its declared value — NOT that the braces
+balance. CSS error recovery swallows a bad rule and everything after it, so
+the file stays "valid" while several hundred lines quietly stop applying;
+a balanced brace count cannot see that, and a computed value can.
+
+## Valid CSS that never applies is the complement of the brace bug
+
+Two opposite failure modes of one blind spot. The brace bug is INVALID and
+silently swallowed; an unreachable selector is perfectly VALID and silently
+inert — a component that mounts, occupies layout, and is never visible.
+`.todo-claim.free` is `opacity: 0` and was revealed only by `.todo-item:hover`,
+which never matches inside a kanban card. `next build` catches the first class
+and cannot catch the second. Neither is visible to a DOM assertion, since the
+element is present either way. Only a browser capture — of the interactive
+state, not a resting page — or a person sees it.
+
+Corollary for captures: photograph the state that would expose the defect. A
+hover-revealed control photographs identically whether its reveal rule exists
+or not, and an overlay caret at position 0 looks identical aligned or drifting.
+
 ## An ephemeral-presence clear must not be throttled
 
 A throttled heartbeat queued behind a `leave` lands AFTER the DELETE and
