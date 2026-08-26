@@ -24,11 +24,13 @@ export type View =
   | "mcp"
   | "sandbox-tools"
   | "sandbox-secrets"
+  | "webhooks"
   | "activity"
   | "policies"
   | "admin"
   | "workflows"
   | "crons"
+  | "monitors"
   | "spaces"
   | "gallery";
 
@@ -115,6 +117,10 @@ export const PAGE_TITLES: Record<View, string> = {
   // machine here, they configure a capability.
   "sandbox-tools": "Sandbox tools",
   "sandbox-secrets": "Sandbox secrets",
+  // The machine surface: bearer tokens external systems call in with, and
+  // the webhook endpoints workspace events are pushed out to. Configuration
+  // through and through, so it lives with Connections behind settings.
+  webhooks: "API & Webhooks",
   // The approval queue. "Activity" described the audit half of the page; the
   // half a user actually comes for is the requests waiting on them.
   activity: "Inbox",
@@ -125,6 +131,9 @@ export const PAGE_TITLES: Record<View, string> = {
   workflows: "Workflows",
   // A cron is a schedule. Its old title, "Automations", is the *group* now.
   crons: "Schedules",
+  // A monitor watches a dataset's number against a threshold on a schedule
+  // and alerts the Inbox on the crossing — the third kind of automation.
+  monitors: "Monitors",
   // Where published skills (and later workflows and agents) are browsed and
   // installed. In Library because it is a shelf you take things from.
   gallery: "Gallery",

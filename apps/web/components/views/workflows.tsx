@@ -14,10 +14,13 @@ import {
   type WorkflowRun,
   type WorkflowRunDetail,
   type WorkflowStatus,
+  type WorkflowTemplate,
 } from "@workspace/api-client";
 import {
+  BookmarkPlus,
   Check,
   CircleSlash,
+  CopyPlus,
   LoaderCircle,
   Play,
   Plus,
@@ -55,6 +58,7 @@ import {
 } from "./workflow-format";
 import { WorkflowGraphView } from "./workflow-graph";
 import { WorkflowInputForm } from "./workflow-inputs";
+import { nextTemplateName, templateBaseName } from "./template-format";
 
 /**
  * Workflow automations, end to end: describe one in English, read the graph the
@@ -608,6 +612,9 @@ export function WorkflowsView({
   onWorkspaceChanged,
 }: WorkflowsViewProps) {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  // Saved automation shapes, fetched with the roster: this panel owns its own
+  // data, so its templates live beside its workflows rather than in the hook.
+  const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
   const [runsByWorkflow, setRunsByWorkflow] = useState<RunMap>({});
   const [activeId, setActiveId] = useState("");
   const [runDetail, setRunDetail] = useState<WorkflowRunDetail | null>(null);
@@ -755,9 +762,14 @@ export function WorkflowsView({
   const load = useCallback(async () => {
     const epoch = listEpoch.current;
     try {
-      const [rows, feed] = await Promise.all([api.listWorkflows(), api.getInbox()]);
+      const [rows, feed, shapes] = await Promise.all([
+        api.listWorkflows(),
+        api.getInbox(),
+        api.listWorkflowTemplates(),
+      ]);
       if (epoch !== listEpoch.current) return;
       setWorkflows(rows);
+      setTemplates(shapes);
       const parked = [
         ...feed.approvals
           .filter((row) => row.workflow_run_id)
@@ -979,6 +991,49 @@ export function WorkflowsView({
     }
   }
 
+  async function saveAsTemplate(workflow: Workflow) {
+    setBusy(true);
+    try {
+      // The client lands on a free name so the one-click save cannot bounce
+      // off the workspace's unique-name claim (see template-format.ts).
+      const template = await api.createWorkflowTemplate({
+        name: nextTemplateName(
+          templateBaseName(workflow.name),
+          templates.map((row) => row.name),
+        ),
+        from_workflow_id: workflow.id,
+      });
+      setTemplates((rows) => [template, ...rows]);
+    } catch (caught) {
+      setError(describeError(caught, "Could not save that template"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function instantiateTemplate(template: WorkflowTemplate) {
+    setBusy(true);
+    try {
+      // Always a draft with no schedule — the server refuses to let a
+      // template arm a cron, so the copy waits here for review.
+      await saved(await api.instantiateWorkflowTemplate(template.id));
+    } catch (caught) {
+      setError(describeError(caught, "Could not create a workflow from that template"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeTemplate(template: WorkflowTemplate) {
+    if (!window.confirm(`Delete the template “${template.name}”?`)) return;
+    try {
+      await api.deleteWorkflowTemplate(template.id);
+      setTemplates((rows) => rows.filter((row) => row.id !== template.id));
+    } catch (caught) {
+      setError(describeError(caught, "Could not delete that template"));
+    }
+  }
+
   async function remove(workflow: Workflow) {
     if (!window.confirm(`Delete “${workflow.name}” and its run history?`)) return;
     try {
@@ -1139,6 +1194,38 @@ export function WorkflowsView({
             })}
           </ul>
         )}
+
+        {templates.length > 0 && (
+          <div className="workflow-templates">
+            <span className="workflow-templates-title">Templates</span>
+            <ul className="workflow-items">
+              {templates.map((template) => (
+                <li key={template.id}>
+                  <button
+                    className="workflow-item"
+                    disabled={busy}
+                    onClick={() => void instantiateTemplate(template)}
+                    aria-label={`New workflow from ${template.name}`}
+                    title="Create a draft workflow from this template"
+                  >
+                    <CopyPlus size={14} />
+                    <span className="workflow-item-name">{template.name}</span>
+                  </button>
+                  <div className="workflow-item-meta">
+                    <span>{formatRelative(template.created_at)}</span>
+                    <button
+                      className="icon-button"
+                      aria-label={`Delete template ${template.name}`}
+                      onClick={() => void removeTemplate(template)}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </aside>
 
       {composing && (
@@ -1193,6 +1280,16 @@ export function WorkflowsView({
               >
                 <Store size={14} />
                 Publish
+              </button>
+              <button
+                className="ghost-button"
+                disabled={busy}
+                onClick={() => void saveAsTemplate(active)}
+                aria-label={`Save ${active.name} as template`}
+                title="Snapshot this graph and prompt as a reusable template"
+              >
+                <BookmarkPlus size={14} />
+                Save as template
               </button>
               <button
                 className="icon-button"

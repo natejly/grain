@@ -5,7 +5,15 @@ import type {
   DashboardTemplate,
   Dataset,
 } from "@workspace/api-client";
-import { Pin, PinOff, Trash2 } from "lucide-react";
+import {
+  Copy,
+  Link2,
+  Mail,
+  MessageSquareText,
+  Pin,
+  PinOff,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { describeDashboard, refusalLines } from "./dashboard-format";
 
@@ -24,8 +32,16 @@ export type DashboardCatalogProps = {
   pinnedIds: Set<string>;
   pin: (dashboardId: string) => Promise<void>;
   unpin: (dashboardId: string) => Promise<void>;
+  /** Copy the definition under "<name> copy" — editing without losing the original. */
+  duplicate: (dashboard: Dashboard) => Promise<void>;
   remove: (dashboard: Dashboard) => Promise<void>;
   open: (dashboardId: string) => void;
+  /** Open the shell's comments drawer about this dashboard. */
+  comment?: (dashboard: Dashboard) => void;
+  /** Open the share-links modal: public read-only URLs for this dashboard. */
+  share?: (dashboard: Dashboard) => void;
+  /** Open the subscribe modal: scheduled snapshot mail of this dashboard. */
+  subscribe?: (dashboard: Dashboard) => void;
 };
 
 /**
@@ -41,8 +57,12 @@ export function DashboardCatalog({
   pinnedIds,
   pin,
   unpin,
+  duplicate,
   remove,
   open,
+  comment,
+  share,
+  subscribe,
 }: DashboardCatalogProps) {
   return (
     <section className="dashboard-catalog" aria-label="All dashboards">
@@ -75,6 +95,48 @@ export function DashboardCatalog({
                 >
                   {pinned ? <PinOff size={14} /> : <Pin size={14} />}
                 </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Duplicate ${dashboard.name}`}
+                  title="Copy this dashboard under a new name"
+                  onClick={() => void duplicate(dashboard)}
+                >
+                  <Copy size={14} />
+                </button>
+                {comment && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Comments on ${dashboard.name}`}
+                    title="Comments on this dashboard"
+                    onClick={() => comment(dashboard)}
+                  >
+                    <MessageSquareText size={14} />
+                  </button>
+                )}
+                {share && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Share ${dashboard.name}`}
+                    title="Share this dashboard with a public link"
+                    onClick={() => share(dashboard)}
+                  >
+                    <Link2 size={14} />
+                  </button>
+                )}
+                {subscribe && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Subscribe to ${dashboard.name}`}
+                    title="Email this dashboard on a schedule"
+                    onClick={() => subscribe(dashboard)}
+                  >
+                    <Mail size={14} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="icon-button"

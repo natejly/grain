@@ -55,12 +55,25 @@ class ScreenStatus(BaseModel):
     backend: Literal["builtin", "proxy"]
 
 
+class DigestStatus(ApiModel):
+    """The caller's daily-digest preference, as their membership row holds it.
+
+    Read here beside the identity it belongs to; written through
+    `PUT /api/me/digest`.
+    """
+
+    enabled: bool
+    hour_utc: int
+
+
 class BootstrapResponse(ApiModel):
     identity: Identity
     feature_flags: Dict[str, bool]
     default_agent_id: str
     model_provider: ModelProviderStatus
     screen: ScreenStatus
+    #: The daily "items waiting on you" mail opt-in for this member.
+    digest: DigestStatus
     #: `DEV_UNRESTRICTED_AGENT` is on: every tool available and nothing parks.
     #: A first-class field rather than a `feature_flags` entry because the client
     #: does not *branch* on it, it *warns* about it — the failure mode is not
@@ -516,6 +529,21 @@ class ConversationShareRequest(BaseModel):
     shared: bool
 
 
+class ConversationForkRequest(BaseModel):
+    """The body of `POST /api/conversations/{id}/fork`.
+
+    The anchor message is the fork point: everything said up to and including
+    it is copied into the new thread. The id is proved to belong to the named
+    conversation at the route — a message from any other thread is a 404, so
+    the pair of ids never becomes an existence oracle. The title is optional;
+    blank falls back to "Fork of <source title>". Bounded like the create
+    path's title: a name, not a document.
+    """
+
+    message_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(default="", max_length=200)
+
+
 class ApprovalModeRequest(BaseModel):
     """The body of `PUT /api/conversations/{id}/approval-mode`.
 
@@ -806,6 +834,9 @@ class AgentToolCallOut(ApiModel):
     #: legible, rather than only in an audit table a chat user never opens. The
     #: *mode* and not `decided_by`, which would put a user id on the wire.
     approved_by_mode: str = ""
+    #: The member this approval is routed to, "" for anyone. Routing only —
+    #: `decided_by` still records who answered.
+    assigned_to: str = ""
     created_at: datetime
 
 

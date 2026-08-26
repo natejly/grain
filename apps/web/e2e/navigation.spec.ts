@@ -119,11 +119,12 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
   await openSettings(page, "Connections");
   // Sandbox tools sit beside MCP: both register capabilities the agent may
   // call. Databases left for Library → Data, where the datasets they feed live.
-  for (const entry of ["MCP", "Sandbox tools", "Integrations"]) {
+  // API & Webhooks joins them: wiring the workspace to software, not people.
+  for (const entry of ["MCP", "Sandbox tools", "Integrations", "API & Webhooks"]) {
     await expect(tabs(page, "Connections").getByRole("button", { name: entry }))
       .toBeVisible();
   }
-  await expect(tabs(page, "Connections").getByRole("button")).toHaveCount(3);
+  await expect(tabs(page, "Connections").getByRole("button")).toHaveCount(4);
   await tabs(page, "Connections").getByRole("button", { name: /MCP/ }).click();
   await expect(page.getByRole("heading", { name: "MCP servers" })).toBeVisible();
 

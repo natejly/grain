@@ -4,7 +4,9 @@ import {
   FileText,
   GitPullRequestArrow,
   History,
+  Link2,
   MessageSquare,
+  MessageSquareText,
   Plus,
   RotateCcw,
   Save,
@@ -25,6 +27,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
+import { ShareLinksModal } from "../share-links-modal";
 import { useDocumentThread } from "../use-document-thread";
 import {
   PendingEditList,
@@ -48,6 +51,8 @@ export type DocumentsViewProps = {
   saveDocument: (documentId: string, content: string) => Promise<void>;
   restoreVersion: (documentId: string, versionId: string) => Promise<void>;
   removeDocument: (document: DocumentSummary) => Promise<void>;
+  /** Open the shell's comments drawer about this document. */
+  openComments?: (document: WorkspaceDocument) => void;
   /** Agent writes awaiting approval; optional until the workspace wires them. */
   pendingEdits?: PendingDocumentEdit[];
   decidePendingEdit?: HunkDecision & PendingDecision;
@@ -120,6 +125,7 @@ export function DocumentsView({
   saveDocument,
   restoreVersion,
   removeDocument,
+  openComments,
   pendingEdits,
   decidePendingEdit,
   chat,
@@ -128,6 +134,10 @@ export function DocumentsView({
   const [dirty, setDirty] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  // Whether the share-links modal is open, about the active document. The
+  // modal is self-contained (see share-links-modal.tsx), so a boolean is all
+  // the state this view holds about it.
+  const [sharing, setSharing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [listCollapsed, toggleList] = useCollapsiblePane("documents-list");
   const [newTitle, setNewTitle] = useState("");
@@ -372,6 +382,20 @@ export function DocumentsView({
                   <MessageSquare size={14} /> Chat
                 </button>
               )}
+              {openComments && (
+                <button
+                  className="ghost-button"
+                  onClick={() => openComments(active)}
+                >
+                  <MessageSquareText size={14} /> Comments
+                </button>
+              )}
+              <button
+                className="ghost-button"
+                onClick={() => setSharing(true)}
+              >
+                <Link2 size={14} /> Share
+              </button>
               <button
                 className="ghost-button"
                 onClick={() => setShowHistory((value) => !value)}
@@ -529,6 +553,15 @@ export function DocumentsView({
             </div>
           )}
         </section>
+      )}
+
+      {sharing && active && (
+        <ShareLinksModal
+          kind="document"
+          resourceId={active.id}
+          resourceName={active.title}
+          close={() => setSharing(false)}
+        />
       )}
 
       {showChat && chat && active && (

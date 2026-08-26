@@ -65,6 +65,24 @@ PUBLIC_UNSAFE_ROUTES = {
     # to attach one — which is exactly why it must not depend on the cookie
     # actor. Its per-workspace scoping is proved by test_mcp_server.py.
     "/api/mcp",
+    # The token-authenticated machine hooks. They resolve identity through
+    # `get_token_actor` — an `Authorization: Bearer` workspace API token,
+    # sha256-at-rest, acting as the member who minted it — not through
+    # `get_actor`, which is cookie+CSRF and is what this tripwire looks for. A
+    # bearer header cannot be attached by an attacker's page, so there is no
+    # CSRF to enforce; a missing or dead token is a uniform 401. Targeted
+    # tests in test_api_tokens.py pin that a token reaches exactly its own
+    # workspace, and the isolation sweep pins the 401 for cookie callers.
+    "/api/hooks/workflows/{workflow_id}/trigger",
+    "/api/hooks/conversations/{conversation_id}/messages",
+    # The email provider's delivery webhook — the tick posture exactly: a mail
+    # provider holds no session, so the route authenticates a shared bearer
+    # (`settings.inbound_email_webhook_secret`) with compare_digest inside the
+    # handler, 503 when unset. Which workspace the mail lands in is decided by
+    # the hashed routing token in the recipient address, never by anything the
+    # caller could forge; unknown/revoked tokens answer 200 {accepted: false}
+    # and write nothing. Targeted tests in test_inbound_email.py.
+    "/api/hooks/email/inbound",
 }
 
 

@@ -1,7 +1,12 @@
 "use client";
 
-import type { Conversation, Source, Space } from "@workspace/api-client";
-import { Layers, Plus, Trash2, UploadCloud } from "lucide-react";
+import type {
+  Conversation,
+  Source,
+  Space,
+  SpaceTemplate,
+} from "@workspace/api-client";
+import { BookmarkPlus, Layers, Plus, Trash2, UploadCloud } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import {
@@ -11,6 +16,7 @@ import {
   statusLabel,
 } from "./shared";
 import { sourcesInSpace, threadsInSpace } from "./space-threads";
+import { nextTemplateName, templateBaseName } from "./template-format";
 
 /**
  * A space groups rail threads under standing context: instructions the server
@@ -26,10 +32,12 @@ import { sourcesInSpace, threadsInSpace } from "./space-threads";
 
 type SpacesViewProps = {
   spaces: Space[];
+  /** Saved starting points; "New space" instantiates one when picked. */
+  spaceTemplates: SpaceTemplate[];
   conversations: Conversation[];
   sources: Source[];
   setError: (message: string) => void;
-  /** Re-fetches spaces and sources — refreshSecondary from the hook. */
+  /** Re-fetches spaces, templates and sources — refreshSecondary from the hook. */
   refreshSpaces: () => Promise<void>;
   onSelectConversation: (conversationId: string) => void;
   onNewThread: (spaceId: string) => Promise<void> | void;
@@ -37,6 +45,7 @@ type SpacesViewProps = {
 
 export function SpacesView({
   spaces,
+  spaceTemplates,
   conversations,
   sources,
   setError,
@@ -46,6 +55,9 @@ export function SpacesView({
 }: SpacesViewProps) {
   const [selectedId, setSelectedId] = useState("");
   const [newName, setNewName] = useState("");
+  /** "" = a blank space; a template id = instantiate that template. */
+  const [fromTemplateId, setFromTemplateId] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
   // The editable copies. Re-seeded whenever the selection or the stored row
   // changes, so a save elsewhere (another tab, another member) is not silently
   // overwritten by a stale buffer — same dirty-tracking shape as agents.tsx.
@@ -71,12 +83,38 @@ export function SpacesView({
     const trimmed = newName.trim();
     if (!trimmed) return;
     try {
-      const space = await api.createSpace({ name: trimmed });
+      // One form, two paths: a picked template routes the same name through
+      // instantiate, so the new space starts with the saved instructions.
+      const space = fromTemplateId
+        ? await api.instantiateSpaceTemplate(fromTemplateId, trimmed)
+        : await api.createSpace({ name: trimmed });
       setNewName("");
+      setFromTemplateId("");
       setSelectedId(space.id);
       await refreshSpaces();
     } catch (caught) {
       setError(describeError(caught, "Could not create the space"));
+    }
+  };
+
+  const saveAsTemplate = async () => {
+    if (!selected || savingTemplate) return;
+    setSavingTemplate(true);
+    try {
+      // The client lands on a free name so the one-click save cannot bounce
+      // off the workspace's unique-name claim (see template-format.ts).
+      await api.createSpaceTemplate({
+        name: nextTemplateName(
+          templateBaseName(selected.name),
+          spaceTemplates.map((template) => template.name),
+        ),
+        from_space_id: selected.id,
+      });
+      await refreshSpaces();
+    } catch (caught) {
+      setError(describeError(caught, "Could not save the template"));
+    } finally {
+      setSavingTemplate(false);
     }
   };
 
@@ -161,6 +199,21 @@ export function SpacesView({
             value={newName}
             onChange={(event) => setNewName(event.target.value)}
           />
+          {spaceTemplates.length > 0 && (
+            <select
+              aria-label="From template"
+              title="From template"
+              value={fromTemplateId}
+              onChange={(event) => setFromTemplateId(event.target.value)}
+            >
+              <option value="">Blank space</option>
+              {spaceTemplates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  From “{template.name}”
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="submit"
             className="primary-button"
@@ -214,6 +267,16 @@ export function SpacesView({
               disabled={!dirty || saving || !name.trim()}
             >
               {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              className="ghost-button"
+              onClick={() => void saveAsTemplate()}
+              disabled={savingTemplate}
+              aria-label={`Save ${selected.name} as template`}
+              title="Snapshot this space's instructions as a reusable template"
+            >
+              <BookmarkPlus size={14} />
+              {savingTemplate ? "Saving…" : "Save as template"}
             </button>
             <button
               className="ghost-button danger"

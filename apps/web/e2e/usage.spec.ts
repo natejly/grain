@@ -127,6 +127,28 @@ function usageBody(priced: boolean) {
         unpriced_calls: 74,
       },
     ],
+    by_agent: [
+      {
+        key: "agent-1",
+        label: "Research partner",
+        calls: 1_040,
+        input_tokens: 3_700_000,
+        output_tokens: 470_000,
+        total_tokens: 4_170_000,
+        cost_usd: cost(33.4),
+        unpriced_calls: 40,
+      },
+      {
+        key: "",
+        label: "",
+        calls: 244,
+        input_tokens: 420_355,
+        output_tokens: 42_940,
+        total_tokens: 463_295,
+        cost_usd: cost(5.0172),
+        unpriced_calls: 34,
+      },
+    ],
     top_runs: [
       {
         run_id: "run-runaway-0001",

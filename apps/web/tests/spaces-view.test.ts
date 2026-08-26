@@ -73,6 +73,7 @@ function source(overrides: Partial<Source> = {}): Source {
 function renderView(overrides: Partial<React.ComponentProps<typeof SpacesView>> = {}) {
   const props: React.ComponentProps<typeof SpacesView> = {
     spaces: [space()],
+    spaceTemplates: [],
     conversations: [conversation(), conversation({ id: "other", space_id: "" })],
     sources: [source(), source({ id: "library", space_id: "", filename: "lib.md" })],
     setError: vi.fn(),

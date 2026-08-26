@@ -2,9 +2,12 @@ import type { AgentToolCall } from "@workspace/api-client";
 import { describe, expect, it } from "vitest";
 import {
   APPROVAL_MODES,
+  actionableApprovals,
+  assigneeName,
   autoApprovedCalls,
   describeMode,
   isBypass,
+  partitionApprovals,
   summariseAutoApproved,
 } from "../components/views/approval-format";
 
@@ -34,6 +37,7 @@ function call(id: string, name: string, approvedByMode: string, conversationId =
     latency_ms: 0,
     artifacts: [],
     approved_by_mode: approvedByMode,
+    assigned_to: "",
     created_at: "2026-01-01T00:00:00Z",
   } as AgentToolCall;
 }
@@ -98,5 +102,46 @@ describe("the trail a bypassed thread carries", () => {
         call("2", "create_document", "auto_writes"),
       ]),
     ).toBe("add_todo and 1 more");
+  });
+});
+
+describe("routing a parked approval", () => {
+  const row = (id: string, assignedTo: string) => ({ id, assigned_to: assignedTo });
+
+  it("splits the queue into yours, anyone's and theirs, keeping each group's order", () => {
+    const rows = [
+      row("1", "them"),
+      row("2", ""),
+      row("3", "me"),
+      row("4", ""),
+      row("5", "me"),
+    ];
+    const buckets = partitionApprovals(rows, "me");
+    expect(buckets.mine.map((item) => item.id)).toEqual(["3", "5"]);
+    expect(buckets.unassigned.map((item) => item.id)).toEqual(["2", "4"]);
+    expect(buckets.others.map((item) => item.id)).toEqual(["1"]);
+  });
+
+  it("claims nothing as yours before the identity's first read lands", () => {
+    // selfId "" must not make every unassigned row read as an assignment — and
+    // an assigned row must fall to "others" rather than to a guess.
+    const buckets = partitionApprovals([row("1", ""), row("2", "them")], "");
+    expect(buckets.mine).toEqual([]);
+    expect(buckets.unassigned.map((item) => item.id)).toEqual(["1"]);
+    expect(buckets.others.map((item) => item.id)).toEqual(["2"]);
+  });
+
+  it("counts only what the caller can answer — theirs first, then anyone's", () => {
+    // The rail badge and the waiting strip read this: a row routed to a
+    // colleague is their wait, and a decide button on it would only 409.
+    const rows = [row("1", "them"), row("2", ""), row("3", "me")];
+    expect(actionableApprovals(rows, "me").map((item) => item.id)).toEqual(["3", "2"]);
+  });
+
+  it("names an assignee the member list no longer holds by id, never as Anyone", () => {
+    const members = [{ user_id: "u1", name: "Ada", role: "member" }];
+    expect(assigneeName("", members)).toBe("Anyone");
+    expect(assigneeName("u1", members)).toBe("Ada");
+    expect(assigneeName("gone-user", members)).toBe("gone-user");
   });
 });

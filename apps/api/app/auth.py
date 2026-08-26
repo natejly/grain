@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session
 from .config import Settings, get_settings
 from .database import get_db
 from .models import ORG_ADMIN, Agent, Membership, Tool, ToolGrant, User, Workspace
-from .services import orgs
+from .services import api_tokens, orgs
 from .services.auth.sessions import csrf_token_matches, resolve_session
 
 # Fixed ids for the rows `seed_dev_workspace` creates. They are a development
@@ -291,6 +291,49 @@ def get_actor(
 
     workspace, membership = _resolve_workspace(db, user, x_workspace_id)
     return _actor_for(db, user, workspace, membership, session_id=session.id)
+
+
+def get_token_actor(
+    authorization: str = Header(default=""),
+    db: Session = Depends(get_db),
+) -> Actor:
+    """The machine door, BESIDE `get_actor` rather than inside it.
+
+    `Authorization: Bearer grain_…` → hash lookup in `api_tokens` → the Actor
+    of the member who minted the token, bound to the token's own workspace. A
+    token is a delegation of one member's access: if that membership is gone,
+    `api_tokens.resolve` answers None and the request is a 401 like any other
+    identity failure — one uniform message, nothing about *why*.
+
+    Deliberately not widened into `get_actor`: the cookie path carries CSRF
+    (cookies ride cross-site; bearer headers cannot be attached by an
+    attacker's page, so there is nothing to double-submit here), the
+    `X-Workspace-Id` selection (a token names its workspace; letting the
+    header override it would turn one workspace's credential into a chooser),
+    and the dev fallback (a machine credential must never fall back to a
+    seeded human). Routes taking this dependency are listed in
+    PUBLIC_UNSAFE_ROUTES with their justification, because the tripwire in
+    test_auth_boundaries.py looks for `get_actor` specifically.
+    """
+    presented = authorization.removeprefix("Bearer ").strip()
+    resolved = api_tokens.resolve(db, presented)
+    if resolved is None:
+        raise _unauthenticated()
+    user = db.get(User, resolved.user_id)
+    if user is None or user.status != "active":
+        raise _unauthenticated()
+    workspace = db.get(Workspace, resolved.workspace_id)
+    if workspace is None:
+        raise _unauthenticated()
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.workspace_id == resolved.workspace_id,
+            Membership.user_id == resolved.user_id,
+        )
+    )
+    if membership is None:
+        raise _unauthenticated()
+    return _actor_for(db, user, workspace, membership, session_id=None)
 
 
 def require_owner(actor: Actor = Depends(get_actor)) -> Actor:

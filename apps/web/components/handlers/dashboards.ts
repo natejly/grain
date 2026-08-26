@@ -201,6 +201,26 @@ export function createDashboardHandlers({
     return dashboard;
   }
 
+  /**
+   * A verbatim copy under "<name> copy", prepended so it appears where the
+   * eye already is. The one refusal worth translating is the 409 — the copy's
+   * name is server-derived, so "already exists" here means "you already made
+   * this copy", not "pick another name".
+   */
+  async function duplicateDashboard(dashboard: Dashboard) {
+    setError("");
+    try {
+      const copy = await api.duplicateDashboard(dashboard.id);
+      setDashboards((items) => [copy, ...items]);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409) {
+        setError(`“${dashboard.name} copy” already exists — rename it first.`);
+        return;
+      }
+      setError(describeError(caught, "Could not duplicate that dashboard"));
+    }
+  }
+
   async function removeDashboard(dashboard: Dashboard) {
     if (!window.confirm(`Delete “${dashboard.name}”?`)) return;
     setError("");
@@ -226,6 +246,7 @@ export function createDashboardHandlers({
     unpinDashboard,
     saveDashboardLayout,
     bindDashboardTemplate,
+    duplicateDashboard,
     removeDashboard,
   };
 }

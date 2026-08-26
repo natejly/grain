@@ -18,7 +18,9 @@ from .api import (
     bibliography,
     board_ops,
     chat,
+    comments,
     crons,
+    dashboard_subscriptions,
     dashboards,
     dbconnect,
     doc_pending,
@@ -26,24 +28,31 @@ from .api import (
     folders,
     generated_apps,
     graph,
+    hooks,
+    inbound_email,
     inbox,
     integrations,
     latex,
     marketplace,
     mcp,
     mcp_server,
+    me,
     memory,
+    monitors,
     org,
     projects,
     sandbox,
     sandbox_secrets,
     sandbox_tools,
+    share_links,
     skills,
     sources,
     spaces,
     system,
+    templates,
     todos,
     tools,
+    webhooks,
     workflows,
 )
 from .api.auth import router as auth_router
@@ -124,6 +133,8 @@ app.include_router(board_ops.router)
 app.include_router(todos.router)
 app.include_router(doc_pending.router)
 app.include_router(inbox.router)
+app.include_router(me.router)
+app.include_router(comments.router)
 app.include_router(folders.router)
 app.include_router(projects.router)
 app.include_router(latex.router)
@@ -134,9 +145,17 @@ app.include_router(sandbox_tools.router)
 app.include_router(analytics.router)
 app.include_router(dashboards.router)
 app.include_router(favorites.router)
+app.include_router(dashboard_subscriptions.router)
+app.include_router(share_links.router)
+app.include_router(api_tokens.router)
+app.include_router(webhooks.router)
+app.include_router(hooks.router)
+app.include_router(inbound_email.router)
 app.include_router(generated_apps.router)
 app.include_router(workflows.router)
+app.include_router(templates.router)
 app.include_router(crons.router)
+app.include_router(monitors.router)
 app.include_router(admin.router)
 app.include_router(org.router)
 app.include_router(api_tokens.router)

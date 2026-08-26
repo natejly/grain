@@ -762,14 +762,12 @@ label,
 .thread {
   width: 100%;
   height: 34px;
-  display: grid;
-  /* FOUR trailing action columns: rename and share/unshare (open thread only),
-     open in a new pane, and delete. `auto` collapses to zero width on rows
-     that do not render a control — but the column has to EXIST: with three
-     columns, the open row's fifth item wrapped to a second grid row inside
-     this fixed 34px height and bled over the next thread, which then
-     intercepted clicks meant for this row's own delete button. */
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  display: flex;
+  /* Flex, not a fixed-column grid: the trailing actions vary per row (rename,
+     share and comments ride only the open thread, split and delete every row),
+     and a grid with fewer columns than children wrapped the overflow into a
+     phantom second row — Delete rendered over the next row's timestamp and
+     stopped being clickable. Flex keeps every action on the one 34px line. */
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;
@@ -788,6 +786,7 @@ label,
 }
 
 .thread-open {
+  flex: 1 1 auto;
   min-width: 0;
   height: 34px;
   display: grid;
@@ -3022,6 +3021,54 @@ label,
   cursor: pointer;
 }
 
+/* Who a parked approval waits on. Sits with the remember-checkbox because both
+   answer "what happens to the next one like this" — routing, not deciding. */
+.approval-assignee {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.approval-assignee select {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 10px;
+}
+
+/* The queue's assignment groups. Headers appear only once routing has split
+   the list; "assigned to others" reads quieter because it is their wait. */
+.approval-group-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 16px 14px 0;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.approval-group-title.assigned-away {
+  color: var(--text-dim);
+}
+
+.approval-card.assigned-away {
+  opacity: 0.62;
+}
+
+.approval-card.assigned-away:hover,
+.approval-card.assigned-away:focus-within {
+  opacity: 1;
+}
+
 .decision-buttons {
   display: grid;
   grid-template-columns: 1fr 1.35fr;
@@ -4552,6 +4599,43 @@ label,
   gap: 6px;
 }
 
+/* The per-message fork affordance: the copy button's quiet hover-reveal
+   treatment, icon-only. Alone on a user message it pushes itself to the row's
+   right edge; beside the copy button (assistant messages) the copy button
+   already did the pushing, so the auto margin comes off. */
+.fork-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.fork-button:hover {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.message-author .fork-button {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.message-author .copy-button + .fork-button {
+  margin-left: 0;
+}
+
+.message:hover .message-author .fork-button {
+  opacity: 1;
+}
+
 .code-block {
   position: relative;
   margin: 10px 0;
@@ -5224,7 +5308,12 @@ label,
 .document-actions {
   display: flex;
   align-items: center;
-  flex: none;
+  /* Shrinkable and wrapping: Comments and Share joined this row, and with the
+     chat panel open the editor column is ~390px — a rigid `flex: none` row
+     slid under the panel and its Delete button swallowed clicks. */
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
   margin-left: auto;
 }
@@ -7390,6 +7479,23 @@ label,
   line-height: 1.5;
 }
 
+/* Saved automation shapes, under the roster: quiet, because a template is a
+   starting point, not work in flight. Clicking one drafts a copy. */
+.workflow-templates {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.workflow-templates-title {
+  display: block;
+  padding: 0 6px 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 /* An unattended run that parked at 3am is useless if nobody can see it
    waiting, so it sits above the list rather than inside whichever workflow
    happens to own it. */
@@ -8837,6 +8943,79 @@ label,
   flex: none;
 }
 
+/* ==========================================================================
+   Share links — the modal that mints and revokes public read-only URLs.
+   It reuses `.invite-link` for the reveal-once URL block, because it makes
+   the identical promise: shown now, never readable back. */
+
+.share-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--scrim);
+}
+
+.share-modal {
+  display: grid;
+  gap: 12px;
+  width: min(460px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.share-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.share-modal-header .field-hint {
+  margin: 4px 0 0;
+}
+
+.share-modal .primary-button {
+  justify-self: start;
+}
+
+.share-link-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-link-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.share-link-list li > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.share-link-meta {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
 /* The role control sits inline with the "you" tag in the roster, so it cannot
    take the full-width sizing `.usage-window` has in a panel header. */
 .admin-table .usage-window {
@@ -9952,6 +10131,13 @@ label,
   width: 100%;
 }
 
+/* The template picker rides in the create form: picking one routes the same
+   name through instantiate, so "blank or from a playbook" is one decision
+   made in one place. */
+.spaces-create select {
+  width: 100%;
+}
+
 .space-row {
   display: flex;
   align-items: center;
@@ -10197,3 +10383,140 @@ label,
 }
 .mcp-token-list li.revoked { opacity: 0.55; }
 .mcp-token-meta { display: block; font-size: 12px; color: var(--text-muted); }
+
+/* --- Comments drawer -------------------------------------------------------
+   One right-hand drawer for every comment subject (thread, document,
+   dashboard), riding the same scrim as the provenance drawer. The column is
+   messages-over-composer like the subject chat panels, but read-first: the
+   scroll area owns the height and the composer keeps to the bottom. */
+
+.thread-comments {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.thread-comments:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.comments-drawer {
+  width: min(420px, 92vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.comments-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px;
+}
+
+.comment-row {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.comment-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.comment-row-head strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.comment-row-head span {
+  flex: 1;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.comment-body {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-mention {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.comment-composer {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.comment-composer textarea {
+  flex: 1;
+  resize: none;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+}
+
+/* The @-completion list floats above the composer, like the slash picker:
+   the top option is what Enter takes. */
+.comment-mention-picker {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 18px;
+  right: 18px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px var(--tint);
+  z-index: 5;
+}
+
+.mention-option {
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mention-option:hover,
+.mention-option.first {
+  background: var(--surface-hover);
+}

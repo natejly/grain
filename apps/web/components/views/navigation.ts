@@ -7,6 +7,7 @@ import {
   Clock,
   Database,
   FileText,
+  Gauge,
   Inbox,
   KanbanSquare,
   KeyRound,
@@ -22,6 +23,7 @@ import {
   Store,
   Table2,
   Terminal,
+  Webhook,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -243,9 +245,10 @@ const GROUP_SPECS: NavGroupSpec[] = [
    * half of what this surface does is making. The other half is operating —
    * watching a run, and answering the approval an unattended run parked on.
    *
-   * The group is "Automations" — the idea — and its entries are the two
-   * kinds: Workflows (a sentence compiled to a reviewable graph) and
-   * Schedules (a recurring prompt on a timer).
+   * The group is "Automations" — the idea — and its entries are the three
+   * kinds: Workflows (a sentence compiled to a reviewable graph), Schedules
+   * (a recurring prompt on a timer), and Monitors (a threshold watched on a
+   * timer, alerting the Inbox on the crossing).
    */
   {
     id: "workflows",
@@ -258,6 +261,7 @@ const GROUP_SPECS: NavGroupSpec[] = [
         items: [
           { view: "workflows", label: "Workflows", icon: Workflow },
           { view: "crons", label: "Schedules", icon: Clock },
+          { view: "monitors", label: "Monitors", icon: Gauge },
         ],
       },
     ],
@@ -279,6 +283,11 @@ const GROUP_SPECS: NavGroupSpec[] = [
           // The credentials that same sandbox code reads to reach a service.
           { view: "sandbox-secrets", label: "Sandbox secrets", icon: KeyRound },
           { view: "integrations", label: "Integrations", icon: Plug },
+          // The machine door and the event push, one surface: mint the token
+          // an external system calls in with, and register the URLs workspace
+          // events go out to. Beside MCP because it is the same kind of thing
+          // — wiring the workspace to software, not to a person.
+          { view: "webhooks", label: "API & Webhooks", icon: Webhook },
         ],
       },
     ],

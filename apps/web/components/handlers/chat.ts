@@ -15,6 +15,7 @@ import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
 import { api } from "../api";
 import type { BudgetPark } from "../views/budget-format";
 import { describeError, type View } from "../views/shared";
+import { UNDO_CONFIRM, summarizeUndo } from "../views/undo-format";
 import { createThreadHandlers } from "./thread";
 
 /**
@@ -216,6 +217,58 @@ export function createChatHandlers({
     },
   });
 
+  /**
+   * Branch a new personal thread from everything said up to one message, and
+   * land in it. The fork is just another conversation — the send/stream loop
+   * needs no special case — so all this does is prepend the server's row,
+   * make it active (state and ref together, like `selectConversation`), and
+   * load its copied transcript.
+   */
+  async function forkThread(messageId: string) {
+    if (!activeConversation) return;
+    setError("");
+    try {
+      const fork = await api.forkConversation(activeConversation, messageId);
+      setConversations((items) => [fork, ...items]);
+      setActiveConversation(fork.id);
+      activeConversationRef.current = fork.id;
+      setView("chat");
+      setSidebarOpen(false);
+      setMessages(await api.listMessages(fork.id));
+    } catch (caught) {
+      setError(describeError(caught, "Could not fork the thread"));
+    }
+  }
+
+  /**
+   * Revert a finished run's writes from its recorded checkpoints.
+   *
+   * Confirmed first — this rewrites documents and boards — and honest after:
+   * the error banner carries the summary only when something could NOT be
+   * reverted, because "it worked" needs no banner and "it half-worked" is
+   * exactly what must not pass silently. The same off-screen-work refreshes a
+   * settled run triggers run afterwards, since an undo changes the same
+   * surfaces a run does.
+   */
+  async function undoRun(runId: string) {
+    if (!window.confirm(UNDO_CONFIRM)) return;
+    setError("");
+    try {
+      const result = await api.revertRun(runId);
+      setError(summarizeUndo(result));
+      await refreshSecondary();
+      await refreshArtifacts().catch(() => undefined);
+      await refreshPendingEdits().catch(() => undefined);
+      const open = activeDocumentRef.current;
+      if (open) {
+        setActiveDocument(await api.getDocument(open).catch(() => null));
+        setDocumentVersions(await api.listDocumentVersions(open).catch(() => []));
+      }
+    } catch (caught) {
+      setError(describeError(caught, "Could not undo the run"));
+    }
+  }
+
   async function removeConversation(
     conversation: Conversation,
     event?: MouseEvent,
@@ -277,6 +330,8 @@ export function createChatHandlers({
   return {
     selectConversation,
     newConversation,
+    forkThread,
+    undoRun,
     removeConversation,
     setApprovalMode,
     decideAgentCall: thread.decideAgentCall,

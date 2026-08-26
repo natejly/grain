@@ -4,6 +4,7 @@ import json
 from typing import Any, List, Literal, Optional, Type, TypeVar, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from ..models import (
     SHARED_OWNER,
     AgentToolCall,
     Conversation,
+    Membership,
     Run,
     Tool,
     ToolCall,
@@ -95,6 +97,7 @@ def _agent_tool_call_out(call: AgentToolCall, conversation_id: str) -> AgentTool
         latency_ms=call.latency_ms,
         artifacts=_artifacts(call.artifacts_json),
         approved_by_mode=call.approved_by_mode,
+        assigned_to=call.assigned_to,
         created_at=call.created_at,
     )
 
@@ -107,6 +110,7 @@ def _claim_decision(
     workspace_id: str,
     decision: str,
     actor_id: str,
+    assignee_gate: bool = False,
 ) -> bool:
     """Move one *proposed* call to its decision, and say whether we moved it.
 
@@ -122,18 +126,29 @@ def _claim_decision(
     Returning a bool rather than raising keeps the two routes free to describe
     the conflict in their own words, and keeps the caller honest about the fact
     that losing is an ordinary outcome.
+
+    `assignee_gate` folds the assignment check into the same CAS — only
+    meaningful for `AgentToolCall`, the one decidable table with `assigned_to`.
+    The route's plain `if` on the assignee gives the friendly 409, but an
+    assign racing a decide can move `assigned_to` between that read and this
+    write; putting the predicate in the WHERE means a decider who was raced by
+    an assignment-to-someone-else loses here instead of deciding a call that
+    now names another member.
     """
+    criteria = [
+        model.id == call_id,
+        model.workspace_id == workspace_id,
+        model.status == "proposed",
+    ]
+    if assignee_gate:
+        criteria.append(AgentToolCall.assigned_to.in_(("", actor_id)))
     # The cast is only about typing: an ORM-enabled UPDATE really does return a
     # CursorResult, but Session.execute is annotated as the generic Result.
     claimed = cast(
         "CursorResult[Any]",
         db.execute(
             update(model)
-            .where(
-                model.id == call_id,
-                model.workspace_id == workspace_id,
-                model.status == "proposed",
-            )
+            .where(*criteria)
             .values(status=decision, decided_by=actor_id, decided_at=utcnow())
         ),
     ).rowcount
@@ -577,6 +592,125 @@ def _validate_manual_submission(
         raise HTTPException(status_code=422, detail="; ".join(exc.problems)) from exc
 
 
+class AgentCallAssignRequest(BaseModel):
+    """Who a parked approval should wait on. "" hands it back to anyone."""
+
+    user_id: str = ""
+
+
+@router.post(
+    "/agent-tool-calls/{tool_call_id}/assign", response_model=AgentToolCallOut
+)
+def assign_agent_tool_call(
+    tool_call_id: str,
+    payload: AgentCallAssignRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> AgentToolCallOut:
+    """Route a parked approval to one member, or back to anyone with "".
+
+    Routing, not deciding: the call stays `proposed`, the run stays parked, and
+    the compare-and-set decision claim is untouched. Setting the same assignee
+    twice is the same state twice — a natural upsert — which is why this takes
+    no Idempotency-Key. Foreign tool-call ids and foreign user ids both answer
+    404: the refusal must confirm neither the call nor the user exists.
+    """
+    call = db.scalar(
+        select(AgentToolCall).where(
+            AgentToolCall.id == tool_call_id,
+            AgentToolCall.workspace_id == actor.workspace_id,
+        )
+    )
+    if call is None:
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    run = db.scalar(
+        select(Run).where(
+            Run.id == call.run_id, Run.workspace_id == actor.workspace_id
+        )
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    # Same gate as the decision endpoint: a member must not route (or even
+    # learn about) a call parked on another member's personal thread.
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
+    ):
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    if call.status != "proposed" or run.status != "waiting_for_approval":
+        raise HTTPException(status_code=409, detail="Tool call already decided")
+    if payload.user_id:
+        member = db.scalar(
+            select(Membership).where(
+                Membership.workspace_id == actor.workspace_id,
+                Membership.user_id == payload.user_id,
+            )
+        )
+        if member is None:
+            # 404, indistinguishable from a user that does not exist — the
+            # refusal must not confirm a foreign workspace's user id.
+            raise HTTPException(status_code=404, detail="Member not found")
+        # The assignee must pass the same run-visibility gate the assigner did:
+        # routing a private thread's park to a member who cannot see the run
+        # would create an approval only the assigner can act on — the assignee's
+        # inbox never lists it, their decide 404s, and everyone else 409s. A
+        # 409 rather than 404: the member exists and the assigner can already
+        # see the whole run, so nothing is disclosed by saying why.
+        if not conversations.run_activity_visible(
+            db,
+            actor_workspace_id=actor.workspace_id,
+            actor_user_id=payload.user_id,
+            run=run,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="That member cannot view this thread",
+            )
+    # No Notification row for the assignee, deliberately: the assignment
+    # already surfaces through their approvals badge (`waitingOnMe` counts
+    # rows assigned to them), so a notification would double-count the same
+    # actionable item in the same Inbox.
+    #
+    # The write is a compare-and-set on `status = 'proposed'`, not the plain
+    # attribute write the 409 above pre-checked: assign racing decide would
+    # otherwise re-park an already-decided row's `assigned_to`. Same shape as
+    # `_claim_decision`, settled by the database while the row is held.
+    claimed = cast(
+        "CursorResult[Any]",
+        db.execute(
+            update(AgentToolCall)
+            .where(
+                AgentToolCall.id == call.id,
+                AgentToolCall.workspace_id == actor.workspace_id,
+                AgentToolCall.status == "proposed",
+            )
+            .values(assigned_to=payload.user_id)
+        ),
+    ).rowcount
+    if not claimed:
+        raise HTTPException(status_code=409, detail="Tool call already decided")
+    append_event(
+        db,
+        workspace_id=actor.workspace_id,
+        run_id=run.id,
+        event_type="tool.assigned",
+        payload={"tool_call_id": call.id, "assigned_to": payload.user_id},
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="tool_call.assigned",
+        resource_type="agent_tool_call",
+        resource_id=call.id,
+        detail={"tool": call.name, "assigned_to": payload.user_id},
+    )
+    db.commit()
+    return _agent_tool_call_out(call, run.conversation_id)
+
+
 @router.post(
     "/agent-tool-calls/{tool_call_id}/decision", response_model=AgentToolCallOut
 )
@@ -624,6 +758,14 @@ def decide_agent_tool_call(
         return _agent_tool_call_out(call, run.conversation_id)
     if run.status != "waiting_for_approval":
         raise HTTPException(status_code=409, detail="Run is not awaiting this approval")
+    # Assignment is routing: while the row names a member, only that member (or
+    # the unassigned '') may answer. A 409 like every other state conflict —
+    # and only after the 404s above, so a foreign-id probe learns nothing new.
+    if call.assigned_to not in ("", actor.user_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This approval is assigned to another member",
+        )
     amendment = _hunk_amendment(db, call=call, run=run, payload=payload, actor=actor)
     _validate_manual_submission(db, call=call, run=run, payload=payload, actor=actor)
     if call.name == ASK_USER and payload.decision == "approved" and payload.inputs:
@@ -642,6 +784,7 @@ def decide_agent_tool_call(
         workspace_id=actor.workspace_id,
         decision="approved" if payload.decision == "approved" else "denied",
         actor_id=actor.user_id,
+        assignee_gate=True,
     ):
         # Losing here is the whole point: the reviewer who was raced must not
         # also schedule `resume_run`, or the tool the other reviewer denied is

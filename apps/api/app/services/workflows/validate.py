@@ -1073,7 +1073,7 @@ def _check_trigger(graph: WorkflowGraph, report: CompileReport) -> None:
         report.errors.append(
             CompileError(
                 "trigger_cron_unexpected",
-                "a manual trigger must not carry a cron expression; set "
-                'kind="schedule" if it should run on a schedule',
+                f"a {trigger.kind} trigger must not carry a cron expression; "
+                'set kind="schedule" if it should run on a schedule',
             )
         )

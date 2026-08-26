@@ -96,6 +96,14 @@ os.environ["DEV_USER"] = ""
 # of them saying something plausible about scoping or the agent loop, and none
 # of them about the one line that actually did it.
 os.environ["DEV_UNRESTRICTED_AGENT"] = "false"
+# Inbound email, pinned for the same reason as everything above: a developer's
+# repo-root .env must not flip the feature between inert and live under the
+# suite. The domain is set (addresses can be minted everywhere, including the
+# isolation sweep's create case); the webhook secret is NOT — the tick's
+# posture, where unset means 503 and the tests that need the door open
+# monkeypatch Settings explicitly.
+os.environ["INBOUND_EMAIL_DOMAIN"] = "mail.grain.test"
+os.environ["INBOUND_EMAIL_WEBHOOK_SECRET"] = ""
 
 from app.auth import (  # noqa: E402
     DEV_SEED_USER_ID,

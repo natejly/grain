@@ -97,6 +97,17 @@ export type ScreenStatus = {
   backend: "builtin" | "proxy";
 };
 
+/**
+ * The caller's daily-digest opt-in, as their membership row holds it. Read on
+ * bootstrap beside the identity it belongs to; written through
+ * `updateDigestPrefs` (PUT /api/me/digest).
+ */
+export type DigestPrefs = {
+  enabled: boolean;
+  /** The UTC hour (0-23) after which the daily mail may go out. */
+  hour_utc: number;
+};
+
 export type Bootstrap = {
   identity: Identity;
   default_agent_id: string;
@@ -116,6 +127,8 @@ export type Bootstrap = {
   };
   /** The prompt-injection screen's posture, for a status indicator. */
   screen: ScreenStatus;
+  /** The caller's daily "items waiting on me" mail opt-in. */
+  digest: DigestPrefs;
   /**
    * The development agent bypass is on: every tool available, nothing parked.
    * The server refuses to boot with this outside development, so it is false
@@ -314,6 +327,30 @@ export type SendMessageResponse = {
   replayed: boolean;
 };
 
+export type RunUndoReverted = {
+  tool_name: string;
+  /** Which restore family put it back: document | board | todo | project_file
+   * | dashboard | memory | source. */
+  kind: string;
+};
+
+export type RunUndoSkipped = {
+  tool_name: string;
+  /** Why it could not be restored — external effects, or no recorded state. */
+  reason: string;
+};
+
+/**
+ * What one run's undo actually did. `skipped` is the honest half: writes whose
+ * effects left the workspace (sandbox execution, MCP, SQL against a connected
+ * database) are reported here rather than silently ignored.
+ */
+export type RunUndoResult = {
+  run_id: string;
+  reverted: RunUndoReverted[];
+  skipped: RunUndoSkipped[];
+};
+
 export type Source = {
   id: string;
   filename: string;
@@ -354,6 +391,34 @@ export type SpaceCreateBody = {
 export type SpaceUpdateBody = {
   name?: string;
   instructions?: string;
+};
+
+/**
+ * A reusable starting point for a space: instructions written down once.
+ *
+ * A snapshot, not a link — saving one copies a space's instructions at that
+ * moment, and instantiating it copies them forward into a new space. Editing
+ * either afterwards moves neither.
+ */
+export type SpaceTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  /** Plain historical agent ids; a deleted agent stays listed, harmlessly. */
+  agent_ids: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type SpaceTemplateCreateBody = {
+  name: string;
+  description?: string;
+  /** Used when `from_space_id` is empty; the snapshot wins otherwise. */
+  instructions?: string;
+  agent_ids?: string[];
+  /** "" = author from scratch; an id = snapshot that space's instructions. */
+  from_space_id?: string;
 };
 
 export type ProvenanceChunk = {
@@ -405,6 +470,9 @@ export type AgentToolCall = {
    * unreviewed without opening an audit table.
    */
   approved_by_mode: string;
+  /** The member this approval is routed to, "" for anyone. Routing only —
+   * the decision machinery and its attribution are untouched. */
+  assigned_to: string;
   created_at: string;
 };
 
@@ -994,6 +1062,10 @@ export type InboxApproval = {
   workflow_run_id: string;
   workflow_id: string;
   workflow_name: string;
+  /** The member this approval is routed to, "" for anyone. The server never
+   * hides assigned-away rows — nothing parked is invisible — so the client
+   * partitions the queue by this field instead. */
+  assigned_to: string;
   created_at: string;
 };
 
@@ -1006,6 +1078,44 @@ export type InboxBudgetHold = {
   workflow_run_id: string;
   workflow_id: string;
   workflow_name: string;
+  created_at: string;
+};
+
+/** One open @mention of the caller. Personal by definition — the server only
+ * lists rows targeted at the signed-in member. */
+export type InboxMention = {
+  id: string;
+  title: string;
+  body: string;
+  /** Deep-link ids, "" when the mention's subject is of another kind. */
+  conversation_id: string;
+  document_id: string;
+  dashboard_id: string;
+  comment_id: string;
+  created_by: string;
+  created_at: string;
+};
+
+/** One open monitor alert. Automation, so member-visible: every member sees
+ * the same row, and one resolve clears it for the whole room. */
+export type InboxAlert = {
+  id: string;
+  title: string;
+  body: string;
+  /** Deep link to the monitor that tripped, for the Monitors view. */
+  monitor_id: string;
+  created_at: string;
+};
+
+/** One open spend anomaly: an agent running well over its usual spend.
+ * Broadcast like an alert — every member sees the same row, one resolve
+ * clears it for the room. */
+export type InboxAnomaly = {
+  id: string;
+  title: string;
+  body: string;
+  /** The agent whose spend drifted; may since have been deleted. */
+  agent_id: string;
   created_at: string;
 };
 
@@ -1027,7 +1137,59 @@ export type InboxRun = {
 export type InboxFeed = {
   approvals: InboxApproval[];
   budget_holds: InboxBudgetHold[];
+  mentions: InboxMention[];
+  alerts: InboxAlert[];
+  anomalies: InboxAnomaly[];
   recent_runs: InboxRun[];
+};
+
+/** One workspace colleague, as the @-picker needs them: an id to mention and
+ * a name to show. Not the admin surface — every member may see this list. */
+export type WorkspaceMember = {
+  user_id: string;
+  name: string;
+  role: string;
+};
+
+/** A remark on a thread, document or dashboard. `mentions` holds the member
+ * ids that were actually kept — the server silently drops anything that is
+ * not a member of the workspace (or cannot see a private thread subject). */
+export type Comment = {
+  id: string;
+  subject_kind: "conversation" | "document" | "dashboard";
+  subject_id: string;
+  body: string;
+  mentions: string[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CommentCreateInput = {
+  subject_kind: "conversation" | "document" | "dashboard";
+  subject_id: string;
+  body: string;
+  mentions?: string[];
+};
+
+/** One generic "a person should look at this" row — a mention today, monitor
+ * alerts and spend anomalies tomorrow. Resolving flips `status` and the Inbox
+ * stops listing it. */
+export type Notification = {
+  id: string;
+  kind: string;
+  status: string;
+  target_user_id: string;
+  title: string;
+  body: string;
+  conversation_id: string;
+  document_id: string;
+  dashboard_id: string;
+  comment_id: string;
+  created_by: string;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: string;
 };
 
 export type GraphEntity = {
@@ -1236,6 +1398,183 @@ export type DashboardLayoutTile = {
   grid_y: number;
   grid_w: number;
   grid_h: number;
+};
+
+/** What a share link points at — the two kinds with no public surface of their own. */
+export type ShareLinkKind = "dashboard" | "document";
+
+/**
+ * One revocable public URL onto a dashboard or document. No token appears here
+ * in any form: the server stores only a hash, and the raw value exists in
+ * exactly one response — `ShareLinkCreated`, at mint time.
+ */
+export type ShareLink = {
+  id: string;
+  resource_kind: ShareLinkKind;
+  resource_id: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+};
+
+/**
+ * The 201 body, and the only time the raw link is ever available — the
+ * `AdminInviteCreated` contract. Show it, let the person copy it, and do not
+ * persist it; an idempotent replay of the create answers with `token` and
+ * `url_path` blank because the raw value cannot be re-derived from its hash.
+ */
+export type ShareLinkCreated = {
+  link: ShareLink;
+  token: string;
+  /** The web app's path for the link ("/share/{token}"); blank on replay. */
+  url_path: string;
+};
+
+/**
+ * What an anonymous holder of a working link sees at `GET /shared/{token}`.
+ * One shape for both kinds; the half that does not apply stays at its empty
+ * default. A dashboard's rows are re-queried live at request time.
+ */
+export type SharedResource = {
+  kind: ShareLinkKind;
+  title: string;
+  spec_json: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  generated_at: string | null;
+  document_kind: string;
+  content: string;
+  updated_at: string | null;
+};
+
+/**
+ * A standing order to mail one member one dashboard on a schedule. The
+ * schedule pair is the Cron's (5-field cron + IANA zone), the fire re-runs the
+ * dashboard's query live, and `last_dispatched_at` is the ticker's claim — a
+ * fact about dispatch, not a delivery receipt.
+ */
+export type DashboardSubscription = {
+  id: string;
+  dashboard_id: string;
+  /** Joined at read time; '' when the dashboard has since been deleted. */
+  dashboard_name: string;
+  recipient_user_id: string;
+  schedule_cron: string;
+  schedule_timezone: string;
+  enabled: boolean;
+  last_dispatched_at: string | null;
+  created_by: string;
+  created_at: string;
+};
+
+export type DashboardSubscriptionCreateInput = {
+  dashboard_id: string;
+  schedule_cron: string;
+  schedule_timezone?: string;
+  /** Omit (or "") to subscribe yourself; naming another member is an owner's move. */
+  recipient_user_id?: string;
+};
+
+/**
+ * A workspace API token — the bearer credential for the machine hooks
+ * (`/api/hooks/...`). No secret appears here in any form: the server stores
+ * only a hash, and the raw value exists in exactly one response —
+ * `ApiTokenMinted`, at mint time.
+ */
+export type ApiTokenRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+/**
+ * The 201 body, and the only time the raw secret is ever available. Show it,
+ * let the person copy it, do not persist it; an idempotent replay answers
+ * with `secret` blank because the raw value cannot be re-derived from its
+ * hash.
+ */
+export type ApiTokenMinted = ApiTokenRow & {
+  secret: string;
+};
+
+/** The events an outbound webhook endpoint may subscribe to. */
+export type WebhookEvent =
+  | "run.completed"
+  | "workflow_run.completed"
+  | "approval.requested"
+  | "monitor.tripped";
+
+/**
+ * One owner-configured URL workspace events are pushed to. The signing
+ * secret is write-only: `has_secret` says one is stored, and nothing ever
+ * echoes it back.
+ */
+export type WebhookEndpoint = {
+  id: string;
+  name: string;
+  url: string;
+  events: WebhookEvent[];
+  enabled: boolean;
+  has_secret: boolean;
+  created_by: string;
+  created_at: string;
+};
+
+/**
+ * One event on its way to (or through) one endpoint — the health trail, not
+ * the payload: `status` is pending | sent | failed, and a failed row's
+ * `last_error` says why the endpoint never answered 2xx.
+ */
+export type WebhookDelivery = {
+  id: string;
+  endpoint_id: string;
+  event: string;
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  last_error: string;
+  created_at: string;
+  sent_at: string | null;
+};
+
+export type WebhookCreateInput = {
+  name?: string;
+  url: string;
+  events: WebhookEvent[];
+  /** Optional HMAC signing secret; write-only, encrypted at rest. */
+  secret?: string;
+};
+
+export type WebhookUpdateInput = {
+  name?: string;
+  url?: string;
+  events?: WebhookEvent[];
+  enabled?: boolean;
+};
+
+/**
+ * One mintable email address that lands mail as a new thread. The address
+ * itself (`inbox+<token>@<domain>`) exists raw in exactly one response —
+ * `InboundAddressMinted`, at mint time; the server stores only a hash.
+ */
+export type InboundAddressRow = {
+  id: string;
+  label: string;
+  target_space_id: string;
+  created_at: string;
+  revoked_at: string | null;
+};
+
+/**
+ * The 201 body, and the only time the full address is ever available. Show
+ * it, let the person copy it, do not persist it; an idempotent replay
+ * answers with `address` blank because it cannot be re-derived from the
+ * stored hash.
+ */
+export type InboundAddressMinted = InboundAddressRow & {
+  address: string;
 };
 
 export type AppRelease = {
@@ -1670,6 +2009,9 @@ export type AdminUsage = {
   by_model: AdminUsageGroup[];
   by_user: AdminUsageGroup[];
   by_operation: AdminUsageGroup[];
+  /** Which agent's turns spent it. Key "" is background work with no agent;
+   * a deleted agent keeps its id as key and label. */
+  by_agent: AdminUsageGroup[];
   /** Ordered by cost, then tokens, so an unpriced run still surfaces. */
   top_runs: AdminUsageRun[];
   /** Models seen in this window with no configured rate. */
@@ -2200,6 +2542,20 @@ export class WorkspaceApi {
     return this.request("/api/bootstrap");
   }
 
+  /**
+   * Set the caller's own daily-digest opt-in and hour.
+   *
+   * A PUT of the whole preference, so a retry lands on the same state by
+   * construction and no `Idempotency-Key` rides along. Edits the caller's own
+   * membership row — there is no id to pass and nothing here to probe.
+   */
+  updateDigestPrefs(prefs: DigestPrefs): Promise<DigestPrefs> {
+    return this.request("/api/me/digest", {
+      method: "PUT",
+      body: JSON.stringify(prefs),
+    });
+  }
+
   listConversations(): Promise<Conversation[]> {
     return this.request("/api/conversations");
   }
@@ -2268,6 +2624,32 @@ export class WorkspaceApi {
       method: "PUT",
       body: JSON.stringify({ shared }),
     });
+  }
+
+  /**
+   * Branch a new personal thread from everything said up to one message.
+   *
+   * The server copies the transcript prefix (fresh message ids, no run
+   * linkage) into a brand-new unshared conversation owned by the caller and
+   * returns it; nothing that hangs off the source's runs comes along. Blank
+   * title falls back to "Fork of <source title>" server-side.
+   */
+  forkConversation(
+    conversationId: string,
+    messageId: string,
+    title = "",
+  ): Promise<Conversation> {
+    return this.request(
+      `/api/conversations/${conversationId}/fork`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          message_id: messageId,
+          ...(title ? { title } : {}),
+        }),
+      },
+      true,
+    );
   }
 
   /** Rename a thread. A PUT of a value, like share — retries land identically. */
@@ -2405,6 +2787,7 @@ export class WorkspaceApi {
   }
 
   /**
+  /**
    * Fold guidance into a live run — the same composer, no new turn. The note
    * lands in the transcript under the run and the loop reads it before its
    * next model call. A finished run answers 409; send a fresh message instead.
@@ -2415,6 +2798,17 @@ export class WorkspaceApi {
       { method: "POST", body: JSON.stringify({ content }) },
       true,
     );
+  }
+
+  /**
+   * Revert the writes a finished run recorded checkpoints for, newest first.
+   *
+   * Only terminal runs, and only once: the server consumes the checkpoints on
+   * the first undo and answers 409 to a second. No Idempotency-Key — the
+   * consumed marker is the natural guard, like `assignAgentCall`'s upsert.
+   */
+  revertRun(runId: string): Promise<RunUndoResult> {
+    return this.request(`/api/runs/${runId}/undo`, { method: "POST" });
   }
 
   listSources(): Promise<Source[]> {
@@ -2494,6 +2888,45 @@ export class WorkspaceApi {
     return this.request("/api/inbox");
   }
 
+  // --- Comments & mentions ---
+
+  /** Who can be @-mentioned here: every member of the caller's workspace. */
+  listMembers(): Promise<WorkspaceMember[]> {
+    return this.request("/api/members");
+  }
+
+  createComment(input: CommentCreateInput): Promise<Comment> {
+    return this.request(
+      "/api/comments",
+      { method: "POST", body: JSON.stringify(input) },
+      true,
+    );
+  }
+
+  listComments(
+    subjectKind: Comment["subject_kind"],
+    subjectId: string,
+  ): Promise<Comment[]> {
+    const params = new URLSearchParams({
+      subject_kind: subjectKind,
+      subject_id: subjectId,
+    });
+    return this.request(`/api/comments?${params.toString()}`);
+  }
+
+  deleteComment(commentId: string): Promise<void> {
+    return this.request(`/api/comments/${commentId}`, { method: "DELETE" }, true);
+  }
+
+  /** Flip one notification out of the waiting set; the feed stops listing it. */
+  resolveNotification(notificationId: string): Promise<Notification> {
+    return this.request(
+      `/api/notifications/${notificationId}/resolve`,
+      { method: "POST" },
+      true,
+    );
+  }
+
   /**
    * What a reviewer changed about the call before allowing it.
    *
@@ -2527,17 +2960,18 @@ export class WorkspaceApi {
   }
 
   /**
-   * Add a mid-turn message to a run that is still working.
-   *
-   * Not a new turn: the text lands in the running turn's transcript before its
-   * next model step, and as a plain user message in the thread. Only a queued
-   * or running run accepts one — a parked or settled run answers 409, and the
-   * composer's ordinary send is the right channel there.
+  /**
+   * Route a parked approval to one member, or back to anyone with "".
+   * Routing, not deciding — the call stays proposed; while the row names a
+   * member, only that member's decision is accepted. A natural upsert, so no
+   * Idempotency-Key travels with it.
    */
-  steerRun(runId: string, content: string): Promise<Run> {
+  assignAgentToolCall(toolCallId: string, userId: string): Promise<AgentToolCall> {
     return this.request(
-      `/api/runs/${runId}/steer`,
-      { method: "POST", body: JSON.stringify({ content }) },
+      `/api/agent-tool-calls/${toolCallId}/assign`,
+      { method: "POST", body: JSON.stringify({ user_id: userId }) },
+      true,
+    );
       true,
     );
   }
@@ -2568,6 +3002,37 @@ export class WorkspaceApi {
    */
   deleteSpace(spaceId: string): Promise<void> {
     return this.request(`/api/spaces/${spaceId}`, { method: "DELETE" }, true);
+  }
+
+  // --- Space templates (saved starting points for spaces) ---
+
+  listSpaceTemplates(): Promise<SpaceTemplate[]> {
+    return this.request("/api/space-templates");
+  }
+
+  createSpaceTemplate(body: SpaceTemplateCreateBody): Promise<SpaceTemplate> {
+    return this.request(
+      "/api/space-templates",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    );
+  }
+
+  deleteSpaceTemplate(templateId: string): Promise<void> {
+    return this.request(
+      `/api/space-templates/${templateId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /** A new space carrying the template's instructions, via the ordinary create path. */
+  instantiateSpaceTemplate(templateId: string, name: string): Promise<Space> {
+    return this.request(
+      `/api/space-templates/${templateId}/instantiate`,
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
   }
 
   listAgents(): Promise<AgentInfo[]> {
@@ -3309,6 +3774,187 @@ export class WorkspaceApi {
     return this.request(`/api/dashboards/${dashboardId}`, { method: "DELETE" }, true);
   }
 
+  /** A verbatim copy named "<name> copy"; 409 when that name is already taken. */
+  duplicateDashboard(dashboardId: string): Promise<Dashboard> {
+    return this.request(
+      `/api/dashboards/${dashboardId}/duplicate`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  // --- Share links ----------------------------------------------------------
+
+  /**
+   * Mint a revocable public URL onto a dashboard or document. The response is
+   * the only place the raw token ever appears — see `ShareLinkCreated`.
+   */
+  createShareLink(
+    resourceKind: ShareLinkKind,
+    resourceId: string,
+  ): Promise<ShareLinkCreated> {
+    return this.request(
+      "/api/share-links",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          resource_kind: resourceKind,
+          resource_id: resourceId,
+        }),
+      },
+      true,
+    );
+  }
+
+  /** Every link this workspace has issued, newest first. Never any token. */
+  listShareLinks(): Promise<ShareLink[]> {
+    return this.request("/api/share-links");
+  }
+
+  /** Stop a link working, now. Idempotent — a second revoke changes nothing. */
+  revokeShareLink(linkId: string): Promise<ShareLink> {
+    return this.request(
+      `/api/share-links/${linkId}/revoke`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  // --- Dashboard subscriptions ----------------------------------------------
+  // Scheduled snapshot mail, dispatched by the same tick that fires crons. The
+  // list is already visibility-filtered by the server: a member sees their own
+  // rows (created by or addressed to them), an owner every row.
+
+  listDashboardSubscriptions(): Promise<DashboardSubscription[]> {
+    return this.request("/api/dashboard-subscriptions");
+  }
+
+  createDashboardSubscription(
+    payload: DashboardSubscriptionCreateInput,
+  ): Promise<DashboardSubscription> {
+    return this.request(
+      "/api/dashboard-subscriptions",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  /** Stop the mail. 404 for a row the caller may not see — nothing confirmed. */
+  deleteDashboardSubscription(subscriptionId: string): Promise<void> {
+    return this.request(
+      `/api/dashboard-subscriptions/${subscriptionId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  // --- API tokens -----------------------------------------------------------
+  // The machine door's credentials. Owner-gated end to end, like the spend
+  // ceiling: standing machine access to the workspace is an owner decision.
+
+  /** Every token the workspace has minted, live and revoked. Never a secret. */
+  listApiTokens(): Promise<ApiTokenRow[]> {
+    return this.request("/api/api-tokens");
+  }
+
+  /**
+   * Mint a bearer token. The response is the only place the raw secret ever
+   * appears — see `ApiTokenMinted`.
+   */
+  createApiToken(name: string): Promise<ApiTokenMinted> {
+    return this.request(
+      "/api/api-tokens",
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
+  }
+
+  /** Stop a token working, now. Revocation is a stamp, not a delete. */
+  revokeApiToken(tokenId: string): Promise<void> {
+    return this.request(
+      `/api/api-tokens/${tokenId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  // --- Outbound webhooks ----------------------------------------------------
+  // Owner-configured URLs workspace events are pushed to, signed with the
+  // endpoint's stored secret. The delivery list is the health trail.
+
+  listWebhooks(): Promise<WebhookEndpoint[]> {
+    return this.request("/api/webhooks");
+  }
+
+  createWebhook(payload: WebhookCreateInput): Promise<WebhookEndpoint> {
+    return this.request(
+      "/api/webhooks",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  updateWebhook(
+    endpointId: string,
+    payload: WebhookUpdateInput,
+  ): Promise<WebhookEndpoint> {
+    return this.request(
+      `/api/webhooks/${endpointId}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  deleteWebhook(endpointId: string): Promise<void> {
+    return this.request(
+      `/api/webhooks/${endpointId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /** The recent delivery trail, newest first — status chips, not payloads. */
+  listWebhookDeliveries(): Promise<WebhookDelivery[]> {
+    return this.request("/api/webhooks/deliveries");
+  }
+
+  // --- Inbound email --------------------------------------------------------
+  // Mintable inbox+<token>@<domain> addresses; mail sent to one lands as a
+  // new personal thread. Owner-gated like the tokens beside it.
+
+  /** Every address the workspace has minted, live and revoked. Never a token. */
+  listInboundAddresses(): Promise<InboundAddressRow[]> {
+    return this.request("/api/inbound-addresses");
+  }
+
+  /**
+   * Mint an address. The response is the only place the full address ever
+   * appears — see `InboundAddressMinted`. 503 while the deployment has no
+   * inbound email domain configured.
+   */
+  createInboundAddress(
+    label: string,
+    targetSpaceId = "",
+  ): Promise<InboundAddressMinted> {
+    return this.request(
+      "/api/inbound-addresses",
+      {
+        method: "POST",
+        body: JSON.stringify({ label, target_space_id: targetSpaceId }),
+      },
+      true,
+    );
+  }
+
+  /** Stop mail landing through an address, now. Revocation is a stamp. */
+  revokeInboundAddress(addressId: string): Promise<InboundAddressRow> {
+    return this.request(
+      `/api/inbound-addresses/${addressId}/revoke`,
+      { method: "POST" },
+      true,
+    );
+  }
+
   // --- Dashboard templates --------------------------------------------------
   // The two writes below go through `workflowWrite`, and throw
   // `WorkflowCompileError`, on purpose rather than by accident. A template that
@@ -3820,6 +4466,45 @@ export class WorkspaceApi {
     return this.request(`/api/workflows/runs/${workflowRunId}`);
   }
 
+  // --- Workflow templates (saved automation shapes, never scheduled) ---
+
+  listWorkflowTemplates(): Promise<WorkflowTemplate[]> {
+    return this.request("/api/workflow-templates");
+  }
+
+  /** Snapshot a stored workflow's graph and prompt under a template name. */
+  createWorkflowTemplate(payload: {
+    name: string;
+    description?: string;
+    from_workflow_id: string;
+  }): Promise<WorkflowTemplate> {
+    return this.request(
+      "/api/workflow-templates",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  deleteWorkflowTemplate(templateId: string): Promise<void> {
+    return this.request(
+      `/api/workflow-templates/${templateId}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  /**
+   * Copy a template into a runnable workflow. Always lands as a draft with an
+   * empty schedule — someone must review and activate it before it can fire.
+   */
+  instantiateWorkflowTemplate(templateId: string, name = ""): Promise<Workflow> {
+    return this.request(
+      `/api/workflow-templates/${templateId}/instantiate`,
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
+  }
+
   // --- Personal crons (automation) ------------------------------------------
   // Plain `this.request`, not `workflowWrite`: a cron does not compile, so
   // there is no findings report to preserve — a bad schedule or IANA zone is a
@@ -3877,6 +4562,47 @@ export class WorkspaceApi {
    */
   runCronNow(cronId: string): Promise<void> {
     return this.request(`/api/crons/${cronId}/run-now`, { method: "POST" }, true);
+  }
+
+  // --- Metric monitors ---
+  // The crons' sibling: same tick, same schedule affordances, but a firing is
+  // a dataset READ compared against a threshold — the only write is the
+  // monitor_alert row the ok→tripped edge leaves in every member's Inbox.
+
+  listMonitors(): Promise<Monitor[]> {
+    return this.request("/api/monitors");
+  }
+
+  createMonitor(payload: MonitorCreateInput): Promise<Monitor> {
+    return this.request(
+      "/api/monitors",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  /** Edit fields or flip `enabled`. Changing what is watched (dataset, query,
+   * comparator, threshold) resets the stored edge state to "never evaluated",
+   * so the new question's first trip alerts. */
+  updateMonitor(monitorId: string, payload: MonitorUpdateInput): Promise<Monitor> {
+    return this.request(
+      `/api/monitors/${monitorId}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  deleteMonitor(monitorId: string): Promise<void> {
+    return this.request(`/api/monitors/${monitorId}`, { method: "DELETE" }, true);
+  }
+
+  /**
+   * Evaluate the monitor now, ignoring its schedule and claim. The answer is
+   * honest: "skipped" with a reason when the query cannot answer, and the edge
+   * rule still applies — an already-tripped monitor writes no duplicate alert.
+   */
+  runMonitorNow(monitorId: string): Promise<MonitorRunNowResult> {
+    return this.request(`/api/monitors/${monitorId}/run-now`, { method: "POST" }, true);
   }
 
   /**
@@ -4126,6 +4852,22 @@ export type WorkflowUpdateInput = {
   graph?: WorkflowGraph;
 };
 
+/**
+ * A stored automation shape, detached from any schedule.
+ *
+ * A snapshot of a workflow's graph and source prompt. Instantiating one always
+ * produces a *draft* workflow with an empty cron — a template can never
+ * schedule anything by itself.
+ */
+export type WorkflowTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  source_prompt: string;
+  graph: WorkflowGraph;
+  created_at: string;
+};
+
 export type WorkflowRunStatus =
   | "queued"
   | "running"
@@ -4332,4 +5074,67 @@ export type CronUpdateInput = {
   enabled?: boolean;
   prompt?: string;
   body?: string;
+};
+
+export type MonitorComparator = "gt" | "lt" | "gte" | "lte";
+
+/**
+ * A threshold question asked of a dataset on a schedule — the Cron's sibling,
+ * riding the same tick. An evaluation is a read: the stored query runs, the
+ * first metric of the first row is compared against `threshold`, and only the
+ * ok→tripped edge writes a `monitor_alert` into every member's Inbox.
+ */
+export type Monitor = {
+  id: string;
+  name: string;
+  /** Resolved under the monitor's own workspace at every evaluation. */
+  dataset_id: string;
+  /** Must carry at least one metric — its first metric is the watched value. */
+  query: DatasetQuery;
+  comparator: MonitorComparator;
+  threshold: number;
+  /** 5-field cron expression, shown verbatim — never reworded into prose. */
+  schedule_cron: string;
+  schedule_timezone: string;
+  enabled: boolean;
+  /** "ok" | "tripped" | "" (never evaluated) — the stored edge state. */
+  last_state: string;
+  /** The last observed value, JSON-encoded; "" before the first evaluation. */
+  last_value_json: string;
+  /** The atomic claim column: when the ticker last evaluated this, null if never. */
+  last_dispatched_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MonitorCreateInput = {
+  name: string;
+  dataset_id: string;
+  query: DatasetQuery;
+  comparator: MonitorComparator;
+  threshold: number;
+  schedule_cron: string;
+  schedule_timezone: string;
+};
+
+export type MonitorUpdateInput = {
+  name?: string;
+  dataset_id?: string;
+  query?: DatasetQuery;
+  comparator?: MonitorComparator;
+  threshold?: number;
+  schedule_cron?: string;
+  schedule_timezone?: string;
+  /** The enable/disable toggle: a disabled monitor never evaluates. */
+  enabled?: boolean;
+};
+
+/** What one run-now evaluation concluded, honestly — including a skip. */
+export type MonitorRunNowResult = {
+  /** "ok" | "tripped" | "skipped". */
+  state: string;
+  /** The observed value, JSON-encoded; "" when skipped. */
+  value_json: string;
+  /** Why a skip skipped; "" otherwise. */
+  reason: string;
 };

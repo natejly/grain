@@ -276,6 +276,44 @@ class WorkspaceInvite(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ShareLink(Base):
+    """A revocable read-only public URL onto one dashboard or document.
+
+    `WorkspaceInvite`'s shape, for `WorkspaceInvite`'s reasons: the database
+    holds only the SHA-256 of the link (`services/share_links.hash_token`), the
+    raw token is returned exactly once at creation, `expires_at` bounds how long
+    a leaked link is worth anything, and `revoked_at` is a terminal timestamp
+    rather than a DELETE — "we shared this and then stopped" is a fact an owner
+    may need to see again.
+
+    `resource_kind`/`resource_id` follow the polymorphic-subject convention
+    (`Conversation.subject_kind`): one table for the two shareable kinds,
+    'dashboard' and 'document'. Published apps already have their own public
+    surface, so they are deliberately not a kind here. `resource_id` is a plain
+    column, not a ForeignKey, per the house convention for references that may
+    outlive their target: deleting the document must not fail because someone
+    once shared it — the public route fail-closes to 404 instead.
+
+    The public read resolves the workspace from THIS row, never from the
+    request: the token is the entire credential, and everything it serves is
+    re-read live under `workspace_id` at request time.
+    """
+
+    __tablename__ = "share_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: 'dashboard' | 'document' — the only kinds with no public surface of
+    #: their own.
+    resource_kind: Mapped[str] = mapped_column(String(16), default="")
+    resource_id: Mapped[str] = mapped_column(String(36), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class Membership(Base):
     """One person's place in one workspace.
 
@@ -293,6 +331,24 @@ class Membership(Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     role: Mapped[str] = mapped_column(String(24), default="member")
+    #: Opt-in to the daily "items waiting on you" mail (services/digests.py).
+    #: Off by default: unattended email is something a member asks for, never
+    #: something a workspace does to them.
+    digest_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    #: The UTC hour (0-23) after which the digest may go out. An hour rather
+    #: than a cron: the digest is deliberately the simplest possible schedule,
+    #: and "after 9:00 UTC" is one integer a settings menu can offer.
+    digest_hour_utc: Mapped[int] = mapped_column(
+        Integer, default=9, server_default="9"
+    )
+    #: The per-member claim column — the daily-job convention: a send is
+    #: elected by one conditional UPDATE ("not yet advanced past today's
+    #: period start"), so however many ticks land after the hour, one wins.
+    digest_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -753,6 +809,12 @@ class AgentToolCall(Base):
     artifacts_json: Mapped[str] = mapped_column(Text, default="[]")
     decided_by: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Routing, not decision: the member this approval waits on, "" for anyone.
+    # A historical user reference in the house convention — plain string, ''
+    # -unset, never NULL — and deliberately separate from `decided_by`, which
+    # records who answered (or which mode bypassed the question). Assignment
+    # only narrows who may answer; the decision machinery is untouched.
+    assigned_to: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     @property
@@ -769,6 +831,54 @@ class AgentToolCall(Base):
         if not value.startswith(MODE_DECIDER_PREFIX):
             return ""
         return value[len(MODE_DECIDER_PREFIX) :]
+
+
+class RunCheckpoint(Base):
+    """The before-state of one write a run performed, captured for undo.
+
+    Written in `agent_loop.execute_agent_tool_call` just before a write-capable
+    tool executes, via the per-family capture helpers in `services/checkpoints`.
+    `before_json` holds enough typed state to put the resource back — a
+    document's prior content, a board's full snapshot, a project file's bytes —
+    and is deliberately NOT built on `arguments_json`, whose 4000-character
+    truncation makes it an incomplete record of exactly the large writes an
+    undo matters most for.
+
+    `run_id`/`tool_call_id` are plain strings in the house convention for
+    historical references: a checkpoint is a record and must outlive whatever
+    it points at. `reversible=False` marks writes whose effects left the
+    workspace (MCP, sandbox execution, SQL against a connected database) or
+    whose capture was clipped — the undo endpoint reports these as skipped
+    rather than pretending. `reverted_at` is the consumed marker: an undo
+    stamps every one of the run's checkpoints, so a second undo answers 409
+    instead of double-applying.
+    """
+
+    __tablename__ = "run_checkpoints"
+    __table_args__ = (
+        # The undo endpoint's scan: one run's checkpoints, newest first.
+        Index(
+            "ix_run_checkpoints_workspace_run_created",
+            "workspace_id",
+            "run_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(36), default="")
+    tool_call_id: Mapped[str] = mapped_column(String(36), default="")
+    tool_name: Mapped[str] = mapped_column(String(80), default="")
+    # document | board | todo | project_file | dashboard | memory | source |
+    # external — which restore family knows how to read `before_json`.
+    kind: Mapped[str] = mapped_column(String(32), default="external")
+    reversible: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The typed capture; "" when irreversible (nothing to restore from).
+    before_json: Mapped[str] = mapped_column(Text, default="")
+    # When an undo consumed this checkpoint. NULL until then.
+    reverted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Space(Base):
@@ -802,6 +912,35 @@ class Space(Base):
     #: no injection — never an empty block.
     instructions: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SpaceTemplate(Base):
+    """A reusable starting point for a space: instructions, written down once.
+
+    A snapshot, not a link. The template copies a space's instructions at the
+    moment it is saved, and instantiating it copies them forward into a new
+    `Space` row — editing either afterwards moves neither, which is what makes
+    "set up a client space the way we always do" reproducible rather than
+    coupled. `agent_ids_json` follows the same rule: plain historical ids
+    (never ForeignKeys, per the house convention for references that must
+    outlive their target), recorded so the template can say which agents the
+    playbook expects without a deleted agent breaking the template.
+    """
+
+    __tablename__ = "space_templates"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    #: The standing instructions a space built from this template starts with.
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    #: Agents this playbook expects, as a JSON list of plain ids ('[]' = none).
+    agent_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -1965,6 +2104,30 @@ class Workflow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class WorkflowTemplate(Base):
+    """A stored automation shape, detached from any schedule.
+
+    A snapshot of a workflow's `graph_json` and `source_prompt` — the whole
+    definition, per the Workflow docstring — with everything that could make it
+    *fire* deliberately left behind. Instantiating one re-validates the graph
+    and writes a fresh draft `Workflow` with empty schedule fields, so a
+    template can never smuggle a live cron into a workspace; someone has to
+    review and activate the copy, exactly as if they had compiled it themselves.
+    """
+
+    __tablename__ = "workflow_templates"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    graph_json: Mapped[str] = mapped_column(Text)
+    source_prompt: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class WorkflowRun(Base):
     """One execution of one workflow version.
 
@@ -2103,6 +2266,108 @@ class Cron(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class Monitor(Base):
+    """A stored question about a dataset's number, asked on a schedule.
+
+    The Cron's shape, deliberately: the same 5-field `schedule_cron` + IANA
+    zone pair validated by the same functions, the same `last_dispatched_at`
+    conditional-UPDATE claim advanced by the same tick. What a monitor does on
+    firing is *read*: it runs its stored `query_json` (a `schemas.DatasetQuery`)
+    against `dataset_id`, compares the first metric of the first row against
+    `threshold`, and — only on the ok→tripped edge, which is what `last_state`
+    exists to detect — writes one `monitor_alert` notification for every
+    member. No run, no agent, no policy question: a monitor holds no authority
+    because it never executes anything.
+
+    `dataset_id` is a plain column, not a ForeignKey, per the house convention
+    for references that outlive their target: a monitor over a purged dataset
+    keeps its definition and simply skips (with an audit) until repointed.
+    """
+
+    __tablename__ = "monitors"
+    __table_args__ = (
+        # The sweep's scan: every enabled monitor of a workspace, once a minute.
+        Index("ix_monitors_workspace_enabled", "workspace_id", "enabled"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(160))
+    # Resolved under the monitor's own workspace at every evaluation — a foreign
+    # id here is a skip, never a read.
+    dataset_id: Mapped[str] = mapped_column(String(36), default="")
+    # A serialized schemas.DatasetQuery; must carry >= 1 metric (validated at
+    # CRUD time — the first metric of the first result row is the value watched).
+    query_json: Mapped[str] = mapped_column(Text, default="")
+    # gt | lt | gte | lte — how the observed value trips against `threshold`.
+    comparator: Mapped[str] = mapped_column(String(8), default="gt")
+    threshold: Mapped[float] = mapped_column(Float, default=0.0)
+    schedule_cron: Mapped[str] = mapped_column(String(120), default="")
+    schedule_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The atomic claim column, exactly as Cron carries it.
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    # The last observed value, JSON-encoded ('' before the first evaluation),
+    # kept so the UI can say what tripped without re-running the query.
+    last_value_json: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # ok | tripped | '' (never evaluated) — the edge detector: an alert is
+    # written only when a tripped evaluation follows a non-tripped state.
+    last_state: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class DashboardSubscription(Base):
+    """A standing order to mail one member one dashboard on a schedule.
+
+    The Cron's shape once more: the same 5-field `schedule_cron` + IANA zone
+    pair validated by the same functions, and a `last_dispatched_at` claim
+    advanced by the same conditional UPDATE from the same tick. What a fire
+    does is a *read and a mail*: the dashboard's stored query re-runs live
+    against its dataset and the answer goes to the recipient's inbox as HTML —
+    no run, no agent, no policy question, because nothing here can act.
+
+    `dashboard_id` and `recipient_user_id` are plain columns per the house
+    convention for references that outlive their target: both are validated at
+    create time (the dashboard under the workspace, the recipient as a member),
+    and a target that has since gone makes the fire a skip-with-audit, never an
+    error out of the shared ticker — and never a mail to someone who left.
+    """
+
+    __tablename__ = "dashboard_subscriptions"
+    __table_args__ = (
+        # The sweep's scan: every enabled subscription, once a minute.
+        Index(
+            "ix_dashboard_subscriptions_workspace_enabled", "workspace_id", "enabled"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: Resolved under the subscription's own workspace at every fire — a purged
+    #: dashboard makes the fire a skip, never a stale mail.
+    dashboard_id: Mapped[str] = mapped_column(String(36), default="")
+    #: Whose inbox the snapshot lands in. The email is resolved at send time
+    #: through the Membership join, so a member who left stops receiving mail
+    #: the moment their membership row goes.
+    recipient_user_id: Mapped[str] = mapped_column(String(36), default="")
+    schedule_cron: Mapped[str] = mapped_column(String(120), default="")
+    schedule_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: The atomic claim column, exactly as Cron carries it — but read with a
+    #: day-wide catch-up window (services/dashboard_subscriptions.CATCHUP): a
+    #: subscription is typically daily, and a ticker that was down at 9:00
+    #: should still deliver today's mail at 9:37, not silently skip the day.
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ModelUsage(Base):
     """One billable model call: what it spent, who caused it, and at what rate.
 
@@ -2141,9 +2406,11 @@ class ModelUsage(Base):
     run_id: Mapped[str] = mapped_column(String(36), default="")
     conversation_id: Mapped[str] = mapped_column(String(36), default="")
     user_id: Mapped[str] = mapped_column(String(36), default="")
-    # Plain column like run_id, and for the same reason: the ledger must outlive
-    # a retired agent. "" = the call had no agent (embeddings, compiles).
-    agent_id: Mapped[str] = mapped_column(String(36), default="")
+    #: Which agent's turn spent this — the run's `agent_id`, frozen at write
+    #: time like every other reference here: plain string, '' for calls with no
+    #: agent behind them (embeddings, ingest, compiles), never a ForeignKey, so
+    #: the ledger outlives the agent it bills.
+    agent_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
     # What caused the call: chat | workflow_node | embedding | codegen |
     # context_blurb | memory_extraction | graph_extraction | workflow_compile.
     # Free text rather than an enum so a new caller records something honest
@@ -2169,6 +2436,29 @@ class ModelUsage(Base):
         Float, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class SweepClaim(Base):
+    """One named system sweep's claim marker — at-most-once per period.
+
+    Workflows, crons and monitors each carry a `last_dispatched_at` claim
+    column on their own rows; a sweep with no row of its own (the hourly spend
+    watch today, the daily digest tomorrow) claims here instead: one row per
+    sweep name, advanced by the same conditional UPDATE, so replayed or racing
+    ticks fire the sweep at most once per period.
+
+    Deliberately the one table in this schema with no `workspace_id`: it is
+    infrastructure about the *ticker*, like `alembic_version`, and holds no
+    tenant data — only a name and a timestamp. Nothing here can leak because
+    nothing here is anyone's.
+    """
+
+    __tablename__ = "sweep_claims"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
 
 
 class WorkspaceBudget(Base):
@@ -2204,6 +2494,188 @@ class WorkspaceBudget(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, onupdate=utcnow
     )
+
+
+class Comment(Base):
+    """A remark a member leaves on a thing: a thread, a document, a dashboard.
+
+    The subject is the established polymorphic pair (`subject_kind` +
+    `subject_id`), exactly as `Conversation` uses it and for the same reason:
+    the visibility gate, the list query and the delete are the SAME rule for
+    all three kinds, and three foreign keys would be three places to forget
+    one. `mentions_json` records which members were @-named, as plain ids —
+    the notification each mention produced is its own row and the comment must
+    not need one to render.
+
+    Soft-deleted (`deleted_at`) rather than removed: a comment sits in the
+    middle of a discussion, and the replies after it stop making sense if the
+    row vanishes. The list simply filters deleted rows out.
+    """
+
+    __tablename__ = "comments"
+    __table_args__ = (
+        Index(
+            "ix_comments_workspace_subject_created",
+            "workspace_id",
+            "subject_kind",
+            "subject_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    # conversation | document | dashboard
+    subject_kind: Mapped[str] = mapped_column(String(16))
+    subject_id: Mapped[str] = mapped_column(String(36))
+    body: Mapped[str] = mapped_column(Text)
+    #: Workspace member user ids this comment @-mentions, as a JSON list. Only
+    #: ids that were valid members at write time are ever stored — a foreign id
+    #: is dropped before it gets here, so the column can never confirm one.
+    mentions_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class Notification(Base):
+    """One thing a person should look at: a mention today; a monitor alert or a
+    spend anomaly tomorrow.
+
+    Deliberately generic — `kind` plus a fan of '' -unset deep-link columns —
+    because the Inbox needs every "look at this" row to obey one contract:
+    workspace-scoped, `status='open'` is the unbounded waiting set,
+    `target_user_id` is '' for "every member" or one member's id for a personal
+    row (a mention is personal; an alert is not), and resolving flips `status`
+    so the feed simply stops listing it. A new notifying feature adds a `kind`
+    and picks its deep links; it does not add a table.
+
+    The deep-link ids are plain columns, never ForeignKeys: a notification is a
+    historical record and must outlive the comment or conversation it points
+    at, per the house convention for references that outlive their target.
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        # The Inbox's unbounded open-set scan, per the 0043 rationale.
+        Index(
+            "ix_notifications_workspace_status_created",
+            "workspace_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: "" means every member of the workspace; otherwise exactly one member's
+    #: user id. Plain column — "" cannot satisfy a foreign key.
+    target_user_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    # mention | monitor_alert | spend_anomaly | ...
+    kind: Mapped[str] = mapped_column(String(32))
+    # open | resolved
+    status: Mapped[str] = mapped_column(String(16), default="open", server_default="open")
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text, default="", server_default="")
+    conversation_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    document_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    dashboard_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    comment_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    monitor_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    agent_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+
+
+class WebhookEndpoint(Base):
+    """One owner-configured URL that wants to hear about workspace events.
+
+    The signing secret is Fernet-encrypted (`services/crypto`), not hashed:
+    unlike an ApiToken's secret it must be *read back* at every delivery to
+    compute the HMAC signature. `events_json` is the subset of the small event
+    vocabulary (`services/webhooks.EVENTS`) this endpoint subscribed to.
+    Disabling is `enabled=False` — revoked-at-style semantics without losing
+    the row the delivery history points at.
+    """
+
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: What the list shows; the URL is the owner's data, the name is ours.
+    name: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    url: Mapped[str] = mapped_column(String(600), default="")
+    secret_encrypted: Mapped[str] = mapped_column(Text, default="", server_default="")
+    events_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WebhookDelivery(Base):
+    """One event on its way to (or through) one endpoint.
+
+    `endpoint_id` is a plain column per the house convention for references
+    that outlive their target: the delivery trail must survive the endpoint's
+    deletion, and a pending row whose endpoint has gone becomes a `failed`
+    skip at send time. `attempts` counts claims by the tick sweep; three
+    without a 2xx and the row is `failed`, never retried again.
+    """
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        # The tick sweep's scan (status='pending' oldest first) and the UI's
+        # recent-deliveries list share this shape.
+        Index(
+            "ix_webhook_deliveries_workspace_status_created",
+            "workspace_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    endpoint_id: Mapped[str] = mapped_column(String(36), default="")
+    event: Mapped[str] = mapped_column(String(40), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    # pending | sent | failed
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class InboundAddress(Base):
+    """One mintable email address that lands mail in this workspace.
+
+    The address is `inbox+<token>@<settings.inbound_email_domain>`, and the
+    token is the whole credential: it is shown once at mint time and only its
+    sha256 lands here, exactly as an ApiToken's secret does — the table can
+    recognise a recipient and can never leak an address. `created_by` is the
+    member delivered threads are created AS (their personal, unshared
+    threads); `target_space_id` is a plain column, not a FK, because "" is the
+    common value and a space's deletion must not take the address's row with
+    it. Revocation is a stamp, not a delete, for the same audit reason as the
+    token's.
+    """
+
+    __tablename__ = "inbound_addresses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(120), default="")
+    target_space_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 # ---------------------------------------------------------------------------

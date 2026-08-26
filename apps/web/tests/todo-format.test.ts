@@ -50,6 +50,7 @@ function call(name: string, args: Record<string, unknown>): AgentToolCall {
     latency_ms: 0,
     artifacts: [],
     approved_by_mode: "",
+    assigned_to: "",
     created_at: "2026-01-01T00:00:00Z",
   };
 }

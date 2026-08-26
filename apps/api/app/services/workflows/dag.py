@@ -78,11 +78,16 @@ class TriggerSpec(BaseModel):
     `schedule` records a cron expression and a timezone. Nothing dispatches one
     yet — see ADR 0007 — so a schedule is a recorded intent, and the compiler
     still validates the expression rather than storing a string nobody has read.
+
+    `webhook` means an external system starts runs through
+    `POST /api/hooks/workflows/{id}/trigger` with a workspace API token; like
+    `manual` it carries no cron, and the trigger's JSON body becomes the run's
+    `{{ input.* }}` payload.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["manual", "schedule"] = "manual"
+    kind: Literal["manual", "schedule", "webhook"] = "manual"
     cron: str = ""
     timezone: str = "UTC"
 

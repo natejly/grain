@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Copy,
   FileText,
+  GitFork,
   Paperclip,
   Pencil,
   RefreshCw,
@@ -17,6 +18,7 @@ import {
   Sparkles,
   Square,
   Terminal,
+  Undo2,
   Wrench,
   X,
   Zap,
@@ -248,6 +250,19 @@ export type ChatViewProps = {
     detach: () => void;
     setArg: (name: string, value: unknown) => void;
   };
+  /**
+   * Branch a new thread from everything said up to one message. Optional and
+   * only passed by the rail chat: the panels beside a document or dashboard
+   * hold a subject's one thread, where a fork would have nowhere to go — no
+   * prop, no button, exactly like `attach` and `approval`.
+   */
+  fork?: (messageId: string) => Promise<void>;
+  /**
+   * Revert a finished run's writes from its recorded checkpoints. Optional
+   * for the same reason `fork` is: only the rail chat passes it, and the
+   * handler owns the confirm and the skipped-summary notice.
+   */
+  undo?: (runId: string) => Promise<void>;
 };
 
 /**
@@ -1143,6 +1158,8 @@ export function ChatView({
   turnControls,
   skills,
   thinking,
+  fork,
+  undo,
 }: ChatViewProps) {
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
@@ -1260,15 +1277,39 @@ export function ChatView({
                   (() => {
                     const calls = callsForRun(message.run_id);
                     const showChecklist = checklistCallId(calls);
-                    return calls.map((call) => (
-                      <ToolCallCard
-                        key={call.id}
-                        call={call}
-                        decide={decideAgentCall}
-                        todos={call.id === showChecklist ? todos : undefined}
-                        pinning={pinning}
-                      />
-                    ));
+                    // The undo affordance rides the turn's tool-card group: it
+                    // exists only where a finished run actually executed a
+                    // call, never on the run still streaming. The handler owns
+                    // the confirm and the skipped-effects summary.
+                    const undoable =
+                      undo &&
+                      message.run_id !== activeRun &&
+                      calls.some((call) => call.status === "succeeded");
+                    return (
+                      <>
+                        {calls.map((call) => (
+                          <ToolCallCard
+                            key={call.id}
+                            call={call}
+                            decide={decideAgentCall}
+                            todos={call.id === showChecklist ? todos : undefined}
+                            pinning={pinning}
+                          />
+                        ))}
+                        {undoable && (
+                          <button
+                            type="button"
+                            className="fork-button undo-run-button"
+                            aria-label="Undo this run's changes"
+                            title="Undo this run's changes"
+                            onClick={() => void undo(message.run_id)}
+                          >
+                            <Undo2 size={13} />
+                            <span>Undo this run&rsquo;s changes</span>
+                          </button>
+                        )}
+                      </>
+                    );
                   })()}
                 <div className="message-author">
                   {message.role === "user" ? (
@@ -1302,6 +1343,22 @@ export function ChatView({
                       }}
                     >
                       <Pencil size={13} /> Edit
+                    </button>
+                  )}
+                  {/* Branch a fresh thread from everything said up to here.
+                      Any message is a fork point — the reply you want to
+                      re-ask after, or your own question worth re-asking — and
+                      the server copies the prefix, so this is one call and a
+                      jump, not a client-side splice. */}
+                  {fork && (
+                    <button
+                      type="button"
+                      className="fork-button"
+                      aria-label="Fork thread from this message"
+                      title="Fork thread from this message"
+                      onClick={() => void fork(message.id)}
+                    >
+                      <GitFork size={13} />
                     </button>
                   )}
                 </div>

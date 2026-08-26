@@ -9,9 +9,10 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..config import ReasoningEffort, Settings, get_settings
 from ..database import get_db
-from ..models import Agent
+from ..models import Agent, Membership
 from ..schemas import (
     BootstrapResponse,
+    DigestStatus,
     HealthResponse,
     Identity,
     ModelProviderStatus,
@@ -42,6 +43,15 @@ def bootstrap(
         .where(Agent.workspace_id == actor.workspace_id, Agent.enabled.is_(True))
         .order_by(Agent.created_at, Agent.id)
         .limit(1)
+    )
+    # The caller's own membership row carries their digest preference; read it
+    # here so the settings menu needs no second request. A session that has
+    # outlived its membership reads as the defaults rather than a 500.
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.workspace_id == actor.workspace_id,
+            Membership.user_id == actor.user_id,
+        )
     )
     return BootstrapResponse(
         identity=Identity(
@@ -90,6 +100,10 @@ def bootstrap(
             enabled=settings.screen_enabled,
             mode=settings.screen_mode,
             backend=settings.screen_backend,
+        ),
+        digest=DigestStatus(
+            enabled=bool(membership.digest_enabled) if membership else False,
+            hour_utc=membership.digest_hour_utc if membership else 9,
         ),
         unrestricted_agent=settings.dev_unrestricted_agent,
         feature_flags={

@@ -12,6 +12,7 @@ import type {
   DashboardTemplate,
   Dataset,
   DbConnection,
+  DigestPrefs,
   DocumentSummary,
   DocumentVersion,
   Folder,
@@ -30,6 +31,7 @@ import type {
   Skill,
   Source,
   Space,
+  SpaceTemplate,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
@@ -51,6 +53,8 @@ import {
 export type { ChatPane } from "./chat-panes";
 import { createBoardHandlers } from "./handlers/boards";
 import { createChatHandlers } from "./handlers/chat";
+import { createApprovalHandlers } from "./handlers/approvals";
+import { createCommentHandlers } from "./handlers/comments";
 import { createDashboardHandlers } from "./handlers/dashboards";
 import { createDocumentHandlers } from "./handlers/documents";
 import { createFolderHandlers } from "./handlers/folders";
@@ -96,12 +100,19 @@ export function useWorkspace() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
+  // Saved starting points for spaces. Lives here beside `spaces` (and
+  // `dashboardTemplates`) because the list refreshes with its sibling.
+  const [spaceTemplates, setSpaceTemplates] = useState<SpaceTemplate[]>([]);
   const [agentCalls, setAgentCalls] = useState<AgentToolCall[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   // The unified attention feed (GET /api/inbox): the server-truth waiting set
   // behind the rail badge, the sidebar strip and the Inbox page. Null until
   // the first read lands, so "0" is never shown before it is known.
   const [inbox, setInbox] = useState<InboxFeed | null>(null);
+  // The caller's daily-digest opt-in, seeded from bootstrap and replaced with
+  // the server's copy on every change. Null until the first read lands, so the
+  // settings menu never shows a default it is about to contradict.
+  const [digest, setDigest] = useState<DigestPrefs | null>(null);
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -304,9 +315,17 @@ export function useWorkspace() {
   }, [notice]);
 
   const refreshSecondary = useCallback(async () => {
-    const [nextSources, nextSpaces, nextAgentCalls, nextAudit, nextInbox] = await Promise.all([
+    const [
+      nextSources,
+      nextSpaces,
+      nextSpaceTemplates,
+      nextAgentCalls,
+      nextAudit,
+      nextInbox,
+    ] = await Promise.all([
       api.listSources(),
       api.listSpaces(),
+      api.listSpaceTemplates(),
       api.listAgentToolCalls(),
       api.listAuditEvents(),
       // Beside — not derived from — the call list: `listAgentToolCalls` is a
@@ -317,6 +336,7 @@ export function useWorkspace() {
     ]);
     setSources(nextSources);
     setSpaces(nextSpaces);
+    setSpaceTemplates(nextSpaceTemplates);
     setAgentCalls(nextAgentCalls);
     setAuditEvents(nextAudit);
     setInbox(nextInbox);
@@ -451,6 +471,26 @@ export function useWorkspace() {
     [patchConversation],
   );
 
+  /**
+   * Set the caller's daily-digest opt-in — optimistic so the settings menu's
+   * checkbox answers the click, then replaced with the server's copy; a
+   * refused write puts the previous preference back and surfaces the error.
+   */
+  const updateDigest = useCallback(async (prefs: DigestPrefs) => {
+    setError("");
+    let previous: DigestPrefs | null = null;
+    setDigest((current) => {
+      previous = current;
+      return prefs;
+    });
+    try {
+      setDigest(await api.updateDigestPrefs(prefs));
+    } catch (caught) {
+      setDigest(previous);
+      setError(describeError(caught, "Could not update the daily digest"));
+    }
+  }, []);
+
   /** Rename a thread and replace its rail row with the server's copy. */
   const renameConversation = useCallback(
     async (conversationId: string, title: string) => {
@@ -559,6 +599,7 @@ export function useWorkspace() {
         chats,
         nextSources,
         nextSpaces,
+        nextSpaceTemplates,
         nextAgentCalls,
         nextAudit,
         nextInbox,
@@ -575,6 +616,7 @@ export function useWorkspace() {
         api.listConversations(),
         api.listSources(),
         api.listSpaces(),
+        api.listSpaceTemplates(),
         api.listAgentToolCalls(),
         api.listAuditEvents(),
         api.getInbox(),
@@ -588,6 +630,7 @@ export function useWorkspace() {
         api.listSandboxSecrets(),
       ]);
       setBootstrap(boot);
+      setDigest(boot.digest);
       setConversations((current) => {
         const listed = new Set(chats.map((item) => item.id));
         const createdDuringLoad = current.filter(
@@ -597,6 +640,7 @@ export function useWorkspace() {
       });
       setSources(nextSources);
       setSpaces(nextSpaces);
+      setSpaceTemplates(nextSpaceTemplates);
       setAgentCalls(nextAgentCalls);
       setAuditEvents(nextAudit);
       setInbox(nextInbox);
@@ -968,6 +1012,16 @@ export function useWorkspace() {
     refreshExpansion,
   });
 
+  const commentHandlers = createCommentHandlers({
+    setError,
+    refreshFeed: refreshSecondary,
+  });
+
+  const approvalHandlers = createApprovalHandlers({
+    setError,
+    refreshFeed: refreshSecondary,
+  });
+
   return {
     bootstrap,
     conversations,
@@ -975,9 +1029,12 @@ export function useWorkspace() {
     messages,
     sources,
     spaces,
+    spaceTemplates,
     agentCalls,
     auditEvents,
     inbox,
+    digest,
+    updateDigest,
     refreshSecondary,
     createDatasetFromSource,
     createDatasetVersionFromSource,
@@ -1093,5 +1150,7 @@ export function useWorkspace() {
     ...graphHandlers,
     ...dashboardHandlers,
     ...integrationHandlers,
+    ...commentHandlers,
+    ...approvalHandlers,
   };
 }

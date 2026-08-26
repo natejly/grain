@@ -40,6 +40,11 @@ from ..database import get_db
 from ..models import Agent, Workflow, WorkflowNodeRun, WorkflowRun
 from ..schemas import ApiModel
 from ..services import crons as cron_service
+from ..services import dashboard_subscriptions as subscription_service
+from ..services import digests as digest_service
+from ..services import monitors as monitor_service
+from ..services import spend_watch
+from ..services import webhooks as webhook_service
 from ..services.audit import record_audit
 from ..services.llm_tools import ToolContext, build_registry
 from ..services.runs import process_run
@@ -146,6 +151,29 @@ class WorkflowTickOut(ApiModel):
     #: synchronously and is not counted here. Reported separately so "a workflow
     #: fired" and "a cron fired" stay distinct facts about one tick.
     crons_dispatched: List[str]
+    #: Monitors this tick claimed and evaluated (services/monitors.py). An
+    #: evaluation is a bounded read done inline — nothing is enqueued — and the
+    #: id names the monitor the tick spent time on, not a verdict.
+    monitors_evaluated: List[str]
+    #: Spend-anomaly notifications the hourly watch wrote this tick
+    #: (services/spend_watch.py). Usually empty — the watch claims at most once
+    #: an hour and speaks only on a 3× deviation.
+    anomalies_flagged: List[str]
+    #: Dashboard subscriptions this tick claimed for delivery
+    #: (services/dashboard_subscriptions.py). The id names a subscription whose
+    #: mail was handed to a background task — a claim, not a delivery receipt:
+    #: a purged dashboard or departed recipient becomes a skip-with-audit there.
+    subscriptions_dispatched: List[str]
+    #: Pending webhook deliveries this tick claimed one send attempt for
+    #: (services/webhooks.py). Same contract as subscriptions: a claim, not a
+    #: receipt — the HTTP conversation happens on a background task, and a
+    #: failed attempt stays pending for a later tick until the attempt cap.
+    webhook_deliveries_dispatched: List[str]
+    #: Memberships whose daily digest this tick claimed (services/digests.py).
+    #: A claim, not a receipt: the waiting-set query, the render and the mail
+    #: run on a background task, and a member with nothing waiting is mailed
+    #: nothing while the claim stands for the day.
+    digests_dispatched: List[str]
     moment: datetime
 
 
@@ -702,15 +730,51 @@ def tick(
     # an ordinary Run on the chat background path — `recover_durable_work` will
     # re-run it if a process dies mid-turn, so no cron-specific recovery is needed.
     cron_run_ids = cron_service.dispatch_due(db)
+    # Monitors ride the same tick, the same claim pattern, the same clock. An
+    # evaluation is a bounded dataset read, so it runs inline rather than on a
+    # background task, and a bad monitor skips-with-audit instead of raising.
+    monitor_ids = monitor_service.dispatch_due(db)
+    # The spend watch shares the tick too, but claims through `sweep_claims`
+    # rather than rows of its own, and at most hourly — comparing a day
+    # against a week is not a per-minute question.
+    anomaly_ids = spend_watch.sweep(db)
+    # Dashboard subscriptions claim here and mail on a background task: the
+    # claim is a handful of conditional UPDATEs, and the slow parts — the live
+    # dataset query and the SMTP conversation — must not delay the dispatches
+    # above (the F5 QA note: no more heavy inline work in the shared tick).
+    subscription_ids = subscription_service.dispatch_due(db)
+    # Webhook deliveries follow the subscription split exactly: the claim (a
+    # few conditional UPDATEs bumping `attempts`) happens here, the HTTP POSTs
+    # run on background tasks, and a delivery that fails stays pending for the
+    # next tick until services/webhooks.MAX_ATTEMPTS closes it out.
+    webhook_delivery_ids = webhook_service.claim_due(db)
+    # Daily digests follow the subscription split exactly: the sweep gates
+    # itself hourly through `sweep_claims`, the per-member conditional UPDATE
+    # on `digest_last_sent_at` elects at most one send per member per day, and
+    # the waiting-set queries + rendering + SMTP all run on background tasks.
+    digest_membership_ids = digest_service.dispatch_due(db)
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
     for workflow_run_id in recovered:
         background_tasks.add_task(executor.process_workflow_run, workflow_run_id)
     for cron_run_id in cron_run_ids:
         background_tasks.add_task(process_run, cron_run_id)
+    for subscription_id in subscription_ids:
+        background_tasks.add_task(
+            subscription_service.send_subscription, subscription_id
+        )
+    for delivery_id in webhook_delivery_ids:
+        background_tasks.add_task(webhook_service.send_delivery, delivery_id)
+    for membership_id in digest_membership_ids:
+        background_tasks.add_task(digest_service.send_digest, membership_id)
     return WorkflowTickOut(
         dispatched=[workflow_run.id for workflow_run in started],
         recovered=recovered,
         crons_dispatched=cron_run_ids,
+        monitors_evaluated=monitor_ids,
+        anomalies_flagged=anomaly_ids,
+        subscriptions_dispatched=subscription_ids,
+        webhook_deliveries_dispatched=webhook_delivery_ids,
+        digests_dispatched=digest_membership_ids,
         moment=schedule.floor_minute(utcnow()),
     )

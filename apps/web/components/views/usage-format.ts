@@ -224,6 +224,21 @@ export function shortId(id: string): string {
   return id.length <= 12 ? id : id.slice(0, 12).replace(/-$/, "");
 }
 
+/**
+ * Name a by-agent breakdown row.
+ *
+ * The API labels a live agent with its name and falls back to the raw id for
+ * one that has since been deleted — its spend already happened and keeps its
+ * key. A bare uuid is a poor row title, so a label that *is* the key is worn
+ * as "Agent <short id>", and the "" key (embeddings, ingest, compiles — calls
+ * no agent made) says so in words.
+ */
+export function agentLabel(row: Pick<AdminUsageGroup, "key" | "label">): string {
+  if (!row.key) return "Background work";
+  if (!row.label || row.label === row.key) return `Agent ${shortId(row.key)}`;
+  return row.label;
+}
+
 export type RunIdentity = {
   /** What to read: the run's own prompt where we have it, else its id. */
   title: string;

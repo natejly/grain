@@ -41,10 +41,9 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import AgentToolCall, Conversation, Run, Workflow, WorkflowRun
+from ..models import Workflow, WorkflowRun
 from ..schemas import ApiModel
-from ..services import conversations
-from ..services.agent_loop import PAUSED_FOR_BUDGET
+from ..services import inbox_feed
 
 router = APIRouter(prefix="/api/inbox", tags=["inbox"])
 
@@ -74,6 +73,10 @@ class InboxApprovalOut(ApiModel):
     #: can say "Weekly digest wants to run edit_document" without a second
     #: request per row.
     workflow_name: str
+    #: The member this approval is routed to, "" for anyone. Deliberately NOT a
+    #: server-side filter: nothing parked is invisible — the client de-emphasizes
+    #: rows assigned to someone else rather than this feed hiding them.
+    assigned_to: str
     created_at: datetime
 
 
@@ -87,6 +90,56 @@ class InboxBudgetHoldOut(ApiModel):
     workflow_run_id: str
     workflow_id: str
     workflow_name: str
+    created_at: datetime
+
+
+class InboxMentionOut(ApiModel):
+    """One open @mention of the caller. Personal by definition — the query
+    below filters on `target_user_id == actor.user_id`, never '' — so one
+    member's mentions are invisible to their roommate."""
+
+    id: str
+    title: str
+    body: str
+    #: Deep-link columns, '' when the subject is of another kind.
+    conversation_id: str
+    document_id: str
+    dashboard_id: str
+    comment_id: str
+    created_by: str
+    created_at: datetime
+
+
+class InboxAlertOut(ApiModel):
+    """One open monitor alert. Automation, so member-visible by definition —
+    the query below filters on `target_user_id == ''` (the monitor sweep only
+    ever writes '' -targeted rows), the holds-tab pattern: no conversation
+    predicate, every member sees it, and resolving it resolves it for all."""
+
+    id: str
+    title: str
+    body: str
+    #: Deep link to the monitor that tripped, for the Monitors view.
+    monitor_id: str
+    created_at: datetime
+
+
+class InboxAnomalyOut(ApiModel):
+    """One open spend anomaly: an agent running well over its usual spend.
+
+    Broadcast like a monitor alert — the sweep writes only '' -targeted rows,
+    every member sees the same list, one resolve clears it for the room. Its
+    own list rather than a fifth kind folded into `alerts`, because the two
+    mean different things: an alert says a number you chose crossed a line you
+    drew; an anomaly says spending drifted from its own history, unasked."""
+
+    id: str
+    title: str
+    body: str
+    #: The agent whose spend drifted — the deep link's subject. Historical id:
+    #: the agent may since have been deleted, and the row still means what it
+    #: meant.
+    agent_id: str
     created_at: datetime
 
 
@@ -104,25 +157,10 @@ class InboxRunOut(ApiModel):
 class InboxOut(ApiModel):
     approvals: List[InboxApprovalOut]
     budget_holds: List[InboxBudgetHoldOut]
+    mentions: List[InboxMentionOut]
+    alerts: List[InboxAlertOut]
+    anomalies: List[InboxAnomalyOut]
     recent_runs: List[InboxRunOut]
-
-
-def _origin(*, cron_id: str, workflow_run_id: str, subject_id: str, conversation_id: str) -> str:
-    """Where the parked run came from, in the order a reader would ask.
-
-    Workflow outranks schedule on purpose: a scheduled workflow's park should
-    send the reader to the workflow run (where the node and its inputs are),
-    not to a cron page that only knows when it fired.
-    """
-    if workflow_run_id:
-        return "workflow"
-    if cron_id:
-        return "schedule"
-    if subject_id:
-        return "subject"
-    if conversation_id:
-        return "chat"
-    return "chat"
 
 
 @router.get("", response_model=InboxOut)
@@ -130,129 +168,79 @@ def read_inbox(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> InboxOut:
-    """The attention feed: parked approvals and budget holds, then history."""
-    rows = db.execute(
-        select(
-            AgentToolCall,
-            Run.conversation_id,
-            Run.cron_id,
-            WorkflowRun.id,
-            WorkflowRun.workflow_id,
-            Workflow.name,
-            Conversation.subject_id,
-            Conversation.title,
-        )
-        .join(Run, Run.id == AgentToolCall.run_id)
-        # LEFT JOINs so automation with no chat thread still lists.
-        .outerjoin(Conversation, Conversation.id == Run.conversation_id)
-        .outerjoin(WorkflowRun, WorkflowRun.run_id == Run.id)
-        .outerjoin(Workflow, Workflow.id == WorkflowRun.workflow_id)
-        .where(
-            AgentToolCall.workspace_id == actor.workspace_id,
-            AgentToolCall.status == "proposed",
-            # A cancelled run leaves its proposal row behind; offering it as a
-            # decision would 409, so it is not work and does not list.
-            Run.status == "waiting_for_approval",
-            conversations.run_activity_predicate(actor_user_id=actor.user_id),
-        )
-        # Oldest first: the queue is answered from the top, and the top is the
-        # one that has waited longest — newest-first is how a queue hides its
-        # own backlog behind this morning's arrivals.
-        .order_by(AgentToolCall.created_at.asc())
-    ).all()
+    """The attention feed: parked approvals and budget holds, then history.
+
+    The waiting sets come from `services/inbox_feed.waiting_for` — the ONE
+    implementation of "what waits on this member", shared with the daily
+    digest so the two surfaces cannot drift (see that module's docstring).
+    This router only shapes the answer and appends the windowed history.
+    """
+    waiting = inbox_feed.waiting_for(
+        db, workspace_id=actor.workspace_id, user_id=actor.user_id
+    )
     approvals = [
         InboxApprovalOut(
-            id=call.id,
-            run_id=call.run_id,
-            conversation_id=conversation_id or "",
-            conversation_title=title or "",
-            name=call.name,
-            proposal_preview=call.proposal_preview,
-            origin=_origin(
-                cron_id=cron_id or "",
-                workflow_run_id=workflow_run_id or "",
-                subject_id=subject_id or "",
-                conversation_id=conversation_id or "",
-            ),
-            workflow_run_id=workflow_run_id or "",
-            workflow_id=workflow_id or "",
-            workflow_name=workflow_name or "",
-            created_at=call.created_at,
+            id=item.id,
+            run_id=item.run_id,
+            conversation_id=item.conversation_id,
+            conversation_title=item.conversation_title,
+            name=item.name,
+            proposal_preview=item.proposal_preview,
+            origin=item.origin,
+            workflow_run_id=item.workflow_run_id,
+            workflow_id=item.workflow_id,
+            workflow_name=item.workflow_name,
+            assigned_to=item.assigned_to,
+            created_at=item.created_at,
         )
-        for (
-            call,
-            conversation_id,
-            cron_id,
-            workflow_run_id,
-            workflow_id,
-            workflow_name,
-            subject_id,
-            title,
-        ) in rows
+        for item in waiting.approvals
     ]
-
-    held = db.execute(
-        select(Run, WorkflowRun.id, WorkflowRun.workflow_id, Workflow.name)
-        .outerjoin(Conversation, Conversation.id == Run.conversation_id)
-        .outerjoin(WorkflowRun, WorkflowRun.run_id == Run.id)
-        .outerjoin(Workflow, Workflow.id == WorkflowRun.workflow_id)
-        .where(
-            Run.workspace_id == actor.workspace_id,
-            Run.status == "waiting_for_approval",
-            Run.paused_reason == PAUSED_FOR_BUDGET,
-            conversations.run_activity_predicate(actor_user_id=actor.user_id),
-        )
-        .order_by(Run.created_at.asc())
-    ).all()
     budget_holds = [
         InboxBudgetHoldOut(
-            run_id=run.id,
-            conversation_id=run.conversation_id or "",
-            origin=_origin(
-                cron_id=run.cron_id or "",
-                workflow_run_id=workflow_run_id or "",
-                subject_id="",
-                conversation_id=run.conversation_id or "",
-            ),
-            workflow_run_id=workflow_run_id or "",
-            workflow_id=workflow_id or "",
-            workflow_name=workflow_name or "",
-            created_at=run.created_at,
+            run_id=item.run_id,
+            conversation_id=item.conversation_id,
+            origin=item.origin,
+            workflow_run_id=item.workflow_run_id,
+            workflow_id=item.workflow_id,
+            workflow_name=item.workflow_name,
+            created_at=item.created_at,
         )
-        for run, workflow_run_id, workflow_id, workflow_name in held
+        for item in waiting.budget_holds
     ]
-
-    # A workflow the ceiling stopped between nodes carries the park on its OWN
-    # row — `WorkflowRun.paused_reason` — and may have no backing chat Run at
-    # all (run_id is null until a node needs one). The Run-anchored query above
-    # cannot see those, which is exactly how a held workflow vanished from the
-    # first version of this feed. A workflow run is automation and so
-    # member-visible by definition; no conversation predicate applies.
-    seen_workflow_runs = {hold.workflow_run_id for hold in budget_holds}
-    held_workflows = db.execute(
-        select(WorkflowRun, Workflow.name)
-        .join(Workflow, Workflow.id == WorkflowRun.workflow_id)
-        .where(
-            WorkflowRun.workspace_id == actor.workspace_id,
-            WorkflowRun.status == "waiting_for_approval",
-            WorkflowRun.paused_reason == PAUSED_FOR_BUDGET,
+    mentions = [
+        InboxMentionOut(
+            id=row.id,
+            title=row.title,
+            body=row.body,
+            conversation_id=row.conversation_id,
+            document_id=row.document_id,
+            dashboard_id=row.dashboard_id,
+            comment_id=row.comment_id,
+            created_by=row.created_by,
+            created_at=row.created_at,
         )
-        .order_by(WorkflowRun.created_at.asc())
-    ).all()
-    budget_holds.extend(
-        InboxBudgetHoldOut(
-            run_id=workflow_run.run_id or "",
-            conversation_id="",
-            origin="workflow",
-            workflow_run_id=workflow_run.id,
-            workflow_id=workflow_run.workflow_id,
-            workflow_name=name,
-            created_at=workflow_run.created_at,
+        for row in waiting.mentions
+    ]
+    alerts = [
+        InboxAlertOut(
+            id=row.id,
+            title=row.title,
+            body=row.body,
+            monitor_id=row.monitor_id,
+            created_at=row.created_at,
         )
-        for workflow_run, name in held_workflows
-        if workflow_run.id not in seen_workflow_runs
-    )
-    budget_holds.sort(key=lambda hold: hold.created_at)
+        for row in waiting.alerts
+    ]
+    anomalies = [
+        InboxAnomalyOut(
+            id=row.id,
+            title=row.title,
+            body=row.body,
+            agent_id=row.agent_id,
+            created_at=row.created_at,
+        )
+        for row in waiting.anomalies
+    ]
 
     outcomes = db.execute(
         select(WorkflowRun, Workflow.name)
@@ -276,4 +264,11 @@ def read_inbox(
         for run, name in outcomes
     ]
 
-    return InboxOut(approvals=approvals, budget_holds=budget_holds, recent_runs=recent_runs)
+    return InboxOut(
+        approvals=approvals,
+        budget_holds=budget_holds,
+        mentions=mentions,
+        alerts=alerts,
+        anomalies=anomalies,
+        recent_runs=recent_runs,
+    )

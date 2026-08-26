@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import Dashboard, DashboardTemplate
+from ..models import Dashboard, DashboardTemplate, new_id
 from ..schemas import (
     DashboardCreate,
     DashboardLayoutUpdate,
@@ -194,6 +194,88 @@ def run_dashboard(
     except AnalyticsValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return DashboardRunOut(dashboard=store.dashboard_out(dashboard), result=result)
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/duplicate",
+    response_model=DashboardOut,
+    status_code=201,
+)
+def duplicate_dashboard(
+    dashboard_id: str,
+    key: str = Depends(idempotency_key),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> DashboardOut:
+    """A verbatim copy under a new name, for editing without losing the original.
+
+    No re-run before saving: the source row already made `create_dashboard`'s
+    guarantee (it answered at least once), and the copy holds byte-identical
+    spec, bindings and dataset — a second query would prove nothing that is not
+    already proved. The source is resolved under the caller's workspace FIRST,
+    so a foreign id is a 404 before the name check could answer 409.
+    """
+    dashboard = _dashboard(db, actor, dashboard_id)
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="dashboard.duplicate",
+        key=key,
+    )
+    if replay:
+        copy = db.scalar(
+            select(Dashboard).where(
+                Dashboard.id == replay.resource_id,
+                Dashboard.workspace_id == actor.workspace_id,
+            )
+        )
+        if copy is None:
+            raise replayed_resource_gone()
+        return store.dashboard_out(copy)
+    name = f"{dashboard.name} copy"[:160]
+    taken = db.scalar(
+        select(Dashboard).where(
+            Dashboard.workspace_id == actor.workspace_id,
+            Dashboard.name == name,
+        )
+    )
+    if taken is not None:
+        raise HTTPException(status_code=409, detail="Dashboard name already exists")
+    copy = Dashboard(
+        id=new_id(),
+        workspace_id=actor.workspace_id,
+        created_by=actor.user_id,
+        dataset_id=dashboard.dataset_id,
+        name=name,
+        description=dashboard.description,
+        spec_json=dashboard.spec_json,
+        # The provenance travels with the copy: without template_id + bindings
+        # the copied spec's column names cannot be traced back to the template
+        # that declared them, and re-binding the copy is guesswork.
+        template_id=dashboard.template_id,
+        bindings_json=dashboard.bindings_json,
+    )
+    db.add(copy)
+    db.flush()
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="dashboard.duplicate",
+        key=key,
+        resource_id=copy.id,
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="dashboard.duplicated",
+        resource_type="dashboard",
+        resource_id=copy.id,
+        detail={"name": copy.name, "source_dashboard_id": dashboard.id},
+    )
+    db.commit()
+    db.refresh(copy)
+    return store.dashboard_out(copy)
 
 
 @router.delete("/dashboards/{dashboard_id}", status_code=204)

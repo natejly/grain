@@ -62,10 +62,12 @@ from app.models import (
     BoardCard,
     BoardColumn,
     Chunk,
+    Comment,
     Conversation,
     Cron,
     Dashboard,
     DashboardPin,
+    DashboardSubscription,
     DashboardTemplate,
     Dataset,
     DbConnection,
@@ -76,6 +78,7 @@ from app.models import (
     GraphEdge,
     GraphEntity,
     GraphProjection,
+    InboundAddress,
     IntegrationAccount,
     Listing,
     ListingVersion,
@@ -85,38 +88,50 @@ from app.models import (
     MemoryItem,
     Message,
     ModelUsage,
+    Monitor,
+    Notification,
     OAuthState,
     OrgMembership,
     OrgToolPolicy,
     Project,
     ProjectFile,
     Run,
+    RunCheckpoint,
     RunEvent,
     SandboxExecution,
     SandboxSecret,
     SandboxSession,
     SandboxTool,
+    ShareLink,
     Skill,
     SkillVersion,
     Source,
     Space,
+    SpaceTemplate,
     SyncJob,
     Tool,
     ToolCall,
     ToolGrant,
     ToolPolicy,
     User,
+    WebhookDelivery,
+    WebhookEndpoint,
     Workflow,
     WorkflowNodeRun,
     WorkflowRun,
+    WorkflowTemplate,
     Workspace,
     WorkspaceInvite,
     new_id,
 )
 from app.services.analytics import create_dataset_version
+from app.services.api_tokens import SECRET_PREFIX
+from app.services.api_tokens import _digest as api_token_digest
 from app.services.auth.invites import hash_token as invite_hash
 from app.services.crypto import encrypt_secret
+from app.services.inbound_email import hash_token as inbound_address_hash
 from app.services.ingestion import object_path
+from app.services.share_links import hash_token as share_link_hash
 
 DENY = "deny"
 SCOPED = "scoped"
@@ -247,6 +262,30 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["run_event"] = event.id
 
+        # The undo trail: naming another tenant's run must not revert (or even
+        # acknowledge) it, and the before-state carries content, so the marker
+        # rides in `before_json` where a leaked checkpoint would quote it.
+        checkpoint = RunCheckpoint(
+            workspace_id=workspace_id,
+            run_id=run.id,
+            tool_call_id="",
+            tool_name="edit_document",
+            kind="document",
+            reversible=True,
+            before_json=json.dumps(
+                {
+                    "existed": True,
+                    "document_id": "",
+                    "title": f"{label} brief",
+                    "kind": "markdown",
+                    "content": f"{label} secret checkpoint body",
+                }
+            ),
+        )
+        db.add(checkpoint)
+        db.flush()
+        ids["run_checkpoint"] = checkpoint.id
+
         csv = dataset_csv(label)
         source = Source(
             workspace_id=workspace_id,
@@ -287,6 +326,21 @@ def build_tenant(label: str) -> Tenant:
         db.add(space)
         db.flush()
         ids["space"] = space.id
+
+        # A saved starting point whose id another tenant can name: naming it
+        # would let you read its instructions, instantiate it into your own
+        # workspace, or delete it.
+        space_template = SpaceTemplate(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} space template",
+            description=f"{label} secret space template",
+            instructions=f"{label} secret template instructions",
+            agent_ids_json=json.dumps([agent_id]),
+        )
+        db.add(space_template)
+        db.flush()
+        ids["space_template"] = space_template.id
 
         tool = Tool(
             workspace_id=workspace_id,
@@ -381,6 +435,37 @@ def build_tenant(label: str) -> Tenant:
         db.add(version)
         db.flush()
         ids["document_version"] = version.id
+
+        # A remark on the document, and the mention it produced. The comment's
+        # body carries the marker so a foreign list leaks content, not just an
+        # id; the notification targets this tenant's owner so a foreign resolve
+        # or a leaked feed has a personal row to be wrong about.
+        comment = Comment(
+            workspace_id=workspace_id,
+            subject_kind="document",
+            subject_id=document.id,
+            body=f"{label} secret comment",
+            mentions_json=json.dumps([user_id]),
+            created_by=user_id,
+        )
+        db.add(comment)
+        db.flush()
+        ids["comment"] = comment.id
+
+        notification = Notification(
+            workspace_id=workspace_id,
+            target_user_id=user_id,
+            kind="mention",
+            status="open",
+            title=f"{label} secret mention",
+            body=f"{label} secret comment",
+            document_id=document.id,
+            comment_id=comment.id,
+            created_by=user_id,
+        )
+        db.add(notification)
+        db.flush()
+        ids["notification"] = notification.id
 
         board = Board(
             workspace_id=workspace_id, name=f"{label} board", created_by=user_id
@@ -594,6 +679,107 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["dashboard"] = dashboard.id
 
+        # A live share link onto that dashboard. The raw token is kept beside
+        # the row's id, as the invite's is: the token is the whole credential
+        # for `GET /shared/{token}`, so storing it under an id kind makes the
+        # leak scan prove no authenticated response — the list route above all —
+        # ever echoes it back.
+        share_token = f"{label.lower()}-isolation-share-token"
+        share_link = ShareLink(
+            workspace_id=workspace_id,
+            resource_kind="dashboard",
+            resource_id=dashboard.id,
+            token_hash=share_link_hash(share_token),
+            created_by=user_id,
+        )
+        db.add(share_link)
+        db.flush()
+        ids["share_link"] = share_link.id
+        ids["share_link_token"] = share_token
+
+        # A scheduled mail of that dashboard to this tenant's owner. The table
+        # carries no free text for the leak grep, but the workspace_id column
+        # enrols it in the tamper digest, and the DELETE DENY below proves a
+        # foreign tenant cannot silence (or discover) someone's morning mail.
+        dashboard_subscription = DashboardSubscription(
+            workspace_id=workspace_id,
+            dashboard_id=dashboard.id,
+            recipient_user_id=user_id,
+            schedule_cron="0 9 * * *",
+            schedule_timezone="UTC",
+            enabled=True,
+            created_by=user_id,
+        )
+        db.add(dashboard_subscription)
+        db.flush()
+        ids["dashboard_subscription"] = dashboard_subscription.id
+
+        # A live API token, its raw secret kept beside the row's id exactly as
+        # the invite's and share link's are: the secret is the whole credential
+        # for /api/hooks, so storing it under an id kind makes the leak scan
+        # prove no response — the token list above all — ever echoes it back.
+        api_token_secret = f"{SECRET_PREFIX}{label.lower()}-isolation-api-token"
+        api_token = ApiToken(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            name=f"{label} secret token",
+            token_hash=api_token_digest(api_token_secret),
+        )
+        db.add(api_token)
+        db.flush()
+        ids["api_token"] = api_token.id
+        ids["api_token_secret"] = api_token_secret
+
+        # A live inbound email address, its raw routing token kept beside the
+        # row's id exactly as the api token's secret is: the token is the whole
+        # credential for landing mail in this workspace, so storing it under an
+        # id kind makes the leak scan prove no response — the address list
+        # above all — ever echoes it back.
+        inbound_address_token = f"{label.lower()}-isolation-inbound-token"
+        inbound_address = InboundAddress(
+            workspace_id=workspace_id,
+            token_hash=inbound_address_hash(inbound_address_token),
+            label=f"{label} secret inbound address",
+            target_space_id="",
+            created_by=user_id,
+        )
+        db.add(inbound_address)
+        db.flush()
+        ids["inbound_address"] = inbound_address.id
+        ids["inbound_address_token"] = inbound_address_token
+
+        # An outbound webhook endpoint and one delivery on its trail. The URL
+        # is owner-chosen data, so the marker lives in the *name*; the
+        # delivery's payload carries a marker title because payloads are what
+        # a leaked read would surface. Both rows join the tamper digest via
+        # workspace_id.
+        webhook_endpoint = WebhookEndpoint(
+            workspace_id=workspace_id,
+            name=f"{label} secret webhook",
+            url=f"https://hooks.{label.lower()}.example.com/sink",
+            secret_encrypted=encrypt_secret(
+                f"{label.lower()}-webhook-signing-secret", settings
+            ),
+            events_json=json.dumps(["run.completed", "monitor.tripped"]),
+            enabled=True,
+            created_by=user_id,
+        )
+        db.add(webhook_endpoint)
+        db.flush()
+        ids["webhook_endpoint"] = webhook_endpoint.id
+
+        webhook_delivery = WebhookDelivery(
+            workspace_id=workspace_id,
+            endpoint_id=webhook_endpoint.id,
+            event="run.completed",
+            payload_json=json.dumps({"title": f"{label} secret delivery"}),
+            status="pending",
+            attempts=0,
+        )
+        db.add(webhook_delivery)
+        db.flush()
+        ids["webhook_delivery"] = webhook_delivery.id
+
         # A template whose declared shape the tenant's own dataset satisfies, so
         # a cross-tenant bind fails for the reason under test (the template is
         # not yours) rather than incidentally, because the shape did not fit.
@@ -803,6 +989,21 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["workflow_node_run"] = node_run.id
 
+        # The automation's saved shape. The graph is the workflow's own — real
+        # and parseable — so a foreign instantiate that somehow got past the
+        # workspace filter would fail for the wrong reason, not this one.
+        workflow_template = WorkflowTemplate(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} workflow template",
+            description=f"{label} secret workflow template",
+            graph_json=workflow.graph_json,
+            source_prompt=workflow.source_prompt,
+        )
+        db.add(workflow_template)
+        db.flush()
+        ids["workflow_template"] = workflow_template.id
+
         # A personal cron whose id another tenant can name: naming it would let
         # you read its prompt, fire it unattended, or delete it. `run-now`'s DENY
         # is the sharp one — it proves a foreign cron cannot be fired.
@@ -819,6 +1020,34 @@ def build_tenant(label: str) -> Tenant:
         db.add(cron)
         db.flush()
         ids["cron"] = cron.id
+
+        # A metric monitor over this tenant's dataset. Naming it would let you
+        # read its query (which names dataset columns), fire an evaluation, or
+        # delete the watchfulness — `run-now`'s DENY is the sharp one, and the
+        # create case plants THIS tenant's dataset id to prove a monitor cannot
+        # be built over another tenant's data.
+        monitor = Monitor(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} secret monitor",
+            dataset_id=dataset.id,
+            query_json=json.dumps(
+                {
+                    "metrics": [
+                        {"field": "amount", "operation": "sum", "label": "total"}
+                    ],
+                    "limit": 1,
+                }
+            ),
+            comparator="gt",
+            threshold=5.0,
+            schedule_cron="0 9 * * *",
+            schedule_timezone="UTC",
+            enabled=True,
+        )
+        db.add(monitor)
+        db.flush()
+        ids["monitor"] = monitor.id
 
         # A standing chat grant, so the scope split has something to be wrong
         # about: `test_workflow_policy_scope.py` proves this row does not reach
@@ -844,6 +1073,7 @@ def build_tenant(label: str) -> Tenant:
             run_id=run.id,
             conversation_id=conversation.id,
             user_id=user_id,
+            agent_id=agent_id,
             operation="chat",
             model=f"{label}-secret-model",
             input_tokens=100,
@@ -859,6 +1089,23 @@ def build_tenant(label: str) -> Tenant:
         db.add(model_usage)
         db.flush()
         ids["model_usage"] = model_usage.id
+
+        # An open spend anomaly on this tenant's agent — the broadcast
+        # ('' -targeted) notification kind, so the anomalies feed and the
+        # shared resolve route have a row whose *content* would leak, not
+        # just an id.
+        anomaly = Notification(
+            workspace_id=workspace_id,
+            target_user_id="",
+            kind="spend_anomaly",
+            status="open",
+            title=f"{label} secret anomaly",
+            body=f"{label} secret spend detail",
+            agent_id=agent_id,
+        )
+        db.add(anomaly)
+        db.flush()
+        ids["anomaly"] = anomaly.id
 
         # A *private* skill, so the DENY cases bite on the workspace filter: a
         # foreign workspace's skill must 404 whether or not it is shared, and a
@@ -1113,7 +1360,27 @@ def _plant_roommate(*, label: str, workspace_id: str) -> tuple[Identity, Dict[st
         )
         db.add(policy)
         db.flush()
-        ids = {"memory": memory.id, "tool_policy": policy.id, "conversation": conversation.id}
+        # An open mention of the roommate. Mentions are the first *personal*
+        # notification kind, so the owner's feed showing this row would be the
+        # roommate-axis leak the target_user_id filter exists to prevent.
+        mention = Notification(
+            workspace_id=workspace_id,
+            target_user_id=user.id,
+            kind="mention",
+            status="open",
+            title=f"{marker} mention",
+            body=f"{marker} mention body",
+            conversation_id=conversation.id,
+            created_by=user.id,
+        )
+        db.add(mention)
+        db.flush()
+        ids = {
+            "memory": memory.id,
+            "tool_policy": policy.id,
+            "conversation": conversation.id,
+            "notification": mention.id,
+        }
         user_id = user.id
         db.commit()
     finally:
@@ -1386,6 +1653,17 @@ ROUTE_CASES: List[RouteCase] = [
         body={"title": "renamed"},
     ),
     RouteCase(
+        "POST",
+        "/api/conversations/{conversation_id}/fork",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"message_id": "placeholder", "title": "forked"},
+        body_ids={"message_id": "message"},
+        note="Forking another tenant's thread would copy its whole transcript "
+        "into the caller's workspace; the visibility gate must refuse before "
+        "the anchor message is even looked at.",
+    ),
+    RouteCase(
         "POST", "/api/runs/{run_id}/cancel", DENY, path_ids={"run_id": "run"}
     ),
     RouteCase(
@@ -1397,16 +1675,78 @@ ROUTE_CASES: List[RouteCase] = [
         note="Steering another workspace's run injects a prompt into it: 404.",
     ),
     RouteCase(
+        "POST",
+        "/api/runs/{run_id}/undo",
+        DENY,
+        path_ids={"run_id": "run"},
+        note="Undoing another tenant's run would rewrite their documents and "
+        "boards from checkpoints the caller cannot see; the workspace filter "
+        "must 404 before the visibility gate is even reached.",
+    ),
+    RouteCase(
         "GET", "/api/runs/{run_id}/events", DENY, path_ids={"run_id": "run"}
     ),
     # The Inbox's attention feed: a pure workspace-scoped list with no id in
     # the request, so the sweep's job is proving tenant A's feed never carries
     # a row of tenant B's.
     RouteCase("GET", "/api/inbox", SCOPED),
+    # The digest opt-in edits the caller's OWN membership row and names no
+    # resource at all, so there is no foreign id to probe: SCOPED, with the
+    # tamper digest proving the write never reaches tenant B's memberships.
+    # enabled=false so the sweep leaves no standing mail subscription behind.
+    RouteCase(
+        "PUT", "/api/me/digest", SCOPED, body={"enabled": False, "hour_utc": 9}
+    ),
     # Transcript search: a workspace-scoped list whose visibility chokepoint is
     # the same one the agent tool reads; the sweep proves tenant A's query
     # never quotes tenant B's words.
     RouteCase("GET", "/api/conversations/search", SCOPED, query={"q": "secret"}),
+    # -- comments & notifications ------------------------------------------
+    # The @-picker's member list: id-less, workspace-scoped, so the sweep's
+    # job is proving A's picker never offers B's colleagues.
+    RouteCase("GET", "/api/members", SCOPED),
+    # The foreign id rides in the body: commenting on another tenant's
+    # document would let the caller list the comment back — and a mention on
+    # it would deep-link a stranger into the subject.
+    RouteCase(
+        "POST",
+        "/api/comments",
+        DENY,
+        body={"subject_kind": "document", "subject_id": "", "body": "probe"},
+        body_ids={"subject_id": "document"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/comments",
+        DENY,
+        body={"subject_kind": "conversation", "subject_id": "", "body": "probe"},
+        body_ids={"subject_id": "conversation"},
+        note="conversation subjects pass resolve_visible, so a foreign "
+        "thread must be indistinguishable from a missing one",
+    ),
+    # Listing rides the same subject resolution, so a foreign subject id in
+    # the query is a 404 before any comment row is read.
+    RouteCase(
+        "GET",
+        "/api/comments",
+        DENY,
+        query={"subject_kind": "document"},
+        query_ids={"subject_id": "document"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/comments/{comment_id}",
+        DENY,
+        path_ids={"comment_id": "comment"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/notifications/{notification_id}/resolve",
+        DENY,
+        path_ids={"notification_id": "notification"},
+        note="resolving another tenant's mention would silently empty their "
+        "inbox; the workspace filter must answer before the target gate",
+    ),
     # -- spaces ------------------------------------------------------------
     RouteCase("GET", "/api/spaces", SCOPED),
     RouteCase("POST", "/api/spaces", SCOPED, body={"name": "mine"}),
@@ -1422,6 +1762,32 @@ ROUTE_CASES: List[RouteCase] = [
     ),
     RouteCase(
         "DELETE", "/api/spaces/{space_id}", DENY, path_ids={"space_id": "space"}
+    ),
+    # -- space templates ---------------------------------------------------
+    RouteCase("GET", "/api/space-templates", SCOPED),
+    # The foreign id rides in the body: snapshotting another tenant's space
+    # would read its instructions into a row the caller can then list.
+    RouteCase(
+        "POST",
+        "/api/space-templates",
+        DENY,
+        body={"name": "stolen", "from_space_id": ""},
+        body_ids={"from_space_id": "space"},
+        note="templates another tenant's space instructions",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/space-templates/{template_id}",
+        DENY,
+        path_ids={"template_id": "space_template"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/space-templates/{template_id}/instantiate",
+        DENY,
+        path_ids={"template_id": "space_template"},
+        body={"name": "probe"},
+        note="builds a space from another tenant's template",
     ),
     # -- sources -----------------------------------------------------------
     RouteCase("GET", "/api/sources", SCOPED),
@@ -1480,6 +1846,19 @@ ROUTE_CASES: List[RouteCase] = [
         DENY,
         path_ids={"tool_call_id": "agent_tool_call"},
         body={"decision": "approved", "remember": False},
+    ),
+    # Assignment routes an approval, and both ids in the request are probes: a
+    # foreign call id must 404 before anything else is looked at, and a foreign
+    # user id must never be confirmed (the org/members pattern). The sweep
+    # sends both foreign at once; the own-call + foreign-user half is pinned in
+    # test_assigned_approvals.py.
+    RouteCase(
+        "POST",
+        "/api/agent-tool-calls/{tool_call_id}/assign",
+        DENY,
+        path_ids={"tool_call_id": "agent_tool_call"},
+        body={"user_id": ""},
+        body_ids={"user_id": "user"},
     ),
     RouteCase("GET", "/api/tool-policies", SCOPED),
     RouteCase(
@@ -1939,6 +2318,13 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"dashboard_id": "dashboard"},
     ),
     RouteCase(
+        "POST",
+        "/api/dashboards/{dashboard_id}/duplicate",
+        DENY,
+        path_ids={"dashboard_id": "dashboard"},
+        note="copies another tenant's dashboard into the caller's workspace",
+    ),
+    RouteCase(
         "DELETE",
         "/api/dashboards/{dashboard_id}",
         DENY,
@@ -2045,6 +2431,160 @@ ROUTE_CASES: List[RouteCase] = [
         body={"entries": [{"kind": "conversation", "target_id": "", "ordinal": 0}]},
         body_ids={"entries.0.target_id": "conversation"},
         note="reorders an entry the caller never favorited",
+    # -- share links --------------------------------------------------------
+    RouteCase("GET", "/api/share-links", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/share-links",
+        DENY,
+        body={"resource_kind": "dashboard", "resource_id": ""},
+        body_ids={"resource_id": "dashboard"},
+        note="mints a public link onto another tenant's dashboard",
+    ),
+    RouteCase(
+        "POST",
+        "/api/share-links/{link_id}/revoke",
+        DENY,
+        path_ids={"link_id": "share_link"},
+    ),
+    # The token is the whole credential, so this is deliberately open; the
+    # revoked/expired/foreign fail-closed 404s are pinned in the targeted
+    # tests (test_share_links.py), per the PUBLIC docstring above.
+    RouteCase(
+        "GET",
+        "/shared/{token}",
+        PUBLIC,
+        path_ids={"token": "share_link_token"},
+    ),
+    # -- dashboard subscriptions -------------------------------------------
+    # The cron posture again: create names a *dashboard* in the body, and
+    # planting another tenant's dashboard id must 404 before any validation
+    # detail could confirm it — a subscription is a standing mail of that
+    # dashboard's data, so subscribing to foreign data is the whole attack.
+    RouteCase("GET", "/api/dashboard-subscriptions", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/dashboard-subscriptions",
+        DENY,
+        body={
+            "dashboard_id": "",
+            "schedule_cron": "0 9 * * *",
+            "schedule_timezone": "UTC",
+        },
+        body_ids={"dashboard_id": "dashboard"},
+        note="stands up recurring mail of another tenant's dashboard",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/dashboard-subscriptions/{subscription_id}",
+        DENY,
+        path_ids={"subscription_id": "dashboard_subscription"},
+        note="silences (and confirms) another tenant's scheduled mail",
+    ),
+    # -- API tokens ---------------------------------------------------------
+    # The list and the mint are id-less (SCOPED); the revoke names a token, and
+    # revoking another tenant's credential must confirm nothing. The raw secret
+    # is planted as an id kind, so the leak grep also proves the list never
+    # echoes a token back.
+    RouteCase("GET", "/api/api-tokens", SCOPED),
+    RouteCase("POST", "/api/api-tokens", SCOPED, body={"name": "isolation probe"}),
+    RouteCase(
+        "DELETE",
+        "/api/api-tokens/{token_id}",
+        DENY,
+        path_ids={"token_id": "api_token"},
+        note="kills (and confirms) another tenant's machine credential",
+    ),
+    # -- token-authed hooks -------------------------------------------------
+    # These two authenticate with `Authorization: Bearer <api token>`, never a
+    # cookie, so the sweep's cookie-authenticated client is refused at the door
+    # — 401, before the path ids are even read. That the *right* token reaches
+    # only its own workspace is pinned by the targeted tests in
+    # test_api_tokens.py (the sweep cannot exercise bearer auth).
+    RouteCase(
+        "POST",
+        "/api/hooks/workflows/{workflow_id}/trigger",
+        DENY,
+        expect=401,
+        path_ids={"workflow_id": "workflow"},
+        body={"payload": {}},
+        note="cookie-only caller holds no bearer token",
+    ),
+    RouteCase(
+        "POST",
+        "/api/hooks/conversations/{conversation_id}/messages",
+        DENY,
+        expect=401,
+        path_ids={"conversation_id": "conversation"},
+        body={"content": "external note"},
+        note="cookie-only caller holds no bearer token",
+    ),
+    # -- inbound email ------------------------------------------------------
+    # The provider webhook is PUBLIC on the tick's posture: with no
+    # `inbound_email_webhook_secret` configured (the suite's default) it is a
+    # deliberate 503, and the full open-door behaviour — wrong secret 401,
+    # unknown token writes nothing, foreign probes cannot land rows — is
+    # pinned in test_inbound_email.py. The management routes are the api-token
+    # posture: mint names a *space* in the body, and planting another tenant's
+    # space id must 404 before the domain check could say anything else.
+    RouteCase(
+        "POST",
+        "/api/hooks/email/inbound",
+        PUBLIC,
+        body={
+            "recipient": "inbox+not-a-real-token-at-all@mail.grain.test",
+            "sender": "probe@example.com",
+            "subject": "isolation probe",
+            "text": "probe body",
+            "message_id": "<isolation-probe@example.com>",
+        },
+    ),
+    RouteCase("GET", "/api/inbound-addresses", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/inbound-addresses",
+        DENY,
+        body={"label": "isolation probe", "target_space_id": ""},
+        body_ids={"target_space_id": "space"},
+        note="files another tenant's space as a mail target",
+    ),
+    RouteCase(
+        "POST",
+        "/api/inbound-addresses/{address_id}/revoke",
+        DENY,
+        path_ids={"address_id": "inbound_address"},
+        note="silences (and confirms) another tenant's mail-in address",
+    ),
+    # -- outbound webhooks --------------------------------------------------
+    # Create takes no foreign id (the URL is the owner's own choice — a DNS
+    # failure in a hermetic run answers 422, never 500); update/delete name an
+    # endpoint and must 404 on another tenant's, or one workspace could
+    # redirect (or silence) another's event stream.
+    RouteCase("GET", "/api/webhooks", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/webhooks",
+        SCOPED,
+        body={
+            "name": "isolation probe",
+            "url": "https://api.github.com/probe-sink",
+            "events": ["run.completed"],
+        },
+    ),
+    RouteCase("GET", "/api/webhooks/deliveries", SCOPED),
+    RouteCase(
+        "PUT",
+        "/api/webhooks/{endpoint_id}",
+        DENY,
+        path_ids={"endpoint_id": "webhook_endpoint"},
+        body={"enabled": False},
+        note="redirects or silences another tenant's event stream",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/webhooks/{endpoint_id}",
+        DENY,
+        path_ids={"endpoint_id": "webhook_endpoint"},
     ),
     # -- database connections ---------------------------------------------
     RouteCase("GET", "/api/db/connections", SCOPED),
@@ -2275,6 +2815,33 @@ ROUTE_CASES: List[RouteCase] = [
     # resource to point it at, and with WORKFLOW_CRON_SECRET unset (as it is
     # here) it refuses outright. See api/workflows.py:tick.
     RouteCase("POST", "/api/workflows/tick", PUBLIC),
+    # -- workflow templates ------------------------------------------------
+    RouteCase("GET", "/api/workflow-templates", SCOPED),
+    # The foreign id rides in the body: snapshotting another tenant's workflow
+    # would copy its graph — tool names, prompts, arguments — into a row the
+    # caller can then read at leisure.
+    RouteCase(
+        "POST",
+        "/api/workflow-templates",
+        DENY,
+        body={"name": "stolen", "from_workflow_id": ""},
+        body_ids={"from_workflow_id": "workflow"},
+        note="templates another tenant's automation",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/workflow-templates/{template_id}",
+        DENY,
+        path_ids={"template_id": "workflow_template"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/workflow-templates/{template_id}/instantiate",
+        DENY,
+        path_ids={"template_id": "workflow_template"},
+        body={"name": ""},
+        note="copies another tenant's automation into a runnable workflow",
+    ),
     # -- crons -------------------------------------------------------------
     # A cron id is worth as much as a workflow id: naming another tenant's
     # automation would let you read its prompt, fire it unattended, or delete it.
@@ -2314,6 +2881,46 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase("DELETE", "/api/crons/{cron_id}", DENY, path_ids={"cron_id": "cron"}),
     RouteCase(
         "POST", "/api/crons/{cron_id}/run-now", DENY, path_ids={"cron_id": "cron"}
+    ),
+    # -- monitors ----------------------------------------------------------
+    # The cron posture, plus one sharper case: create names a *dataset* in the
+    # body, and planting another tenant's dataset id must 404 before any
+    # validation detail could confirm the id — a monitor is a standing read of
+    # that dataset, so building one over foreign data is the whole attack.
+    RouteCase("GET", "/api/monitors", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/monitors",
+        DENY,
+        body={
+            "name": "stolen watch",
+            "dataset_id": "",
+            "query": {"metrics": [{"operation": "count", "label": "rows"}]},
+            "comparator": "gt",
+            "threshold": 0,
+            "schedule_cron": "0 9 * * *",
+            "schedule_timezone": "UTC",
+        },
+        body_ids={"dataset_id": "dataset"},
+        note="builds a standing read over another tenant's dataset",
+    ),
+    RouteCase(
+        "PUT",
+        "/api/monitors/{monitor_id}",
+        DENY,
+        path_ids={"monitor_id": "monitor"},
+        body={"enabled": False},
+    ),
+    RouteCase(
+        "DELETE", "/api/monitors/{monitor_id}", DENY, path_ids={"monitor_id": "monitor"}
+    ),
+    # The sharp one: a foreign monitor cannot be evaluated — an evaluation
+    # reads the dataset behind it.
+    RouteCase(
+        "POST",
+        "/api/monitors/{monitor_id}/run-now",
+        DENY,
+        path_ids={"monitor_id": "monitor"},
     ),
     # -- integrations ------------------------------------------------------
     RouteCase("GET", "/api/integrations", SCOPED),

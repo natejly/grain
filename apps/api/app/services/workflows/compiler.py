@@ -58,7 +58,8 @@ Reply with one JSON object and nothing else. No prose, no code fence.
 {{
   "name": "short human name",
   "description": "one sentence",
-  "trigger": {{"kind": "manual" | "schedule", "cron": "5-field cron", "timezone": "IANA zone"}},
+  "trigger": {{"kind": "manual" | "schedule" | "webhook", "cron": "5-field cron",
+    "timezone": "IANA zone"}},
   "inputs": [
     {{"name": "slug", "type": "string" | "number" | "integer" | "boolean" | "object" | "array",
       "label": "What a person is asked", "description": "help text",

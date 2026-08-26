@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind } from "@workspace/api-client";
-import { BarChart3, CircleDot, Columns2, LogOut, Menu, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
+import { BarChart3, CircleDot, Columns2, LogOut, Menu, MessageSquareText, Pencil, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
@@ -12,6 +12,7 @@ import { CreateMenu } from "./create-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
 import { SystemStatus } from "./system-status";
 import { useWorkspace } from "./use-workspace";
+import { actionableApprovals } from "./views/approval-format";
 import { InboxView, asCall } from "./views/inbox";
 import { AdminView } from "./views/admin";
 import { DatasetsView } from "./views/datasets";
@@ -23,6 +24,7 @@ import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
 import { ChatSplit } from "./views/chat-split";
 import type { DashboardPinning } from "./views/dashboard-pin-bar";
+import { CommentsPanel, type CommentSubject } from "./views/comments";
 import { DashboardEditor } from "./views/dashboard-editor";
 import { DashboardsView } from "./views/dashboards";
 import { DataView } from "./views/data";
@@ -30,6 +32,7 @@ import { DocumentsView } from "./views/documents";
 import { GraphView } from "./views/graph";
 import { IntegrationsView } from "./views/integrations";
 import { McpView } from "./views/mcp";
+import { WebhooksView } from "./views/webhooks";
 import { MemoryView } from "./views/memory";
 import { CHORD_WINDOW_MS, chordEligible, chordTarget } from "./views/chords";
 import {
@@ -57,6 +60,7 @@ import { SourcesView } from "./views/sources";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
 import { CronsView } from "./views/crons";
+import { MonitorsView } from "./views/monitors";
 import { WorkspaceSwitcher } from "./workspace-selection";
 
 export function Workspace() {
@@ -67,9 +71,12 @@ export function Workspace() {
     messages,
     sources,
     spaces,
+    spaceTemplates,
     agentCalls,
     auditEvents,
     inbox,
+    digest,
+    updateDigest,
     createDatasetFromSource,
     createDatasetVersionFromSource,
     graph,
@@ -201,6 +208,8 @@ export function Workspace() {
     removeSandboxSecret,
     selectConversation,
     newConversation,
+    forkThread,
+    undoRun,
     removeConversation,
     decideAgentCall,
     steerActiveRun,
@@ -222,6 +231,7 @@ export function Workspace() {
     unpinDashboard,
     saveDashboardLayout,
     bindDashboardTemplate,
+    duplicateDashboard,
     removeDashboard,
     publishGeneratedApp,
     rollbackGeneratedApp,
@@ -229,6 +239,14 @@ export function Workspace() {
     connectGarminAccount,
     disconnectIntegration,
     syncIntegration,
+    loadComments,
+    addComment,
+    removeComment,
+    loadMembers,
+    resolveMention,
+    resolveAlert,
+    resolveAnomaly,
+    assignApproval,
   } = useWorkspace();
   // Always present: this component only renders inside the authenticated gate.
   const { session, signOut } = useSession();
@@ -276,6 +294,11 @@ export function Workspace() {
   // row state) so exactly one rename can be open at a time.
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+
+  // What the comments drawer is about, or null when closed. One subject state
+  // for all three surfaces (thread, document, dashboard) because one drawer
+  // serves them all — the subject pair is the server's own shape.
+  const [commentSubject, setCommentSubject] = useState<CommentSubject | null>(null);
 
   // ⌘K / Ctrl+K, from anywhere — inputs included, which is why this handler
   // exists at the window and preventDefaults: the browser wants the shortcut
@@ -440,6 +463,25 @@ export function Workspace() {
       >
         <Columns2 size={13} />
       </button>
+      {/* Comments ride only the OPEN thread, like rename and share: the drawer
+          is about the thread you are looking at, not any row you can reach. */}
+      {activeConversation === conversation.id && (
+        <button
+          className="thread-comments"
+          title="Comments on this thread"
+          aria-label={`Comments on ${conversation.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setCommentSubject({
+              kind: "conversation",
+              id: conversation.id,
+              label: conversation.title,
+            });
+          }}
+        >
+          <MessageSquareText size={13} />
+        </button>
+      )}
       <button
         className="thread-delete"
         title="Delete chat"
@@ -542,8 +584,21 @@ export function Workspace() {
   // (requests waiting on a human), and sleeping through one does not make it
   // stop waiting. Only the nag surfaces — the strip below and the Inbox's
   // approvals tab — honour a snooze.
+  // An approval routed to a colleague is *their* wait, so it neither counts
+  // here nor previews in the strip — it still lists in the Inbox, dimmed.
+  const selfId = bootstrap?.identity.user_id ?? "";
+  const waitingOnMe = inbox ? actionableApprovals(inbox.approvals, selfId) : [];
   const inboxBadge = inbox
-    ? inbox.approvals.length + inbox.budget_holds.length
+    ? waitingOnMe.length +
+      inbox.budget_holds.length +
+      inbox.mentions.length +
+      // Monitor alerts wait on a human too — '' -targeted, so they wait on
+      // every member until one resolves them for the room.
+      inbox.alerts.length +
+      // Spend anomalies are the same broadcast shape: a workspace fact
+      // waiting for anyone to acknowledge it. Left out of this sum they
+      // would be invisible on the rail — the founding bug of this badge.
+      inbox.anomalies.length
     : pendingApprovals.length;
 
   // The Inbox's "Later" schedule, re-read whenever the feed refreshes, the
@@ -560,9 +615,7 @@ export function Workspace() {
     rereadSnoozes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inbox, view]);
-  const waitingRows = inbox
-    ? inbox.approvals.filter((row) => !snoozedApprovals.has(row.id))
-    : [];
+  const waitingRows = waitingOnMe.filter((row) => !snoozedApprovals.has(row.id));
 
   /** One rail/drawer destination button; `wide` is the mobile drawer's shape. */
   const renderGroupButton = (group: (typeof RAIL_GROUPS)[number], wide: boolean) => {
@@ -853,7 +906,7 @@ export function Workspace() {
         />
       )}
 
-      <main className="main-panel">
+      <main id="main-content" className="main-panel">
         <ApiHealthBanner api={api} health={health} />
         <header className="topbar">
           <button
@@ -880,7 +933,12 @@ export function Workspace() {
           </div>
           <div className="topbar-actions">
             <CreateMenu create={create} />
-            <WorkspaceSettingsMenu activeGroup={activeGroup.id} open={openGroup} />
+            <WorkspaceSettingsMenu
+              activeGroup={activeGroup.id}
+              open={openGroup}
+              digest={digest}
+              onDigestChange={(prefs) => void updateDigest(prefs)}
+            />
             <ThemeToggle />
             {/* The screen and provider pills, folded into one popover: the
                 facts they spelt out are posture, not news, and belong behind a
@@ -993,6 +1051,8 @@ export function Workspace() {
                   detach: detachSkill,
                   setArg: setSkillArg,
                 }}
+                fork={forkThread}
+                undo={undoRun}
               />
             }
           />
@@ -1102,9 +1162,17 @@ export function Workspace() {
             unpinDashboard={unpinDashboard}
             saveDashboardLayout={saveDashboardLayout}
             bindDashboardTemplate={bindDashboardTemplate}
+            duplicateDashboard={duplicateDashboard}
             removeDashboard={removeDashboard}
             focused={focusedDashboard}
             setFocused={setFocusedDashboard}
+            openComments={(dashboard) =>
+              setCommentSubject({
+                kind: "dashboard",
+                id: dashboard.id,
+                label: dashboard.name,
+              })
+            }
             chat={{
               agentId: bootstrap?.default_agent_id,
               sources,
@@ -1150,6 +1218,13 @@ export function Workspace() {
             saveDocument={saveDocument}
             restoreVersion={restoreDocumentVersion}
             removeDocument={removeDocument}
+            openComments={(document) =>
+              setCommentSubject({
+                kind: "document",
+                id: document.id,
+                label: document.title,
+              })
+            }
             pendingEdits={pendingEdits}
             decidePendingEdit={decidePendingEdit}
             chat={{
@@ -1220,6 +1295,7 @@ export function Workspace() {
         {view === "spaces" && (
           <SpacesView
             spaces={spaces}
+            spaceTemplates={spaceTemplates}
             conversations={conversations}
             sources={sources}
             setError={setError}
@@ -1254,6 +1330,12 @@ export function Workspace() {
             fetched here rather than at page load. */}
         {view === "crons" && <CronsView setError={setError} />}
 
+        {/* Self-contained like CronsView, but the dataset picker reads the
+            shell's datasets list — the same rows the Datasets page shows. */}
+        {view === "monitors" && (
+          <MonitorsView setError={setError} datasets={datasets} />
+        )}
+
         {view === "mcp" && (
           <McpView
             servers={mcpServers}
@@ -1282,6 +1364,11 @@ export function Workspace() {
           />
         )}
 
+        {/* Self-contained like CronsView: tokens and endpoints are owner
+            configuration, fetched when the settings page opens and never at
+            page load. */}
+        {view === "webhooks" && <WebhooksView setError={setError} />}
+
         {view === "activity" && (
           <InboxView
             feed={inbox}
@@ -1291,6 +1378,39 @@ export function Workspace() {
             activeRun={activeRun}
             openConversation={(id) => void selectConversation(id)}
             onSnoozesChanged={rereadSnoozes}
+            resolveMention={resolveMention}
+            resolveAlert={resolveAlert}
+            openMonitors={() => setView("monitors")}
+            resolveAnomaly={resolveAnomaly}
+            // Where this reader can act on spend: owners get the usage panel
+            // on Admin; a member cannot see that page, so they land on the
+            // Agents view the anomaly is about.
+            openSpending={() =>
+              setView(
+                bootstrap?.identity.role === "owner" ? "admin" : "agents",
+              )
+            }
+            identityId={selfId}
+            loadMembers={loadMembers}
+            assignApproval={assignApproval}
+            openMention={(mention) => {
+              // The deep link in precedence order: the thread the comment sits
+              // on, else the document, else the dashboard (revealed the way the
+              // rail reveals a pin).
+              if (mention.conversation_id) {
+                void selectConversation(mention.conversation_id);
+                return;
+              }
+              if (mention.document_id) {
+                void openDocument(mention.document_id);
+                setView("documents");
+                return;
+              }
+              if (mention.dashboard_id) {
+                setFocusedDashboard(mention.dashboard_id);
+                setView("dashboards");
+              }
+            }}
           />
         )}
 
@@ -1313,6 +1433,21 @@ export function Workspace() {
           onCreated={setEditing}
           onClose={() => setEditing(null)}
           setError={setError}
+        />
+      )}
+
+      {commentSubject && (
+        <CommentsPanel
+          subject={commentSubject}
+          close={() => setCommentSubject(null)}
+          ops={{
+            load: loadComments,
+            add: addComment,
+            remove: removeComment,
+            loadMembers,
+          }}
+          currentUserId={session?.user_id ?? ""}
+          isOwner={bootstrap?.identity.role === "owner"}
         />
       )}
 

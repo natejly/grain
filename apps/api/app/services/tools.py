@@ -32,12 +32,24 @@ def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
-def validate_public_https_url(url: str, settings: Settings) -> None:
+def validate_public_https_url(
+    url: str, settings: Settings, *, require_allowlist: bool = True
+) -> None:
+    """HTTPS-only, allowlisted (by default), and never a blocked network.
+
+    `require_allowlist=False` is for destinations a workspace OWNER configured
+    by hand — outbound webhook endpoints — where the allowlist would be policy
+    theatre: the owner chose the host, and the thing still worth refusing is
+    the scheme and the internal address space. Model- or document-supplied
+    URLs must never pass False here.
+    """
     parsed = urlparse(url)
     if parsed.scheme != "https":
         raise ToolSecurityError("Only HTTPS tool destinations are allowed")
     host = (parsed.hostname or "").lower().rstrip(".")
-    if not host or host not in settings.allowed_tool_hosts:
+    if not host:
+        raise ToolSecurityError("Tool destination is not on the host allowlist")
+    if require_allowlist and host not in settings.allowed_tool_hosts:
         raise ToolSecurityError("Tool destination is not on the host allowlist")
     try:
         addresses = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)

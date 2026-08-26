@@ -102,6 +102,75 @@ Backend landed 2026-08-22 for Phase 5 (web halves pending):
   0046); its 0046 upgrade guard and one E501 were fixed from here and the
   session notified. Its remaining red tests (harness registry ×3, delegation
   db.get review) are theirs.
+# Feature sweep (started 2026-08-22, ultracode)
+
+Scope approved by user: everything from the 2026-08-22 brainstorm EXCEPT agent
+eval suites (deferred — see "Later in line" below). Build order is by
+dependency: internal reuse first, then Inbox-integrated features, then the
+egress tier (mail service, share links, webhooks) last since it needs new
+infra. Each feature lands with migration guards, route-table/tenant-isolation
+cases, unit tests, and its own commit.
+
+- [x] 1. Templates: space templates + duplicate dashboard + workflow templates
+- [x] 2. Thread forking: branch a conversation from any message
+- [x] 3. Comments & @mentions on documents/dashboards/threads → Inbox
+- [x] 4. Assignable approvals: route an approval to a member; Inbox "assigned"
+- [x] 5. Metric monitors: dataset/typed-query threshold trips → Inbox alerts
+- [x] 6. Run undo: revert a run's write-tool effects from recorded state
+- [x] 7. Per-agent cost attribution + spend anomaly flags → Inbox
+      (model_usage.agent_id bound in the agent-loop usage scope; admin usage
+      by_agent axis; hourly spend watch on the tick claiming via the new
+      shared sweep_claims table — reused by F13; anomalies are their own
+      Inbox list + badge term, resolved via the shared notification route)
+- [x] 8. Mail service abstraction (console/dev fallback, SMTP config) — infra
+      for 9/11/12
+      (HTML support: OutboundEmail.html '' -unset; SMTP sender upgrades to
+      multipart/alternative, console sender stays text-only; pure inline-CSS
+      helpers services/mail_render.py render_table/render_link_button with
+      html.escape on every interpolation — consumed by F10/F13; config
+      guards untouched; tests in test_mail_render.py)
+- [x] 9. Share links: revocable read-only public URLs (dashboard/document)
+      (scoped to dashboards + documents, NOT artifacts: published apps
+      already have their own public surface at /published/apps/{slug};
+      share_links stores sha256 only, raw token in the 201 exactly once —
+      blank on idempotent replay; GET /shared/{token} is PUBLIC and
+      fail-closed 404 for unknown/revoked/expired/deleted, dashboards
+      re-queried LIVE server-side; web page app/share/[token], modal on
+      Dashboards + Documents)
+- [x] 10. Dashboard subscriptions: scheduled snapshot delivery
+      (0052_dashboard_subscriptions; per-member recipient validated as a
+      workspace member — subscribing someone else needs the owner role, and
+      the membership is re-checked at send so a departed member stops
+      receiving; the tick only CLAIMS (day-wide "not yet fired in this
+      period" window, so a late ticker still delivers today's mail once) and
+      the live query + HTML render (mail_render) + SMTP run on a background
+      task per the F5 QA note; skips audit dashboard.subscription_skipped;
+      subscribe modal on Dashboards rows + read-only list on Schedules)
+- [x] 11. Outbound webhooks + API tokens (trigger workflow / post to thread;
+      event push) — DONE 2026-08-25 (api_tokens mirrors upstream ed7195b for
+      the merge, revoke is upstream's DELETE; get_token_actor beside
+      get_actor; /api/hooks trigger runs at WORKFLOW scope; deliveries
+      claimed in tick, sent signed on background tasks, 3 attempts;
+      "API & Webhooks" settings view)
+- [x] 12. Inbound email → thread (provider-webhook endpoint, pairs with Rules)
+      (0054_inbound_email; POST /api/hooks/email/inbound on the tick's
+      bearer posture, hashed inbox+token@domain routing addresses minted
+      owner-only, delivery = personal thread + user message with NO agent
+      turn, message_id idempotency; "Email in" card in API & Webhooks)
+- [x] 13. Notification digests: daily pending-approvals email per member
+      (0055_digests membership columns; waiting-set queries extracted to
+      services/inbox_feed.py shared by GET /api/inbox and the digest; tick
+      claims hourly via sweep_claims + per-member digest_last_sent_at
+      period-start UPDATE, render/send on background tasks per the F5 QA
+      note; PUT /api/me/digest + bootstrap exposure; settings-menu toggle
+      and hour picker)
+- [ ] Full gate: make lint, pytest, pnpm test, pnpm build, e2e
+
+## Later in line (explicitly deferred by user 2026-08-22)
+
+- [ ] Agent eval suites: save real threads as fixtures, replay against an
+      edited agent, diff transcripts (productize the scripted/hermetic
+      harness + memory-eval gate patterns). Do AFTER the feature sweep above.
 
 # Frontend redesign: "Foyer"
 
@@ -892,3 +961,33 @@ was timing:
       reconverges the waiting strip from fresh truth.
 - [x] Verify: full playwright suite 72 passed / 0 failed (first fully
       green run; 3.0m, down from 7.4m of timeout stalls).
+## Merge notes (feature-sweep, 2026-08-23)
+
+- MIGRATION RENUMBERING (QA finding #1, do at merge time): this branch's
+  migration chain 0045–0055 must be renumbered onto the then-current head at
+  merge. Last common revision is 0044_conversation_index; mainline
+  feat/agentic-workspace and bg/marketplace-todo both claimed 0045+
+  independently (mainline: 0045_conversation_defaults → 0046_model_usage_agent
+  → 0047_favorites; marketplace: 0045_marketplace → 0046_listing_installs).
+  Whoever merges second re-parents their whole chain (rename files, update
+  revision/down_revision pairs) and coordinates with the marketplace session so
+  both don't take the same slots.
+
+Known follow-ups deferred from the F3 QA review:
+
+- QA #5: no caps/pagination on comment POST volume (50 mentions x 10KB bodies)
+  or GET /api/inbox — member-DoS surface; fold into the F13 digests/inbox work.
+- QA #9: comment-create TOCTOU between resolve_visible and commit on a
+  concurrent un-share, and an N+1 resolve_visible per mention (bounded at 50)
+  — revisit if mention fan-out grows.
+- QA #10: mention chips in comment-format.ts re-derive from current member
+  names, so a rename leaves stale chip text — cosmetic only.
+
+Design consideration from the F5 QA review, for the F13 digests agent:
+
+- F5 QA #10: monitor evaluation (workflows.py tick, monitors step) runs inline
+  DuckDB inside the shared tick request — slow monitors delay workflow/cron
+  dispatch behind them. F13 must not add more heavy inline work to the tick:
+  digests should render/send via the background-enqueue path (or keep per-tick
+  work strictly bounded), and a future fix could move monitor evaluation there
+  too.

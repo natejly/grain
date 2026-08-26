@@ -1,21 +1,27 @@
 "use client";
 
 import {
+  AtSign,
+  Bell,
   Check,
   CircleDollarSign,
   Clock,
   ExternalLink,
   Inbox as InboxIcon,
   RefreshCw,
+  TrendingUp,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentToolCall,
   AuditEvent,
   InboxApproval,
   InboxFeed,
+  InboxMention,
+  WorkspaceMember,
 } from "@workspace/api-client";
+import { assigneeName, partitionApprovals } from "./approval-format";
 import type { ToolDecision } from "./chat";
 import { RulesTable } from "./policies";
 import { ProposalDiff } from "./proposal-diff";
@@ -69,9 +75,40 @@ export type InboxViewProps = {
    * ringing the doorbell beside the very tab that put it off.
    */
   onSnoozesChanged?: () => void;
+  /** Flip a mention out of the waiting set; the caller re-reads the feed. */
+  resolveMention: (notificationId: string) => Promise<void>;
+  /** Jump to whatever a mention deep-links: its thread, document or dashboard. */
+  openMention: (mention: InboxMention) => void;
+  /** Flip a monitor alert out of the waiting set — for the whole room, since
+   * an alert is '' -targeted and every member sees the same row. */
+  resolveAlert: (notificationId: string) => Promise<void>;
+  /** Jump to the Monitors view, where the tripped monitor is defined. */
+  openMonitors: () => void;
+  /** Flip a spend anomaly out of the waiting set — broadcast, like alerts. */
+  resolveAnomaly: (notificationId: string) => Promise<void>;
+  /** Jump to where this reader can act on spend: the admin usage panel for an
+   * owner, the Agents view for everyone else. */
+  openSpending: () => void;
+  /** The signed-in member's user id — what splits the queue into "assigned to
+   * you" vs the rest. "" until bootstrap's first read lands. */
+  identityId: string;
+  /** The workspace member list for the assignee control (the same list the
+   * @-picker reads; every member may see it). */
+  loadMembers: () => Promise<WorkspaceMember[]>;
+  /** Route one approval to a member, or back to anyone with "". */
+  assignApproval: (callId: string, userId: string) => Promise<boolean>;
 };
 
-type Section = "approvals" | "snoozed" | "holds" | "runs" | "history" | "rules";
+type Section =
+  | "approvals"
+  | "snoozed"
+  | "holds"
+  | "mentions"
+  | "alerts"
+  | "anomalies"
+  | "runs"
+  | "history"
+  | "rules";
 
 const ORIGIN_LABELS: Record<string, string> = {
   chat: "Chat",
@@ -112,6 +149,7 @@ export function asCall(row: InboxApproval): AgentToolCall {
     latency_ms: 0,
     proposal_preview: row.proposal_preview,
     approved_by_mode: "",
+    assigned_to: row.assigned_to,
     artifacts: [],
     created_at: row.created_at,
   };
@@ -126,6 +164,10 @@ function ApprovalRow({
   onSnooze,
   snoozedUntil,
   onUnsnooze,
+  selfId,
+  members,
+  assign,
+  dimmed,
 }: {
   row: InboxApproval;
   decide: ToolDecision;
@@ -137,6 +179,11 @@ function ApprovalRow({
   /** ISO wake time — set on rows rendered in the Later tab, with the way back. */
   snoozedUntil?: string;
   onUnsnooze?: () => void;
+  selfId: string;
+  members: WorkspaceMember[];
+  assign: (callId: string, userId: string) => Promise<boolean>;
+  /** True in the "assigned to others" group — their wait, not this reader's. */
+  dimmed?: boolean;
 }) {
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -174,12 +221,25 @@ function ApprovalRow({
     }
   }
 
+  async function route(userId: string) {
+    setBusy(true);
+    try {
+      await assign(row.id, userId);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const classNames = [
+    "approval-card",
+    focused ? "focused" : "",
+    dimmed ? "assigned-away" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <article
-      ref={ref}
-      className={focused ? "approval-card focused" : "approval-card"}
-      data-call-id={row.id}
-    >
+    <article ref={ref} className={classNames} data-call-id={row.id}>
       <div className="approval-card-top">
         <div className="tool-glyph">
           <InboxIcon size={17} />
@@ -258,6 +318,32 @@ function ApprovalRow({
           )}
         </p>
       )}
+      <label className="approval-assignee">
+        Waiting on
+        <select
+          value={row.assigned_to}
+          disabled={busy}
+          aria-label={`Assign ${row.name} to a member`}
+          onChange={(event) => void route(event.target.value)}
+        >
+          <option value="">Anyone</option>
+          {members.map((member) => (
+            <option key={member.user_id} value={member.user_id}>
+              {member.user_id === selfId ? `${member.name} (you)` : member.name}
+            </option>
+          ))}
+          {/* A row routed to someone the list no longer names (a departed
+              member) still has to render its truth rather than "Anyone". */}
+          {row.assigned_to &&
+            !members.some((member) => member.user_id === row.assigned_to) && (
+              <option value={row.assigned_to}>
+                {assigneeName(row.assigned_to, members)}
+              </option>
+            )}
+        </select>
+      </label>
+      {/* An assigned-away row's decision belongs to its assignee — the server
+          would 409 either button, so neither is offered as pressable. */}
       <div className={onSnooze ? "decision-buttons with-snooze" : "decision-buttons"}>
         {onSnooze && (
           <button
@@ -271,13 +357,18 @@ function ApprovalRow({
             Later
           </button>
         )}
-        <button disabled={busy} onClick={() => void choose("denied")}>
+        <button
+          disabled={busy || dimmed}
+          title={dimmed ? "Waiting on its assignee" : undefined}
+          onClick={() => void choose("denied")}
+        >
           <X size={15} />
           Deny
         </button>
         <button
           className="approve"
-          disabled={busy}
+          disabled={busy || dimmed}
+          title={dimmed ? "Waiting on its assignee" : undefined}
           onClick={() => void choose("approved")}
         >
           <Check size={15} />
@@ -300,12 +391,55 @@ export function InboxView({
   activeRun,
   openConversation,
   onSnoozesChanged,
+  resolveMention,
+  openMention,
+  resolveAlert,
+  openMonitors,
+  resolveAnomaly,
+  openSpending,
+  identityId,
+  loadMembers,
+  assignApproval,
 }: InboxViewProps) {
   const [section, setSection] = useState<Section>("approvals");
   const [focusIndex, setFocusIndex] = useState(0);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
 
-  const approvals = feed?.approvals ?? [];
+  // The assignee control needs names once, not per keystroke; the same
+  // member-visible list the @-picker reads.
+  useEffect(() => {
+    let cancelled = false;
+    void loadMembers().then((rows) => {
+      if (!cancelled) setMembers(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Triage order: yours first, then anyone's, then — de-emphasized, at the
+  // bottom — the rows routed to colleagues. The flattened order is what J/K
+  // walk, so the keyboard and the page cannot disagree about "next". Memoised
+  // because the flattened array is a dependency of the keyboard effect.
+  const feedApprovals = feed?.approvals;
+  const buckets = useMemo(
+    () => partitionApprovals(feedApprovals ?? [], identityId),
+    [feedApprovals, identityId],
+  );
+  const approvals = useMemo(
+    () => [...buckets.mine, ...buckets.unassigned, ...buckets.others],
+    [buckets],
+  );
+  // Rows a colleague is waiting on sit at the end of the flat array; only the
+  // prefix is this reader's to act on — deciding an assigned-away row is a
+  // guaranteed 409, so the keyboard walk stops before them and their buttons
+  // are disabled.
+  const actionableCount = buckets.mine.length + buckets.unassigned.length;
   const holds = feed?.budget_holds ?? [];
+  const mentions = feed?.mentions ?? [];
+  const alerts = feed?.alerts ?? [];
+  const anomalies = feed?.anomalies ?? [];
   const runs = feed?.recent_runs ?? [];
 
   /**
@@ -368,6 +502,9 @@ export function InboxView({
       } else if (event.key === "a" || event.key === "A" || event.key === "d" || event.key === "D") {
         const row = waiting[focusIndex];
         if (!row) return;
+        // An assigned-away row's decision belongs to its assignee — the server
+        // would 409 either button, so the keyboard walk refuses to decide it.
+        if (row.assigned_to && row.assigned_to !== identityId) return;
         const decision = event.key.toLowerCase() === "a" ? "approved" : "denied";
         void decide(asCall(row), decision, false).then(refreshFeed);
       }
@@ -384,6 +521,9 @@ export function InboxView({
     { id: "approvals", label: "Needs approval", count: waiting.length },
     { id: "snoozed", label: "Later", count: snoozed.length },
     { id: "holds", label: "Budget holds", count: holds.length },
+    { id: "mentions", label: "Mentions", count: mentions.length },
+    { id: "alerts", label: "Alerts", count: alerts.length },
+    { id: "anomalies", label: "Spend", count: anomalies.length },
     { id: "runs", label: "Runs" },
     { id: "history", label: "History" },
     // The ledger the "always allow" checkbox above writes into — one
@@ -444,23 +584,69 @@ export function InboxView({
                 Oldest first. <kbd>J</kbd>/<kbd>K</kbd> to move, <kbd>A</kbd> approve,{" "}
                 <kbd>D</kbd> deny.
               </p>
-              {waiting.map((row, index) => (
-                <ApprovalRow
-                  key={row.id}
-                  row={row}
-                  decide={decide}
-                  focused={index === focusIndex}
-                  onOpen={
-                    row.conversation_id
-                      ? () => openConversation(row.conversation_id)
-                      : undefined
-                  }
-                  onDecided={refreshFeed}
-                  onSnooze={() =>
-                    persistSnoozes(addSnooze(snoozes, row.id, nextMorning(new Date())))
-                  }
-                />
-              ))}
+              {(() => {
+                const groups = [
+                  {
+                    label: "Assigned to you",
+                    rows: buckets.mine.filter((row) => !asleep.has(row.id)),
+                  },
+                  {
+                    label: "Unassigned",
+                    rows: buckets.unassigned.filter((row) => !asleep.has(row.id)),
+                  },
+                  {
+                    label: "Assigned to others",
+                    rows: buckets.others.filter((row) => !asleep.has(row.id)),
+                  },
+                ] as const;
+                const showHeader =
+                  groups[0].rows.length + groups[2].rows.length > 0;
+                let offset = 0;
+                return groups.map((group) => {
+                  const groupOffset = offset;
+                  offset += group.rows.length;
+                  if (group.rows.length === 0) return null;
+                  return (
+                    <div key={group.label} className="approval-group">
+                      {showHeader && (
+                        <h2
+                          className={
+                            group.label === "Assigned to others"
+                              ? "approval-group-title assigned-away"
+                              : "approval-group-title"
+                          }
+                        >
+                          {group.label}
+                          <span className="approval-count">{group.rows.length}</span>
+                        </h2>
+                      )}
+                      {group.rows.map((row, index) => (
+                        <ApprovalRow
+                          key={row.id}
+                          row={row}
+                          decide={decide}
+                          focused={groupOffset + index === focusIndex}
+                          onOpen={
+                            row.conversation_id
+                              ? () => openConversation(row.conversation_id)
+                              : undefined
+                          }
+                          onDecided={refreshFeed}
+                          onSnooze={() =>
+                            persistSnoozes(
+                              addSnooze(snoozes, row.id, nextMorning(new Date())),
+                            )
+                          }
+                          selfId={identityId}
+                          members={members}
+                          assign={assignApproval}
+                          dimmed={group.label === "Assigned to others"}
+                        />
+                      ))}
+                    </div>
+                  );
+                });
+              })()}
             </>
           )}
         </div>
@@ -537,6 +723,172 @@ export function InboxView({
                   Nothing to approve — the run resumes when a workspace owner raises
                   the ceiling under Settings › Usage &amp; budget.
                 </p>
+              </article>
+            ))
+          )}
+        </div>
+      )}
+
+      {section === "mentions" && (
+        <div className="approval-panel inbox-queue">
+          {mentions.length === 0 ? (
+            <div className="approval-empty">
+              <div>
+                <Check size={18} />
+              </div>
+              <strong>Nobody needs your eyes</strong>
+              <p>Comments that @-mention you appear here until you resolve them.</p>
+            </div>
+          ) : (
+            mentions.map((mention) => {
+              const destination = mention.conversation_id
+                ? "thread"
+                : mention.document_id
+                  ? "document"
+                  : mention.dashboard_id
+                    ? "dashboard"
+                    : "";
+              return (
+                <article key={mention.id} className="approval-card">
+                  <div className="approval-card-top">
+                    <div className="tool-glyph">
+                      <AtSign size={17} />
+                    </div>
+                    <div>
+                      <span>
+                        Mention · waiting{" "}
+                        {formatRelative(mention.created_at).replace(" ago", "")}
+                      </span>
+                      <strong>{mention.title}</strong>
+                    </div>
+                    {destination && (
+                      <button
+                        type="button"
+                        className="ghost-button approval-open"
+                        onClick={() => openMention(mention)}
+                      >
+                        <ExternalLink size={13} />
+                        Open {destination}
+                      </button>
+                    )}
+                  </div>
+                  {mention.body && <p className="inbox-hold-note">{mention.body}</p>}
+                  <div className="decision-buttons">
+                    <button
+                      className="approve"
+                      onClick={() => void resolveMention(mention.id)}
+                    >
+                      <Check size={15} />
+                      Resolve
+                    </button>
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {section === "alerts" && (
+        <div className="approval-panel inbox-queue">
+          {alerts.length === 0 ? (
+            <div className="approval-empty">
+              <div>
+                <Check size={18} />
+              </div>
+              <strong>No monitor has tripped</strong>
+              <p>
+                When a metric monitor crosses its threshold, the alert appears
+                here for every member until someone resolves it.
+              </p>
+            </div>
+          ) : (
+            alerts.map((alert) => (
+              <article key={alert.id} className="approval-card">
+                <div className="approval-card-top">
+                  <div className="tool-glyph">
+                    <Bell size={17} />
+                  </div>
+                  <div>
+                    <span>
+                      Monitor alert · waiting{" "}
+                      {formatRelative(alert.created_at).replace(" ago", "")}
+                    </span>
+                    <strong>{alert.title}</strong>
+                  </div>
+                  {alert.monitor_id && (
+                    <button
+                      type="button"
+                      className="ghost-button approval-open"
+                      onClick={openMonitors}
+                    >
+                      <ExternalLink size={13} />
+                      Open monitors
+                    </button>
+                  )}
+                </div>
+                {alert.body && <p className="inbox-hold-note">{alert.body}</p>}
+                <div className="decision-buttons">
+                  <button
+                    className="approve"
+                    onClick={() => void resolveAlert(alert.id)}
+                  >
+                    <Check size={15} />
+                    Resolve
+                  </button>
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      )}
+
+      {section === "anomalies" && (
+        <div className="approval-panel inbox-queue">
+          {anomalies.length === 0 ? (
+            <div className="approval-empty">
+              <div>
+                <Check size={18} />
+              </div>
+              <strong>Spending looks usual</strong>
+              <p>
+                When an agent runs at several times its own typical spend, the
+                hourly watch flags it here for every member.
+              </p>
+            </div>
+          ) : (
+            anomalies.map((anomaly) => (
+              <article key={anomaly.id} className="approval-card">
+                <div className="approval-card-top">
+                  <div className="tool-glyph">
+                    <TrendingUp size={17} />
+                  </div>
+                  <div>
+                    <span>
+                      Spend anomaly · flagged{" "}
+                      {formatRelative(anomaly.created_at).replace(" ago", "")}
+                    </span>
+                    <strong>{anomaly.title}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-button approval-open"
+                    onClick={openSpending}
+                  >
+                    <ExternalLink size={13} />
+                    Review spending
+                  </button>
+                </div>
+                {anomaly.body && <p className="inbox-hold-note">{anomaly.body}</p>}
+                <div className="decision-buttons">
+                  <button
+                    className="approve"
+                    onClick={() => void resolveAnomaly(anomaly.id)}
+                  >
+                    <Check size={15} />
+                    Resolve
+                  </button>
+                </div>
               </article>
             ))
           )}
