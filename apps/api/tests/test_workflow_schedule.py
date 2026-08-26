@@ -24,12 +24,14 @@ from typing import Any
 import pytest
 from conftest import Identity, create_identity
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 from test_workflow_executor import Probe, graph, install, store, tool_node
 
+from app.clock import utcnow
 from app.config import get_settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import Workflow, WorkflowRun
+from app.models import Run, Workflow, WorkflowRun
 from app.services.workflows import cron_matches, executor, schedule
 
 TEST_BASE_URL = "https://testserver"
@@ -346,6 +348,25 @@ def test_the_tick_also_picks_up_a_run_a_dead_process_left_behind(
     with pytest.raises(Kill):
         executor.advance_run(db, workflow_run)
     orphan(db, workflow_run)
+
+    # The tick recovers EVERY eligible run, not only this one, and earlier
+    # tests in the same session leave their own behind. Those resume through
+    # the probe patched in above, so `probe.calls` was really counting "how
+    # many orphans happened to exist by now" — it passed locally and failed on
+    # CI at 5 == 2, purely on test order.
+    #
+    # Eligible means `status == "queued"`, or `status == "running"` with a
+    # lease that is NULL **or** already past (services/recovery.py). So parking
+    # only the non-NULL leases would miss half the candidates — a NULL lease is
+    # the recoverable case, not the exempt one. Every other run is therefore
+    # given a future lease and taken out of the queued state, leaving exactly
+    # one candidate: the one under test.
+    db.execute(
+        update(Run)
+        .where(Run.id != workflow_run.run_id)
+        .values(lease_expires_at=utcnow() + timedelta(hours=1), status="succeeded")
+    )
+    db.commit()
 
     with _secret(monkeypatch, "correct-horse"):
         with TestClient(app, base_url=TEST_BASE_URL) as client:
