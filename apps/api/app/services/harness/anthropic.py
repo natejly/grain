@@ -357,6 +357,7 @@ class AnthropicHarness:
         evidence: List[Evidence],
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        thinking: bool = False,
     ) -> ModelStep:
         client = _client(settings)
         # Captured once so the usage record is keyed on the model actually
@@ -381,8 +382,17 @@ class AnthropicHarness:
                 kwargs["tools"] = translated_tools
             with client.messages.stream(**kwargs) as stream:
                 for event in stream:
-                    if getattr(event, "type", "") == "text":
+                    event_type = getattr(event, "type", "")
+                    if event_type == "text":
                         yield "delta", getattr(event, "text", "") or ""
+                    elif thinking and event_type == "thinking":
+                        # `thinking` is the *visibility* switch (the loop's
+                        # thinking buffer), mirroring the OpenAI path's
+                        # reasoning summaries. Whether the model thinks at all
+                        # stays steered by effort (`_thinking_kwargs`); with
+                        # the flag off the blocks are still captured below for
+                        # replay, just not streamed to the user.
+                        yield "thinking", getattr(event, "thinking", "") or ""
                 message = stream.get_final_message()
             thinking_items: List[Any] = []
             output: List[Any] = []

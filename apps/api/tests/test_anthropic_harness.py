@@ -104,8 +104,15 @@ def _run_step(
     model: Optional[str] = None,
     effort: Optional[str] = "high",
     final: Any = None,
+    thinking: bool = False,
+    stream_events: Optional[List[Any]] = None,
 ) -> Tuple[_FakeClient, List[Tuple[str, Any]]]:
-    fake = _FakeClient(_FakeStream(_events(), final or _final_message()))
+    fake = _FakeClient(
+        _FakeStream(
+            _events() if stream_events is None else stream_events,
+            final or _final_message(),
+        )
+    )
     monkeypatch.setattr(harness_anthropic, "_client", lambda settings: fake)
     step = AnthropicHarness().build_step(
         _settings(),
@@ -114,6 +121,7 @@ def _run_step(
         evidence=[],
         model=model,
         effort=effort,
+        thinking=thinking,
     )
     events = list(step(input_items, tools or [], instructions))
     return fake, events
@@ -217,6 +225,48 @@ def test_step_yields_deltas_then_exactly_one_completed(monkeypatch):
     assert response.output[1].type == "message"
     assert response.output[1].role == "assistant"
     assert response.output[1].content == [{"type": "output_text", "text": "Hello"}]
+
+
+def _thinking_stream_events() -> List[Any]:
+    return [
+        SimpleNamespace(type="thinking", thinking="mulling", snapshot="mulling"),
+        SimpleNamespace(type="signature", signature="sig-1"),
+        SimpleNamespace(type="text", text="Hello", snapshot="Hello"),
+    ]
+
+
+def test_show_thinking_streams_thinking_deltas(monkeypatch):
+    """The loop passes `thinking=run.show_thinking` on every turn (the merge
+    that added the flag to the protocol broke this harness's signature), so
+    the parameter must be accepted — and with it on, thinking stream events
+    surface as ("thinking", ...) ahead of the answer, mirroring the OpenAI
+    path's reasoning summaries."""
+    _, events = _run_step(
+        monkeypatch,
+        input_items=[{"role": "user", "content": "hi"}],
+        thinking=True,
+        stream_events=_thinking_stream_events(),
+    )
+    kinds = [kind for kind, _ in events]
+    assert kinds == ["thinking", "delta", "completed"]
+    assert events[0][1] == "mulling"
+
+
+def test_thinking_off_still_replays_but_does_not_stream(monkeypatch):
+    """Visibility off is not thinking off: the blocks are still captured for
+    replay (the API refuses a tool continuation without them) — they just
+    never reach the user's stream."""
+    _, events = _run_step(
+        monkeypatch,
+        input_items=[{"role": "user", "content": "hi"}],
+        thinking=False,
+        stream_events=_thinking_stream_events(),
+    )
+    kinds = [kind for kind, _ in events]
+    assert kinds == ["delta", "completed"]
+    response = events[-1][1]
+    assert response.output[0].type == "anthropic_thinking"
+    assert response.output[0].thinking == "private"
 
 
 def test_output_items_survive_a_replay_round_trip(monkeypatch):
