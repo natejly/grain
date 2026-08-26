@@ -80,6 +80,7 @@ export function ResetRoute() {
                     type="password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
+                    name="new-password"
                     autoComplete="new-password"
                     required
                   />
@@ -90,6 +91,7 @@ export function ResetRoute() {
                     type="password"
                     value={confirm}
                     onChange={(event) => setConfirm(event.target.value)}
+                    name="confirm-password"
                     autoComplete="new-password"
                     required
                   />

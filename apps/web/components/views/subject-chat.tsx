@@ -83,7 +83,6 @@ export function SubjectChatPanel({
         budgetPark={thread.budgetPark}
         submitPrompt={thread.submitPrompt}
         cancelActiveRun={thread.cancelActiveRun}
-        steer={thread.steerActiveRun}
         regenerate={thread.regenerate}
         decideAgentCall={thread.decideAgentCall}
         openCitation={openCitation}

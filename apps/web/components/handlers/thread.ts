@@ -235,22 +235,6 @@ export function createThreadHandlers({
     }
   }
 
-  async function steerActiveRun(content: string): Promise<boolean> {
-    if (!activeRun || !content.trim()) return false;
-    setError("");
-    try {
-      await api.steerRun(activeRun, content.trim());
-      // No optimistic transcript row: the server writes the Message, and the
-      // settle-time refetch renders it. The strip's own feedback is enough.
-      setRunStatus("Heard — folding that in");
-      return true;
-    } catch (caught) {
-      setError(describeError(caught, "Could not steer the run"));
-      // False keeps the strip's draft: the error banner is not a clipboard.
-      return false;
-    }
-  }
-
   async function cancelActiveRun() {
     if (!activeRun) return;
     try {
@@ -409,7 +393,9 @@ export function createThreadHandlers({
         }
         if (event.event === "retrieval.completed") {
           const count = Number(event.data.count || 0);
-          setRunStatus(count ? `Using ${count} source passages` : "No matching source");
+          if (count > 0) {
+            setRunStatus(`Using ${count} source passages`);
+          }
         }
         if (event.event === "memory.recalled") {
           const count = Number(event.data.count || 0);
@@ -602,7 +588,6 @@ export function createThreadHandlers({
   return {
     upsertAgentCall,
     decideAgentCall,
-    steerActiveRun,
     cancelActiveRun,
     regenerate,
     editMessage,
