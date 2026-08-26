@@ -35,6 +35,11 @@ alarm_email = "ops@example.com"
 // github_repo        = "ricelabs/grain"
 // Must match the `environment:` name on deploy-prod.yml's deploy job.
 // github_environment = "production"
+// The repo as it appears in the OIDC token's `sub`, numeric ids and all. Read
+// it from a real token — CloudTrail's userName on a denied
+// AssumeRoleWithWebIdentity shows the exact subject — rather than assuming the
+// plain owner/name form. See variables.tf.
+// github_repo_subject = "natejly@141955513/grain@1330287696"
 
 // Anything else on Settings that you want to override, upper-cased field name
 // to value. These are visible to anyone who can DescribeTaskDefinition.
