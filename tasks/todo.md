@@ -1006,12 +1006,16 @@ Account 518060119468, us-east-1, tag 2026-08-25-462f03c. Per docs/DEPLOY-AWS.md.
       issued: .../certificate/104b3405-5f49-4e42-aeae-2599bf16209d
 - [x] tofu init (S3 backend) + targeted apply of ECR repos
 - [x] Sandbox image pushed to grain/sandbox:2026-08-25-462f03c
-- [ ] API image → grain/api:2026-08-25-462f03c (colima Fastly/MTU issue: pypi
+- [x] API image → grain/api:2026-08-25-462f03c (colima Fastly/MTU issue: pypi
       TLS handshake dies behind docker0 NAT; fixed with docker build --network=host)
-- [ ] Full tofu apply
-- [ ] Secrets: OPENAI_API_KEY (from .env), Fernet integrations key; google left placeholder
-- [ ] SSM /grain/sandbox-image + host pull
-- [ ] DNS: api.grain CNAME -> ALB
+- [x] Full tofu apply — everything created EXCEPT aws_instance.app, aws_db_instance.main,
+      aws_ecs_service (AWS account is on the Free plan: m7g.large refused, RDS
+      FreeTierRestrictionError). BLOCKED on account upgrade to paid plan, then re-apply.
+- [x] Secrets: OPENAI_API_KEY (from .env), Fernet integrations key; google left placeholder
+- [x] SSM /grain/sandbox-image (terraform-managed; host pulls at bootstrap)
+- [x] DNS: api.grain CNAME -> grain-api-1869332955.us-east-1.elb.amazonaws.com
+      (CAA moved to apex: CNAME cannot coexist with other records at same name)
 - [ ] Migration task (grain-migrate) exit 0
-- [ ] Vercel: domain grain.natejly.com on grain-web, NEXT_PUBLIC_API_URL at build, redeploy
+- [x] Vercel: grain.natejly.com live on grain-web, NEXT_PUBLIC_API_URL inlined at build
+      (CLI 46 was too old for deploy endpoint; upgraded to 59.5.0)
 - [ ] Health check https://api.grain.natejly.com/health + login smoke
