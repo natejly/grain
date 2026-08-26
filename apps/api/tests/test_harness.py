@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import json
+import textwrap
+from typing import Any, List, Optional, Tuple
 
 import pytest
 from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
-from app.services.harness import HARNESSES, Harness, resolve_harness
+from app.models import Run
+from app.services import agent_loop
+from app.services.harness import HARNESSES, Harness, ModelStep, resolve_harness
 from app.services.harness.openai import OpenAIHarness
 from app.services.harness.scripted import ScriptedHarness
 from app.services.retrieval import Evidence
@@ -209,3 +215,137 @@ def test_registry_keys_only_on_providers_settings_would_boot(scripted_settings):
     # ...and so is anthropic.
     with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY"):
         Settings(_env_file=None, model_provider="anthropic", anthropic_api_key=None)
+
+
+# --- The call site, not the callee -------------------------------------------
+#
+# A harness that accepts `thinking=` proves nothing on its own: the incident
+# fixed in 948fd97 was a TypeError on *every* Anthropic run because the loop
+# passed a keyword the harness had never grown, and a test that only exercised
+# the harness directly stayed green throughout it. What has to be pinned is the
+# join — the arguments `agent_loop` actually writes, the contract `Harness`
+# declares, and the signatures the registered backends ship — so that drift in
+# any one of the three fails here instead of on a user's turn.
+
+
+def _shape(signature: inspect.Signature) -> List[Tuple[str, Any, Any]]:
+    """(name, kind, default) per parameter — the part that decides whether a
+    call binds. Annotations are deliberately excluded: they are strings under
+    `from __future__ import annotations`, and a cosmetic retype must not fail a
+    drift test."""
+    return [
+        (name, parameter.kind, parameter.default)
+        for name, parameter in signature.parameters.items()
+    ]
+
+
+def _call_site_keywords() -> set[str]:
+    """The keyword names `_default_model_step` literally passes to `build_step`.
+
+    Read out of the source rather than restated here, on purpose: a restated
+    list is a second copy that drifts silently, which is the very failure mode
+    under test.
+    """
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(agent_loop._default_model_step))
+    )
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "build_step"
+    ]
+    assert len(calls) == 1, "the loop should resolve one harness and call it once"
+    return {keyword.arg for keyword in calls[0].keywords if keyword.arg}
+
+
+def test_the_loops_call_site_binds_against_the_harness_contract():
+    """Every keyword the loop passes is one the `Harness` protocol accepts.
+
+    This is the direction the incident travelled: the protocol grew `thinking`
+    alongside the loop, and a backend written before it kept a narrower
+    signature.
+    """
+    keywords = _call_site_keywords()
+    assert "thinking" in keywords, "the loop still forwards the show-thinking flag"
+    inspect.signature(Harness.build_step).bind(
+        object(), object(), **{name: object() for name in keywords}
+    )
+
+
+def test_every_registered_harness_has_the_contracts_build_step_shape():
+    """A backend whose `build_step` drifts from the protocol fails here.
+
+    `isinstance` against a runtime-checkable Protocol cannot see this, and
+    neither can a test that calls one backend with arguments it happens to
+    accept: the check has to be that *each registered* harness would bind the
+    same call the loop makes of whichever one is resolved.
+    """
+    contract = _shape(inspect.signature(Harness.build_step))
+    keywords = _call_site_keywords()
+    for name, harness in HARNESSES.items():
+        assert _shape(inspect.signature(type(harness).build_step)) == contract, (
+            f"the {name} harness's build_step has drifted from the Harness protocol"
+        )
+        inspect.signature(harness.build_step).bind(
+            object(), **{keyword: object() for keyword in keywords}
+        )
+
+
+def test_a_real_turn_forwards_show_thinking_through_the_loops_call_site(monkeypatch):
+    """Drive the actual call path, not a reconstruction of it.
+
+    The recorder is held to the protocol's own signature first, so it cannot
+    quietly absorb a keyword a real backend would reject — then the run's
+    `show_thinking` is asserted to arrive as `thinking`, which is the wiring
+    the merge broke.
+    """
+    seen: dict = {}
+
+    class Recorder:
+        name = "recorder"
+
+        def build_step(
+            self,
+            settings: Settings,
+            *,
+            prompt: str,
+            user_id: str,
+            evidence: List[Evidence],
+            model: Optional[str] = None,
+            effort: Optional[str] = None,
+            thinking: bool = False,
+        ) -> ModelStep:
+            seen.update(
+                prompt=prompt,
+                user_id=user_id,
+                model=model,
+                effort=effort,
+                thinking=thinking,
+            )
+            return lambda items, tools, instructions: iter(())
+
+    assert _shape(inspect.signature(Recorder.build_step)) == _shape(
+        inspect.signature(Harness.build_step)
+    )
+    monkeypatch.setattr(agent_loop, "resolve_harness", lambda settings: Recorder())
+
+    run = Run(
+        prompt="who owns the launch?",
+        created_by="alice",
+        requested_model="",
+        requested_effort="",
+        show_thinking=True,
+    )
+    step = agent_loop._default_model_step(_openai_settings(), run, _evidence())
+
+    assert callable(step)
+    assert seen == {
+        "prompt": "who owns the launch?",
+        "user_id": "alice",
+        # "" is the unset convention; the harness sees None and falls back.
+        "model": None,
+        "effort": None,
+        "thinking": True,
+    }
