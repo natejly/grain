@@ -51,6 +51,19 @@ os.environ.setdefault(
     "SCRIPTED_MODEL_SCRIPT",
     str(Path(__file__).parents[1] / "tests" / "scripts" / "agent.json"),
 )
+# And the env that makes the line above legal. `scripted` is gated on APP_ENV
+# being development or test — a deliberate structural refusal, so that a test
+# double can never answer a production request — and `app_env` defaults to
+# "production". Setting the provider without setting this asks Settings for a
+# combination it exists to reject.
+#
+# It ran anyway for a long time because a developer's repo-root `.env` supplies
+# APP_ENV, so the gap was invisible to everyone who had one and fatal to everyone
+# who did not — which is exactly CI, where this harness has been failing on
+# "MODEL_PROVIDER=scripted requires APP_ENV to be development or test" while
+# reading like a config problem with the runner. `setdefault` like its siblings:
+# a real configuration in the environment still wins.
+os.environ.setdefault("APP_ENV", "development")
 
 from app.config import Settings, get_settings  # noqa: E402
 from app.database import Base  # noqa: E402

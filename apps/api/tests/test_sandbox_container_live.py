@@ -94,13 +94,33 @@ def _mount_round_trips() -> bool:
 
     This is a real condition on developer machines. Colima and Lima share only
     `$HOME` by default, while pytest's temp root follows `$TMPDIR` to
-    `/var/folders/...`, which is outside it. Linux CI bind-mounts anything, so
-    this never fires there. Probed with the same `mkdtemp` the fixture's temp root
-    comes from, because the answer depends on *which* path is being shared.
+    `/var/folders/...`, which is outside it. Probed with the same `mkdtemp` the
+    fixture's temp root comes from, because the answer depends on *which* path is
+    being shared.
+
+    The modes below are load-bearing, and their absence is why this used to fire
+    on Linux CI — where, per the paragraph above, it should never fire at all.
+    `mkdtemp` creates 0700 owned by the calling user; the container runs as uid
+    65534. On Docker Desktop the bind mount goes through a VM that flattens
+    ownership, so the probe reads its own file and passes. On native Linux the
+    ownership is real, 65534 cannot traverse a 0700 directory owned by someone
+    else, and `cat` fails — which this function then reported as "the runtime
+    cannot share this path".
+
+    That conflation is the bug: a probe meant to ask whether the RUNTIME shares a
+    directory was actually asking whether an unprivileged user could read one, and
+    under SANDBOX_PROOF_REQUIRED it turned that false negative into a collection
+    error that failed the whole job. Widening to 0755/0644 is what the real driver
+    does for a session root (`local_exec.ensure_session_root`), so the probe now
+    tests the same thing the product does. A failure after this means the mount
+    genuinely did not come through.
     """
     probe_root = Path(tempfile.mkdtemp(prefix="sandbox-mount-probe-"))
     try:
-        (probe_root / "sentinel").write_text("ok", encoding="utf-8")
+        probe_root.chmod(0o755)
+        sentinel = probe_root / "sentinel"
+        sentinel.write_text("ok", encoding="utf-8")
+        sentinel.chmod(0o644)
         completed = subprocess.run(
             [DOCKER, "run", "--rm", "-v", f"{probe_root}:/probe", IMAGE,
              "cat", "/probe/sentinel"],
