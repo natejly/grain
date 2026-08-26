@@ -16,7 +16,7 @@ import {
   writeDrag,
 } from "./board-columns";
 import { glyphFor, isTodoList } from "./todo-format";
-import { TodoChecklist, type TodoOps } from "./todos";
+import { ClaimBadge, TodoChecklist, type TodoOps } from "./todos";
 
 export type BoardViewProps = {
   /** Every board, lists included — this page is the one listing for both. */
@@ -159,12 +159,19 @@ function BoardCanvas({
   moveCard,
   removeCard,
   ops,
+  todoOps,
+  selfId,
 }: {
   board: Board;
   addCard: BoardViewProps["addCard"];
   moveCard: BoardViewProps["moveCard"];
   removeCard: BoardViewProps["removeCard"];
   ops?: BoardColumnOps;
+  // The claim ops are the checklist's, unchanged: a card is a card whichever
+  // shape is drawn around it, and `claimTodoItem` already takes the board it
+  // lives on rather than assuming a list.
+  todoOps?: TodoOps;
+  selfId?: string;
 }) {
   // dataTransfer is unreadable during dragover, so the payload is mirrored in
   // state to decide what the pointer is currently hovering over.
@@ -382,6 +389,21 @@ function BoardCanvas({
                   >
                     <div className="kanban-card-title">{card.title}</div>
                     {card.body && <p>{card.body}</p>}
+                    {/* Above the foot, not in it: a claim says who is working
+                        this card, which outranks its labels and its move
+                        controls. Without it the kanban view was the one
+                        surface where an agent could take a card and have
+                        nowhere to say so. */}
+                    {todoOps && (
+                      <ClaimBadge
+                        item={card}
+                        selfId={selfId ?? ""}
+                        onClaim={() => void todoOps.claimTodoItem(board, card.id)}
+                        onRelease={(force) =>
+                          void todoOps.releaseTodoItem(board, card.id, force)
+                        }
+                      />
+                    )}
                     <div className="kanban-card-foot">
                       {card.labels.map((label) => (
                         <span key={label} className="kanban-label">
@@ -569,6 +591,8 @@ export function BoardView({
                 moveCard={moveCard}
                 removeCard={removeCard}
                 ops={columnOps}
+                todoOps={gatedTodoOps}
+                selfId={selfId}
               />
             </section>
           ),

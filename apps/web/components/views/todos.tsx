@@ -32,8 +32,13 @@ export type TodoOps = {
  * a named chip when held. Who holds it decides the verb — the holder gets
  * "Release", everyone else gets "Take over", which is `force` and is the
  * human override an agent tool does not have.
+ *
+ * Exported because a todo item and a kanban card are the same row: a list is
+ * a board with one column, so both surfaces read the claim lease off the same
+ * `board_cards` columns. One component means the two can never disagree about
+ * who holds a card or which verb is offered for taking it.
  */
-function ClaimBadge({
+export function ClaimBadge({
   item,
   selfId,
   onClaim,

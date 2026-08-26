@@ -10804,3 +10804,18 @@ label,
   font-size: 12px;
   color: var(--red);
 }
+
+/* A claim on a kanban card. The chip itself is `.todo-claim`, shared with the
+   checklist so the two surfaces cannot drift; only its placement differs —
+   here it sits on its own line under the title rather than at a row's edge. */
+.kanban-card .todo-claim {
+  display: inline-flex;
+  margin: 6px 0 0;
+}
+
+/* `.todo-claim.free` is already hidden and already reveals on :focus-visible;
+   the only thing missing for a card is the hover target, since `.todo-item`
+   never wraps one. */
+.kanban-card:hover .todo-claim.free {
+  opacity: 1;
+}
