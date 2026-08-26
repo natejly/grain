@@ -1037,6 +1037,20 @@ Account 518060119468, us-east-1, tag 2026-08-25-462f03c. Per docs/DEPLOY-AWS.md.
 4. `grain.natejly.com` and `uat.grain.natejly.com` were attached and verified in
    the Vercel project but had no DNS record in the Vercel-managed zone — the
    hostnames were NXDOMAIN. Each needs its own CNAME -> cname.vercel-dns.com.
+6. **Signup took 45 seconds.** The app security group allowed egress on 443 and
+   5432 only, so the SMTP connection to SES was blackholed and smtplib waited
+   out its 15s timeout three times (connect, EHLO, login) inside the signup
+   request. `send_quietly` swallows mail *errors*, but a blocked port is not an
+   error. The UI sat on "Working..." and users gave up. Opening 587 took signup
+   from 45.2s to 0.68s. The rule is derived from `extra_environment` so it only
+   exists when EMAIL_SENDER=smtp is configured.
+7. Vercel deployment protection (`all_except_custom_domains`) plus a
+   branch-bound domain made uat.grain.natejly.com redirect to Vercel SSO. The
+   binding had to be cleared for the manual alias to be treated as a custom
+   domain.
+8. `NEXT_PUBLIC_API_URL` is inlined at build time, so a cached Vercel build
+   keeps the old value — a changed env var needs `vercel deploy --force`.
+
 5. `EMAIL_SENDER=console` is refused outside development, and
    `extra_environment` was not merged into the migrate task, so the migration
    could not construct Settings even after SMTP was configured.

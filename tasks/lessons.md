@@ -584,3 +584,22 @@
   rule: when dev is SQLite and prod is PostgreSQL, prove the migration chain
   against a real postgres container before calling a deploy done; one local run
   found it in 90 seconds after three ~10-minute ECS round-trips found it once.
+- A swallowed exception does not protect you from a blocked port. `send_quietly`
+  wraps SMTP in `except Exception` precisely so mail cannot break signup — but a
+  closed security-group egress does not raise, it blackholes the SYN, and
+  smtplib then waits out its 15s timeout for connect, EHLO and login in turn.
+  Signup took 45 seconds and the UI sat on "Working…"; every API-level check I
+  ran passed, because `/health` sends no mail and `curl --max-time 25` cut the
+  request off before it could tell me. Two habits from this: when a request
+  "hangs", measure it with a generous timeout and read the number, and when an
+  app is moved behind a restrictive egress policy, enumerate every outbound port
+  the code can use, not just the ones the happy path needs.
+- Reproduce user-facing bugs in a real browser, not with curl. curl proved
+  signup+login worked at the API; the browser showed the form stuck on
+  "Working…" with the POST sent and no response — the actual complaint. Driving
+  Chromium with Playwright while logging every response and console error found
+  it in one run, and also proved the fix by watching the UI reach the workspace.
+- `NEXT_PUBLIC_*` is inlined at build time, so changing the env var is not
+  enough — a cached Vercel build keeps the old value. Use `vercel deploy
+  --force` after changing one, and verify by reading the deployed page's CSP
+  `connect-src` rather than trusting the dashboard.
