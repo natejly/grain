@@ -31,6 +31,28 @@ jobs:
       - run: npx --yes pnpm@9.15.9 test
       - run: npx --yes pnpm@9.15.9 build
       - run: npx playwright install --with-deps chromium
+
+      # latex-project.spec.ts compiles a real document and asserts a real PDF
+      # comes back. `compile._compile_on_host` is documented "tests and CI only"
+      # — production goes through the container — so CI is the environment that
+      # path exists for, and it was the one environment without a TeX toolchain:
+      # the spec failed on "latexmk is not installed on this host".
+      #
+      # Scoped to what the starter template actually pulls in (fontenc, lmodern,
+      # geometry, amsmath, amssymb, graphicx, natbib, hyperref) rather than
+      # texlive-full, which is several gigabytes to prove one PDF. The container
+      # image is where the broad "most CTAN packages work" claim lives; this only
+      # has to compile the document the spec writes.
+      - name: Install the TeX toolchain the LaTeX e2e spec compiles with
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            latexmk \
+            texlive-latex-base \
+            texlive-latex-recommended \
+            texlive-fonts-recommended \
+            lmodern
+
       - run: npx --yes pnpm@9.15.9 test:e2e
 
       - name: Check OpenAPI contract drift

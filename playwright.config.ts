@@ -1,5 +1,29 @@
 import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
 import { STORAGE_STATE } from "./apps/web/e2e/credentials";
+
+/**
+ * The interpreter that runs the API under test.
+ *
+ * `.venv/bin/python` is the repo's own virtualenv and the right answer on a
+ * developer machine — but it is not the only place a working interpreter lives,
+ * and hardcoding it made two environments unable to run this suite at all:
+ *
+ *   - CI installs the api package with `pip install -e` into the interpreter
+ *     actions/setup-python put on PATH. There is no `.venv` there, so the
+ *     webServer command exited 127 and every spec failed as
+ *     "Process from config.webServer was not able to start" — a message that
+ *     says nothing about a missing interpreter.
+ *   - git worktrees do not get their own `.venv`, so the suite could not be run
+ *     from one without symlinking the venv in by hand.
+ *
+ * Fall back to PATH, and let E2E_PYTHON override for anyone whose interpreter is
+ * somewhere else again. Checked with `existsSync` rather than assumed, because
+ * the venv being present is precisely what varies.
+ */
+const API_PYTHON =
+  process.env.E2E_PYTHON ??
+  (existsSync(".venv/bin/python") ? ".venv/bin/python" : "python3");
 
 export default defineConfig({
   testDir: "./apps/web/e2e",
@@ -24,7 +48,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: ".venv/bin/python apps/api/scripts/serve_e2e.py",
+      command: `${API_PYTHON} apps/api/scripts/serve_e2e.py`,
       url: "http://127.0.0.1:8010/health",
       reuseExistingServer: false,
       timeout: 30_000,
