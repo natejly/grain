@@ -53,7 +53,13 @@ cases, unit tests, and its own commit.
       bearer posture, hashed inbox+token@domain routing addresses minted
       owner-only, delivery = personal thread + user message with NO agent
       turn, message_id idempotency; "Email in" card in API & Webhooks)
-- [ ] 13. Notification digests: daily pending-approvals email per member
+- [x] 13. Notification digests: daily pending-approvals email per member
+      (0055_digests membership columns; waiting-set queries extracted to
+      services/inbox_feed.py shared by GET /api/inbox and the digest; tick
+      claims hourly via sweep_claims + per-member digest_last_sent_at
+      period-start UPDATE, render/send on background tasks per the F5 QA
+      note; PUT /api/me/digest + bootstrap exposure; settings-menu toggle
+      and hour picker)
 - [ ] Full gate: make lint, pytest, pnpm test, pnpm build, e2e
 
 ## Later in line (explicitly deferred by user 2026-08-22)

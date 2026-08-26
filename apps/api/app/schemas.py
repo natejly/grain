@@ -55,12 +55,25 @@ class ScreenStatus(BaseModel):
     backend: Literal["builtin", "proxy"]
 
 
+class DigestStatus(ApiModel):
+    """The caller's daily-digest preference, as their membership row holds it.
+
+    Read here beside the identity it belongs to; written through
+    `PUT /api/me/digest`.
+    """
+
+    enabled: bool
+    hour_utc: int
+
+
 class BootstrapResponse(ApiModel):
     identity: Identity
     feature_flags: Dict[str, bool]
     default_agent_id: str
     model_provider: ModelProviderStatus
     screen: ScreenStatus
+    #: The daily "items waiting on you" mail opt-in for this member.
+    digest: DigestStatus
     #: `DEV_UNRESTRICTED_AGENT` is on: every tool available and nothing parks.
     #: A first-class field rather than a `feature_flags` entry because the client
     #: does not *branch* on it, it *warns* about it — the failure mode is not

@@ -331,6 +331,24 @@ class Membership(Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     role: Mapped[str] = mapped_column(String(24), default="member")
+    #: Opt-in to the daily "items waiting on you" mail (services/digests.py).
+    #: Off by default: unattended email is something a member asks for, never
+    #: something a workspace does to them.
+    digest_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    #: The UTC hour (0-23) after which the digest may go out. An hour rather
+    #: than a cron: the digest is deliberately the simplest possible schedule,
+    #: and "after 9:00 UTC" is one integer a settings menu can offer.
+    digest_hour_utc: Mapped[int] = mapped_column(
+        Integer, default=9, server_default="9"
+    )
+    #: The per-member claim column — the daily-job convention: a send is
+    #: elected by one conditional UPDATE ("not yet advanced past today's
+    #: period start"), so however many ticks land after the hour, one wins.
+    digest_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

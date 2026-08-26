@@ -41,6 +41,7 @@ from ..models import Agent, Workflow, WorkflowNodeRun, WorkflowRun
 from ..schemas import ApiModel
 from ..services import crons as cron_service
 from ..services import dashboard_subscriptions as subscription_service
+from ..services import digests as digest_service
 from ..services import monitors as monitor_service
 from ..services import spend_watch
 from ..services import webhooks as webhook_service
@@ -168,6 +169,11 @@ class WorkflowTickOut(ApiModel):
     #: receipt — the HTTP conversation happens on a background task, and a
     #: failed attempt stays pending for a later tick until the attempt cap.
     webhook_deliveries_dispatched: List[str]
+    #: Memberships whose daily digest this tick claimed (services/digests.py).
+    #: A claim, not a receipt: the waiting-set query, the render and the mail
+    #: run on a background task, and a member with nothing waiting is mailed
+    #: nothing while the claim stands for the day.
+    digests_dispatched: List[str]
     moment: datetime
 
 
@@ -742,6 +748,11 @@ def tick(
     # run on background tasks, and a delivery that fails stays pending for the
     # next tick until services/webhooks.MAX_ATTEMPTS closes it out.
     webhook_delivery_ids = webhook_service.claim_due(db)
+    # Daily digests follow the subscription split exactly: the sweep gates
+    # itself hourly through `sweep_claims`, the per-member conditional UPDATE
+    # on `digest_last_sent_at` elects at most one send per member per day, and
+    # the waiting-set queries + rendering + SMTP all run on background tasks.
+    digest_membership_ids = digest_service.dispatch_due(db)
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
     for workflow_run_id in recovered:
@@ -754,6 +765,8 @@ def tick(
         )
     for delivery_id in webhook_delivery_ids:
         background_tasks.add_task(webhook_service.send_delivery, delivery_id)
+    for membership_id in digest_membership_ids:
+        background_tasks.add_task(digest_service.send_digest, membership_id)
     return WorkflowTickOut(
         dispatched=[workflow_run.id for workflow_run in started],
         recovered=recovered,
@@ -762,5 +775,6 @@ def tick(
         anomalies_flagged=anomaly_ids,
         subscriptions_dispatched=subscription_ids,
         webhook_deliveries_dispatched=webhook_delivery_ids,
+        digests_dispatched=digest_membership_ids,
         moment=schedule.floor_minute(utcnow()),
     )

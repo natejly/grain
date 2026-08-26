@@ -97,6 +97,17 @@ export type ScreenStatus = {
   backend: "builtin" | "proxy";
 };
 
+/**
+ * The caller's daily-digest opt-in, as their membership row holds it. Read on
+ * bootstrap beside the identity it belongs to; written through
+ * `updateDigestPrefs` (PUT /api/me/digest).
+ */
+export type DigestPrefs = {
+  enabled: boolean;
+  /** The UTC hour (0-23) after which the daily mail may go out. */
+  hour_utc: number;
+};
+
 export type Bootstrap = {
   identity: Identity;
   default_agent_id: string;
@@ -116,6 +127,8 @@ export type Bootstrap = {
   };
   /** The prompt-injection screen's posture, for a status indicator. */
   screen: ScreenStatus;
+  /** The caller's daily "items waiting on me" mail opt-in. */
+  digest: DigestPrefs;
   /**
    * The development agent bypass is on: every tool available, nothing parked.
    * The server refuses to boot with this outside development, so it is false
@@ -2352,6 +2365,20 @@ export class WorkspaceApi {
 
   bootstrap(): Promise<Bootstrap> {
     return this.request("/api/bootstrap");
+  }
+
+  /**
+   * Set the caller's own daily-digest opt-in and hour.
+   *
+   * A PUT of the whole preference, so a retry lands on the same state by
+   * construction and no `Idempotency-Key` rides along. Edits the caller's own
+   * membership row — there is no id to pass and nothing here to probe.
+   */
+  updateDigestPrefs(prefs: DigestPrefs): Promise<DigestPrefs> {
+    return this.request("/api/me/digest", {
+      method: "PUT",
+      body: JSON.stringify(prefs),
+    });
   }
 
   listConversations(): Promise<Conversation[]> {

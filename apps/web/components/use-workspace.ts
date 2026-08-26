@@ -11,6 +11,7 @@ import type {
   DashboardTemplate,
   Dataset,
   DbConnection,
+  DigestPrefs,
   DocumentSummary,
   DocumentVersion,
   Folder,
@@ -101,6 +102,10 @@ export function useWorkspace() {
   // behind the rail badge, the sidebar strip and the Inbox page. Null until
   // the first read lands, so "0" is never shown before it is known.
   const [inbox, setInbox] = useState<InboxFeed | null>(null);
+  // The caller's daily-digest opt-in, seeded from bootstrap and replaced with
+  // the server's copy on every change. Null until the first read lands, so the
+  // settings menu never shows a default it is about to contradict.
+  const [digest, setDigest] = useState<DigestPrefs | null>(null);
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -400,6 +405,26 @@ export function useWorkspace() {
     [patchConversation],
   );
 
+  /**
+   * Set the caller's daily-digest opt-in — optimistic so the settings menu's
+   * checkbox answers the click, then replaced with the server's copy; a
+   * refused write puts the previous preference back and surfaces the error.
+   */
+  const updateDigest = useCallback(async (prefs: DigestPrefs) => {
+    setError("");
+    let previous: DigestPrefs | null = null;
+    setDigest((current) => {
+      previous = current;
+      return prefs;
+    });
+    try {
+      setDigest(await api.updateDigestPrefs(prefs));
+    } catch (caught) {
+      setDigest(previous);
+      setError(describeError(caught, "Could not update the daily digest"));
+    }
+  }, []);
+
   /** Rename a thread and replace its rail row with the server's copy. */
   const renameConversation = useCallback(
     async (conversationId: string, title: string) => {
@@ -528,6 +553,7 @@ export function useWorkspace() {
         api.listSandboxTools(),
       ]);
       setBootstrap(boot);
+      setDigest(boot.digest);
       setConversations((current) => {
         const listed = new Set(chats.map((item) => item.id));
         const createdDuringLoad = current.filter(
@@ -854,6 +880,8 @@ export function useWorkspace() {
     agentCalls,
     auditEvents,
     inbox,
+    digest,
+    updateDigest,
     refreshSecondary,
     createDatasetFromSource,
     createDatasetVersionFromSource,

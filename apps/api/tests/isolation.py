@@ -1550,6 +1550,13 @@ ROUTE_CASES: List[RouteCase] = [
     # the request, so the sweep's job is proving tenant A's feed never carries
     # a row of tenant B's.
     RouteCase("GET", "/api/inbox", SCOPED),
+    # The digest opt-in edits the caller's OWN membership row and names no
+    # resource at all, so there is no foreign id to probe: SCOPED, with the
+    # tamper digest proving the write never reaches tenant B's memberships.
+    # enabled=false so the sweep leaves no standing mail subscription behind.
+    RouteCase(
+        "PUT", "/api/me/digest", SCOPED, body={"enabled": False, "hour_utc": 9}
+    ),
     # Transcript search: a workspace-scoped list whose visibility chokepoint is
     # the same one the agent tool reads; the sweep proves tenant A's query
     # never quotes tenant B's words.

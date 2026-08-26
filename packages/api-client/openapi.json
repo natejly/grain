@@ -2227,6 +2227,9 @@
             "title": "Default Agent Id",
             "type": "string"
           },
+          "digest": {
+            "$ref": "#/components/schemas/DigestStatus"
+          },
           "feature_flags": {
             "additionalProperties": {
               "type": "boolean"
@@ -2254,7 +2257,8 @@
           "feature_flags",
           "default_agent_id",
           "model_provider",
-          "screen"
+          "screen",
+          "digest"
         ],
         "title": "BootstrapResponse",
         "type": "object"
@@ -4189,6 +4193,63 @@
           "enabled"
         ],
         "title": "DevOverrideOut",
+        "type": "object"
+      },
+      "DigestPrefsIn": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "hour_utc": {
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "Hour Utc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "hour_utc"
+        ],
+        "title": "DigestPrefsIn",
+        "type": "object"
+      },
+      "DigestPrefsOut": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "hour_utc": {
+            "title": "Hour Utc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "hour_utc"
+        ],
+        "title": "DigestPrefsOut",
+        "type": "object"
+      },
+      "DigestStatus": {
+        "description": "The caller's daily-digest preference, as their membership row holds it.\n\nRead here beside the identity it belongs to; written through\n`PUT /api/me/digest`.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "hour_utc": {
+            "title": "Hour Utc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "hour_utc"
+        ],
+        "title": "DigestStatus",
         "type": "object"
       },
       "DocumentContentRequest": {
@@ -9879,6 +9940,13 @@
             "title": "Crons Dispatched",
             "type": "array"
           },
+          "digests_dispatched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Digests Dispatched",
+            "type": "array"
+          },
           "dispatched": {
             "items": {
               "type": "string"
@@ -9928,6 +9996,7 @@
           "anomalies_flagged",
           "subscriptions_dispatched",
           "webhook_deliveries_dispatched",
+          "digests_dispatched",
           "moment"
         ],
         "title": "WorkflowTickOut",
@@ -17971,7 +18040,7 @@
     },
     "/api/inbox": {
       "get": {
-        "description": "The attention feed: parked approvals and budget holds, then history.",
+        "description": "The attention feed: parked approvals and budget holds, then history.\n\nThe waiting sets come from `services/inbox_feed.waiting_for` \u2014 the ONE\nimplementation of \"what waits on this member\", shared with the daily\ndigest so the two surfaces cannot drift (see that module's docstring).\nThis router only shapes the answer and appends the windowed history.",
         "operationId": "read_inbox_api_inbox_get",
         "parameters": [
           {
@@ -19120,6 +19189,66 @@
         "summary": "Update Tool",
         "tags": [
           "mcp"
+        ]
+      }
+    },
+    "/api/me/digest": {
+      "put": {
+        "description": "Set the caller's own digest opt-in and hour. Member self-serve.",
+        "operationId": "update_digest_prefs_api_me_digest_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DigestPrefsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DigestPrefsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Digest Prefs",
+        "tags": [
+          "me"
         ]
       }
     },

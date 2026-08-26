@@ -69,6 +69,8 @@ export function Workspace() {
     agentCalls,
     auditEvents,
     inbox,
+    digest,
+    updateDigest,
     createDatasetFromSource,
     createDatasetVersionFromSource,
     graph,
@@ -802,7 +804,12 @@ export function Workspace() {
           </div>
           <div className="topbar-actions">
             <CreateMenu create={create} />
-            <WorkspaceSettingsMenu activeGroup={activeGroup.id} open={openGroup} />
+            <WorkspaceSettingsMenu
+              activeGroup={activeGroup.id}
+              open={openGroup}
+              digest={digest}
+              onDigestChange={(prefs) => void updateDigest(prefs)}
+            />
             <ThemeToggle />
             {/* The prompt-injection screen's posture, shown only when it is on:
                 a status indicator, not a control. "enforce" is the mode that
