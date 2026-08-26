@@ -1110,11 +1110,40 @@ was timing:
   0050_marketplace/0051_listing_installs; single head confirmed. The QA fix
   pass added 0064_open_alert_unique on that head. Fixes now land via branch
   sweep-qa-fixes + PR onto main — no further renumbering expected.
+- WEB_ORIGIN BOOT GUARD (QA verification finding 1): FIXED on sweep-qa-fixes,
+  with a deliberate operator-visible consequence. `render_link_button` refuses
+  a non-http(s) URL, so `WEB_ORIGIN=app.example.com` used to boot fine and
+  then raise on every digest and every subscription mail forever, swallowed by
+  the background `except` with no audit row — a silent permanent outage.
+  `Settings._guard_web_origin` now refuses that at startup, matching
+  `SCREEN_PROXY_URL`. A deployment that has been running on a scheme-less
+  origin will therefore FAIL TO BOOT after this lands instead of failing
+  quietly; that is the intended trade and belongs in release notes. Both mail
+  call sites also degrade honestly now (`digest.skipped` is a new audit
+  action; subscriptions reuse `dashboard.subscription_skipped`).
 - TWO TOKEN UIs (QA F11 LOW 2): SETTLED on sweep-qa-fixes — post-merge both
   mcp.tsx's token panel and webhooks.tsx's TokensSection manage the same
   api_tokens table; kept both on purpose (each page is where its audience
   already is) and cross-linked the copy in each. Fold into one shared
-  component only if a third surface appears.
+  component only if a third surface appears. NOT the same thing as the router
+  double-include below: this entry is about the two web panels.
+- ROUTER DOUBLE-INCLUDE (QA verification finding 2): FIXED on sweep-qa-fixes.
+  `main.py` included `api_tokens.router` twice (a merge splice artifact), and
+  every openapi build emitted three duplicate-operation-id warnings. The
+  redundant include is gone; the first match had always won, so behaviour is
+  unchanged — the regenerated `packages/api-client/openapi.json` is
+  byte-identical, and the export now warns zero times where it warned three.
+  Recorded here because an earlier agent claimed this was already tracked and
+  it was not.
+- ROUTERS RE-INCLUDED FROM TESTS (noticed while closing the above, NOT fixed):
+  `tests/test_board_depth.py:17` and `tests/test_doc_pending.py:18` call
+  `app.include_router(...)` on the shared `app.main` app for routers `main.py`
+  already includes, so a full pytest run permanently doubles those routes for
+  every later test in the session and emits six duplicate-operation-id
+  warnings. Behaviour is unchanged (first match wins) and the openapi export
+  is clean because it never imports those tests, so this is left alone rather
+  than widening a branch already under review. Fix is to build a local
+  `FastAPI()` in each test instead of mutating the shared app.
 - SHARE-LINK AUTHZ (QA F9 LOW 2): decided and documented on sweep-qa-fixes —
   the flat model stands (any member mints/revokes any link; see the
   api/share_links.py router docstring for the grounds), intentionally beside
