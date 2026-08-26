@@ -136,6 +136,11 @@ export type MessageControls = {
   effort?: string;
   fast?: boolean;
   /**
+   * Stream the model's reasoning summaries for this turn as `thinking.delta`
+   * events — the composer's Thinking toggle. Absent means off.
+   */
+  thinking?: boolean;
+  /**
    * A skill to inject into this one turn, and the values for its declared args.
    * Per-turn like the model/effort above: absent means today's behaviour, and
    * the skill never becomes part of the conversation. `skillArgs` only rides the
@@ -525,6 +530,90 @@ export type SkillUpdateBody = {
   body?: string;
   args?: SkillArg[];
   shared?: boolean;
+};
+
+/**
+ * A marketplace listing: the browse-card view of something published. `mine`
+ * and `can_manage` are the caller's standing, resolved server-side like the
+ * skill rights above.
+ */
+export type Listing = {
+  id: string;
+  kind: "skill" | "workflow" | "agent";
+  slug: string;
+  title: string;
+  description: string;
+  visibility: "workspace" | "org";
+  status: string;
+  author_name: string;
+  install_count: number;
+  latest_version: number;
+  mine: boolean;
+  can_manage: boolean;
+  /**
+   * The caller's workspace's relationship to the listing: "" (never installed,
+   * or the copy was deleted), "installed", "update_available", or "diverged"
+   * (the copy was edited locally since install). A pinned install reports
+   * "installed" even when newer versions exist — suppression happens
+   * server-side, so every surface agrees.
+   */
+  install_state: "" | "installed" | "update_available" | "diverged";
+  pinned: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One immutable published version, for the detail drawer's history. */
+export type ListingVersion = {
+  id: string;
+  version: number;
+  changelog: string;
+  content_hash: string;
+  created_at: string;
+};
+
+/**
+ * The detail view: the card plus the FULL payload an install would copy. The
+ * gallery renders the payload before the Install button enables — installing
+ * instructions you have not read is not consent.
+ */
+export type ListingDetail = Listing & {
+  payload: Record<string, unknown>;
+  versions: ListingVersion[];
+  /** The name of the workspace that published it — provenance for org readers. */
+  publisher_workspace: string;
+};
+
+export type ListingPublishBody = {
+  kind?: "skill" | "workflow" | "agent";
+  source_id: string;
+  slug: string;
+  title?: string;
+  description?: string;
+  author_name?: string;
+  /** Required when republishing an existing slug. */
+  changelog?: string;
+  /** "org" reaches the whole organization and is owner-gated server-side. */
+  visibility?: "workspace" | "org";
+};
+
+/** Head metadata only; the published payload is immutable by design. */
+export type ListingUpdateBody = {
+  title?: string;
+  description?: string;
+  author_name?: string;
+  visibility?: "workspace" | "org";
+  /** "delisted" withdraws it from browse/install; installed copies stand. */
+  status?: "published" | "delisted";
+};
+
+/** What installing created: an ordinary local row in the caller's workspace. */
+export type ListingInstallResult = {
+  kind: string;
+  resource_id: string;
+  name: string;
+  title: string;
+  warnings: string[];
 };
 
 /** One registry tool, as the provisioning checklist renders it. */
@@ -2245,6 +2334,7 @@ export class WorkspaceApi {
           ...(controls?.model ? { model: controls.model } : {}),
           ...(controls?.effort ? { effort: controls.effort } : {}),
           ...(controls?.fast ? { fast: true } : {}),
+          ...(controls?.thinking ? { thinking: true } : {}),
           // A skill is injected for this turn only, so it rides the send like the
           // other per-turn controls. `skill_args` only travels with a skill.
           ...(controls?.skillId ? { skill_id: controls.skillId } : {}),
@@ -2312,6 +2402,19 @@ export class WorkspaceApi {
 
   cancelRun(runId: string): Promise<Run> {
     return this.request(`/api/runs/${runId}/cancel`, { method: "POST" }, true);
+  }
+
+  /**
+   * Fold guidance into a live run — the same composer, no new turn. The note
+   * lands in the transcript under the run and the loop reads it before its
+   * next model call. A finished run answers 409; send a fresh message instead.
+   */
+  steerRun(runId: string, content: string): Promise<SendMessageResponse> {
+    return this.request(
+      `/api/runs/${runId}/steer`,
+      { method: "POST", body: JSON.stringify({ content }) },
+      true,
+    );
   }
 
   listSources(): Promise<Source[]> {
@@ -2521,6 +2624,76 @@ export class WorkspaceApi {
     return this.request(
       `/api/skills/${skillId}/versions/${versionId}/restore`,
       { method: "POST" },
+    );
+  }
+
+  // --- Marketplace (publish, browse, install) ---
+
+  /** Listings visible to the caller: their workspace's, plus org-tier ones. */
+  listListings(): Promise<Listing[]> {
+    return this.request("/api/marketplace/listings");
+  }
+
+  getListing(listingId: string): Promise<ListingDetail> {
+    return this.request(`/api/marketplace/listings/${listingId}`);
+  }
+
+  /** Snapshot a skill into a listing (or, same slug + same source, a new version). */
+  publishListing(body: ListingPublishBody): Promise<ListingDetail> {
+    return this.request(
+      "/api/marketplace/listings",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    );
+  }
+
+  /** Rename, redescribe, widen to the org, or delist — never edit the payload. */
+  updateListing(listingId: string, body: ListingUpdateBody): Promise<ListingDetail> {
+    return this.request(`/api/marketplace/listings/${listingId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Copy the listing's payload into the caller's workspace as a local row.
+   * For an agent, `body.allowed_tools` is the scope-review sheet's confirmed
+   * subset — it can only narrow what the listing requested.
+   */
+  installListing(
+    listingId: string,
+    body?: { allowed_tools?: string[] },
+  ): Promise<ListingInstallResult> {
+    return this.request(
+      `/api/marketplace/listings/${listingId}/install`,
+      { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) },
+      true,
+    );
+  }
+
+  /**
+   * Bring the workspace's installed copy up to the listing's head version.
+   * Refused (409) when already current or when the copy has local edits;
+   * `confirm_overwrite` is the consent that lets an update replace a
+   * diverged copy.
+   */
+  updateListingInstall(
+    listingId: string,
+    body?: { confirm_overwrite?: boolean },
+  ): Promise<ListingInstallResult> {
+    return this.request(
+      `/api/marketplace/listings/${listingId}/update`,
+      { method: "POST", body: JSON.stringify(body ?? {}) },
+      true,
+    );
+  }
+
+  /** Freeze (or unfreeze) the caller's install at its current version. */
+  pinListing(listingId: string, pinned: boolean): Promise<Listing> {
+    return this.request(
+      `/api/marketplace/listings/${listingId}/pin`,
+      { method: "POST", body: JSON.stringify({ pinned }) },
+      true,
     );
   }
 

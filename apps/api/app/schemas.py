@@ -307,6 +307,119 @@ class SkillVersionOut(ApiModel):
     created_at: datetime
 
 
+class ListingOut(ApiModel):
+    id: str
+    kind: str
+    slug: str
+    title: str
+    description: str = ""
+    visibility: str
+    status: str
+    author_name: str = ""
+    install_count: int = 0
+    latest_version: int = 1
+    #: True when the listing was published from the caller's own workspace —
+    #: the gallery shows a "yours" marker and the manage affordances on these.
+    mine: bool = False
+    #: True when the caller may edit or delist it (publisher-or-owner).
+    can_manage: bool = False
+    #: The caller's workspace's relationship to this listing: "" (never
+    #: installed, or the copy was deleted), "installed", "update_available",
+    #: or "diverged" (the copy was edited locally since install). A pinned
+    #: install reports "installed" even when newer versions exist — the pin's
+    #: whole meaning is "stop offering".
+    install_state: str = ""
+    pinned: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class ListingVersionOut(ApiModel):
+    id: str
+    version: int
+    changelog: str = ""
+    content_hash: str = ""
+    created_at: datetime
+
+
+class ListingDetailOut(ListingOut):
+    """The browse card plus everything an installer must be able to read.
+
+    `payload` is the FULL latest published payload — the gallery renders it
+    before the Install button enables, because consenting to instructions you
+    have not seen is not consent.
+    """
+
+    payload: Dict[str, Any] = {}
+    versions: List[ListingVersionOut] = []
+    #: The name of the workspace that published it — provenance a reader of an
+    #: org-tier listing is entitled to before installing.
+    publisher_workspace: str = ""
+
+
+class ListingCreate(BaseModel):
+    #: Crons are deliberately not here: a cron is a personal prompt on a timer,
+    #: and both halves of that are workspace-bound.
+    kind: Literal["skill", "workflow", "agent"] = "skill"
+    #: The id of the thing being published, in the caller's workspace.
+    source_id: str
+    slug: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    #: Blank falls back to the source's own title.
+    title: str = Field(default="", max_length=160)
+    description: str = Field(default="", max_length=500)
+    author_name: str = Field(default="", max_length=120)
+    #: Required when republishing an existing slug; ignored on first publish.
+    changelog: str = Field(default="", max_length=2000)
+    #: "org" reaches every workspace of the organization and is owner-gated.
+    visibility: Literal["workspace", "org"] = "workspace"
+
+
+class ListingUpdate(BaseModel):
+    """Head metadata only — the published payload is immutable by design; to
+    change what installs, publish a new version. None means "leave alone"."""
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    description: Optional[str] = Field(default=None, max_length=500)
+    author_name: Optional[str] = Field(default=None, max_length=120)
+    #: Widening to "org" is owner-gated, like publishing at "org" is.
+    visibility: Optional[Literal["workspace", "org"]] = None
+    #: "delisted" withdraws it from every browse/install surface; copies
+    #: already installed are untouched. "taken_down" is not settable here —
+    #: that word is reserved for the future admin takedown flow.
+    status: Optional[Literal["published", "delisted"]] = None
+
+
+class ListingInstallBody(BaseModel):
+    """Optional install-time choices. For an agent, `allowed_tools` is the
+    scope-review sheet's confirmed subset — it can only narrow what the payload
+    requested, and what survives is still intersected with the installing
+    workspace's live registry."""
+
+    allowed_tools: Optional[List[str]] = Field(default=None, max_length=200)
+
+
+class ListingUpdateApply(BaseModel):
+    """Body of POST /listings/{id}/update. `confirm_overwrite` is the consent
+    an update needs when the local copy diverged: without it, a copy with local
+    edits refuses to be replaced (409 names the conflict)."""
+
+    confirm_overwrite: bool = False
+
+
+class ListingPinBody(BaseModel):
+    pinned: bool
+
+
+class InstallOut(ApiModel):
+    """What installing created: an ordinary local row, plus any degradations."""
+
+    kind: str
+    resource_id: str
+    name: str
+    title: str
+    warnings: List[str] = []
+
+
 class ToolInfoOut(ApiModel):
     """One registry tool, for the provisioning checklist."""
 
@@ -473,6 +586,14 @@ class MessageOut(ApiModel):
     created_at: datetime
 
 
+class SteerRequest(BaseModel):
+    """Mid-run guidance typed into the same composer while a turn is live.
+    Becomes an ordinary user message under the run plus a `run.steer` event
+    the loop folds into its next model call — no new run starts."""
+
+    content: str = Field(min_length=1, max_length=8000)
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     agent_id: Optional[str] = None
@@ -489,6 +610,10 @@ class SendMessageRequest(BaseModel):
     #: "fast" must not promise a setting some models cannot honour. An explicit
     #: `effort` always wins over `fast`.
     fast: bool = False
+    #: Stream the model's reasoning summaries as a live "thinking trail"
+    #: (`thinking.delta` run events). The composer's Thinking toggle; off by
+    #: default so an unchanged client sends exactly what it always did.
+    thinking: bool = False
     #: Invoke this skill for this turn only. Must be visible to the caller (own or
     #: shared). Absent = today's behaviour exactly; the skill's body is spliced
     #: into the turn's instructions and does not change the conversation.

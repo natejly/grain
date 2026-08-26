@@ -50,6 +50,7 @@ import {
   shareControl,
   type View,
 } from "./views/shared";
+import { GalleryView } from "./views/gallery";
 import { SkillsView } from "./views/skills";
 import { SNOOZE_KEY, parseSnoozes, snoozedIds } from "./views/snooze";
 import { SourcesView } from "./views/sources";
@@ -108,6 +109,9 @@ export function Workspace() {
     setSelectedEffort,
     fast,
     setFast,
+    thinking,
+    setThinking,
+    runThinking,
     attachedSkill,
     skillArgs,
     attachSkill,
@@ -587,6 +591,9 @@ export function Workspace() {
 
   return (
     <div className={railCollapsed ? "workspace-shell rail-collapsed" : "workspace-shell"}>
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
       <CommandPalette
         open={paletteOpen}
         close={() => setPaletteOpen(false)}
@@ -975,7 +982,10 @@ export function Workspace() {
                   setEffort: setSelectedEffort,
                   fast,
                   setFast,
+                  thinking,
+                  setThinking,
                 }}
+                thinking={runThinking}
                 skills={{
                   attached: attachedSkill,
                   argValues: skillArgs,
@@ -1223,6 +1233,10 @@ export function Workspace() {
         {/* Self-contained like AgentsView: the skill list is nobody's business
             until they open this or type "/" in the composer. */}
         {view === "skills" && <SkillsView setError={setError} />}
+
+        {/* Self-contained like SkillsView: what the marketplace holds is
+            nobody's business until they browse it. */}
+        {view === "gallery" && <GalleryView setError={setError} />}
 
         {/* Self-contained: a workflow's run history is nobody's business until
             they open this, so it is fetched here rather than at page load. */}

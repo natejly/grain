@@ -251,6 +251,61 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
+/* Double-tap-to-zoom on a button or link is a 300ms delay and an accidental
+   page zoom; `manipulation` keeps pan and pinch but drops both, so touch
+   targets respond on the first tap. Text inputs are excluded so long-press
+   text selection keeps its native gesture. */
+a,
+button,
+select,
+label,
+[role="button"],
+[role="option"],
+[role="tab"],
+[role="menuitem"] {
+  touch-action: manipulation;
+}
+
+/* Skip-to-content: the first Tab in the shell lands on this, then Enter jumps
+   focus into the main panel so a keyboard or screen-reader user bypasses the
+   rail and sidebar. Visually hidden until focused, so it never competes with
+   the chrome for a sighted user. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 8px 12px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-150%);
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* iOS auto-zooms when a text input smaller than 16px is focused. The workspace
+   deliberately sets 12–13px on dense inputs for the desktop layout; on mobile
+   that density is wrong anyway, so bump every form control to 16px there. The
+   `.workspace-shell` ancestor raises specificity above the per-input rules so
+   this actually wins. Buttons and checkboxes are included harmlessly — only
+   text inputs, textareas, and selects trigger the zoom. */
+@media (max-width: 900px) {
+  .workspace-shell input,
+  .workspace-shell select,
+  .workspace-shell textarea {
+    font-size: 16px;
+  }
+}
+
 .workspace-shell {
   min-height: 100vh;
   display: grid;
@@ -469,6 +524,7 @@ select:focus-visible {
   min-width: max(100%, 208px);
   max-height: 60vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -895,6 +951,9 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  /* The skip link targets this; keep a little clearance so a sticky topbar
+     never covers the focus target. */
+  scroll-margin-top: 8px;
 }
 
 /* Stacked above the view and the tab strip so the Create and Settings panels
@@ -1703,6 +1762,14 @@ select:focus-visible {
   color: var(--text-muted);
 }
 
+/* The palette clips overflow, so an outline ring on the input would be cut.
+   Surface focus on the row instead — the same grouped-control pattern the
+   composer and memory-search use — so a keyboard opener sees the input is
+   focused without a ring being eaten by the rounded frame. */
+.palette-input-row:focus-within {
+  border-bottom-color: var(--accent);
+}
+
 .palette-input-row input {
   flex: 1;
   border: 0;
@@ -1726,6 +1793,7 @@ select:focus-visible {
   padding: 6px;
   list-style: none;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .palette-row {
@@ -3728,6 +3796,7 @@ select:focus-visible {
   width: min(480px, 92vw);
   height: 100%;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border-left: 1px solid var(--border);
   background: var(--bg);
 }

@@ -122,8 +122,8 @@ def test_openai_harness_forwards_the_per_turn_overrides(monkeypatch):
     captured: dict = {}
 
     def spy(client, settings, *, user_id, input_items, tools, instructions,
-            model=None, effort=None, operation=""):
-        captured.update(model=model, effort=effort)
+            model=None, effort=None, thinking=False, operation=""):
+        captured.update(model=model, effort=effort, thinking=thinking)
         yield ("completed", object())
 
     monkeypatch.setattr(openai_harness, "_openai_client", lambda settings: "CLIENT")
@@ -131,16 +131,16 @@ def test_openai_harness_forwards_the_per_turn_overrides(monkeypatch):
 
     list(OpenAIHarness().build_step(
         _openai_settings(), prompt="p", user_id="alice", evidence=[],
-        model="override-model", effort="high",
+        model="override-model", effort="high", thinking=True,
     )([], [], ""))
-    assert captured == {"model": "override-model", "effort": "high"}
+    assert captured == {"model": "override-model", "effort": "high", "thinking": True}
 
     # ...and with nothing chosen, None flows through so the defaults win downstream.
     captured.clear()
     list(OpenAIHarness().build_step(
         _openai_settings(), prompt="p", user_id="alice", evidence=[]
     )([], [], ""))
-    assert captured == {"model": None, "effort": None}
+    assert captured == {"model": None, "effort": None, "thinking": False}
 
 
 # --- Endpoint level: the request contract and the bootstrap exposure ---------

@@ -125,6 +125,9 @@ describe("navigation model", () => {
       // Inside Library, one always-visible click from anywhere in it — nearer
       // than the old rail seat, which existed only to outrun a Settings menu.
       ["Knowledge", ["sources", "memory", "graph"]],
+      // The marketplace: a shelf you take things from, so it lives with the
+      // shelves. Publishing happens on the Skills page, where the things live.
+      ["Gallery", ["gallery"]],
     ]);
     expect(library?.items[0].label).toBe("Documents");
     expect(PAGE_TITLES.documents).toBe("Documents");

@@ -354,6 +354,12 @@ class Settings(BaseSettings):
     # window, exactly the memory_recall_candidate_cap trade.
     conversation_vector_candidate_cap: int = 20000
 
+    # --- Marketplace --------------------------------------------------------
+    # Publishing and installing skills (later workflows and agents) across a
+    # workspace or organization. Off, every /api/marketplace route answers 404
+    # as if the feature did not exist — the kill switch, not the launch gate.
+    marketplace_enabled: bool = True
+
     run_lease_seconds: int = 90
 
     # --- Workflow schedules ------------------------------------------------

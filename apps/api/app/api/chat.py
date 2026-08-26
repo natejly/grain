@@ -725,6 +725,7 @@ def _stage_turn(
         skill_id=skill_id,
         skill_args_json=skill_args_json,
         skill_version=skill_version,
+        show_thinking=payload.thinking,
         # What was on screen when this was typed — the file the project editor
         # had open. Stored, not acted on: `subjects.resolve` reads it back on
         # every entry into the loop, so a turn that parks for an approval comes
@@ -1071,115 +1072,95 @@ def cancel_run(
     return run
 
 
-@router.post("/runs/{run_id}/steer", response_model=RunOut)
+@router.post(
+    "/runs/{run_id}/steer", response_model=SendMessageResponse, status_code=202
+)
 def steer_run(
     run_id: str,
     payload: SteerRequest,
     key: str = Depends(idempotency_key),
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
-) -> Run:
-    """Inject a mid-turn user message into a run that is still working.
+) -> SendMessageResponse:
+    """Fold mid-run guidance into a live turn — same text box, no new run.
 
-    The message rides `run_events` — the channel the loop already polls for
-    cancellation — as a `steer.requested` event the loop folds into the
-    transcript at the head of its next iteration (`_absorb_steering`). Only a
-    queued or running turn accepts one: a parked run is waiting on a decision,
-    not on words, and a finished run has a composer for the next turn.
+    The note lands twice on purpose: as an ordinary user Message under this
+    run (the transcript record, attributed to whoever typed it) and as a
+    `run.steer` RunEvent — the channel the loop actually consumes, keyed by
+    the event's per-run `sequence` so a park/resume neither replays a note
+    nor drops one sent while parked. A finished run answers 409 rather than
+    404, so the composer can tell "too late, send it as a fresh turn" apart
+    from "not yours to steer".
     """
-    from sqlalchemy.exc import IntegrityError
-
-    from ..services.agent_loop import STEER_REQUESTED
-
     run = db.scalar(
         select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)
     )
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    # Stricter than cancel's gate, on purpose. Cancel only stops work, so every
-    # member may cancel an automation; steer INJECTS instructions into a turn
-    # and writes a user message into its conversation, so it demands the same
-    # authority sending a message there would: the run is the caller's own, or
-    # its conversation is one the caller could post to (shared, or their own).
-    # A cron run targeting another member's personal thread refuses — without
-    # this, a member could write into (and redirect) a thread they cannot open.
-    conversation = (
-        db.get(Conversation, run.conversation_id) if run.conversation_id else None
-    )
-    if conversation is not None and conversation.workspace_id != actor.workspace_id:
-        conversation = None
-    may_steer = run.created_by == actor.user_id or (
-        conversation is not None
-        and (bool(conversation.shared) or conversation.created_by == actor.user_id)
-    )
-    if not may_steer:
-        raise HTTPException(status_code=404, detail="Run not found")
-    if find_replay(
-        db, workspace_id=actor.workspace_id, operation="run.steer", key=key
+    # Same gate as cancel and the event stream: a member must not steer a run
+    # on another member's personal thread.
+    if not conversations.run_activity_visible(
+        db,
+        actor_workspace_id=actor.workspace_id,
+        actor_user_id=actor.user_id,
+        run=run,
     ):
-        return run
-    if run.status not in {"queued", "running"}:
-        raise HTTPException(
-            status_code=409, detail="Run is not in flight; send a message instead"
+        raise HTTPException(status_code=404, detail="Run not found")
+    replay = find_replay(
+        db, workspace_id=actor.workspace_id, operation="run.steer", key=key
+    )
+    if replay:
+        message = db.scalar(
+            select(Message).where(
+                Message.id == replay.resource_id,
+                Message.workspace_id == actor.workspace_id,
+            )
         )
-    # One transaction for all four writes, so the idempotency key covers
-    # exactly what it makes replayable: a crash after the commit replays as
-    # "already steered", a crash before it left nothing to duplicate. The
-    # steer's Message carries `run_id=run.id` like the turn's own prompt
-    # message does — `_transcript` excludes the current run's messages, so a
-    # queued run that starts later, or a lease-recovery re-run that rebuilds
-    # its LoopState from scratch, re-absorbs the steer from its events without
-    # ALSO meeting it in the transcript; later turns see it as ordinary
-    # history.
-    #
-    # `append_event` assigns the sequence atomically, but a snapshot-isolated
-    # backend can still collide with the loop's own writer; one retry
-    # recomputes it, and losing twice means something is genuinely wrong.
-    for attempt in (1, 2):
-        try:
-            append_event(
-                db,
-                workspace_id=actor.workspace_id,
-                run_id=run.id,
-                event_type=STEER_REQUESTED,
-                payload={"content": payload.content, "user_id": actor.user_id},
-            )
-            db.add(
-                Message(
-                    id=new_id(),
-                    workspace_id=actor.workspace_id,
-                    conversation_id=run.conversation_id,
-                    run_id=run.id,
-                    role="user",
-                    created_by=actor.user_id,
-                    content=payload.content,
-                )
-            )
-            record_key(
-                db,
-                workspace_id=actor.workspace_id,
-                operation="run.steer",
-                key=key,
-                resource_id=run.id,
-            )
-            record_audit(
-                db,
-                workspace_id=actor.workspace_id,
-                actor_id=actor.user_id,
-                action="run.steered",
-                resource_type="run",
-                resource_id=run.id,
-                detail={"chars": len(payload.content)},
-            )
-            db.commit()
-            break
-        except IntegrityError:
-            db.rollback()
-            if attempt == 2:
-                raise HTTPException(
-                    status_code=409, detail="The run is busy; try steering again"
-                ) from None
-    return run
+        if message is None:
+            raise replayed_resource_gone()
+        return SendMessageResponse(
+            message=_message_out(message, actor.user_name), run=None, replayed=True
+        )
+    if run.status in TERMINAL_RUN_STATES or run.cancel_requested:
+        raise HTTPException(
+            status_code=409,
+            detail="This run has finished — send the note as a new message",
+        )
+    message = Message(
+        id=new_id(),
+        workspace_id=actor.workspace_id,
+        conversation_id=run.conversation_id,
+        run_id=run.id,
+        role="user",
+        created_by=actor.user_id,
+        content=payload.content,
+    )
+    db.add(message)
+    append_event(
+        db,
+        workspace_id=actor.workspace_id,
+        run_id=run.id,
+        event_type="run.steer",
+        payload={"content": payload.content, "message_id": message.id},
+    )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="run.steer",
+        key=key,
+        resource_id=message.id,
+    )
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="run.steered",
+        resource_type="run",
+        resource_id=run.id,
+        detail={"conversation_id": run.conversation_id},
+    )
+    db.commit()
+    return SendMessageResponse(message=_message_out(message, actor.user_name), run=None)
 
 
 async def _event_stream(

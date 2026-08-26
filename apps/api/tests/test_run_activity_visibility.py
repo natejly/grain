@@ -224,6 +224,16 @@ def test_personal_thread_activity_is_hidden_from_other_members():
     assert (
         client_b.post(f"/api/runs/{run_id}/cancel", headers=_key()).status_code == 404
     )
+    # Steering injects a prompt into the run, so it sits behind the same gate:
+    # a personal thread's run answers 404 to another member, not 409/202.
+    assert (
+        client_b.post(
+            f"/api/runs/{run_id}/steer",
+            json={"content": "steered by B"},
+            headers=_key(),
+        ).status_code
+        == 404
+    )
 
 
 def test_sharing_the_thread_lets_other_members_act():

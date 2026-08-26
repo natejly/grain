@@ -26,10 +26,11 @@ class ScriptedHarness:
         evidence: List[Evidence],
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        thinking: bool = False,
     ) -> ModelStep:
-        # The double talks to no provider, so a per-turn model or effort override
-        # has nothing to apply to — it accepts both to satisfy the Protocol and
-        # ignores them.
+        # The double talks to no provider, so a per-turn model, effort, or
+        # thinking override has nothing to apply to — it accepts them to
+        # satisfy the Protocol and ignores them.
         from ..scripted_model import scripted_model_step
 
         return scripted_model_step(settings, prompt=prompt, evidence=evidence)

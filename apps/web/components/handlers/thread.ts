@@ -48,6 +48,12 @@ export type ThreadHandlerDeps = {
   setAgentCalls: Dispatch<SetStateAction<AgentToolCall[]>>;
   setActiveRun: Dispatch<SetStateAction<string | null>>;
   setRunStatus: Dispatch<SetStateAction<string>>;
+  /**
+   * The live thinking trail streamed by the current run. Optional like
+   * `controls`: a surface without the Thinking toggle never receives the
+   * events and has nowhere to draw them.
+   */
+  setRunThinking?: Dispatch<SetStateAction<string>>;
   setBudgetPark: Dispatch<SetStateAction<BudgetPark | null>>;
   setDraft: Dispatch<SetStateAction<string>>;
   /**
@@ -129,6 +135,7 @@ export function createThreadHandlers({
   setAgentCalls,
   setActiveRun,
   setRunStatus,
+  setRunThinking,
   setBudgetPark,
   setDraft,
   ensureConversation,
@@ -333,6 +340,7 @@ export function createThreadHandlers({
     const temporaryId = `streaming-${runId}`;
     setActiveRun(runId);
     setRunStatus("Starting");
+    setRunThinking?.("");
     setBudgetPark(null);
     /**
      * The citation validator's verdict, which arrives just before the message
@@ -405,6 +413,12 @@ export function createThreadHandlers({
           if (count > 0) {
             setRunStatus(`Recalling ${count} ${count === 1 ? "memory" : "memories"}`);
           }
+        }
+        if (event.event === "thinking.delta" && stillOpen()) {
+          // The trail is live narration, not transcript: it accumulates in its
+          // own lane and is cleared when the run settles.
+          const fragment = String(event.data.delta || "");
+          setRunThinking?.((current) => current + fragment);
         }
         if (event.event === "message.delta" && stillOpen()) {
           const delta = String(event.data.delta || "");
@@ -505,6 +519,7 @@ export function createThreadHandlers({
     } finally {
       setActiveRun((current) => (current === runId ? null : current));
       setRunStatus("");
+      setRunThinking?.("");
       // The stream only ends once the run is terminal, and a parked run is not
       // terminal — so reaching here means this run is finished, cancelled or
       // disconnected, and a hold card for it would outlive the hold.
@@ -515,12 +530,38 @@ export function createThreadHandlers({
   async function submitPrompt(event?: FormEvent) {
     event?.preventDefault();
     const content = draft.trim();
-    if (!content || activeRun) return;
+    if (!content) return;
     // "/btw …" is an aside: recorded in the thread, read by the next turn, no
     // run started. A bare "/btw" is an aside with nothing in it — the draft
     // stays put rather than an empty note being recorded.
     const aside = parseAside(content);
     if (aside === "") return;
+    // A live run makes the same box a steering wheel: the note joins the
+    // running turn instead of queueing a new one. Asides fall through — they
+    // never belonged to a run in the first place. Per-turn composer state (an
+    // attached skill, the model override) deliberately does NOT ride a steer
+    // and is NOT cleared by one: those controls configure the next full turn,
+    // and the chip staying visible is what says so.
+    if (activeRun && aside === null) {
+      setDraft("");
+      setError("");
+      try {
+        const steered = await api.steerRun(activeRun, content);
+        setMessages((items) =>
+          items.some((item) => item.id === steered.message.id)
+            ? items
+            : [...items, steered.message],
+        );
+      } catch (caught) {
+        // The likeliest failure is a race with the run finishing (409). The
+        // draft comes back so one more Enter sends it as an ordinary turn.
+        setDraft(content);
+        setError(
+          describeError(caught, "The run finished first — press Enter to send"),
+        );
+      }
+      return;
+    }
     setDraft("");
     setError("");
     try {

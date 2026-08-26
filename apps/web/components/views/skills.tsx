@@ -1,9 +1,10 @@
 "use client";
 
 import type { Skill, SkillArg, SkillVersion } from "@workspace/api-client";
-import { History, Pencil, Plus, Share2, Sparkles, Trash2, X } from "lucide-react";
+import { History, Pencil, Plus, Share2, Sparkles, Store, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { PublishDrawer } from "./publish-listing";
 import { describeError, slugify } from "./shared";
 
 /**
@@ -31,6 +32,8 @@ export function SkillsView({ setError }: SkillsViewProps) {
   const [loaded, setLoaded] = useState(false);
   /** null = closed; "" = creating; an id = editing that skill. */
   const [editing, setEditing] = useState<string | null>(null);
+  /** The skill whose publish drawer is open, or null. */
+  const [publishing, setPublishing] = useState<Skill | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -97,6 +100,14 @@ export function SkillsView({ setError }: SkillsViewProps) {
                     <Pencil size={14} />
                     {skill.can_edit ? "Edit" : "View"}
                   </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => setPublishing(skill)}
+                    aria-label={`Publish ${skill.title} to the gallery`}
+                  >
+                    <Store size={14} />
+                    Publish
+                  </button>
                   {skill.can_edit && (
                     <button
                       className="ghost-button"
@@ -129,9 +140,24 @@ export function SkillsView({ setError }: SkillsViewProps) {
           }}
         />
       )}
+
+      {publishing !== null && (
+        <PublishDrawer
+          kind="skill"
+          sourceId={publishing.id}
+          defaults={{
+            slug: publishing.name,
+            title: publishing.title,
+            description: publishing.description,
+          }}
+          setError={setError}
+          onClose={() => setPublishing(null)}
+        />
+      )}
     </div>
   );
 }
+
 
 type SkillEditorProps = {
   /** null = creating a new skill. */

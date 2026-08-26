@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import RunEvent
@@ -16,6 +17,19 @@ DELTA_FLUSH_CHARS = 48
 DELTA_FLUSH_SECONDS = 0.1
 
 
+#: How many sequence collisions one append will absorb before giving up. Two
+#: writers per run is the designed maximum (the worker's stream and one steer
+#: route), so a second attempt nearly always lands; the margin is for a burst.
+_APPEND_ATTEMPTS = 5
+
+
+def _next_sequence(db: Session, run_id: str) -> int:
+    latest = db.scalar(
+        select(func.max(RunEvent.sequence)).where(RunEvent.run_id == run_id)
+    )
+    return (latest or 0) + 1
+
+
 def append_event(
     db: Session,
     *,
@@ -24,36 +38,39 @@ def append_event(
     event_type: str,
     payload: Dict[str, Any],
 ) -> RunEvent:
-    """Append one event, with its sequence computed *inside* the INSERT.
+    """Append the run's next event, surviving a concurrent appender.
 
-    `run_events` is unique on (run_id, sequence), and two writers race it in
-    production: the loop's own DeltaBuffer/tool events, and request threads —
-    cancel, and now steer, which made the collision a routine user action. A
-    read-max-then-insert here would hand both writers the same number and fail
-    whichever inserts second, and the loop side has no retry: an IntegrityError
-    there fails the whole turn. The scalar subquery makes the assignment atomic
-    on SQLite (one writer at a time under WAL; the subquery evaluates inside
-    the insert's own write transaction), which is the shipped backend.
-
-    On backends with snapshot-isolated concurrent writers (Postgres) two
-    simultaneous inserts can still compute the same max — callers that write
-    from a request thread keep their one-shot IntegrityError retry as the
-    belt to this suspenders.
+    `sequence` is allocated read-then-insert, and steering made two writers
+    per run the designed common case: the worker flushing deltas and the steer
+    route recording a note race on the same `UNIQUE(run_id, sequence)`. Each
+    attempt runs in a SAVEPOINT so a lost race rolls back only the one insert
+    — never the caller's transaction — and retries against the fresh maximum.
+    Without this, whichever side lost the race raised IntegrityError: in the
+    worker that failed the very run being steered; in the route it was a 500.
     """
-    event = RunEvent(
-        workspace_id=workspace_id,
-        run_id=run_id,
-        sequence=(
-            select(func.coalesce(func.max(RunEvent.sequence), 0) + 1)
-            .where(RunEvent.run_id == run_id)
-            .scalar_subquery()
-        ),
-        event_type=event_type,
-        payload_json=json.dumps(payload, separators=(",", ":"), default=str),
-    )
-    db.add(event)
-    db.flush()
-    return event
+    body = json.dumps(payload, separators=(",", ":"), default=str)
+    for attempt in range(_APPEND_ATTEMPTS):
+        event = RunEvent(
+            workspace_id=workspace_id,
+            run_id=run_id,
+            sequence=_next_sequence(db, run_id),
+            event_type=event_type,
+            payload_json=body,
+        )
+        try:
+            with db.begin_nested():
+                db.add(event)
+            return event
+        except IntegrityError:
+            if attempt == _APPEND_ATTEMPTS - 1:
+                raise
+            # A concurrent appender took this sequence between the read and
+            # the insert; the savepoint rolled our row back — go again. The
+            # rollback usually expunges the pending row itself; the guard is
+            # for dialects that leave it in the session's new set.
+            if event in db:
+                db.expunge(event)
+    raise AssertionError("unreachable")
 
 
 class DeltaBuffer:
@@ -64,10 +81,20 @@ class DeltaBuffer:
     seen so the caller can use it as the final message body.
     """
 
-    def __init__(self, db: Session, *, workspace_id: str, run_id: str) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        workspace_id: str,
+        run_id: str,
+        event_type: str = "message.delta",
+    ) -> None:
         self._db = db
         self._workspace_id = workspace_id
         self._run_id = run_id
+        #: The answer streams as `message.delta`; a thinking trail streams the
+        #: same way under `thinking.delta` — same buffering, different lane.
+        self._event_type = event_type
         self._pending = ""
         self._last_flush = time.monotonic()
         self.text = ""
@@ -91,7 +118,7 @@ class DeltaBuffer:
             self._db,
             workspace_id=self._workspace_id,
             run_id=self._run_id,
-            event_type="message.delta",
+            event_type=self._event_type,
             payload={"delta": self._pending},
         )
         self._db.commit()

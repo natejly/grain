@@ -34,6 +34,8 @@ export type ChatHandlerDeps = {
   selectedModel: string;
   selectedEffort: string;
   fast: boolean;
+  /** The Thinking toggle: stream this turn's reasoning summaries as a trail. */
+  thinking: boolean;
   /** The skill attached to the next turn, its arg values, and the way to drop
    * it once the send lands. All three are per-turn, like the draft. */
   attachedSkill: Skill | null;
@@ -53,6 +55,8 @@ export type ChatHandlerDeps = {
   setAgentCalls: Dispatch<SetStateAction<AgentToolCall[]>>;
   setActiveRun: Dispatch<SetStateAction<string | null>>;
   setRunStatus: Dispatch<SetStateAction<string>>;
+  /** The live thinking trail the current run has streamed; "" between runs. */
+  setRunThinking: Dispatch<SetStateAction<string>>;
   setBudgetPark: Dispatch<SetStateAction<BudgetPark | null>>;
   /** Records a run the prompt-injection screen flagged, so the transcript can mark it. */
   onScreenFlag: (runId: string) => void;
@@ -76,6 +80,7 @@ export function createChatHandlers({
   selectedModel,
   selectedEffort,
   fast,
+  thinking,
   attachedSkill,
   skillArgs,
   clearAttachedSkill,
@@ -93,6 +98,7 @@ export function createChatHandlers({
   setAgentCalls,
   setActiveRun,
   setRunStatus,
+  setRunThinking,
   setBudgetPark,
   onScreenFlag,
   setDraft,
@@ -161,6 +167,7 @@ export function createChatHandlers({
       model: selectedModel,
       effort: fast ? "" : selectedEffort,
       fast,
+      thinking,
       skillId: attachedSkill?.id,
       skillArgs,
     },
@@ -173,6 +180,7 @@ export function createChatHandlers({
     setAgentCalls,
     setActiveRun,
     setRunStatus,
+    setRunThinking,
     setBudgetPark,
     setDraft,
     activeConversationRef,

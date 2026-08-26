@@ -133,11 +133,10 @@ class LoopState:
     iteration: int = 0
     text_so_far: str = ""
     evidence: List[Evidence] = field(default_factory=list)
-    #: The highest `steer.requested` event sequence already folded into
-    #: `input_items`. On the state so a parked turn resumed in another process
-    #: neither re-injects a steer it already read nor drops one that arrived
-    #: while it was parked.
-    last_steer_sequence: int = 0
+    #: Highest `run.steer` event sequence already folded into `input_items`.
+    #: Persisted with the state so a park/resume neither replays a steering
+    #: note nor drops one sent while the run was parked.
+    steered_sequence: int = 0
     #: How many parked-grade calls the guardian reviewer has waved through this
     #: turn. On the state for the same reason: the cap is per turn, and a turn
     #: can cross processes.
@@ -151,7 +150,7 @@ class LoopState:
                 "iteration": self.iteration,
                 "text_so_far": self.text_so_far,
                 "evidence": [asdict(item) for item in self.evidence],
-                "last_steer_sequence": self.last_steer_sequence,
+                "steered_sequence": self.steered_sequence,
                 "guardian_approvals": self.guardian_approvals,
             },
             default=str,
@@ -166,7 +165,7 @@ class LoopState:
             iteration=int(data.get("iteration") or 0),
             text_so_far=data.get("text_so_far") or "",
             evidence=[revive_evidence(item) for item in data.get("evidence") or []],
-            last_steer_sequence=int(data.get("last_steer_sequence") or 0),
+            steered_sequence=int(data.get("steered_sequence") or 0),
             guardian_approvals=int(data.get("guardian_approvals") or 0),
         )
 
@@ -213,6 +212,7 @@ def _default_model_step(
         # deployment defaults, so a run with no override is identical to today.
         model=run.requested_model or None,
         effort=run.requested_effort or None,
+        thinking=run.show_thinking,
     )
 
 
@@ -1242,12 +1242,12 @@ def _guardian_clears(
             select(RunEvent)
             .where(
                 RunEvent.run_id == run.id,
-                RunEvent.event_type == STEER_REQUESTED,
+                RunEvent.event_type == "run.steer",
             )
             .order_by(RunEvent.sequence)
         )
     )
-    if any(row.sequence > state.last_steer_sequence for row in steers):
+    if any(row.sequence > state.steered_sequence for row in steers):
         return False
     prompt = run.prompt
     if steers:
@@ -1439,7 +1439,7 @@ def _delegate_parallel_batch(
             run,
             kind="tool_output",
             text="\n\n".join(
-                [result.content or "", *(item.excerpt for item in result.evidence)]
+                [result.content or "", *(item.excerpts for item in result.evidence)]
             ),
             settings=settings,
         )
@@ -1455,45 +1455,52 @@ def _delegate_parallel_batch(
     return True
 
 
-def _absorb_steering(db: Session, run: Run, state: LoopState) -> None:
-    """Fold mid-turn user messages into the transcript before the next step.
-
-    `POST /api/runs/{id}/steer` appends `steer.requested` events; the loop
-    reads them here, at the head of each iteration, so a steer lands before
-    the very next model call rather than after the turn. The cursor lives on
-    `LoopState`, so a park/resume neither replays nor drops one. The text is
-    the user's own typed input — trusted exactly as `run.prompt` is, so it is
-    not screened as an attack on itself.
-    """
-    rows = list(
-        db.scalars(
-            select(RunEvent)
+def _steering_pending(db: Session, run: Run, state: LoopState) -> bool:
+    """Whether unabsorbed steer events exist, without absorbing them — the
+    finish-time check needs to know before deciding what order to append."""
+    return (
+        db.scalar(
+            select(RunEvent.id)
             .where(
                 RunEvent.run_id == run.id,
-                RunEvent.event_type == STEER_REQUESTED,
-                RunEvent.sequence > state.last_steer_sequence,
+                RunEvent.event_type == "run.steer",
+                RunEvent.sequence > state.steered_sequence,
             )
-            .order_by(RunEvent.sequence)
+            .limit(1)
         )
+        is not None
     )
-    for row in rows:
+
+
+def _absorb_steering(db: Session, run: Run, state: LoopState) -> int:
+    """Fold user guidance sent mid-run into the model's next call.
+
+    Steering arrives as `run.steer` events; the per-run `sequence` is the
+    cursor (persisted in LoopState), so a park/resume neither replays a note
+    nor drops one sent while parked. Only called at the outer-loop checkpoint
+    beside the cancel check — never inside `_drain_pending`, where a user item
+    would split a function_call from the output the API requires adjacent.
+    """
+    rows = db.scalars(
+        select(RunEvent)
+        .where(
+            RunEvent.run_id == run.id,
+            RunEvent.event_type == "run.steer",
+            RunEvent.sequence > state.steered_sequence,
+        )
+        .order_by(RunEvent.sequence)
+    ).all()
+    absorbed = 0
+    for event in rows:
         try:
-            content = str(json.loads(row.payload_json).get("content") or "")
+            content = str(json.loads(event.payload_json).get("content") or "")
         except ValueError:
             content = ""
         if content.strip():
-            state.input_items.append(
-                {
-                    "role": "user",
-                    "content": f"[The user adds, mid-task]: {content}",
-                }
-            )
-        state.last_steer_sequence = row.sequence
-
-
-#: The event the steer endpoint writes and `_absorb_steering` reads. One name,
-#: defined beside the reader, imported by the writer.
-STEER_REQUESTED = "steer.requested"
+            state.input_items.append({"role": "user", "content": content})
+            absorbed += 1
+        state.steered_sequence = event.sequence
+    return absorbed
 
 
 def _drain_pending(
@@ -1859,14 +1866,31 @@ def _advance(
 
         final_round = state.iteration == MAX_ITERATIONS - 1
         buffer = DeltaBuffer(db, workspace_id=run.workspace_id, run_id=run.id)
+        # The thinking trail's own lane: same buffering, distinct event type,
+        # so the client can render it apart from the answer. Streamed live and
+        # deliberately not persisted anywhere else — the trail is working
+        # narration for the person watching, not part of the transcript.
+        thinking_buffer = DeltaBuffer(
+            db,
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            event_type="thinking.delta",
+        )
         response: Any = None
+        incomplete = False
         for kind, value in step(
             state.input_items, [] if final_round else tools, instructions
         ):
             if kind == "delta":
                 buffer.add(str(value))
+            elif kind == "thinking":
+                thinking_buffer.add(str(value))
             elif kind == "completed":
                 response = value
+            elif kind == "incomplete":
+                response = value
+                incomplete = True
+        thinking_buffer.flush()
         buffer.flush()
         state.iteration += 1
         if response is None:
@@ -1874,6 +1898,39 @@ def _advance(
         state.text_so_far += _apply_web_search(
             db, run, state, response=response, text=buffer.text, settings=settings
         )
+        if incomplete:
+            # The provider ended the stream early (usually the output-token
+            # ceiling) but everything streamed so far is real. Discarding it
+            # for an error was the old behavior and the worse trade: finish
+            # the turn honestly with what exists. Any function calls on the
+            # truncated response are dropped — a cut-off argument list is not
+            # a call worth executing. Only a stream that produced nothing at
+            # all is still an error.
+            reason = str(
+                getattr(
+                    getattr(response, "incomplete_details", None), "reason", ""
+                )
+                or ""
+            )
+            answer = state.text_so_far.strip()
+            if not answer:
+                raise RuntimeError(
+                    "Model stream ended early: " + (reason or "response.incomplete")
+                )
+            note = (
+                "it hit the output limit"
+                if reason == "max_output_tokens"
+                else "the model stopped early"
+            )
+            # No "say continue" advice on purpose: the next turn's transcript
+            # truncates long messages, so a continue could not reliably see
+            # what it was continuing — advertising it would promise more than
+            # the product keeps. The note itself stays: the reader must know
+            # the answer is not the whole answer.
+            return Done(
+                answer=answer + f"\n\n*(The answer was cut short — {note}.)*",
+                evidence=state.evidence,
+            )
 
         calls = [
             item
@@ -1881,6 +1938,40 @@ def _advance(
             if getattr(item, "type", None) == "function_call"
         ]
         if not calls:
+            # The finish-time steering check: a note typed during the FINAL
+            # model call passed the route's 409 gate (the run was still
+            # running) but arrived after the last absorb checkpoint. Without
+            # this, that note would be silently ignored for the turn it aimed
+            # at — accepted with a 202, folded into nothing. Absorbing here
+            # and looping once more answers it in this turn; the answer so far
+            # is kept as context, exactly as a tool round would keep it.
+            # Chronology matters: the answer is extended FIRST, then the note
+            # absorbed, so the next call reads [answer, note] — the note came
+            # after the answer, and shown the other way round the model could
+            # conclude the answer already addressed it. Hence the peek before
+            # either mutation.
+            if state.iteration < MAX_ITERATIONS and _steering_pending(
+                db, run, state
+            ):
+                state.input_items.extend(
+                    _serialize_item(item) for item in response.output or []
+                )
+                _absorb_steering(db, run, state)
+                if state.text_so_far:
+                    state.text_so_far += "\n\n"
+                    # The live view builds the message from message.delta
+                    # events; the joiner has to travel the same lane or the
+                    # two segments render run-together until the completed
+                    # message replaces them.
+                    append_event(
+                        db,
+                        workspace_id=run.workspace_id,
+                        run_id=run.id,
+                        event_type="message.delta",
+                        payload={"delta": "\n\n"},
+                    )
+                    db.commit()
+                continue
             answer = (state.text_so_far or response.output_text or "").strip()
             if not answer:
                 raise RuntimeError("Model returned an empty response")

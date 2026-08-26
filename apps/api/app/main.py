@@ -29,6 +29,7 @@ from .api import (
     inbox,
     integrations,
     latex,
+    marketplace,
     mcp,
     mcp_server,
     memory,
@@ -108,6 +109,7 @@ app.include_router(system.router)
 app.include_router(chat.router)
 app.include_router(agents.router)
 app.include_router(skills.router)
+app.include_router(marketplace.router)
 app.include_router(sources.router)
 app.include_router(spaces.router)
 app.include_router(tools.router)

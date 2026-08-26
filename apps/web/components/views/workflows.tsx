@@ -23,6 +23,7 @@ import {
   Plus,
   ShieldQuestion,
   Sparkles,
+  Store,
   Trash2,
   TriangleAlert,
   UserRound,
@@ -33,6 +34,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api } from "../api";
 import { BudgetHold } from "./budget";
 import { ProposalDiff } from "./proposal-diff";
+import { PublishDrawer } from "./publish-listing";
 import { describeError, formatRelative } from "./shared";
 import {
   attributeProblems,
@@ -616,6 +618,8 @@ export function WorkflowsView({
   const [busy, setBusy] = useState(false);
   /** The API's last refusal of a run payload, one entry per offending input. */
   const [inputProblems, setInputProblems] = useState<InputProblem[]>([]);
+  /** The workflow whose publish drawer is open, or null. */
+  const [publishing, setPublishing] = useState<Workflow | null>(null);
 
   const active = workflows.find((item) => item.id === activeId) ?? null;
   const runs = runsByWorkflow[activeId] ?? [];
@@ -738,9 +742,21 @@ export function WorkflowsView({
     }>
   >([]);
 
+  /**
+   * Invalidates in-flight `load()` snapshots. A settled run triggers a
+   * background reload; if a delete (or save) lands while that fetch is in the
+   * air, the pre-mutation snapshot resolves last and would silently resurrect
+   * the deleted row — with the run's poll already torn down, nothing ever
+   * corrected it. Any authoritative local mutation bumps this; a snapshot
+   * fetched under an older value is discarded instead of applied.
+   */
+  const listEpoch = useRef(0);
+
   const load = useCallback(async () => {
+    const epoch = listEpoch.current;
     try {
       const [rows, feed] = await Promise.all([api.listWorkflows(), api.getInbox()]);
+      if (epoch !== listEpoch.current) return;
       setWorkflows(rows);
       const parked = [
         ...feed.approvals
@@ -916,6 +932,7 @@ export function WorkflowsView({
   }
 
   async function saved(workflow: Workflow) {
+    listEpoch.current += 1;
     setWorkflows((rows) => [workflow, ...rows.filter((row) => row.id !== workflow.id)]);
     setRunsByWorkflow((current) => ({ ...current, [workflow.id]: [] }));
     setComposing(false);
@@ -928,6 +945,7 @@ export function WorkflowsView({
     setBusy(true);
     try {
       const updated = await api.updateWorkflow(workflow.id, { status });
+      listEpoch.current += 1;
       setWorkflows((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
     } catch (caught) {
       setError(describeError(caught, "Could not change that workflow"));
@@ -965,6 +983,7 @@ export function WorkflowsView({
     if (!window.confirm(`Delete “${workflow.name}” and its run history?`)) return;
     try {
       await api.deleteWorkflow(workflow.id);
+      listEpoch.current += 1;
       setWorkflows((rows) => rows.filter((row) => row.id !== workflow.id));
       setRunsByWorkflow((current) => {
         const next = { ...current };
@@ -975,6 +994,9 @@ export function WorkflowsView({
         setActiveId("");
         setRunDetail(null);
       }
+      // Reconverge the waiting strip from fresh truth: any snapshot the bump
+      // above discarded also carried feed rows this delete may have retired.
+      void load().catch(() => undefined);
     } catch (caught) {
       setError(describeError(caught, "Could not delete that workflow"));
     }
@@ -1164,6 +1186,15 @@ export function WorkflowsView({
                 {active.status === "active" ? "Disable" : "Activate"}
               </button>
               <button
+                className="ghost-button"
+                disabled={busy}
+                onClick={() => setPublishing(active)}
+                aria-label={`Publish ${active.name} to the gallery`}
+              >
+                <Store size={14} />
+                Publish
+              </button>
+              <button
                 className="icon-button"
                 aria-label={`Delete ${active.name}`}
                 onClick={() => void remove(active)}
@@ -1340,6 +1371,20 @@ export function WorkflowsView({
             </section>
           </div>
         </div>
+      )}
+
+      {publishing !== null && (
+        <PublishDrawer
+          kind="workflow"
+          sourceId={publishing.id}
+          defaults={{
+            slug: publishing.name,
+            title: publishing.name,
+            description: publishing.description || publishing.source_prompt,
+          }}
+          setError={setError}
+          onClose={() => setPublishing(null)}
+        />
       )}
     </div>
   );

@@ -1,9 +1,10 @@
 "use client";
 
 import type { AgentInfo, ToolInfo } from "@workspace/api-client";
-import { Bot, Check, Pencil, Plus, X } from "lucide-react";
+import { Bot, Check, Pencil, Plus, Store, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { PublishDrawer } from "./publish-listing";
 import { describeError } from "./shared";
 
 /**
@@ -38,6 +39,8 @@ export function AgentsView({ setError }: AgentsViewProps) {
   const [loaded, setLoaded] = useState(false);
   /** null = closed; "" = creating; an id = editing that agent. */
   const [editing, setEditing] = useState<string | null>(null);
+  /** The agent whose publish drawer is open, or null. */
+  const [publishing, setPublishing] = useState<AgentInfo | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -130,6 +133,14 @@ export function AgentsView({ setError }: AgentsViewProps) {
                   </button>
                   <button
                     className="ghost-button"
+                    onClick={() => setPublishing(agent)}
+                    aria-label={`Publish ${agent.name} to the gallery`}
+                  >
+                    <Store size={14} />
+                    Publish
+                  </button>
+                  <button
+                    className="ghost-button"
                     onClick={() => void remove(agent)}
                     aria-label={`Delete ${agent.name}`}
                   >
@@ -144,6 +155,20 @@ export function AgentsView({ setError }: AgentsViewProps) {
             </section>
           ))}
         </div>
+      )}
+
+      {publishing !== null && (
+        <PublishDrawer
+          kind="agent"
+          sourceId={publishing.id}
+          defaults={{
+            slug: publishing.name,
+            title: publishing.name,
+            description: publishing.description,
+          }}
+          setError={setError}
+          onClose={() => setPublishing(null)}
+        />
       )}
 
       {editing !== null && (

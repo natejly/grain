@@ -85,18 +85,25 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
     "Sources",
     "Memory",
     "Graph",
+    "Gallery",
   ]) {
     // Anchored: "Boards" is a substring of "Dashboards", and the count badge is
     // part of the accessible name, so neither end can be matched loosely.
     await expect(tabs(page, "Library").getByRole("button", { name: new RegExp(`^${entry}`) }))
       .toBeVisible();
   }
-  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(10);
+  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(12);
   // The retired "Lists" entry stays gone: one destination, one listing.
   await expect(tabs(page, "Library").getByRole("button", { name: /^Lists/ })).toHaveCount(0);
   await expect(tabs(page, "Library").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
   // The shelves say their names.
-  for (const heading of ["Boards & todos", "Data", "Dashboards", "Knowledge"]) {
+  for (const heading of [
+    "Boards & todos",
+    "Data",
+    "Dashboards",
+    "Knowledge",
+    "Gallery",
+  ]) {
     await expect(
       tabs(page, "Library").locator(".section-heading", { hasText: heading }),
     ).toBeVisible();

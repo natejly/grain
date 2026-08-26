@@ -580,3 +580,315 @@ egress machinery. Default egress stays `none`; nothing widens by default.
       tsc/pnpm test/build if web touched. Container e2e is NOT runnable here
       (colima daemon down) — argv construction + proxy protocol are unit-tested
       instead; live docker verification owed when the daemon is up.
+
+# Marketplace — publish & share skills, workflows, agents (planned 2026-08-22)
+
+Design: Grain Gallery won (judge 1: 8.5 — workspace-tier-first sequencing,
+native fit with the GeneratedApp/AppRelease + SkillVersion patterns), hardened
+with both judges' grafts from the two Granary proposals. Two new tables in
+migration 0045 (next free at planning time; 0044_conversation_index is head),
+zero columns added to existing tables. Publishing snapshots a
+Skill/Workflow/Agent into an immutable ListingVersion (append-only,
+content_hash, changelog); installing copies the payload into the caller's
+workspace as an ordinary local row — copy, never reference, so a remote author
+can never mutate what runs in your workspace and delisting never breaks
+installs. Trust rules are load-bearing: per-kind allowlist serializers
+(pydantic extra="forbid", nothing serializes by default), a secret/token-shape
+lint at publish, full-body preview as a hard gate before the Install button
+enables, installs land inert (skill shared=false, agent enabled=false,
+workflow draft + manual trigger), an agent scope-review sheet with
+write-capable tools unchecked by default, and local ToolPolicy/OrgToolPolicy
+ceilings untouched — no marketplace bypass path. Integer versions + changelog
+(house SkillVersion/AppRelease convention; semver, publisher handles, public
+tier, and import/export consciously deferred — /published/apps is the
+ready-made PUBLIC template when wanted). The status enum reserves 'taken_down'
+now so the report→takedown→banner flow (required before any public tier) needs
+no migration revisit. Feature flag `marketplace_enabled` in config.py. Crons
+are never publishable.
+
+## Phase 1 — Skills gallery, in-workspace (publish → browse → install)
+
+- [x] 1. Model + migration 0045_marketplace.py: `Listing` (organization_id FK,
+      workspace_id FK publisher, kind 'skill'|'workflow'|'agent', slug unique
+      per org `^[a-z0-9-]+$`, title, description, visibility
+      'workspace'|'org' default 'workspace', status
+      'published'|'delisted'|'taken_down' — 'taken_down' reserved now, wired
+      in the pre-public follow-up — author_name byline captured at publish,
+      created_by, install_count, latest_version, timestamps) and
+      `ListingVersion` (listing_id FK, version int UNIQUE with listing_id,
+      payload_json, content_hash per the skills.py sha256 convention,
+      changelog text, source_id plain string NOT an FK (Run.skill_id
+      rationale: survives source deletion), source_version, created_by,
+      created_at). Round-trip up/down/up on a scratch DB
+- [x] 2. Config: `marketplace_enabled` (default False) in
+      apps/api/app/config.py, memory_enabled pattern; gates the router
+- [x] 3. services/marketplace.py: `SkillPayload` allowlist serializer —
+      exactly title/description/body/args_json, extra="forbid" — plus
+      snapshot_skill() reading the current SkillVersion, content_hash, and a
+      `resolve_visible` chokepoint mirroring conversations.resolve_visible.
+      Secret lint over every payload string (token-shape regexes + entropy +
+      tokened-URL/workspace-id detection): publish 422s with findings.
+      STRIP TEST: assert the payload key set is exactly the allowlist —
+      workspace_id/created_by/secrets can never ride along by construction
+- [x] 4. apps/api/app/api/marketplace.py: POST /api/marketplace/listings
+      (kind='skill' + skill_id, idempotency-keyed, 409 on duplicate slug,
+      audit `listing.published`; republishing a slug appends a ListingVersion
+      and bumps latest_version, 409 on identical content_hash, changelog
+      required), GET /api/marketplace/listings (via resolve_visible), GET
+      /api/marketplace/listings/{id} (detail incl. FULL payload + version
+      history), POST /api/marketplace/listings/{id}/install (copies payload
+      into a new Skill: shared=false, version 1, deterministic '-2' suffix on
+      name collision — never a 409; bumps install_count; audit
+      `listing.installed`). Any member may publish at workspace visibility
+- [x] 5. Schemas ListingOut/ListingCreate/ListingDetailOut/InstallOut in
+      schemas.py; api-client listListings/getListing/publishListing/
+      installListing in packages/api-client/src/index.ts
+- [x] 6. Isolation: ROUTE_CASES entries in apps/api/tests/isolation.py for
+      all four routes — SCOPED same-workspace, cross-tenant DENY 404 — so
+      test_route_table_matches_the_app cannot pass without verdicts
+- [x] 7. apps/api/tests/test_marketplace.py: publish snapshots the current
+      version (later skill edits don't mutate the listing), the strip test
+      from item 3, secret lint blocks a fake token in a body, install yields
+      an independent editable Skill, delisted/deleted source leaves installs
+      intact, duplicate-slug 409, name-collision suffix
+- [x] 8. Web: 'gallery' view in views/navigation.ts (Library group) +
+      "Browse gallery" entry in views/commands.ts; views/gallery.tsx card
+      grid reusing the apps.tsx 'dashboard-gallery' styles (kind badge,
+      byline, install count, client-side substring search) with a detail
+      drawer; Install button stays DISABLED until the full body has been
+      rendered to the installer — hard gate, not an optional preview.
+      "Publish to Gallery" modal (slug/title/description/byline/changelog)
+      from the SkillsView kebab in views/skills.tsx
+- [x] 9. Verify: make lint, pytest (full suite exit 0), pnpm test, pnpm
+      build, e2e (gallery publish→install spec)
+
+## Phase 2 — Org tier: cross-workspace sharing
+
+- [x] 1. Extend services/marketplace.resolve_visible: 'workspace' rows filter
+      workspace_id; 'org' rows filter organization_id joined through the
+      caller's Membership→Workspace. Single chokepoint — no marketplace query
+      may bypass it (any bypass is a cross-tenant leak)
+- [x] 2. Gates in api/marketplace.py: publishing or PATCHing to
+      visibility='org' requires require_owner (auth.py:296 — same gate as
+      the Skill.shared flip and GeneratedApp publish). PATCH
+      /api/marketplace/listings/{id}: title/description/visibility/
+      status='delisted' only (payload stays immutable), author-or-owner
+- [x] 3. Isolation (the novel query shape — named, not implied): add a
+      same-org-second-workspace fixture to tests/isolation.py; ROUTE_CASES
+      proving an org listing is SCOPED-readable and installable from a
+      sibling workspace, workspace-tier listings stay invisible to siblings,
+      and cross-org is DENY 404
+- [x] 4. test_marketplace.py: installing an org listing lands the copy in
+      the installer's workspace_id
+- [x] 5. Web: visibility selector in the publish modal (Workspace /
+      Organization), 'Org' badge on cards, publisher workspace name in the
+      detail drawer
+- [x] 6. Verify: make lint, pytest, pnpm test, pnpm build, e2e
+
+## Phase 3 — Workflows and agents as listable kinds
+
+- [x] 1. services/marketplace.py `AgentPayload`: name/description/
+      instructions + allowed_tools INTERSECTED with the universal
+      registry_families names (llm_tools.py); workspace-specific MCP/sandbox/
+      custom tool names DROPPED and recorded as `unresolved_tools` in the
+      payload (degrade-with-warning, not 422). Strip test: payload never
+      contains a workspace MCP/sandbox tool name
+- [x] 2. `WorkflowPayload`: name/description/source_prompt/graph_json with
+      trigger FORCED to manual; schedule_cron/timezone/last_dispatched_at/
+      workspace ids excluded by construction; node arguments_json strings run
+      through the Phase-1 secret lint. Strip test: no schedule trigger or
+      dispatch state in the payload. Crons rejected as a publishable kind
+      (documented in the router)
+- [x] 3. Install paths in api/marketplace.py: agent lands enabled=false
+      ALWAYS — even after the scope sheet is confirmed (judge-2 graft:
+      re-arming is a separate deliberate act in the agent editor; adding a
+      row never trips the last-enabled-agent 409). Workflow lands
+      status='draft' after revalidation via
+      services/workflows/compiler.compile_document against the installing
+      workspace's registry; missing tools returned as warnings in InstallOut,
+      not errors
+- [x] 4. Agent scope-review sheet in gallery.tsx (trust-first graft):
+      requested tools grouped by family via GET /api/tools (same source as
+      the agents.tsx editor), read/write badges, write-capable tools
+      UNCHECKED by default; the confirmed subset ∩ local registry becomes the
+      new agent's allowed_tools_json. Test: the installed agent still routes
+      through resolve_policy with ToolPolicy/OrgToolPolicy ceilings intact —
+      no marketplace bypass
+- [x] 5. Requires-vs-installed checklist on the detail drawer BEFORE install
+      (registry-Granary graft): render unresolved_tools / workflow
+      required-tools against GET /api/tools with present/missing badges —
+      the main mitigation for the installs-broken-as-designed trust risk
+- [x] 6. Publish kebabs in views/agents.tsx and views/workflows.tsx; gallery
+      kind filter tabs (Skills / Workflows / Agents); per-kind detail
+      rendering (instructions view, read-only workflow-graph.tsx preview)
+- [x] 7. Tests: installed agent is disabled, installed workflow is
+      draft+manual and revalidated, cross-workspace install with a missing
+      tool surfaces the warning; ROUTE_CASES verdicts for any new route
+      shapes
+- [x] 8. Verify: make lint, pytest, pnpm test, pnpm build, e2e
+
+## Phase 4 — Installs, updates, divergence, lineage
+
+- [x] 1. Model + migration 0046_listing_installs.py: `ListingInstall`
+      (listing_id FK, listing_version_id FK, workspace_id FK, target_kind,
+      target_id string, content_hash_at_install, pinned bool default false,
+      created_by, created_at, UNIQUE(workspace_id, listing_id) — no
+      duplicate-install rows, unambiguous update tracking). The install
+      endpoint writes a row; install_count derived from it going forward
+- [x] 2. Update detection: per-install state current | update_available
+      (installed version < latest_version) | diverged (local content_hash !=
+      content_hash_at_install). Pinned installs excluded from update prompts
+      (teams that froze a known-good copy aren't nagged)
+- [x] 3. POST /api/marketplace/listings/{id}/update: applies the newest
+      payload onto the tracked target — skills as a NEW SkillVersion (the
+      existing restore route becomes one-click rollback from a bad update),
+      workflows via the recompile-bump PATCH path, agents overwrite with an
+      audit row. Diverged targets require an explicit confirm-overwrite flag
+      (else 409) — never silently clobber local edits. Never automatic.
+      Audit `listing.republished` / `listing.updated`
+- [x] 4. GET /api/marketplace/listings/{id}/versions; ROUTE_CASES verdicts
+      for the versions/update routes; tests: hash/version update detection,
+      diverged blocks silent update, pinned suppression, skill update lands
+      as a restorable SkillVersion
+- [x] 5. Web: version history + changelogs in the detail drawer, update
+      dialog rendering the target version's changelog AND a body diff before
+      applying (the prompt-injection review surface), 'Installed' /
+      'Update available' / 'Pinned' badges on cards, pin toggle
+- [ ] 6. Spec item (designated follow-up BEFORE any public tier — no build
+      yet): report → org-admin takedown (status='taken_down') → banners on
+      installed copies via the content_hash/ListingInstall provenance join;
+      the public tier itself reuses the /published/apps PUBLIC-verdict
+      pattern and requires revisiting the free-text author_name byline
+      (verified publisher identity) first
+- [x] 7. Verify: make lint, pytest, pnpm test, pnpm build, e2e
+
+## Review (built 2026-08-22, branch bg/marketplace-todo)
+
+All four phases shipped: 00e7a9d (Phase 1), 4cee3bf (Phase 2), a2bbd16
+(Phase 3), 79087a1 (QA fixes), 776e6e3 (Phase 4). 33 marketplace tests +
+isolation-sweep coverage for every route; gallery e2e covers
+publish→install and publish→install→republish→update.
+
+Deviations from the plan, all deliberate:
+
+- `marketplace_enabled` defaults **True**, not False — the house pattern is
+  a kill switch, not a launch gate, and a default-off flag would make the
+  e2e and the feature itself dead on arrival. The off state still answers
+  404 everywhere (tested).
+- Republishing a slug is bound to the **source's lineage** (same publisher +
+  same kind + same source_id); anything else reusing the slug answers 409
+  "not available" — wording that never confirms an invisible listing exists.
+- `install_count` stayed an event counter (each install bumps it) rather
+  than being derived from ListingInstall rows — re-installs re-point the
+  one lineage row, so deriving would silently change Phase 1 semantics.
+- No separate GET /listings/{id}/versions route: the detail payload already
+  carries the full version list, and a second read path would double the
+  isolation surface for no reader.
+- The update dialog shows the new version's changelog and full body (the
+  drawer always renders the head payload) but not a line-diff; the diff is
+  a follow-up if reviewing long bodies proves painful.
+- Updates rewrite **content fields only** — a skill's shared flag, an
+  agent's enabled + local tool grant, a workflow's status/trigger all
+  survive. New tool requests surface as warnings, never as grants
+  ("new words, never wider reach"). Skill updates land as ordinary
+  restorable SkillVersions. A pinned install stops being offered updates
+  server-side (install_state says "installed"), so every surface agrees.
+- Delist/restore is API-only (PATCH status); no UI affordance yet.
+
+Adversarial QA (continuous session) findings closed in 79087a1 + 776e6e3:
+org-listing republish is now owner-gated like widening; republish honors
+visibility="org" and never silently narrows; duplicate-slug/taken-down
+conflicts answer non-confirming "not available"; whitespace-only titles
+422.
+
+⚠ Cross-branch migration coordination (convention agreed between the
+marketplace, feature-sweep, and agentic-workspace sessions 2026-08-23):
+0044_conversation_index is the last revision common to all branches, and
+each in-flight branch keeps its own internal numbering while it moves —
+this branch has 0045_marketplace → 0046_listing_installs, and the other
+two branches use overlapping 0045+ numbers of their own. Resolution is
+merge-order re-parenting, not slot reservation: whichever branch merges
+second (and third) renumbers its whole chain onto the then-current head
+and retargets the down_revisions. If this branch is not first in, re-parent
+this branch's whole chain — 0045_marketplace → 0046_listing_installs →
+0047_run_thinking — onto the merge-time head; do not pre-claim numbers.
+
+# Steering + graceful incomplete streams (planned 2026-08-23)
+
+The composer disables its textarea while a run is active; steering should
+work in the same text box. Separately, `response.incomplete` (output-token
+limit) raises "Model stream ended early", discarding everything streamed.
+
+- [x] 1. Backend steer channel: POST /api/runs/{run_id}/steer (content,
+      1..8000). Same auth as cancel (workspace + run_activity_visible),
+      409 on TERMINAL_RUN_STATES / cancel_requested so the client can fall
+      back to a fresh send. Writes a Message (run_id, role user) for the
+      transcript and a `run.steer` RunEvent carrying the content — the
+      event's per-run `sequence` is the consumption cursor.
+- [x] 2. Loop absorption: LoopState gains `steered_sequence` (serialized,
+      defaults 0 on old snapshots). `_absorb_steering` folds any newer
+      run.steer events into `input_items` as plain user messages at the
+      outer-loop checkpoint (after the cancel check, before the model
+      call) — never inside _drain_pending, where a user item would split
+      a function_call from its output. Parked runs absorb on resume.
+- [x] 3. Incomplete streams: `stream_agent_response` records usage and
+      yields ("incomplete", response) instead of raising; the loop
+      finishes the turn with the streamed text plus a cut-short note
+      (steering/"continue" now works for the rest), raising only when
+      nothing at all streamed. response.failed still raises.
+- [x] 4. Web: textarea always enabled (placeholder says it steers while a
+      run is live); Enter/Send during a run calls api.steerRun and appends
+      the message; Stop button stays; per-turn controls (skills, model)
+      stay disabled — they configure the *next* turn.
+- [x] 5. Tests: steer route (message+event, 409 terminal, isolation DENY),
+      absorption unit tests via model_step fakes (pre-planted event lands
+      in the first call's input; cursor is idempotent; park/resume keeps
+      it), incomplete unit tests (partial text survives with note; empty
+      still errors). Web: api-client steerRun contract test.
+- [x] 6. Verify: ruff, mypy, full pytest, tsc, vitest, eslint, build, e2e.
+      Note: the live composer removed the disabled-textarea sync the specs
+      leaned on — every double-send spec now waits for Regenerate (turn
+      settled) before its second send, or it would steer the closing run.
+
+# Thinking trails (built 2026-08-25)
+
+"Show thinking trails, as a setting that can be enabled." Design mirrors
+the per-turn model/effort controls end to end:
+
+- [x] 1. `Run.show_thinking` (migration 0047_run_thinking, guarded incl.
+      no-runs-table case) — persisted per turn so a park/resume keeps the
+      choice; `SendMessageRequest.thinking` (default False) rides the send.
+- [x] 2. Harness protocol gains `thinking: bool`; OpenAI harness asks the
+      provider for reasoning summaries (`reasoning.summary = "auto"`, only
+      when on — the default request stays byte-identical) and yields
+      ("thinking", text) events; scripted double accepts and ignores it.
+- [x] 3. Loop streams the trail through a second DeltaBuffer as
+      `thinking.delta` run events — its own lane, never part of the
+      transcript or the answer.
+- [x] 4. Web: Thinking toggle beside Fast in the composer (a *setting*:
+      persists in localStorage under grain.thinking-trails); thread
+      handler accumulates thinking.delta into a live collapsible
+      "Thinking" panel above the run status, cleared when the run settles.
+- [x] 5. Tests: thinking lane events land as thinking.delta with the
+      answer untouched; the toggle rides the send onto the run row; both
+      harness-forwarding spies extended to pin the new argument.
+
+# The "flaky" e2e trio was two real product bugs (fixed 2026-08-25)
+
+palette:56 + workflows:135/281 failed full runs but passed alone. Neither
+was timing:
+
+- [x] Thread rail: the open row renders four trailing actions (rename +
+      share + split + delete) but `.thread` declared three `auto` columns,
+      so the delete button grid-wrapped onto an implicit row OVER the next
+      thread — unclickable whenever any thread sat below (i.e. exactly in
+      crowded full runs). Fifth column added; thread-rail-css.test.ts pins
+      column-count == action-count so the next added button can't repeat it.
+- [x] Workflows list: a settled run triggers a background `load()`; a
+      delete landing while that fetch is in flight was resurrected by the
+      pre-delete snapshot resolving last, with the poll already torn down
+      so nothing ever corrected it. `listEpoch` ref now invalidates
+      in-flight snapshots on delete/save/status-change, and delete
+      reconverges the waiting strip from fresh truth.
+- [x] Verify: full playwright suite 72 passed / 0 failed (first fully
+      green run; 3.0m, down from 7.4m of timeout stalls).

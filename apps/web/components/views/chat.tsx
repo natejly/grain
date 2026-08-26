@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Ban,
   Bot,
+  Brain,
   Check,
   ChevronRight,
   Copy,
@@ -224,7 +225,15 @@ export type ChatViewProps = {
     setEffort: (value: string) => void;
     fast: boolean;
     setFast: (value: boolean) => void;
+    /**
+     * The Thinking toggle — stream reasoning summaries as a live trail.
+     * Optional: a surface that offers no toggle simply never shows one.
+     */
+    thinking?: boolean;
+    setThinking?: (value: boolean) => void;
   };
+  /** The live thinking trail streamed by the active run; "" between runs. */
+  thinking?: string;
   /**
    * The composer's slash-command picker: the skill attached to the next turn,
    * the values for its declared args, and the ways to change them. Optional and
@@ -318,6 +327,8 @@ function TurnControls({
   setEffort,
   fast,
   setFast,
+  thinking,
+  setThinking,
   disabled,
 }: NonNullable<ChatViewProps["turnControls"]> & { disabled: boolean }) {
   return (
@@ -366,6 +377,18 @@ function TurnControls({
             <Zap size={13} aria-hidden="true" /> Fast
           </button>
         </>
+      )}
+      {setThinking !== undefined && (
+        <button
+          type="button"
+          className={thinking ? "composer-toggle on" : "composer-toggle"}
+          onClick={() => setThinking(!thinking)}
+          disabled={disabled}
+          aria-pressed={thinking}
+          title="Show the model's thinking trail while it works"
+        >
+          <Brain size={13} aria-hidden="true" /> Thinking
+        </button>
       )}
     </>
   );
@@ -1119,6 +1142,7 @@ export function ChatView({
   onSelectAgent,
   turnControls,
   skills,
+  thinking,
 }: ChatViewProps) {
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
@@ -1378,6 +1402,20 @@ export function ChatView({
             {activeRun && budgetPark && (
               <BudgetHold park={budgetPark} menuId="chat-spend-ceiling" />
             )}
+            {/* The thinking trail: live narration in its own quiet lane above
+                the status line, open by default because the person turned it
+                on to watch. Ephemeral — it clears when the run settles. */}
+            {activeRun && thinking && (
+              <details className="agent-provisioning thinking-trail" open>
+                <summary className="mcp-card-meta">Thinking</summary>
+                <p
+                  className="agent-instructions"
+                  style={{ whiteSpace: "pre-wrap" }}
+                >
+                  {thinking}
+                </p>
+              </details>
+            )}
             {activeRun && runStatus && (
               <div className="run-status">
                 <span className="thinking-dots">
@@ -1495,12 +1533,13 @@ export function ChatView({
             // visible; the accessible name is stable ("Message") so tests and
             // screen readers do not depend on whether a source is indexed yet.
             placeholder={
-              sources.some((source) => source.status === "ready")
-                ? "Ask your workspace…"
-                : "Upload a source, then ask a question…"
+              activeRun
+                ? "Steer the assistant — your note joins this turn…"
+                : sources.some((source) => source.status === "ready")
+                  ? "Ask your workspace…"
+                  : "Upload a source, then ask a question…"
             }
             rows={1}
-            disabled={Boolean(activeRun)}
             aria-label="Message"
           />
           {skills?.attached && (
@@ -1560,14 +1599,28 @@ export function ChatView({
             )}
             <span className="composer-spacer" />
             {activeRun ? (
-              <button
-                type="button"
-                className="send-button stop"
-                onClick={() => void cancelActiveRun()}
-                aria-label="Stop generating"
-              >
-                <Square size={15} />
-              </button>
+              <>
+                {/* Steering: the same box stays live during a run, and a
+                    non-empty draft sends INTO the running turn. Stop keeps
+                    its place beside it — typing must never hide the brake. */}
+                {draft.trim() !== "" && (
+                  <button
+                    className="send-button"
+                    type="submit"
+                    aria-label="Steer the run"
+                  >
+                    <ArrowUp size={18} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="send-button stop"
+                  onClick={() => void cancelActiveRun()}
+                  aria-label="Stop generating"
+                >
+                  <Square size={15} />
+                </button>
+              </>
             ) : (
               <button
                 className="send-button"

@@ -19,6 +19,7 @@ import {
   Plug,
   ShieldCheck,
   Sparkles,
+  Store,
   Table2,
   Terminal,
   Workflow,
@@ -221,6 +222,16 @@ const GROUP_SPECS: NavGroupSpec[] = [
           { view: "memory", label: "Memory", icon: Brain },
           { view: "graph", label: "Graph", icon: Network },
         ],
+      },
+      {
+        /**
+         * The marketplace. In Library because it is a shelf you take things
+         * from — browse what teammates published, read the whole of it, and
+         * install a copy that becomes an ordinary local skill. Publishing
+         * happens where the things live (the Skills page), not here.
+         */
+        label: "Gallery",
+        items: [{ view: "gallery", label: "Gallery", icon: Store }],
       },
     ],
   },
