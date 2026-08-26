@@ -76,13 +76,49 @@ jobs:
               --query 'taskDefinition.taskDefinitionArn' --output text
           done
 
+      # The API task (1024 MiB) and the migration task (512 MiB) cannot coexist:
+      # a t4g.small registers 1334 MiB with ECS, so run-task fails
+      # RESOURCE:MEMORY while the service is up. Take the explicit window
+      # docs/DEPLOY-AWS.md §7 describes rather than letting placement fail.
+      # The trap restores the service if anything below goes wrong.
       - name: Run database migration
+        env:
+          CLUSTER: grain-cluster
+          SERVICE: grain-api
+          FAMILY: grain-migrate
         run: |
-          TASK=$(aws ecs run-task --cluster grain-cluster \
-                   --task-definition grain-migrate --launch-type EC2 \
-                   --query 'tasks[0].taskArn' --output text)
-          aws ecs wait tasks-stopped --cluster grain-cluster --tasks "$TASK"
-          CODE=$(aws ecs describe-tasks --cluster grain-cluster --tasks "$TASK" \
+          set -euo pipefail
+          restore_on_failure() {
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "restoring $SERVICE after a failed migration"
+              aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+                --desired-count 1 >/dev/null || true
+            fi
+            exit "$rc"
+          }
+          trap restore_on_failure EXIT
+
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --desired-count 0 >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+
+          # Placement can still lose a race with the draining API task.
+          TASK=None
+          for attempt in $(seq 1 10); do
+            TASK=$(aws ecs run-task --cluster "$CLUSTER" --task-definition "$FAMILY" \
+                     --launch-type EC2 --query 'tasks[0].taskArn' --output text)
+            if [ "$TASK" != "None" ] && [ -n "$TASK" ]; then break; fi
+            echo "placement attempt $attempt did not take, retrying"
+            sleep 15
+          done
+          if [ "$TASK" = "None" ] || [ -z "$TASK" ]; then
+            echo "migration task could not be placed"
+            exit 1
+          fi
+
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK"
+          CODE=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
                    --query 'tasks[0].containers[0].exitCode' --output text)
           echo "migration exit code: $CODE"
           test "$CODE" = "0"
@@ -90,7 +126,7 @@ jobs:
       - name: Roll the service
         run: |
           aws ecs update-service --cluster grain-cluster --service grain-api \
-            --task-definition grain-api --force-new-deployment >/dev/null
+            --task-definition grain-api --desired-count 1 --force-new-deployment >/dev/null
           aws ecs wait services-stable --cluster grain-cluster --services grain-api
 
       - name: API health check
