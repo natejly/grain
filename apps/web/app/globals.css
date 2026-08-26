@@ -770,7 +770,11 @@ label,
      the count stayed at four, and the fifth button grid-wrapped onto a phantom
      row BELOW the fixed-height row — overlaying the next thread, which then
      intercepted every click on Delete. Auto-flow columns cannot wrap, whatever
-     the action count. The test in thread-rail-css.test.ts pins this mechanism. */
+     the action count. The test in thread-rail-css.test.ts pins this mechanism.
+     It is now the backstop rather than the load-bearing part: the actions ride
+     in `.thread-actions`, out of flow — see there. `relative` is what makes
+     this row that cluster's containing block, so it can never leave the row. */
+  position: relative;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-flow: column;
   grid-auto-columns: max-content;
@@ -786,7 +790,8 @@ label,
 }
 
 .thread:hover,
-.thread.active {
+.thread.active,
+.thread:focus-within {
   background: var(--surface);
   color: var(--text);
 }
@@ -820,6 +825,46 @@ label,
   font-size: 9px;
 }
 
+/* EVERY trailing action lives in this one cluster, and the cluster is out of
+   flow. That is the whole fix for a title that read "Ne…": in flow, each icon
+   took its width off the title's track, and the open row's five of them (six
+   once mainline's favourite star merges, more later) left the title about two
+   characters. Absolutely positioned, they take none of it — the title track is
+   the full row width for any number of actions, which is the property the rail
+   needs rather than "five happens to fit".
+   The cluster is right-anchored and exactly the row's height, so it can reach
+   neither the row below (the overlap that used to swallow clicks on Delete) nor
+   any other row. It fades in on hover or keyboard focus, carrying the row's own
+   background so the title tail is masked only while you are actually pointing
+   at the row; at rest every row — open one included — reads as title and time.
+   Kept interactive at all times rather than collapsed to nothing, so a click
+   never has to wait for a transition and the buttons stay hit-testable. */
+.thread-actions {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  height: 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  padding-left: 20px;
+  background: linear-gradient(to right, transparent, var(--surface) 20px);
+  opacity: 0;
+}
+
+.thread:hover .thread-actions,
+.thread:focus-within .thread-actions {
+  opacity: 1;
+}
+
+/* Nothing hovers on a touch screen, so there the actions simply stay up. */
+@media (hover: none) {
+  .thread-actions {
+    opacity: 1;
+  }
+}
+
 .thread-delete,
 .thread-split {
   width: 26px;
@@ -830,17 +875,7 @@ label,
   border-radius: 5px;
   background: transparent;
   color: var(--text-dim);
-  opacity: 0;
   cursor: pointer;
-}
-
-.thread:hover .thread-delete,
-.thread.active .thread-delete,
-.thread-delete:focus-visible,
-.thread:hover .thread-split,
-.thread.active .thread-split,
-.thread-split:focus-visible {
-  opacity: 1;
 }
 
 .thread-delete:hover,
@@ -849,9 +884,6 @@ label,
   color: var(--text);
 }
 
-/* The share toggle rides only the open thread, so it stays visible rather than
-   revealing on hover the way the split/delete actions do — it is that thread's
-   primary affordance, not an incidental one. */
 .thread-share {
   width: 26px;
   height: 26px;
@@ -4859,13 +4891,21 @@ label,
   background: var(--surface);
 }
 
+/* A field row is usable on its own — the API-tokens and Email-in cards use one
+   as the whole form, with no `.mcp-form` panel around it — so it carries the
+   field styling too rather than only the two-column split. Without this the
+   bare rows fell through to the browser's default label/input rendering: an
+   inline label butted against an unstyled grey box. `end` keeps the submit
+   button on the input's baseline now that the label sits above it. */
 .mcp-form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  align-items: end;
   gap: 14px;
 }
 
-.mcp-form label {
+.mcp-form label,
+.mcp-form-row label {
   display: block;
   color: var(--text-muted);
   font-size: 11px;
@@ -4873,7 +4913,10 @@ label,
 
 .mcp-form input,
 .mcp-form select,
-.mcp-form textarea {
+.mcp-form textarea,
+.mcp-form-row input,
+.mcp-form-row select,
+.mcp-form-row textarea {
   width: 100%;
   margin-top: 5px;
   padding: 8px 10px;
@@ -4989,6 +5032,19 @@ label,
 
 .mcp-tool:hover {
   background: var(--surface-hover);
+}
+
+/* A tool row inside a form is still a `label`, so `.mcp-form label` — a class
+   AND a type — outranked the rule above and flattened the row back to a block:
+   the tick box stretched the row's width and the event name butted against its
+   description. The row keeps its own layout, and the tick box its own size. */
+.mcp-form .mcp-tool {
+  display: flex;
+}
+
+.mcp-tool input[type="checkbox"] {
+  width: auto;
+  margin-top: 0;
 }
 
 .mcp-tool code {

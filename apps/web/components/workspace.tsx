@@ -421,75 +421,83 @@ export function Workspace() {
         )}
         <time>{formatRelative(conversation.updated_at)}</time>
       </button>
-      {/* Rename rides only the OPEN thread, like share: an affordance on every
-          row is sidebar noise. Subject threads are named by what they hang
-          off, so they never offer it — the server refuses anyway. */}
-      {activeConversation === conversation.id && !conversation.subject_id && (
+      {/* One cluster for every trailing action, always — the CSS floats it over
+          the row's right end instead of spending the title's width on it, so
+          the row's title survives however many actions land here. Anything
+          added later belongs INSIDE this div; thread-rail-css.test.ts fails if
+          it is not. */}
+      <div className="thread-actions">
+        {/* Rename rides only the OPEN thread, like share: an affordance on
+            every row is sidebar noise. Subject threads are named by what they
+            hang off, so they never offer it — the server refuses anyway. */}
+        {activeConversation === conversation.id && !conversation.subject_id && (
+          <button
+            className="thread-rename"
+            title="Rename thread"
+            aria-label={`Rename ${conversation.title}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              setRenamingId(conversation.id);
+              setRenameDraft(conversation.title);
+            }}
+          >
+            <Pencil size={13} />
+          </button>
+        )}
+        {share && (
+          <button
+            className={share.shared ? "thread-share shared" : "thread-share"}
+            title={share.title}
+            aria-label={share.ariaLabel}
+            aria-pressed={share.pressed}
+            onClick={(event) => {
+              event.stopPropagation();
+              void shareConversation(conversation.id, !conversation.shared);
+            }}
+          >
+            {share.shared ? <Users size={13} /> : <Share2 size={13} />}
+          </button>
+        )}
         <button
-          className="thread-rename"
-          title="Rename thread"
-          aria-label={`Rename ${conversation.title}`}
+          className="thread-split"
+          title="Open in a new pane"
+          aria-label={`Open ${conversation.title} in a new pane`}
           onClick={(event) => {
             event.stopPropagation();
-            setRenamingId(conversation.id);
-            setRenameDraft(conversation.title);
+            openInNewPane(conversation.id);
           }}
         >
-          <Pencil size={13} />
+          <Columns2 size={13} />
         </button>
-      )}
-      {share && (
+        {/* Comments ride only the OPEN thread, like rename and share: the
+            drawer is about the thread you are looking at, not any row you can
+            reach. */}
+        {activeConversation === conversation.id && (
+          <button
+            className="thread-comments"
+            title="Comments on this thread"
+            aria-label={`Comments on ${conversation.title}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              setCommentSubject({
+                kind: "conversation",
+                id: conversation.id,
+                label: conversation.title,
+              });
+            }}
+          >
+            <MessageSquareText size={13} />
+          </button>
+        )}
         <button
-          className={share.shared ? "thread-share shared" : "thread-share"}
-          title={share.title}
-          aria-label={share.ariaLabel}
-          aria-pressed={share.pressed}
-          onClick={(event) => {
-            event.stopPropagation();
-            void shareConversation(conversation.id, !conversation.shared);
-          }}
+          className="thread-delete"
+          title="Delete chat"
+          aria-label={`Delete ${conversation.title}`}
+          onClick={(event) => void removeConversation(conversation, event)}
         >
-          {share.shared ? <Users size={13} /> : <Share2 size={13} />}
+          <Trash2 size={13} />
         </button>
-      )}
-      <button
-        className="thread-split"
-        title="Open in a new pane"
-        aria-label={`Open ${conversation.title} in a new pane`}
-        onClick={(event) => {
-          event.stopPropagation();
-          openInNewPane(conversation.id);
-        }}
-      >
-        <Columns2 size={13} />
-      </button>
-      {/* Comments ride only the OPEN thread, like rename and share: the drawer
-          is about the thread you are looking at, not any row you can reach. */}
-      {activeConversation === conversation.id && (
-        <button
-          className="thread-comments"
-          title="Comments on this thread"
-          aria-label={`Comments on ${conversation.title}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            setCommentSubject({
-              kind: "conversation",
-              id: conversation.id,
-              label: conversation.title,
-            });
-          }}
-        >
-          <MessageSquareText size={13} />
-        </button>
-      )}
-      <button
-        className="thread-delete"
-        title="Delete chat"
-        aria-label={`Delete ${conversation.title}`}
-        onClick={(event) => void removeConversation(conversation, event)}
-      >
-        <Trash2 size={13} />
-      </button>
+      </div>
     </div>
     );
   };
