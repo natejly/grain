@@ -292,6 +292,18 @@ variable "github_repo" {
   default     = ""
 }
 
+variable "github_repo_subject" {
+  description = <<-EOT
+    The owner/name as it appears in the OIDC token's `sub`, WITH the numeric
+    ids GitHub's immutable-id subjects carry — e.g.
+    "natejly@141955513/grain@1330287696". Read it from a real token rather than
+    assuming: CloudTrail's userName on a failed AssumeRoleWithWebIdentity shows
+    the exact subject that was presented. Empty falls back to `github_repo`.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "github_environment" {
   description = <<-EOT
     Name of the GitHub environment the deploy job runs in ("uat", "production").

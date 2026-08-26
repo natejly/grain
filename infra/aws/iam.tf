@@ -462,8 +462,19 @@ resource "aws_iam_role" "deploy" {
         // access itself, and a fork's pull request cannot reach one without a
         // reviewer letting it. The ref form stays for any future job that
         // deploys from the default branch without naming an environment.
+        //
+        // Second correction, from CloudTrail rather than from reading docs:
+        // this account's tokens carry GitHub's IMMUTABLE-ID subject, so the
+        // owner and repository arrive with their numeric ids attached —
+        // observed verbatim as
+        //   repo:natejly@141955513/grain@1330287696:environment:uat
+        // not `repo:natejly/grain:...`. Both halves were wrong, which is why
+        // no deploy ever authenticated. `github_repo_subject` carries the
+        // id-bearing form; the plain form stays as a fallback in case the
+        // account is ever switched back off it.
         StringLike = {
           "token.actions.githubusercontent.com:sub" = compact([
+            (var.github_repo_subject != "" && var.github_environment != "") ? "repo:${var.github_repo_subject}:environment:${var.github_environment}" : "",
             var.github_environment != "" ? "repo:${var.github_repo}:environment:${var.github_environment}" : "",
             "repo:${var.github_repo}:ref:refs/heads/main",
           ])
