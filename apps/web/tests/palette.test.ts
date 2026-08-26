@@ -99,8 +99,15 @@ describe("matchPalette", () => {
     );
   });
 
-  it("is case-insensitive and bounded", () => {
+  it("is case-insensitive, and bounds searches but not the empty listing", () => {
     expect(matchPalette(rows, "BUDGET")[0].label).toBe("Budget questions");
-    expect(matchPalette(rows, "", 3)).toHaveLength(3);
+    expect(matchPalette(rows, "budget", 1)).toHaveLength(1);
+    // The empty palette answers "what can I even do" — a cap was silently
+    // eating every row after the ~22 views, so creates, layouts and the
+    // preference toggles were undiscoverable from the one surface built to
+    // surface them. The list scrolls; capabilities must all be in it.
+    const everything = matchPalette(rows, "", 3);
+    expect(everything.length).toBeGreaterThan(3);
+    expect(everything.every((row) => row.kind !== "thread")).toBe(true);
   });
 });

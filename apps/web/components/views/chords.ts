@@ -23,6 +23,20 @@ export const CHORD_VIEWS: ReadonlyArray<{ key: string; view: View; label: string
 /** How long a lone G stays armed before the chord lapses. */
 export const CHORD_WINDOW_MS = 1500;
 
+/** localStorage key for the kill-switch, following the `grain.*` convention. */
+export const CHORDS_KEY = "grain.chords";
+
+/** Decode the kill-switch: exactly "off" disables, anything else — missing,
+ *  malformed, hostile — leaves the chords on. Total, never a throw. */
+export function parseChordsEnabled(raw: string | null): boolean {
+  return raw !== "off";
+}
+
+/** Encode the kill-switch — the inverse of `parseChordsEnabled`. */
+export function serializeChordsEnabled(enabled: boolean): string {
+  return enabled ? "on" : "off";
+}
+
 /** The view a second keypress completes the chord to, or null. */
 export function chordTarget(key: string): View | null {
   const hit = CHORD_VIEWS.find((chord) => chord.key === key.toLowerCase());
@@ -48,17 +62,23 @@ export function isTypingContext(target: EventTarget | null): boolean {
 }
 
 /**
- * Whether a keydown may take part in a chord at all: a bare letter, no
- * modifiers (⌘G and ctrl+letter belong to the browser), not typed into a
- * field. The palette closes over its own keys before this is consulted.
+ * Whether a keydown may take part in a chord at all: the kill-switch is on,
+ * a bare letter, no modifiers (⌘G and ctrl+letter belong to the browser), not
+ * typed into a field. The palette closes over its own keys before this is
+ * consulted. `enabled` is the first argument rather than a shell-side guard so
+ * the switch and the key rules cannot be consulted separately and disagree.
  */
-export function chordEligible(event: {
-  key: string;
-  metaKey: boolean;
-  ctrlKey: boolean;
-  altKey: boolean;
-  target: EventTarget | null;
-}): boolean {
+export function chordEligible(
+  enabled: boolean,
+  event: {
+    key: string;
+    metaKey: boolean;
+    ctrlKey: boolean;
+    altKey: boolean;
+    target: EventTarget | null;
+  },
+): boolean {
+  if (!enabled) return false;
   if (event.metaKey || event.ctrlKey || event.altKey) return false;
   if (event.key.length !== 1) return false;
   return !isTypingContext(event.target);

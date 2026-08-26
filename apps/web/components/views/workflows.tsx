@@ -36,6 +36,7 @@ import {
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api } from "../api";
 import { BudgetHold } from "./budget";
+import { FavoriteStar, type FavoritesApi } from "./favorites";
 import { ProposalDiff } from "./proposal-diff";
 import { PublishDrawer } from "./publish-listing";
 import { describeError, formatRelative } from "./shared";
@@ -96,6 +97,8 @@ export type WorkflowsViewProps = {
    * pending edit without any of the shell's own refresh paths hearing about it.
    */
   onWorkspaceChanged?: () => void;
+  /** The shell's one favorites list; without it the header offers no star. */
+  favorites?: FavoritesApi;
 };
 
 /**
@@ -610,6 +613,7 @@ export function WorkflowsView({
   composeRequested = false,
   onComposeHandled,
   onWorkspaceChanged,
+  favorites,
 }: WorkflowsViewProps) {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   // Saved automation shapes, fetched with the roster: this panel owns its own
@@ -1255,6 +1259,14 @@ export function WorkflowsView({
               <p>{active.description || active.source_prompt}</p>
             </div>
             <div className="workflow-head-actions">
+              {favorites && (
+                <FavoriteStar
+                  kind="workflow"
+                  targetId={active.id}
+                  label={active.name}
+                  favorites={favorites}
+                />
+              )}
               <button
                 className="primary-button"
                 type="submit"

@@ -92,14 +92,18 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
     await expect(tabs(page, "Library").getByRole("button", { name: new RegExp(`^${entry}`) }))
       .toBeVisible();
   }
-  // Count matches the eleven entries above: the four-branch merge combined the
-  // marketplace's twelve (Boards and Lists still split) with the glyph merge
-  // that fused them, and the count kept the losing side's arithmetic.
-  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(11);
+  // 16, not 14: the five labelled shelf headings are collapse toggles — buttons
+  // in their own right — on top of the eleven view entries, Gallery included
+  // (the marketplace shelf this merge brings in, which folds like the rest).
+  // Their accessible names say the outcome ("Hide the Data section"), so none
+  // of the anchored per-entry matches above can land on a heading by mistake.
+  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(16);
   // The retired "Lists" entry stays gone: one destination, one listing.
   await expect(tabs(page, "Library").getByRole("button", { name: /^Lists/ })).toHaveCount(0);
   await expect(tabs(page, "Library").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
-  // The shelves say their names.
+  // The shelves say their names — and fold: a heading hides its entries and
+  // says so through aria-expanded, then brings them back. The unlabelled block
+  // has no heading, so Documents/Projects can never be folded away.
   for (const heading of [
     "Boards & todos",
     "Data",
@@ -111,6 +115,38 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
       tabs(page, "Library").locator(".section-heading", { hasText: heading }),
     ).toBeVisible();
   }
+  const dataToggle = tabs(page, "Library").getByRole("button", {
+    name: "Hide the Data section",
+  });
+  await expect(dataToggle).toHaveAttribute("aria-expanded", "true");
+  await dataToggle.click();
+  const foldedToggle = tabs(page, "Library").getByRole("button", {
+    name: "Show the Data section",
+  });
+  await expect(foldedToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(tabs(page, "Library").getByRole("button", { name: /^Datasets/ }))
+    .toHaveCount(0);
+  // The palette still reaches a folded view, but the sidebar route comes back
+  // the moment the heading is pressed again.
+  await foldedToggle.click();
+  await expect(tabs(page, "Library").getByRole("button", { name: /^Datasets/ }))
+    .toBeVisible();
+
+  // Landing on a folded shelf's view unfolds the shelf: however you arrive —
+  // the palette here, a chord, an upload landing on Sources — the sidebar
+  // must always show a current row for where you are.
+  await dataToggle.click();
+  await expect(tabs(page, "Library").getByRole("button", { name: /^Datasets/ }))
+    .toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+k");
+  await page
+    .getByRole("dialog", { name: "Command palette" })
+    .getByRole("textbox")
+    .fill("datasets");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Datasets" })).toBeVisible();
+  await expect(tabs(page, "Library").getByRole("button", { name: /^Datasets/ }))
+    .toBeVisible();
 
   await shot(page, "library");
 

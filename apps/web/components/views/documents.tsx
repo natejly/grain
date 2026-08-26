@@ -28,6 +28,7 @@ import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
 import { ShareLinksModal } from "../share-links-modal";
+import { FavoriteStar, type FavoritesApi } from "./favorites";
 import { useDocumentThread } from "../use-document-thread";
 import {
   PendingEditList,
@@ -56,6 +57,9 @@ export type DocumentsViewProps = {
   /** Agent writes awaiting approval; optional until the workspace wires them. */
   pendingEdits?: PendingDocumentEdit[];
   decidePendingEdit?: HunkDecision & PendingDecision;
+  /** The shell's one favorites list; optional so a caller without the sidebar
+      block (tests, embeds) simply has no star. */
+  favorites?: FavoritesApi;
   /** What the side chat needs to be the same chat as the rail's. */
   chat?: DocumentChatDeps;
 };
@@ -128,6 +132,7 @@ export function DocumentsView({
   openComments,
   pendingEdits,
   decidePendingEdit,
+  favorites,
   chat,
 }: DocumentsViewProps) {
   const [draft, setDraft] = useState("");
@@ -402,6 +407,17 @@ export function DocumentsView({
               >
                 <History size={14} /> History
               </button>
+              {/* Beside Save because that is where "this document, as a
+                  thing" lives; the sidebar's Favorites block is what it
+                  feeds. */}
+              {favorites && (
+                <FavoriteStar
+                  kind="document"
+                  targetId={active.id}
+                  label={active.title}
+                  favorites={favorites}
+                />
+              )}
               <button
                 className="primary-button"
                 disabled={!dirty || editingPaused}

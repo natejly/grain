@@ -2,7 +2,7 @@
 
 import { ListChecks, Plus, Trash2 } from "lucide-react";
 import type { Board } from "@workspace/api-client";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { describeProgress, itemsOf } from "./todo-format";
 
 /**
@@ -77,9 +77,14 @@ export type TodoChecklistProps = {
   caption?: string;
   /** Chat renders a denser card with no delete affordances. */
   compact?: boolean;
+  /**
+   * Extra header controls the mounting page owns — the merged listing threads
+   * its favorite star through here. Chat's compact card passes nothing.
+   */
+  headerExtra?: ReactNode;
 };
 
-export function TodoChecklist({ list, ops, caption, compact }: TodoChecklistProps) {
+export function TodoChecklist({ list, ops, caption, compact, headerExtra }: TodoChecklistProps) {
   const items = itemsOf(list);
 
   return (
@@ -93,6 +98,7 @@ export function TodoChecklist({ list, ops, caption, compact }: TodoChecklistProp
           <h2>{list.name}</h2>
           <span className="todo-progress">{describeProgress(list)}</span>
         </div>
+        {!compact && headerExtra}
         {!compact && (
           <button
             className="icon-button"

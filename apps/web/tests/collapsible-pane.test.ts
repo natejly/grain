@@ -3,7 +3,10 @@ import {
   collapseKey,
   collapseLabel,
   persistCollapsed,
+  persistSectionCollapsed,
   readCollapsed,
+  readSectionCollapsed,
+  sectionCollapseKey,
 } from "../components/collapsible-pane";
 
 afterEach(() => window.localStorage.clear());
@@ -44,6 +47,28 @@ describe("readCollapsed / persistCollapsed", () => {
     persistCollapsed("rail", true);
     persistCollapsed("rail", false);
     expect(window.localStorage.getItem(collapseKey("rail"))).toBeNull();
+  });
+});
+
+describe("sidebar sections", () => {
+  it("keys per group and section, apart from the panes", () => {
+    // The shelves inside a destination's sidebar remember their folds under
+    // their own family — a section named like a pane must not collide with it.
+    expect(sectionCollapseKey("files", "data")).toBe("grain.section.files.data");
+    expect(sectionCollapseKey("files", "rail")).not.toBe(collapseKey("rail"));
+  });
+
+  it("round-trips one shelf without disturbing its neighbours, expanded by default", () => {
+    expect(readSectionCollapsed("files", "knowledge")).toBe(false);
+    persistSectionCollapsed("files", "knowledge", true);
+    expect(readSectionCollapsed("files", "knowledge")).toBe(true);
+    expect(readSectionCollapsed("files", "data")).toBe(false);
+    // Same total parse as the panes: anything but the stored "1" is showing.
+    window.localStorage.setItem(sectionCollapseKey("files", "data"), "yes");
+    expect(readSectionCollapsed("files", "data")).toBe(false);
+    // Expanding again leaves nothing behind.
+    persistSectionCollapsed("files", "knowledge", false);
+    expect(window.localStorage.getItem(sectionCollapseKey("files", "knowledge"))).toBeNull();
   });
 });
 
