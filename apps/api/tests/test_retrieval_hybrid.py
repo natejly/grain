@@ -31,6 +31,7 @@ from app.services.retrieval import (
     search_evidence,
     tokenize,
 )
+from tests.embedding_doubles import as_batch
 
 # Wide enough that two unrelated sentences do not collide into a high cosine:
 # with 16 buckets the hash stand-in scored everything against everything.
@@ -120,7 +121,7 @@ def test_retrieval_survives_an_embedding_provider_that_fails(workspace, monkeypa
         def _boom(texts, settings=None):
             raise RuntimeError("provider is down")
 
-        monkeypatch.setattr(retrieval_service, "embed_texts", _boom)
+        monkeypatch.setattr(retrieval_service, "embed_batch", as_batch(_boom))
 
         # Ingest-side: the chunk is written and indexed even though embedding failed.
         assert embed_chunks(db, chunks) == 0
@@ -151,8 +152,8 @@ def test_the_context_prefix_is_indexed_and_embedded_but_never_cited(workspace, m
 
         monkeypatch.setattr(
             retrieval_service,
-            "embed_texts",
-            lambda texts, settings=None: [_fake_vector(text) for text in texts],
+            "embed_batch",
+            as_batch(lambda texts, settings=None: [_fake_vector(text) for text in texts]),
         )
         embed_chunks(db, chunks)
         # The vector covers prefix + content: embedding the content alone would
@@ -277,8 +278,8 @@ def test_the_dense_arm_finds_what_no_shared_word_could(workspace, monkeypatch):
         # match the first chunk and nothing else.
         monkeypatch.setattr(
             retrieval_service,
-            "embed_texts",
-            lambda texts, settings=None: [_fake_vector(text) for text in texts],
+            "embed_batch",
+            as_batch(lambda texts, settings=None: [_fake_vector(text) for text in texts]),
         )
         embed_chunks(db, chunks)
         db.commit()
@@ -315,8 +316,8 @@ def test_switching_the_dense_arm_off_leaves_the_lexical_ranking_untouched(worksp
         db.commit()
         monkeypatch.setattr(
             retrieval_service,
-            "embed_texts",
-            lambda texts, settings=None: [_fake_vector(text) for text in texts],
+            "embed_batch",
+            as_batch(lambda texts, settings=None: [_fake_vector(text) for text in texts]),
         )
         embed_chunks(db, chunks)
         db.commit()
@@ -397,8 +398,8 @@ def test_a_query_with_nothing_but_stopwords_retrieves_nothing(workspace, monkeyp
         index_chunks(db, chunks)
         monkeypatch.setattr(
             retrieval_service,
-            "embed_texts",
-            lambda texts, settings=None: [_fake_vector(text) for text in texts],
+            "embed_batch",
+            as_batch(lambda texts, settings=None: [_fake_vector(text) for text in texts]),
         )
         embed_chunks(db, chunks)
         db.commit()
@@ -419,8 +420,8 @@ def test_the_dense_arm_does_not_cite_a_corpus_that_has_no_answer(workspace, monk
         index_chunks(db, chunks)
         monkeypatch.setattr(
             retrieval_service,
-            "embed_texts",
-            lambda texts, settings=None: [_fake_vector(text) for text in texts],
+            "embed_batch",
+            as_batch(lambda texts, settings=None: [_fake_vector(text) for text in texts]),
         )
         embed_chunks(db, chunks)
         db.commit()
@@ -473,8 +474,8 @@ def test_a_failing_blurb_call_does_not_take_the_index_and_vectors_with_it(
     monkeypatch.setattr(ingestion_service, "situate_chunk", _boom)
     monkeypatch.setattr(
         retrieval_service,
-        "embed_texts",
-        lambda texts, settings=None: [_fake_vector(text) for text in texts],
+        "embed_batch",
+        as_batch(lambda texts, settings=None: [_fake_vector(text) for text in texts]),
     )
     contextual = get_settings().model_copy(update={"retrieval_contextual": True})
     monkeypatch.setattr(ingestion_service, "get_settings", lambda: contextual)

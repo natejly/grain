@@ -24,9 +24,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from ..config import Settings, get_settings
-from ..models import Chunk, ChunkTerm, Source
+from ..models import Chunk, ChunkTerm, EmbeddingGeneration, EmbeddingVector, Source
+from . import embedding_generations as generations
 from .embeddings import (
-    embed_texts,
+    content_fingerprint,
+    embed_batch,
     query_cache_key,
     query_embedding_cache,
     ranked_cosine_scores,
@@ -181,17 +183,29 @@ def index_chunks(db: Session, chunks: Sequence[Chunk]) -> None:
 
 
 def clear_source_postings(db: Session, source_id: str) -> None:
-    """Drop the postings of every chunk of a source. The caller owns the commit.
+    """Drop the postings and vectors of every chunk of a source.
+
+    The caller owns the commit.
 
     Postings reference chunks, so anything that deletes chunks has to delete these
     first — on SQLite an orphan is a slow storage leak, and on Postgres the
     foreign key makes it an outright failure to delete the source.
+
+    Vectors go with them, across *every* generation rather than only the active
+    one. A vector left behind in a retired generation is not inert: it is a
+    deleted document waiting to be resurrected by a rollback, and `owner_id` would
+    by then point at a chunk row that no longer exists.
     """
-    db.execute(
-        delete(ChunkTerm).where(
-            ChunkTerm.chunk_id.in_(select(Chunk.id).where(Chunk.source_id == source_id))
-        )
-    )
+    chunk_ids = [
+        row_id
+        for (row_id,) in db.execute(
+            select(Chunk.id).where(Chunk.source_id == source_id)
+        ).all()
+    ]
+    if not chunk_ids:
+        return
+    generations.drop_vectors(db, owner_kind=generations.CHUNK, owner_ids=chunk_ids)
+    db.execute(delete(ChunkTerm).where(ChunkTerm.chunk_id.in_(chunk_ids)))
 
 
 def reconcile_index(
@@ -224,6 +238,48 @@ def reconcile_index(
     return len(pending)
 
 
+def chunks_needing_embedding(
+    db: Session, chunks: Sequence[Chunk], settings: Optional[Settings] = None
+) -> List[Chunk]:
+    """Which of these chunks lack a current vector under the generation we write to.
+
+    Three ways to need one: no vector in that generation at all, or a vector whose
+    `content_hash` no longer matches the text the chunk now holds, or a chunk we
+    have never hashed.
+
+    The hash is what closes a real hole. Re-ingesting a source rewrites `content`
+    in place, and the old predicate asked only whether *a* vector existed under
+    the configured model name — which it did, describing the previous revision of
+    the text. The chunk stayed retrievable, kept its confident cosine, and pointed
+    at words it no longer contained, with nothing anywhere reporting a problem.
+    Comparing hashes turns that into an ordinary re-embed.
+
+    Rows carrying an empty stored hash are treated as stale exactly once: 0068
+    could not know which formatter produced the vectors it inherited, so it
+    recorded no hash rather than asserting a false one, and the first reconcile
+    after the migration re-embeds them and settles the question.
+    """
+    settings = settings or get_settings()
+    if not chunks:
+        return []
+    generation = generations.writable_generation(db, settings)
+    known = {
+        row.owner_id: row.content_hash
+        for row in db.execute(
+            select(EmbeddingVector).where(
+                EmbeddingVector.generation_id == generation.id,
+                EmbeddingVector.owner_kind == generations.CHUNK,
+                EmbeddingVector.owner_id.in_([chunk.id for chunk in chunks]),
+            )
+        ).scalars()
+    }
+    return [
+        chunk
+        for chunk in chunks
+        if known.get(chunk.id, "") != content_fingerprint(indexed_text(chunk))
+    ]
+
+
 def embed_chunks(
     db: Session, chunks: Sequence[Chunk], settings: Optional[Settings] = None
 ) -> int:
@@ -239,25 +295,47 @@ def embed_chunks(
     if not pending:
         return 0
     model = settings.openai_embedding_model
+    generation = generations.writable_generation(db, settings)
     embedded = 0
     for start in range(0, len(pending), EMBED_BATCH):
         batch = pending[start : start + EMBED_BATCH]
+        texts = [indexed_text(chunk) for chunk in batch]
         try:
             # Attributed off the rows themselves, so every path that embeds a
             # corpus — ingest, the backfill script, a reconcile — is billed
             # without each having to remember to say so.
             with usage_scope(workspace_id=batch[0].workspace_id):
-                vectors = embed_texts([indexed_text(chunk) for chunk in batch], settings)
+                result = embed_batch(
+                    texts,
+                    settings,
+                    dimensions=generation.dimensions,
+                    dtype=generation.storage_dtype,
+                )
         except Exception:
             logger.warning("chunk embedding failed; retrieval stays lexical", exc_info=True)
             continue
-        if not vectors:
+        if result is None or not result.blobs:
             # None means "no provider configured", which is a mode, not a failure,
             # and will not improve on the next batch.
             break
+        if result.revision and not generation.revision:
+            # First answer from the provider under this contract: record what it
+            # actually said it was, rather than what we asked for.
+            generation.revision = result.revision
         # strict=False: a short response from an external API should embed fewer
         # chunks, not lose the whole batch.
-        for chunk, vector in zip(batch, vectors, strict=False):
+        for chunk, text, vector in zip(batch, texts, result.blobs, strict=False):
+            generations.store_vector(
+                db,
+                generation=generation,
+                owner_kind=generations.CHUNK,
+                owner_id=chunk.id,
+                workspace_id=chunk.workspace_id,
+                vector=vector,
+                content_hash=content_fingerprint(text),
+            )
+            # Kept in step for the downgrade path and for anything still reading
+            # the column; the dense arm reads `embedding_vectors`.
             chunk.embedding = vector
             chunk.embedding_model = model
             embedded += 1
@@ -471,7 +549,9 @@ def bm25_ranking(
     return ranked
 
 
-def _embed_query(query: str, settings: Settings) -> Optional[bytes]:
+def _embed_query(
+    query: str, settings: Settings, generation: EmbeddingGeneration
+) -> Optional[bytes]:
     """This turn's query vector, from the LRU when we already paid for it.
 
     Shares the process-wide cache with memory recall on purpose: `search_evidence`
@@ -479,20 +559,35 @@ def _embed_query(query: str, settings: Settings) -> Optional[bytes]:
     `search_sources`, and recall embeds that same prompt. One round-trip of
     ~50-200ms is the entire added latency of the dense arm, so paying it three
     times for one turn's identical text is the whole cost, tripled, for nothing.
+
+    The query is embedded under the *reading* generation's contract, not the
+    configured one. During a migration those differ on purpose — new documents
+    are being written into a generation nothing reads yet — and embedding the
+    query at the new width would produce a vector that cannot be compared to a
+    single row the dense arm is about to score.
     """
     if not query.strip():
         return None
     key = query_cache_key(
-        query, settings.openai_embedding_model, settings.active_model_provider
+        query,
+        generation.model,
+        settings.active_model_provider,
+        generation.id,
     )
     cached = query_embedding_cache.get(key)
     if cached is not None:
         return cached
-    vectors = embed_texts([query], settings)
-    if not vectors:
+    result = embed_batch(
+        [query],
+        settings,
+        model=generation.model,
+        dimensions=generation.dimensions,
+        dtype=generation.storage_dtype,
+    )
+    if result is None or not result.blobs:
         return None
-    query_embedding_cache.put(key, vectors[0])
-    return vectors[0]
+    query_embedding_cache.put(key, result.blobs[0])
+    return result.blobs[0]
 
 
 def dense_ranking(
@@ -517,34 +612,53 @@ def dense_ranking(
     worse than none.
     """
     settings = settings or get_settings()
+    generation = generations.active_generation(db)
+    if generation is None:
+        # No contract has been established, so nothing has been embedded under one
+        # and there is nothing here to rank. Lexical-only, same as a missing
+        # provider.
+        return []
     try:
         with usage_scope(workspace_id=workspace_id):
-            query_blob = _embed_query(query, settings)
+            query_blob = _embed_query(query, settings, generation)
     except Exception:
         logger.warning("retrieval degraded to lexical-only: embedding failed", exc_info=True)
         return []
     if not query_blob:
         return []
     rows = db.execute(
-        select(Chunk.id, Chunk.embedding)
+        select(EmbeddingVector.owner_id, EmbeddingVector.vector)
+        .join(Chunk, Chunk.id == EmbeddingVector.owner_id)
         .join(Source, Source.id == Chunk.source_id)
         .where(
+            # One generation, so everything scored here was produced by one model,
+            # at one width, with one normalisation. This is what the old
+            # `embedding_model ==` filter was reaching for and could not express:
+            # two models can agree on a name's worth of metadata and still write
+            # vectors that must never be compared.
+            EmbeddingVector.generation_id == generation.id,
+            EmbeddingVector.owner_kind == generations.CHUNK,
+            EmbeddingVector.workspace_id == workspace_id,
             Chunk.workspace_id == workspace_id,
             Source.workspace_id == workspace_id,
             *_live_sources(space_id),
-            Chunk.embedding.is_not(None),
-            # Vectors from two embedding models are not comparable, and same-width
-            # vectors from different models are the case the length guard cannot
-            # catch. Cheaper to exclude them in SQL than to score them wrongly.
-            Chunk.embedding_model == settings.openai_embedding_model,
         )
         .order_by(Chunk.created_at.desc(), Chunk.id)
         .limit(settings.retrieval_vector_candidate_cap)
     ).all()
     ranked = ranked_cosine_scores(
-        [(str(row_id), blob) for row_id, blob in rows], query_blob
+        [(str(row_id), blob) for row_id, blob in rows],
+        query_blob,
+        generation.storage_dtype,
     )
-    floor = settings.retrieval_dense_floor
+    # The generation's floor unless this deployment set one explicitly. Cosine
+    # between unrelated vectors rises as dimensionality falls, so a floor
+    # calibrated at one width admits roughly twice the noise at a quarter of it —
+    # measured on the eval corpus, 0.30 lets 11.5% of pairs through at 1536
+    # dimensions and 24.4% at 256. The floor is a property of the geometry, so it
+    # travels with the contract that produced it; see `effective_floor` for why an
+    # explicit override still wins.
+    floor = generations.effective_floor(generation, settings)
     # Sorted descending, so the first score below the floor ends the ranking.
     for position, (_chunk_id, score) in enumerate(ranked):
         if score < floor:

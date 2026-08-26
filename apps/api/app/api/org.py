@@ -49,6 +49,7 @@ from ..models import (
     new_id,
 )
 from ..schemas import ApiModel
+from ..services import embedding_generations as generations
 from ..services import orgs
 from ..services.agent_loop import CHAT_SCOPE, WORKFLOW_SCOPE
 from ..services.audit import record_audit
@@ -442,3 +443,95 @@ def set_org_member_role(
     db.commit()
     db.refresh(row)
     return _member_out(row, user, actor)
+
+
+# --------------------------------------------------------------------------
+# Retrieval contract
+
+
+class EmbeddingCoverageOut(ApiModel):
+    table: str
+    covered: int
+    pending: int
+    unembedded: int
+
+
+class EmbeddingGenerationOut(ApiModel):
+    id: str
+    model: str
+    #: What the provider answered with, which for OpenAI is currently the same
+    #: alias it was asked for. Empty on a generation backfilled by 0068, because
+    #: nothing recorded it at the time and inventing it would be worse.
+    revision: str
+    dimensions: int
+    storage_dtype: str
+    normalization: str
+    input_format: str
+    #: The cosine below which this generation's vectors do not enter fusion.
+    #: Carried per generation because it does not survive a change of width.
+    dense_floor: float
+    status: str
+    note: str
+    created_at: datetime
+    activated_at: Optional[datetime]
+    #: Only populated for the active generation — coverage is several counting
+    #: queries per table, and running them for every retired generation would
+    #: make this endpoint quadratic in a history nobody is reading.
+    coverage: List[EmbeddingCoverageOut]
+
+
+@router.get("/retrieval-contract", response_model=List[EmbeddingGenerationOut])
+def list_embedding_generations(
+    actor: Actor = Depends(require_org_admin),
+    db: Session = Depends(get_db),
+) -> List[EmbeddingGenerationOut]:
+    """How this deployment embeds text, and how much of the corpus agrees.
+
+    Read-only, and that is a decision rather than an omission. Building and
+    activating a generation is an operator action with a corpus-wide blast
+    radius, it is guarded by a coverage check that wants a human reading the
+    numbers, and it belongs to the deployment rather than to any one org — so it
+    lives in `scripts/rebuild_embeddings.py`, where it is reviewable, scriptable
+    and logged. What an admin needs from a console is the answer to "is a
+    migration in progress, and how far along is it", which is exactly what a
+    `building` generation with a pending count is.
+
+    Deployment-wide rows on an org-scoped router, which is worth being explicit
+    about: there is no `organization_id` here to filter on, because two orgs
+    disagreeing about what a vector means is not a state the system can hold. The
+    gate is still `require_org_admin` — the rows describe model names, widths and
+    corpus sizes, which is posture, not tenant data, and the same class of thing
+    `GET /api/org` already returns.
+    """
+    active_id = getattr(generations.active_generation(db), "id", None)
+    out: List[EmbeddingGenerationOut] = []
+    for row in generations.list_generations(db):
+        coverage = (
+            generations.coverage(db, row).tables if row.id == active_id else []
+        )
+        out.append(
+            EmbeddingGenerationOut(
+                id=row.id,
+                model=row.model,
+                revision=row.revision,
+                dimensions=row.dimensions,
+                storage_dtype=row.storage_dtype,
+                normalization=row.normalization,
+                input_format=row.input_format,
+                dense_floor=row.dense_floor,
+                status=row.status,
+                note=row.note,
+                created_at=row.created_at,
+                activated_at=row.activated_at,
+                coverage=[
+                    EmbeddingCoverageOut(
+                        table=item.table,
+                        covered=item.covered,
+                        pending=item.pending,
+                        unembedded=item.unembedded,
+                    )
+                    for item in coverage
+                ],
+            )
+        )
+    return out
