@@ -1,6 +1,50 @@
 {
   "components": {
     "schemas": {
+      "ActivityRunOut": {
+        "description": "One run, as the coworking surfaces care about it: who is doing what\nwhere \u2014 never the transcript.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_label": {
+            "title": "Agent Label",
+            "type": "string"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "intent": {
+            "title": "Intent",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "conversation_id",
+          "status",
+          "agent_id",
+          "agent_label",
+          "intent",
+          "created_by"
+        ],
+        "title": "ActivityRunOut",
+        "type": "object"
+      },
       "AddEntryOut": {
         "properties": {
           "created": {
@@ -2246,6 +2290,43 @@
             "title": "Body",
             "type": "string"
           },
+          "claim_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Expires At"
+          },
+          "claimed": {
+            "default": false,
+            "title": "Claimed",
+            "type": "boolean"
+          },
+          "claimed_by": {
+            "default": "",
+            "title": "Claimed By",
+            "type": "string"
+          },
+          "claimed_kind": {
+            "default": "",
+            "title": "Claimed Kind",
+            "type": "string"
+          },
+          "claimed_label": {
+            "default": "",
+            "title": "Claimed Label",
+            "type": "string"
+          },
+          "claimed_run_id": {
+            "default": "",
+            "title": "Claimed Run Id",
+            "type": "string"
+          },
           "done": {
             "default": false,
             "title": "Done",
@@ -2423,6 +2504,11 @@
           },
           "model_provider": {
             "$ref": "#/components/schemas/ModelProviderStatus"
+          },
+          "safe_mode": {
+            "default": false,
+            "title": "Safe Mode",
+            "type": "boolean"
           },
           "screen": {
             "$ref": "#/components/schemas/ScreenStatus"
@@ -2920,7 +3006,7 @@
       "ConversationOut": {
         "properties": {
           "approval_mode": {
-            "default": "ask_writes",
+            "default": "auto_writes",
             "enum": [
               "ask_writes",
               "ask_all",
@@ -3067,6 +3153,35 @@
           "title"
         ],
         "title": "ConversationTitleRequest",
+        "type": "object"
+      },
+      "CoworkingActivityOut": {
+        "properties": {
+          "last_event_sequence": {
+            "title": "Last Event Sequence",
+            "type": "integer"
+          },
+          "presences": {
+            "items": {
+              "$ref": "#/components/schemas/PresenceOut"
+            },
+            "title": "Presences",
+            "type": "array"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/ActivityRunOut"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "presences",
+          "last_event_sequence"
+        ],
+        "title": "CoworkingActivityOut",
         "type": "object"
       },
       "CronCreateRequest": {
@@ -7646,6 +7761,66 @@
         "title": "PlaygroundOut",
         "type": "object"
       },
+      "PresenceHeartbeat": {
+        "properties": {
+          "state": {
+            "additionalProperties": true,
+            "title": "State",
+            "type": "object"
+          },
+          "surface": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Surface",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface"
+        ],
+        "title": "PresenceHeartbeat",
+        "type": "object"
+      },
+      "PresenceOut": {
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_kind": {
+            "title": "Actor Kind",
+            "type": "string"
+          },
+          "actor_label": {
+            "title": "Actor Label",
+            "type": "string"
+          },
+          "state": {
+            "additionalProperties": true,
+            "title": "State",
+            "type": "object"
+          },
+          "surface": {
+            "title": "Surface",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor_id",
+          "actor_kind",
+          "actor_label",
+          "surface",
+          "state",
+          "updated_at"
+        ],
+        "title": "PresenceOut",
+        "type": "object"
+      },
       "ProjectEntryRequest": {
         "description": "Which file the preview renders. See `store.set_entry_path`.",
         "properties": {
@@ -8047,6 +8222,32 @@
           "outcome"
         ],
         "title": "RunUndoSkippedOut",
+        "type": "object"
+      },
+      "SafeModePrefIn": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SafeModePrefIn",
+        "type": "object"
+      },
+      "SafeModePrefOut": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SafeModePrefOut",
         "type": "object"
       },
       "SandboxExecutionOut": {
@@ -9603,6 +9804,43 @@
             "title": "Body",
             "type": "string"
           },
+          "claim_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Expires At"
+          },
+          "claimed": {
+            "default": false,
+            "title": "Claimed",
+            "type": "boolean"
+          },
+          "claimed_by": {
+            "default": "",
+            "title": "Claimed By",
+            "type": "string"
+          },
+          "claimed_kind": {
+            "default": "",
+            "title": "Claimed Kind",
+            "type": "string"
+          },
+          "claimed_label": {
+            "default": "",
+            "title": "Claimed Label",
+            "type": "string"
+          },
+          "claimed_run_id": {
+            "default": "",
+            "title": "Claimed Run Id",
+            "type": "string"
+          },
           "done": {
             "title": "Done",
             "type": "boolean"
@@ -10977,6 +11215,22 @@
           }
         },
         "title": "WorkflowUpdateRequest",
+        "type": "object"
+      },
+      "WorkspaceCreate": {
+        "description": "A name, and nothing else.\n\nThe org the workspace lands in is never accepted from the client: it is\nderived from the caller (`api/auth.create_workspace`). Letting a body name\nan organization would be an authority the rest of the tier does not grant \u2014\nan org admin binds workspaces they govern, and nobody adopts a workspace\ninto someone else's org by asking.",
+        "properties": {
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkspaceCreate",
         "type": "object"
       },
       "WorkspaceMembershipOut": {
@@ -12666,17 +12920,6 @@
         "parameters": [
           {
             "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 8,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
@@ -12689,6 +12932,17 @@
                 }
               ],
               "title": "X-Workspace-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
@@ -12917,17 +13171,6 @@
           },
           {
             "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 8,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
@@ -12940,6 +13183,17 @@
                 }
               ],
               "title": "X-Workspace-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
@@ -14033,6 +14287,64 @@
           }
         },
         "summary": "List Workspaces",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "description": "Make a new workspace and put the caller in it as owner.\n\nUntil this existed a workspace could only be born as a side effect of\nsigning up (`_create_account`), so \"start a shared space for this project\"\nmeant making a second account. The row this writes is the same shape that\npath writes \u2014 workspace, owner `Membership`, one starter agent \u2014 because a\nworkspace that came in through the other door and is missing an agent is a\nworkspace where the first chat has nothing to answer it.\n\nThe organization is derived, never accepted: the caller's own org if they\nfounded one, otherwise a fresh org with them as admin. Reading it off the\nrequest would let anyone graft a workspace into an org they merely belong\nto and inherit \u2014 or escape \u2014 a policy posture they do not hold.\n\nOwner, not member: the person who made it must be able to invite into it\n(`POST /api/admin/invites` is `require_owner`), and an unshareable\nworkspace is the thing this endpoint exists to stop.",
+        "operationId": "create_workspace_api_auth_workspaces_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMembershipOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Workspace",
         "tags": [
           "auth"
         ]
@@ -15816,17 +16128,6 @@
           },
           {
             "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 8,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
@@ -15839,6 +16140,17 @@
                 }
               ],
               "title": "X-Workspace-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
@@ -15905,17 +16217,6 @@
           },
           {
             "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 8,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
@@ -15928,6 +16229,17 @@
                 }
               ],
               "title": "X-Workspace-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
@@ -16104,6 +16416,362 @@
         "summary": "Rename Conversation",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/api/coworking/activity": {
+      "get": {
+        "description": "The snapshot a shell paints before subscribing: runs in flight, who is\nwhere, and the stream cursor to resume from so nothing lands between.",
+        "operationId": "activity_api_coworking_activity_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoworkingActivityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activity",
+        "tags": [
+          "coworking"
+        ]
+      }
+    },
+    "/api/coworking/items/{item_id}/claim": {
+      "post": {
+        "operationId": "claim_item_api_coworking_items__item_id__claim_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodoItemOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim Item",
+        "tags": [
+          "coworking"
+        ]
+      }
+    },
+    "/api/coworking/items/{item_id}/release": {
+      "post": {
+        "description": "Release a claim. `force` lets a user take any claim off a card \u2014 humans\noutrank agents on their own board; agents have no such override.",
+        "operationId": "release_item_api_coworking_items__item_id__release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodoItemOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Item",
+        "tags": [
+          "coworking"
+        ]
+      }
+    },
+    "/api/coworking/presence": {
+      "delete": {
+        "description": "The explicit goodbye a closing tab sends, so chips clear in one tick\ninstead of a TTL. Best-effort: a tab that dies silently expires anyway.",
+        "operationId": "leave_api_coworking_presence_delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Surface",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Leave",
+        "tags": [
+          "coworking"
+        ]
+      },
+      "post": {
+        "operationId": "heartbeat_api_coworking_presence_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresenceHeartbeat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresenceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Heartbeat",
+        "tags": [
+          "coworking"
+        ]
+      }
+    },
+    "/api/coworking/stream": {
+      "get": {
+        "description": "The workspace's one live connection. Never terminates on its own \u2014 the\nshell owns its lifetime, unlike a run stream, which ends with its run.\n`once` bounds it to a single pass instead: the poll-shaped reading.",
+        "operationId": "stream_api_coworking_stream_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "once",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Once",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream",
+        "tags": [
+          "coworking"
         ]
       }
     },
@@ -19192,17 +19860,6 @@
         "parameters": [
           {
             "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 8,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
@@ -19215,6 +19872,17 @@
                 }
               ],
               "title": "X-Workspace-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
@@ -21352,6 +22020,66 @@
           }
         },
         "summary": "Update Digest Prefs",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/me/safe-mode": {
+      "put": {
+        "description": "Turn the approval step on or off for the caller's future threads.\n\nA seed, not a switch on anything already running: it changes what\n`services.conversations.default_approval_mode` hands the next thread this\nmember creates, and touches no existing conversation. That is the whole\nreason it can be a plain preference rather than a privileged operation \u2014\nturning it *off* cannot loosen a thread a colleague is watching, and\nturning it *on* cannot strand one mid-turn.\n\nAudited on both edges. Off is the interesting direction, and an audit trail\nthat only recorded the cautious half would be no trail at all.",
+        "operationId": "update_safe_mode_api_me_safe_mode_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SafeModePrefIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SafeModePrefOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Safe Mode",
         "tags": [
           "me"
         ]
@@ -23863,17 +24591,6 @@
         "parameters": [
           {
             "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 8,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
@@ -23886,6 +24603,17 @@
                 }
               ],
               "title": "X-Workspace-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
@@ -24610,17 +25338,6 @@
         "parameters": [
           {
             "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 8,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-workspace-id",
             "required": false,
             "schema": {
@@ -24633,6 +25350,17 @@
                 }
               ],
               "title": "X-Workspace-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
