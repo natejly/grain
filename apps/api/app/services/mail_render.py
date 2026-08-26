@@ -12,12 +12,15 @@ Pure string builders shared by every feature that mails rendered content
 
 No settings, no database, no I/O: callers assemble the fragments into an
 :class:`~app.services.auth.email.OutboundEmail` ``html`` field themselves and
-always pair it with a complete plain-text ``body``.
+always pair it with a complete plain-text ``body``. That text/HTML parity is a
+caller obligation by convention — this module renders the HTML half only, and
+nothing here can check that the plain body says the same thing.
 """
 from __future__ import annotations
 
 import html
 from typing import Sequence
+from urllib.parse import urlsplit
 
 _FONT = "font-family:Arial,Helvetica,sans-serif;"
 
@@ -71,7 +74,19 @@ def render_table(
 
 def render_link_button(label: str, url: str) -> str:
     """A button-styled link. The URL is escaped as an attribute value (quotes
-    included), so a URL carrying ``"`` or ``&`` cannot break out of ``href``."""
+    included), so a URL carrying ``"`` or ``&`` cannot break out of ``href``.
+
+    The URL must be an absolute ``http://`` or ``https://`` address — anything
+    else (``javascript:``, ``data:``, a scheme-relative or relative path)
+    raises :class:`ValueError`. Escaping keeps a URL from breaking out of the
+    attribute; the allowlist keeps the attribute itself from being a payload.
+    Every current caller passes a server-built URL (``settings.
+    primary_web_origin``), so a raise here is a programming error surfacing,
+    never user input winning.
+    """
+    scheme = urlsplit(url).scheme
+    if scheme not in ("http", "https"):
+        raise ValueError(f"link button URL must be http(s), got scheme {scheme!r}")
     return (
         '<p style="margin:16px 0;">'
         f'<a href="{html.escape(url, quote=True)}" style="{_BUTTON_STYLE}">'

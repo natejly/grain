@@ -5,6 +5,8 @@ seam (monkeypatching get_email_sender) still observes every field.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.config import get_settings
 from app.services import mail_render
 from app.services.auth import email as email_service
@@ -63,6 +65,30 @@ def test_render_link_button_escapes_label_and_url():
     assert "&lt;b&gt;Open&lt;/b&gt; dashboard" in fragment
     # The URL is escaped as an attribute value: quotes cannot close href.
     assert 'href="https://example.com/d?a=1&amp;b=&quot;&gt;&lt;script&gt;"' in fragment
+
+
+def test_render_link_button_refuses_every_non_http_scheme():
+    """Escaping keeps a URL inside the href attribute; the allowlist keeps the
+    attribute from being a payload. Callers pass server-built URLs, so a raise
+    is a programming error surfacing, never user input winning."""
+    for url in (
+        "javascript:alert(1)",
+        "JAVASCRIPT:alert(1)",
+        "data:text/html,<script>x</script>",
+        "vbscript:msgbox",
+        "//example.com/scheme-relative",
+        "/relative/path",
+        "",
+    ):
+        with pytest.raises(ValueError):
+            mail_render.render_link_button("Open", url)
+    # The two allowed schemes still render.
+    assert 'href="http://example.com"' in mail_render.render_link_button(
+        "Open", "http://example.com"
+    )
+    assert 'href="https://example.com"' in mail_render.render_link_button(
+        "Open", "https://example.com"
+    )
 
 
 # --- SMTP multipart assembly --------------------------------------------------
