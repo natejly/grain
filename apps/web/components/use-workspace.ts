@@ -35,7 +35,7 @@ import type {
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { useCoworking } from "./use-coworking";
 import {
@@ -52,6 +52,7 @@ import {
 } from "./chat-panes";
 
 export type { ChatPane } from "./chat-panes";
+import { viewFromUrl, pushViewToUrl } from "./view-url";
 import { createBoardHandlers } from "./handlers/boards";
 import { createChatHandlers } from "./handlers/chat";
 import { createApprovalHandlers } from "./handlers/approvals";
@@ -131,7 +132,31 @@ export function useWorkspace() {
   const [dbConnections, setDbConnections] = useState<DbConnection[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [activeProject, setActiveProject] = useState<WorkspaceProject | null>(null);
-  const [view, setView] = useState<View>("chat");
+  // The active view lives in the URL as `?view=…` so a screen is deep-linkable
+  // and back/forward moves between views. The state stays the source of truth
+  // for the render; the URL is a projection of it. SSR and hydration both
+  // render the "chat" default so they agree, then a mount effect adopts the
+  // URL's view on the client without a hydration mismatch.
+  const [view, setViewRaw] = useState<View>("chat");
+  // Keep the current view in a ref so the wrapper below can resolve a
+  // functional updater without re-creating on every view change.
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const setView = useCallback((next: SetStateAction<View>) => {
+    const resolved = typeof next === "function" ? next(viewRef.current) : next;
+    setViewRaw(resolved);
+    pushViewToUrl(resolved);
+  }, []);
+  useEffect(() => {
+    const fromUrl = viewFromUrl(window.location.search);
+    if (fromUrl) setViewRaw(fromUrl);
+    const onPop = () => {
+      const next = viewFromUrl(window.location.search);
+      if (next) setViewRaw(next);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   // Extra chat panes open beside the primary shell chat, and which one holds the
   // split's focus. An empty list is today's single-pane shell — a guaranteed
   // no-regression path — so pane 0 (the shell's `activeConversation`) is
@@ -590,7 +615,7 @@ export function useWorkspace() {
     setView("chat");
     setSidebarOpen(false);
     return true;
-  }, []);
+  }, [setView]);
 
   const closePane = useCallback((paneId: string) => {
     setExtraPanes((panes) => removePane(panes, paneId));
@@ -839,7 +864,7 @@ export function useWorkspace() {
     window.history.replaceState(null, "", window.location.pathname);
     setView("integrations");
     if (failed) setError(`Could not connect ${failed}. Try again.`);
-  }, []);
+  }, [setView]);
 
   useEffect(() => {
     if (!sources.some((source) => ["queued", "processing"].includes(source.status))) {

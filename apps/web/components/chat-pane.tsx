@@ -184,7 +184,6 @@ export function ChatPane({
         sharedThread={conversation.shared}
         submitPrompt={thread.submitPrompt}
         cancelActiveRun={thread.cancelActiveRun}
-        steer={thread.steerActiveRun}
         regenerate={thread.regenerate}
         editMessage={thread.editMessage}
         viewerId={session?.user_id}

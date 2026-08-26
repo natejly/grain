@@ -35,11 +35,12 @@ import type {
   Skill,
   Source,
 } from "@workspace/api-client";
-import { FormEvent, useEffect, useState } from "react";
+import { type CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChatDashboardEmbeds } from "../chat-dashboard-embed";
 import { ArtifactImages } from "../source-image";
 import { autoApprovedCalls, isBypass } from "./approval-format";
@@ -59,7 +60,6 @@ import { describeCitationCheck } from "./citation-format";
 import { ProposalDiff } from "./proposal-diff";
 import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
 import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel } from "./shared";
-import { steerStripVisible } from "./steer-format";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
 
@@ -113,16 +113,6 @@ export type ChatViewProps = {
   sharedThread?: boolean;
   submitPrompt: (event?: FormEvent) => Promise<void>;
   cancelActiveRun: () => Promise<void>;
-  /**
-   * Add a mid-turn note to the run that is streaming right now. Resolves true
-   * when the note was delivered — the strip keeps the draft on failure, since
-   * an error banner far from the input is not a place to lose a sentence to.
-   * Optional: panels that mount ChatView without it show no steer strip, and
-   * the strip hides while the run is parked in ANY way — on an approval, on
-   * the spend ceiling, or with its card decided elsewhere — because a parked
-   * run wants a decision, not more words, and the server refuses with a 409.
-   */
-  steer?: (content: string) => Promise<boolean>;
   regenerate: () => Promise<void>;
   /**
    * Rewrite one of the viewer's own prompts and re-run the thread from there.
@@ -843,60 +833,8 @@ function ToolStatus({ call }: { call: AgentToolCall }) {
         </span>
       ) : null}
       {call.status}
-      {latency}
+          {latency}
     </span>
-  );
-}
-
-/**
- * The mid-turn steering strip: a one-line note into the run as it works.
- *
- * Its own component so the draft's state mounts and unmounts with the strip —
- * the same rule the attach popover follows: state that only makes sense while
- * the surface is visible lives inside it, and the unmount is the reset.
- */
-function SteerStrip({ steer }: { steer: (content: string) => Promise<boolean> }) {
-  const [note, setNote] = useState("");
-  const [sending, setSending] = useState(false);
-
-  async function send() {
-    const content = note.trim();
-    if (!content || sending) return;
-    setSending(true);
-    try {
-      // Only a delivered note clears the box: a 409 (the run parked or
-      // finished in the race) or a network failure keeps the user's sentence
-      // where they can resend or copy it into the composer.
-      if (await steer(content)) setNote("");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <div className="steer-strip">
-      <input
-        type="text"
-        aria-label="Add a note to the running turn"
-        placeholder="Add a note mid-task — it reaches the assistant before its next step"
-        value={note}
-        onChange={(event) => setNote(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            void send();
-          }
-        }}
-      />
-      <button
-        type="button"
-        className="ghost-button"
-        disabled={sending || !note.trim()}
-        onClick={() => void send()}
-      >
-        Steer
-      </button>
-    </div>
   );
 }
 
@@ -1074,7 +1012,6 @@ export function ChatView({
   sharedThread,
   submitPrompt,
   cancelActiveRun,
-  steer,
   regenerate,
   editMessage,
   viewerId,
@@ -1114,6 +1051,21 @@ export function ChatView({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [editSaving, setEditSaving] = useState(false);
+  // The transcript scroll container is the virtualizer's scroll element. The
+  // virtualizer only engages past 50 messages: below that the list is short
+  // enough that mounting every row is cheaper and friendlier to the jsdom test
+  // suite, and the streaming auto-scroll and edit-in-place paths stay exactly
+  // as they were. Past 50, only the visible window is mounted and measured as
+  // it scrolls into view — the Vercel "virtualize large lists" rule, applied
+  // only where it actually pays.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualize = messages.length > 50;
+  const rows = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 160,
+    overscan: 6,
+  });
   const submitEdit = async (messageId: string) => {
     // The button is aria-disabled rather than disabled while a run streams —
     // focus must survive the wait — so the guard lives here too. `editSaving`
@@ -1191,208 +1143,255 @@ export function ChatView({
       )
     : [];
 
+  // One message row, shared by the plain list and the virtualized window so the
+  // two paths can never drift. `articleProps` carries the virtualizer's ref,
+  // data-index and absolute-positioning style; the plain path passes nothing
+  // and the article lays out in normal flow exactly as it always has.
+  const renderMessage = (
+    message: Message,
+    articleProps?: {
+      ref?: (el: HTMLElement | null) => void;
+      "data-index"?: number;
+      style?: CSSProperties;
+    },
+  ) => {
+    // An aside ("/btw") is a user message with no run — a note the agent will
+    // read later, not a prompt it answered — so it wears a quieter treatment
+    // than a turn, and it never grows a pencil: there is no turn after it to
+    // re-run.
+    const aside = message.role === "user" && message.run_id === "";
+    const editable =
+      Boolean(editMessage) &&
+      !aside &&
+      senderIsViewer(message, Boolean(sharedThread), viewerId ?? "");
+    return (
+      <article
+        key={message.id}
+        className={`message ${message.role}${aside ? " aside" : ""}`}
+        ref={articleProps?.ref}
+        data-index={articleProps?.["data-index"]}
+        style={articleProps?.style}
+      >
+        {message.role === "assistant" &&
+          (() => {
+            const calls = callsForRun(message.run_id);
+            const showChecklist = checklistCallId(calls);
+            // The undo affordance rides the turn's tool-card group: it
+            // exists only where a finished run actually executed a
+            // call, never on the run still streaming. The handler owns
+            // the confirm and the skipped-effects summary.
+            const undoable =
+              undo &&
+              message.run_id !== activeRun &&
+              calls.some((call) => call.status === "succeeded");
+            return (
+              <>
+                {calls.map((call) => (
+                  <ToolCallCard
+                    key={call.id}
+                    call={call}
+                    decide={decideAgentCall}
+                    todos={call.id === showChecklist ? todos : undefined}
+                    pinning={pinning}
+                  />
+                ))}
+                {undoable && (
+                  <button
+                    type="button"
+                    className="fork-button undo-run-button"
+                    aria-label="Undo this run's changes"
+                    title="Undo this run's changes"
+                    onClick={() => void undo(message.run_id)}
+                  >
+                    <Undo2 size={13} />
+                    <span>Undo this run&rsquo;s changes</span>
+                  </button>
+                )}
+              </>
+            );
+          })()}
+        <div className="message-author">
+          {message.role === "user" ? (
+            <div className="tiny-avatar">
+              {senderInitial(message, Boolean(sharedThread))}
+            </div>
+          ) : (
+            <div className="assistant-mark">A</div>
+          )}
+          {/* On a shared thread the sender's name says who spoke — a
+              teammate's turn is not "You". On a personal thread every
+              user message is the caller's, so the name would be noise. */}
+          <span>{senderLabel(message, Boolean(sharedThread))}</span>
+          {message.role === "assistant" && message.content && (
+            <CopyButton value={message.content} label="Copy message" />
+          )}
+          {/* Disabled rather than hidden while a run streams: the
+              server would 409 an edit over a live turn, and a control
+              that vanishes and reappears reads as a bug. The name
+              quotes the prompt so each row's pencil is distinct to a
+              screen reader. */}
+          {editable && (
+            <button
+              type="button"
+              className="copy-button"
+              aria-label={`Edit: ${message.content.slice(0, 40)}`}
+              disabled={Boolean(activeRun)}
+              onClick={() => {
+                setEditingId(message.id);
+                setEditDraft(message.content);
+              }}
+            >
+              <Pencil size={13} /> Edit
+            </button>
+          )}
+          {/* Branch a fresh thread from everything said up to here.
+              Any message is a fork point — the reply you want to
+              re-ask after, or your own question worth re-asking — and
+              the server copies the prefix, so this is one call and a
+              jump, not a client-side splice. */}
+          {fork && (
+            <button
+              type="button"
+              className="fork-button"
+              aria-label="Fork thread from this message"
+              title="Fork thread from this message"
+              onClick={() => void fork(message.id)}
+            >
+              <GitFork size={13} />
+            </button>
+          )}
+        </div>
+        <div className="message-body">
+          {message.role === "assistant" ? (
+            <MarkdownBody content={message.content} />
+          ) : editingId === message.id ? (
+            <div className="message-edit">
+              <textarea
+                value={editDraft}
+                onChange={(event) => setEditDraft(event.target.value)}
+                aria-label="Edit message"
+                rows={3}
+                autoFocus
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void submitEdit(message.id);
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setEditingId(null);
+                  }
+                }}
+              />
+              {/* Said before the button is pressed, not discovered from its
+                  result. This is the one hint the minimal pass kept on this
+                  surface: it names an irreversible consequence rather than
+                  teaching an obvious control. */}
+              <p className="message-edit-note">
+                Saving re-runs the thread from here — the old answer and
+                everything after it are deleted.
+              </p>
+              <div className="message-edit-actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setEditingId(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  // `editSaving` is the in-flight half: `activeRun` only becomes
+                  // true AFTER the edit's round trip (followRun sets it), so
+                  // without it a held Enter's key repeat fires concurrent
+                  // truncations at the same pivot. submitEdit refuses all three.
+                  disabled={!editDraft.trim() || Boolean(activeRun) || editSaving}
+                  onClick={() => void submitEdit(message.id)}
+                >
+                  {/* Named for what it does, not for the verb: this deletes the
+                      old turn and everything after it, then re-runs. "Save"
+                      alone reads as non-destructive and the truncation would be
+                      a surprise — the one place on this surface where longer
+                      copy is carrying information rather than teaching. */}
+                  Save &amp; re-run
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p>{message.content}</p>
+          )}
+        </div>
+        {/* Unconditionally rendered, and that is the point: it returns
+            null when the message names no app, so its position in this
+            subtree never changes. A conditional here would take the
+            iframe out of the tree and put it back — which reloads the
+            frame — the first time a streamed message crossed the line
+            between naming an app and not. */}
+        <ChatDashboardEmbeds content={message.content} apps={apps} />
+        {message.role === "assistant" &&
+          flaggedRuns?.includes(message.run_id) && <ScreenFlagNote />}
+        {message.citation_report && (
+          <CitationVerdictNote report={message.citation_report} />
+        )}
+        {message.citations.length > 0 && (
+          <div className="citations">
+            {message.citations.map((citation, index) => (
+              <button key={citation.chunk_id} onClick={() => void openCitation(citation)}>
+                <FileText size={13} />
+                <span>[{index + 1}]</span>
+                {citation.filename}
+              </button>
+            ))}
+          </div>
+        )}
+      </article>
+    );
+  };
+
   return (
     <section className="chat-layout">
-      <div className={`message-scroll ${messages.length === 0 ? "empty" : ""}`}>
+      <div
+        ref={scrollRef}
+        className={`message-scroll ${messages.length === 0 ? "empty" : ""}`}
+      >
+        {/* An empty transcript is just the composer. The starter cards that
+            used to teach here were removed deliberately: they were onboarding
+            filler on a surface whose only real instruction is the placeholder
+            in the composer itself. */}
         {messages.length > 0 && (
           <div className="message-column">
-            {messages.map((message) => {
-              // An aside ("/btw") is a user message with no run — a note the
-              // agent will read later, not a prompt it answered — so it wears
-              // a quieter treatment than a turn, and it never grows a pencil:
-              // there is no turn after it to re-run.
-              const aside = message.role === "user" && message.run_id === "";
-              const editable =
-                Boolean(editMessage) &&
-                !aside &&
-                senderIsViewer(message, Boolean(sharedThread), viewerId ?? "");
-              return (
-              <article
-                key={message.id}
-                className={`message ${message.role}${aside ? " aside" : ""}`}
-              >
-                {message.role === "assistant" &&
-                  (() => {
-                    const calls = callsForRun(message.run_id);
-                    const showChecklist = checklistCallId(calls);
-                    // The undo affordance rides the turn's tool-card group: it
-                    // exists only where a finished run actually executed a
-                    // call, never on the run still streaming. The handler owns
-                    // the confirm and the skipped-effects summary.
-                    const undoable =
-                      undo &&
-                      message.run_id !== activeRun &&
-                      calls.some((call) => call.status === "succeeded");
-                    return (
-                      <>
-                        {calls.map((call) => (
-                          <ToolCallCard
-                            key={call.id}
-                            call={call}
-                            decide={decideAgentCall}
-                            todos={call.id === showChecklist ? todos : undefined}
-                            pinning={pinning}
-                          />
-                        ))}
-                        {undoable && (
-                          <button
-                            type="button"
-                            className="fork-button undo-run-button"
-                            aria-label="Undo this run's changes"
-                            title="Undo this run's changes"
-                            onClick={() => void undo(message.run_id)}
-                          >
-                            <Undo2 size={13} />
-                            <span>Undo this run&rsquo;s changes</span>
-                          </button>
-                        )}
-                      </>
-                    );
-                  })()}
-                <div className="message-author">
-                  {message.role === "user" ? (
-                    <div className="tiny-avatar">
-                      {senderInitial(message, Boolean(sharedThread))}
-                    </div>
-                  ) : (
-                    <div className="assistant-mark">A</div>
-                  )}
-                  {/* On a shared thread the sender's name says who spoke — a
-                      teammate's turn is not "You". On a personal thread every
-                      user message is the caller's, so the name would be noise. */}
-                  <span>{senderLabel(message, Boolean(sharedThread))}</span>
-                  {message.role === "assistant" && message.content && (
-                    <CopyButton value={message.content} label="Copy message" />
-                  )}
-                  {/* Inert rather than hidden while a run streams: the server
-                      would 409 an edit over a live turn, and a control that
-                      vanishes and reappears reads as a bug. aria-disabled, not
-                      disabled — the favorites-chevron convention — so focus
-                      survives the wait. The name quotes the prompt so each
-                      row's pencil is distinct to a screen reader. */}
-                  {editable && (
-                    <button
-                      type="button"
-                      className="copy-button"
-                      aria-label={`Edit: ${message.content.slice(0, 40)}`}
-                      aria-disabled={Boolean(activeRun)}
-                      onClick={() => {
-                        if (activeRun) return;
-                        setEditingId(message.id);
-                        setEditDraft(message.content);
-                      }}
-                    >
-                      <Pencil size={13} /> Edit
-                    </button>
-                  )}
-                  {/* Branch a fresh thread from everything said up to here.
-                      Any message is a fork point — the reply you want to
-                      re-ask after, or your own question worth re-asking — and
-                      the server copies the prefix, so this is one call and a
-                      jump, not a client-side splice. */}
-                  {fork && (
-                    <button
-                      type="button"
-                      className="fork-button"
-                      aria-label="Fork thread from this message"
-                      title="Fork thread from this message"
-                      onClick={() => void fork(message.id)}
-                    >
-                      <GitFork size={13} />
-                    </button>
-                  )}
-                </div>
-                <div className="message-body">
-                  {message.role === "assistant" ? (
-                    <MarkdownBody content={message.content} />
-                  ) : editingId === message.id ? (
-                    <div className="message-edit">
-                      <textarea
-                        value={editDraft}
-                        onChange={(event) => setEditDraft(event.target.value)}
-                        aria-label="Edit message"
-                        rows={3}
-                        autoFocus
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" && !event.shiftKey) {
-                            event.preventDefault();
-                            void submitEdit(message.id);
-                          }
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            setEditingId(null);
-                          }
-                        }}
-                      />
-                      {/* Saving IS the truncation, so the editor says so
-                          before the button is pressed — a destructive act must
-                          not be discovered from its result. */}
-                      <p className="message-edit-note">
-                        Saving re-runs the thread from here — the old answer and
-                        everything after it are deleted.
-                      </p>
-                      <div className="message-edit-actions">
-                        <button
-                          type="button"
-                          className="ghost-button"
-                          onClick={() => setEditingId(null)}
-                        >
-                          Cancel
-                        </button>
-                        {/* aria-disabled while a run streams OR the edit's own
-                            round trip is in flight (submitEdit refuses both),
-                            so focus survives the wait; the empty draft is
-                            guarded there too. */}
-                        <button
-                          type="button"
-                          className="primary-button"
-                          aria-disabled={
-                            !editDraft.trim() || Boolean(activeRun) || editSaving
-                          }
-                          onClick={() => void submitEdit(message.id)}
-                        >
-                          Save &amp; re-run
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    /* User-authored content is plain text on purpose, and
-                       this branch is a security boundary: inbound email
-                       lands as user-role messages (run_id ""), so rendering
-                       markdown here would let a hostile mail auto-load
-                       remote images (tracking pixels) or dress a phishing
-                       URL in friendly link text. services/inbound_email.py's
-                       strip_html contract leans on exactly this — change the
-                       two together or not at all. */
-                    <p>{message.content}</p>
-                  )}
-                </div>
-                {/* Unconditionally rendered, and that is the point: it returns
-                    null when the message names no app, so its position in this
-                    subtree never changes. A conditional here would take the
-                    iframe out of the tree and put it back — which reloads the
-                    frame — the first time a streamed message crossed the line
-                    between naming an app and not. */}
-                <ChatDashboardEmbeds content={message.content} apps={apps} />
-                {message.role === "assistant" &&
-                  flaggedRuns?.includes(message.run_id) && <ScreenFlagNote />}
-                {message.citation_report && (
-                  <CitationVerdictNote report={message.citation_report} />
-                )}
-                {message.citations.length > 0 && (
-                  <div className="citations">
-                    {message.citations.map((citation, index) => (
-                      <button key={citation.chunk_id} onClick={() => void openCitation(citation)}>
-                        <FileText size={13} />
-                        <span>[{index + 1}]</span>
-                        {citation.filename}
-                      </button>
-                    ))}
+            {virtualize
+              ? rows.getTotalSize() > 0 && (
+                  <div
+                    style={{
+                      position: "relative",
+                      width: "100%",
+                      height: rows.getTotalSize(),
+                    }}
+                  >
+                    {rows.getVirtualItems().map((item) =>
+                      renderMessage(messages[item.index], {
+                        ref: rows.measureElement,
+                        "data-index": item.index,
+                        style: {
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          transform: `translateY(${item.start}px)`,
+                          // The plain path spaces rows with `.message { margin-bottom:
+                          // 32px }`. Margins don't fold into a measured height, so
+                          // the virtualized row carries the gap as padding instead —
+                          // same visual gap, included in the measured size.
+                          marginBottom: 0,
+                          paddingBottom: 32,
+                        },
+                      }),
+                    )}
                   </div>
-                )}
-              </article>
-              );
-            })}
+                )
+              : messages.map((message) => renderMessage(message))}
             {liveCalls.map((call) => (
               <ToolCallCard
                 key={call.id}
@@ -1442,14 +1441,6 @@ export function ChatView({
                 {runStatus}
               </div>
             )}
-            {steer &&
-              steerStripVisible({
-                activeRun,
-                hasSteer: true,
-                budgetPark,
-                runStatus,
-                agentCalls,
-              }) && <SteerStrip steer={steer} />}
             {!activeRun && lastAssistant && (
               <div className="turn-actions">
                 <button type="button" className="ghost-button" onClick={() => void regenerate()}>

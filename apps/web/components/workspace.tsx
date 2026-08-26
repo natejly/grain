@@ -285,7 +285,6 @@ export function Workspace() {
     undoRun,
     removeConversation,
     decideAgentCall,
-    steerActiveRun,
     setApprovalMode,
     cancelActiveRun,
     regenerate,
@@ -1338,7 +1337,6 @@ export function Workspace() {
                 sharedThread={activeThread?.shared}
                 submitPrompt={submitPrompt}
                 cancelActiveRun={cancelActiveRun}
-                steer={steerActiveRun}
                 regenerate={regenerate}
                 editMessage={editMessage}
                 // The signed-in member, so a shared thread offers the pencil
