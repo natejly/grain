@@ -834,6 +834,15 @@ export type CoworkingPresence = {
     typing?: boolean;
     draft?: string;
     draft_truncated?: boolean;
+    /**
+     * Where this actor's mouse is on the surface, as a fraction of the
+     * surface's own box — never pixels, so a laptop and a wall monitor
+     * looking at the same document put the cursor in the same *place* rather
+     * than at the same offset. The server clamps both to 0..1 and drops a
+     * malformed pair (`services/coworking.sanitize_pointer`), so a renderer
+     * may treat a present pointer as drawable without re-checking it.
+     */
+    pointer?: { x: number; y: number };
     [key: string]: unknown;
   };
   updated_at: string;
@@ -2412,6 +2421,22 @@ export class WorkspaceApi {
   /** Every workspace the signed-in user may select, oldest membership first. */
   listWorkspaces(): Promise<WorkspaceMembership[]> {
     return this.request<WorkspaceMembership[]>("/api/auth/workspaces");
+  }
+
+  /**
+   * Make a new workspace with the caller as its owner.
+   *
+   * Owner rather than member because inviting is owner-gated, and the point of
+   * making a workspace is to share it. Comes back with `is_current: false` —
+   * the request that made it still belonged to the old workspace, and the
+   * caller switches by selecting the returned id.
+   */
+  createWorkspace(name: string): Promise<WorkspaceMembership> {
+    return this.request<WorkspaceMembership>(
+      "/api/auth/workspaces",
+      { method: "POST", body: JSON.stringify({ name }) },
+      true,
+    );
   }
 
   async devOverride(): Promise<DevOverride> {

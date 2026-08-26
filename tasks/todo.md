@@ -1075,3 +1075,56 @@ line, not $?; the theme forbids color literals below the token blocks;
 
 Decisions: no CRDT — one agent + one user per surface in practice; soft claim
 + live mirror + versioned saves. SSE poll tick reused (250ms); no websockets.
+
+---
+
+## Shared workspaces + live pointer cursors (2026-08-26)
+
+Answering "if I have a shared workspace with coworking can I see the live
+cursor?" — the honest answer at the start was no, on three counts. Coworking
+was never merged (it lived on `worktree-coworking`); there was no way to MAKE
+a second workspace; and even the coworking branch had text carets, not the
+Google-Docs pointer you can watch glide.
+
+- [x] Merged `worktree-coworking` onto main. Renumbered its migration 0049 →
+      0064 so it chains onto 0063_digests rather than forking the revision
+      graph — verified single head, no branch points.
+- [x] `POST /api/auth/workspaces` — create a workspace, creator lands as
+      OWNER (invites are owner-gated, so a member-level creator would produce
+      a workspace nobody can share). The org is DERIVED from the caller's own
+      admin membership, never read off the body.
+- [x] Web: "New workspace" in the switcher menu, an input in place; the new
+      row is pushed into the list and selected, which remounts the shell.
+- [x] Live pointer cursors: `pointer: {x, y}` as FRACTIONS of the surface box
+      (never pixels — a laptop and a wall monitor must point at the same
+      *place*), clamped and rounded server-side; `LiveCursorLayer` wraps a
+      surface and draws everyone else's arrow + name chip.
+- [x] Sharing by email already existed (`POST /api/admin/invites` +
+      `views/members.tsx`, real mail, hashed single-use token). Confirmed
+      reachable from a newly created workspace rather than rebuilt.
+- [x] Confirmed workspace scoping: Source, Space, Folder, Document,
+      DocumentVersion, Project, ProjectFile, MemoryItem all carry
+      `workspace_id`; now also pinned BETWEEN two workspaces of one account,
+      which the tenant-isolation suite (two accounts) never exercised.
+
+Gate: full pytest 2694 ✓ vitest 758/758 ✓ web lint 0 errors ✓ tsc ✓ next
+build ✓ migration chain linear, single head ✓
+
+Bugs caught by the gates, not by reading:
+- The merge's `models.py` resolution silently dropped `BoardCard`'s claim
+  columns (I rebuilt the file from the pure "ours" stage, which is NOT the
+  partially auto-merged working file). Twelve tests caught it.
+- The conflict in `globals.css` split a CSS rule mid-block, so unioning both
+  sides lost a closing brace and broke the ENTIRE stylesheet. Only `next
+  build` caught it — vitest and tsc were both happy.
+- A throttled pointer beat could land after a surface's `leave`, recreating
+  the presence row: a stranger left standing on the surface until the TTL
+  swept them. The clear path now sends immediately and cancels the pending
+  timer.
+
+Decisions: pointers ride the EXISTING presence channel (no second socket) but
+on their own key and their own 90ms throttle, merged in at send time — folding
+them into `report` would have had a mouse move erase a live draft and a
+keystroke erase the cursor, because `report` replaces a surface's state by
+design (that is how a save retires a draft). Smoothness comes from a CSS
+transition matched to the send rate, not from a higher send rate.

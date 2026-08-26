@@ -304,3 +304,115 @@ def test_quiet_workspace_has_no_digest(owner: TestClient, db: Any) -> None:
     db.add(run)
     db.commit()
     assert coworking.digest_block(db, run=run) == ""
+
+
+# ---------------------------------------------------------------------------
+# Live pointer cursors. The pointer is the one part of a heartbeat that another
+# member's browser turns into geometry rather than into escaped text, so the
+# shape is enforced on the way in and these pin that it is.
+
+
+def test_pointer_rides_the_heartbeat_to_the_other_members(
+    owner: TestClient, identity_client: Callable[..., TestClient], db: Any
+) -> None:
+    """The whole feature in one assertion: A moves, B sees where."""
+    who = identity_of(owner)
+    mate = identity_client(name="Second")
+    db.add(
+        Membership(
+            workspace_id=who.workspace_id,
+            user_id=identity_of(mate).user_id,
+            role="member",
+        )
+    )
+    db.commit()
+    mate.headers["X-Workspace-Id"] = who.workspace_id
+
+    beat = owner.post(
+        "/api/coworking/presence",
+        json={
+            "surface": "document:doc-9",
+            "state": {"pointer": {"x": 0.25, "y": 0.5}},
+        },
+    )
+    assert beat.status_code == 200, beat.text
+    seen = mate.get("/api/coworking/activity").json()["presences"]
+    mine = [row for row in seen if row["actor_id"] == who.user_id]
+    assert mine and mine[0]["state"]["pointer"] == {"x": 0.25, "y": 0.5}
+
+
+@pytest.mark.parametrize(
+    ("sent", "expected"),
+    [
+        # Out of the box in both directions clamps rather than 422s: a drag
+        # that runs off the edge is a normal gesture, not a broken client.
+        ({"x": -3.0, "y": 9.0}, {"x": 0.0, "y": 1.0}),
+        # Rounded, so a pointer costs a bounded number of bytes per beat.
+        ({"x": 0.123456789, "y": 0.987654321}, {"x": 0.1235, "y": 0.9877}),
+    ],
+)
+def test_pointer_is_clamped_and_rounded(
+    owner: TestClient, sent: Dict[str, Any], expected: Dict[str, Any]
+) -> None:
+    owner.post(
+        "/api/coworking/presence",
+        json={"surface": "document:doc-9", "state": {"pointer": sent}},
+    )
+    presences = owner.get("/api/coworking/activity").json()["presences"]
+    assert presences[0]["state"]["pointer"] == expected
+
+
+@pytest.mark.parametrize(
+    "junk",
+    [
+        "over there",
+        {"x": "left", "y": 0.5},
+        {"x": None, "y": None},
+        {"y": 0.5},
+        [0.5, 0.5],
+    ],
+)
+def test_a_malformed_pointer_is_dropped_not_rejected(
+    owner: TestClient, junk: Any
+) -> None:
+    """The rest of the heartbeat still lands.
+
+    A member whose cursor stops moving is a smaller failure than a member who
+    stops appearing, so a bad pointer costs the pointer and nothing else.
+    """
+    beat = owner.post(
+        "/api/coworking/presence",
+        json={
+            "surface": "document:doc-9",
+            "state": {"pointer": junk, "typing": True},
+        },
+    )
+    assert beat.status_code == 200, beat.text
+    state = owner.get("/api/coworking/activity").json()["presences"][0]["state"]
+    assert "pointer" not in state
+    assert state["typing"] is True
+
+
+def test_a_non_finite_pointer_never_reaches_the_payload() -> None:
+    """NaN and the infinities are rejected, not clamped.
+
+    Worth its own test at the unit level because JSON cannot carry them but
+    Python's float() parses the words, and `min`/`max` would wave a NaN
+    through wearing the shape of a legitimate clamp — a cursor drawn nowhere,
+    on everyone else's screen.
+    """
+    for bad in ("nan", "inf", "-inf"):
+        state = coworking.sanitize_pointer({"pointer": {"x": bad, "y": "0.5"}})
+        assert "pointer" not in state, bad
+    # A string that IS a number still works: the check is on the value, not on
+    # the type the transport happened to use.
+    assert coworking.sanitize_pointer({"pointer": {"x": "0.5", "y": "0.25"}})[
+        "pointer"
+    ] == {"x": 0.5, "y": 0.25}
+
+
+def test_sanitize_pointer_leaves_a_pointerless_state_alone() -> None:
+    """Identity, not a copy: every heartbeat that is not a mouse move — every
+    keystroke, every idle re-beat — goes through here."""
+    state = {"typing": True, "draft": "x"}
+    assert coworking.sanitize_pointer(state) is state

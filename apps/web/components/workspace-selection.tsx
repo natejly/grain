@@ -1,7 +1,7 @@
 "use client";
 
 import type { WorkspaceMembership } from "@workspace/api-client";
-import { Check, ChevronsUpDown, RefreshCw } from "lucide-react";
+import { Check, ChevronsUpDown, Plus, RefreshCw } from "lucide-react";
 import {
   Fragment,
   createContext,
@@ -40,6 +40,18 @@ type WorkspaceSelectionValue = {
   workspaces: WorkspaceMembership[];
   currentId: string;
   select: (workspaceId: string) => void;
+  /**
+   * Make a workspace and switch into it. Resolves once the shell is on its
+   * way there, so the caller can close its menu; rejects with the API's
+   * message so a duplicate-ish name or a lost connection is shown rather than
+   * swallowed.
+   *
+   * The new row is pushed into `workspaces` here rather than refetched: the
+   * `select` below remounts the whole shell on the new id, and a list that
+   * has not caught up yet would render the switcher with the workspace the
+   * user is standing in missing from it.
+   */
+  create: (name: string) => Promise<WorkspaceMembership>;
   /**
    * The list request failed. Distinguished from "belongs to nothing" because
    * the two demand opposite chrome: nothing-to-switch renders no switcher,
@@ -124,9 +136,21 @@ export function WorkspaceSelection({ children }: { children: React.ReactNode }) 
     [currentId],
   );
 
+  const create = useCallback(async (name: string) => {
+    const made = await api.createWorkspace(name);
+    setWorkspaces((held) => [...(held ?? []), made]);
+    // Same three steps as `select`, inlined rather than called: `select`
+    // early-returns when the id already matches, and its `currentId`
+    // dependency is a render behind the row we just added.
+    api.setWorkspaceId(made.id);
+    persist(made.id);
+    setCurrentId(made.id);
+    return made;
+  }, []);
+
   const value = useMemo(
-    () => ({ workspaces: workspaces ?? [], currentId, select, failed, retry }),
-    [workspaces, currentId, select, failed, retry],
+    () => ({ workspaces: workspaces ?? [], currentId, select, create, failed, retry }),
+    [workspaces, currentId, select, create, failed, retry],
   );
 
   if (workspaces === null) return <AuthSplash message="Opening your workspace…" />;
@@ -154,6 +178,80 @@ export function useWorkspaceSelection(): WorkspaceSelectionValue {
  * The switcher itself, at the top of the sidebar because everything below it —
  * threads, sources, memory, the graph — is scoped to whatever it says.
  */
+/**
+ * The "start a new one" half of the switcher menu: a button that becomes an
+ * input in place.
+ *
+ * In the menu rather than in settings because this is where a person already
+ * goes when the question in their head is "which workspace?" — and "a new
+ * one" is one of the answers to it.
+ */
+function CreateWorkspaceRow({ onCreated }: { onCreated: () => void }) {
+  const { create } = useWorkspaceSelection();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!open) {
+    return (
+      <button className="workspace-option create" onClick={() => setOpen(true)}>
+        <Plus size={13} aria-hidden />
+        <span className="workspace-option-name">New workspace</span>
+      </button>
+    );
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await create(trimmed);
+      // Only now: closing the menu before the request lands would leave the
+      // person with no idea whether it worked.
+      onCreated();
+    } catch (caught) {
+      setBusy(false);
+      setError(caught instanceof Error ? caught.message : "Could not create it");
+    }
+  }
+
+  return (
+    <form className="workspace-create-form" onSubmit={submit}>
+      <input
+        autoFocus
+        className="workspace-create-input"
+        placeholder="Workspace name"
+        aria-label="New workspace name"
+        value={name}
+        maxLength={120}
+        disabled={busy}
+        onChange={(event) => setName(event.target.value)}
+        // Escape backs out of the input without closing the whole menu, so a
+        // mis-click costs nothing.
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            setOpen(false);
+            setName("");
+          }
+        }}
+      />
+      <button className="chrome-button" type="submit" disabled={busy || !name.trim()}>
+        {busy ? "Creating…" : "Create"}
+      </button>
+      {error && (
+        <span className="workspace-create-error" role="alert">
+          {error}
+        </span>
+      )}
+    </form>
+  );
+}
+
 export function WorkspaceSwitcher() {
   const { workspaces, currentId, select, failed, retry } = useWorkspaceSelection();
 
@@ -205,25 +303,28 @@ export function WorkspaceSwitcher() {
       menuLabel="Your workspaces"
       closeLabel="Close workspace list"
     >
-      {(close) =>
-        workspaces.map((item) => (
-          <button
-            key={item.id}
-            className={
-              item.id === current.id ? "workspace-option active" : "workspace-option"
-            }
-            aria-current={item.id === current.id ? "true" : undefined}
-            onClick={() => {
-              close();
-              select(item.id);
-            }}
-          >
-            <span className="workspace-option-name">{item.name}</span>
-            <span className="workspace-option-role">{item.role}</span>
-            {item.id === current.id && <Check size={13} />}
-          </button>
-        ))
-      }
+      {(close) => (
+        <>
+          {workspaces.map((item) => (
+            <button
+              key={item.id}
+              className={
+                item.id === current.id ? "workspace-option active" : "workspace-option"
+              }
+              aria-current={item.id === current.id ? "true" : undefined}
+              onClick={() => {
+                close();
+                select(item.id);
+              }}
+            >
+              <span className="workspace-option-name">{item.name}</span>
+              <span className="workspace-option-role">{item.role}</span>
+              {item.id === current.id && <Check size={13} />}
+            </button>
+          ))}
+          <CreateWorkspaceRow onCreated={close} />
+        </>
+      )}
     </DisclosureMenu>
   );
 }

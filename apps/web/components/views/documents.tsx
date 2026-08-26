@@ -27,6 +27,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
+import { LiveCursorLayer } from "../live-cursors";
 import { ShareLinksModal } from "../share-links-modal";
 import type { CoworkingState } from "../use-coworking";
 import { useDocumentThread } from "../use-document-thread";
@@ -616,7 +617,15 @@ export function DocumentsView({
                   following={following}
                 />
               )}
-              <div className="document-panes">
+              {/* The panes, not the whole editor: the chrome above them
+                  (title, actions, history) is the same on both screens, so a
+                  pointer over it points at nothing shared. Inside here, both
+                  people are looking at the same text. */}
+              <LiveCursorLayer
+                surface={surface}
+                coworking={coworking ?? undefined}
+                className="document-panes"
+              >
                 <div className="document-source-wrap">
                   <textarea
                     className={
@@ -656,7 +665,7 @@ export function DocumentsView({
                 <div className="document-preview">
                   <DocumentBody kind={active.kind} content={shownText} />
                 </div>
-              </div>
+              </LiveCursorLayer>
             </>
           )}
         </section>

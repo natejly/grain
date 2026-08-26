@@ -149,6 +149,55 @@ def heartbeat_presence(
     return row
 
 
+#: Pointer coordinates ride the heartbeat as a fraction of the surface's own
+#: box, never pixels. Two people on a laptop and a wall monitor are looking at
+#: the same document at different sizes, and a pixel offset would put one
+#: person's cursor in the margin of the other's screen.
+POINTER_PRECISION = 4
+
+
+def sanitize_pointer(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Return `state` with any `pointer` key reduced to two clamped fractions.
+
+    `Presence.state_json` is relayed verbatim to every other client on the
+    surface, so it is an input from one member that renders in another
+    member's browser. Everything else in the blob is text a view escapes; a
+    pointer is different because its numbers become a CSS transform. A NaN or
+    a 1e9 there is not a security hole but it is a cursor drawn a mile off the
+    page, dragging scrollbars onto everyone else's screen — so the shape is
+    enforced once, here, rather than trusted in the renderer.
+
+    A malformed pointer is dropped rather than 422'd: the rest of the
+    heartbeat (typing, the live draft, the caret) is still worth relaying, and
+    a member whose cursor stops moving is a smaller failure than a member who
+    stops appearing.
+    """
+    raw = state.get("pointer")
+    if raw is None:
+        return state
+    out = dict(state)
+    if not isinstance(raw, dict):
+        out.pop("pointer", None)
+        return out
+    try:
+        x = float(raw.get("x"))
+        y = float(raw.get("y"))
+    except (TypeError, ValueError):
+        out.pop("pointer", None)
+        return out
+    # NaN fails every comparison, so `min`/`max` would carry it straight
+    # through into the payload wearing the shape of a clamp. Reject it and the
+    # infinities explicitly instead.
+    if any(v != v or v in (float("inf"), float("-inf")) for v in (x, y)):
+        out.pop("pointer", None)
+        return out
+    out["pointer"] = {
+        "x": round(min(1.0, max(0.0, x)), POINTER_PRECISION),
+        "y": round(min(1.0, max(0.0, y)), POINTER_PRECISION),
+    }
+    return out
+
+
 def drop_presence(
     db: Session, *, workspace_id: str, actor_id: str, surface: str = ""
 ) -> None:

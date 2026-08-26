@@ -150,6 +150,19 @@ class WorkspaceMembershipOut(ApiModel):
     is_current: bool
 
 
+class WorkspaceCreate(BaseModel):
+    """A name, and nothing else.
+
+    The org the workspace lands in is never accepted from the client: it is
+    derived from the caller (`api/auth.create_workspace`). Letting a body name
+    an organization would be an authority the rest of the tier does not grant —
+    an org admin binds workspaces they govern, and nobody adopts a workspace
+    into someone else's org by asking.
+    """
+
+    name: str = Field(min_length=1, max_length=120)
+
+
 class InviteTokenIn(ApiModel):
     """A raw invitation link, in the body and never in the path.
 
