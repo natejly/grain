@@ -714,7 +714,7 @@ def test_shortest_path_ignores_edge_direction(workspace, db):
 def test_walk_tools_are_read_only(workspace, db):
     workspace_id, user_id = workspace
     tools = registry_tools(db, _context(workspace_id, user_id))
-    assert set(tools) == {"graph_neighbors", "graph_path"}
+    assert set(tools) == {"graph_neighbors", "graph_path", "graph_export"}
     assert all(spec.read_only and spec.preview is None for spec in tools.values())
 
 
@@ -1217,3 +1217,145 @@ def test_memory_derived_entities_stay_inside_their_workspace(workspace, db):
             session.commit()
         finally:
             session.close()
+
+
+# --------------------------------------------------------------------------
+# Export
+
+
+def _export(db, workspace_id: str, user_id: str, args: dict) -> dict:
+    spec = registry_tools(db, _context(workspace_id, user_id))["graph_export"]
+    return json.loads(spec.executor(db, _context(workspace_id, user_id), args).content)
+
+
+def test_export_names_edges_by_entity_and_reports_the_projection(workspace, db):
+    workspace_id, user_id = workspace
+    _chain(db, workspace_id, ["Maya Chen", "Project Northstar", "Atlas Labs"])
+    db.add(
+        GraphProjection(
+            workspace_id=workspace_id, status="ready", version="v7", entity_count=3
+        )
+    )
+    db.commit()
+
+    snapshot = _export(db, workspace_id, user_id, {})
+    assert snapshot["status"] == "ready" and snapshot["version"] == "v7"
+    assert snapshot["entities_truncated"] is False
+    assert snapshot["edges_truncated"] is False
+    assert {e["name"] for e in snapshot["entities"]} == {
+        "Maya Chen",
+        "Project Northstar",
+        "Atlas Labs",
+    }
+    # Edges carry names, never rebuild-volatile entity ids or provenance lists.
+    edge = snapshot["edges"][0]
+    assert set(edge) == {"from", "to", "relation", "weight", "confidence"}
+    assert {(e["from"], e["to"]) for e in snapshot["edges"]} == {
+        ("Maya Chen", "Project Northstar"),
+        ("Project Northstar", "Atlas Labs"),
+    }
+
+
+def test_export_of_an_unbuilt_graph_is_empty_not_an_error(workspace, db):
+    workspace_id, user_id = workspace
+    snapshot = _export(db, workspace_id, user_id, {})
+    assert snapshot["status"] == "empty"
+    assert snapshot["entities"] == [] and snapshot["edges"] == []
+
+
+def test_export_truncates_to_the_limit_and_says_so(workspace, db):
+    workspace_id, user_id = workspace
+    entities = _chain(db, workspace_id, ["Alpha", "Beta", "Gamma"])
+    entities["Alpha"].mention_count = 9
+    entities["Beta"].mention_count = 5
+    db.commit()
+
+    snapshot = _export(db, workspace_id, user_id, {"limit": 2})
+    assert snapshot["entities_truncated"] is True
+    # Most-mentioned first, and only edges among the included entities survive.
+    assert [e["name"] for e in snapshot["entities"]] == ["Alpha", "Beta"]
+    assert {(e["from"], e["to"]) for e in snapshot["edges"]} == {("Alpha", "Beta")}
+    # A malformed limit falls back to the default instead of erroring.
+    assert (
+        _export(db, workspace_id, user_id, {"limit": "wide"})["entities_truncated"]
+        is False
+    )
+
+
+def test_export_fits_the_transport_clip_and_still_parses(workspace, db):
+    """Every delivery path clips content to MAX_RESULT_CHARS. A full-size
+    export must arrive under that budget as valid JSON with honest flags —
+    not cut mid-array with `truncated: false` surviving at the head."""
+    from app.services.llm_tools import MAX_RESULT_CHARS
+
+    workspace_id, user_id = workspace
+    _chain(
+        db,
+        workspace_id,
+        [f"Entity {i:03d} With A Deliberately Long Name" for i in range(120)],
+    )
+
+    spec = registry_tools(db, _context(workspace_id, user_id))["graph_export"]
+    result = spec.executor(db, _context(workspace_id, user_id), {"limit": 200})
+    assert len(result.content) <= MAX_RESULT_CHARS
+    # The clip is a no-op, so what the MCP client receives parses.
+    snapshot = json.loads(result.bounded_content())
+    assert snapshot["entities_truncated"] is True
+    assert snapshot["edges_truncated"] is True
+    assert snapshot["entities"], "the refit keeps a payload, not an empty shell"
+    kept = {entity["name"] for entity in snapshot["entities"]}
+    assert all(e["from"] in kept and e["to"] in kept for e in snapshot["edges"])
+
+
+def test_neighbors_refit_to_the_clip_and_still_parse(workspace, db):
+    """The row cap (50) times a long-named neighbor outgrows the clip too."""
+    from app.services.llm_tools import MAX_RESULT_CHARS
+
+    workspace_id, user_id = workspace
+    hub = _entity(db, workspace_id, "Hub")
+    for i in range(60):
+        spoke = _entity(
+            db, workspace_id, f"Spoke {i:03d} With A Deliberately Long Name Attached"
+        )
+        _edge(db, workspace_id, hub, spoke)
+    db.commit()
+
+    spec = registry_tools(db, _context(workspace_id, user_id))["graph_neighbors"]
+    result = spec.executor(
+        db, _context(workspace_id, user_id), {"entity": "Hub", "limit": 50}
+    )
+    assert len(result.content) <= MAX_RESULT_CHARS
+    payload = json.loads(result.bounded_content())
+    assert payload["truncated"] is True
+    assert payload["neighbors"], "the refit keeps a payload, not an empty shell"
+
+
+def test_path_refits_to_the_clip_shedding_provenance_before_steps(workspace, db):
+    """Six hops of long names — non-ASCII ones inflate ~6x under ensure_ascii —
+    with three provenance ids a step outgrow the clip. The chain survives whole
+    (provenance sheds first) and the payload owns up with truncated."""
+    from app.services.llm_tools import MAX_RESULT_CHARS
+
+    workspace_id, user_id = workspace
+    names = [f"知識グラフの節点 {i} " * 8 for i in range(7)]
+    entities = {name: _entity(db, workspace_id, name) for name in names}
+    for left, right in zip(names, names[1:], strict=False):
+        edge = _edge(db, workspace_id, entities[left], entities[right])
+        edge.source_ids_json = json.dumps([uuid.uuid4().hex for _ in range(3)])
+        edge.chunk_ids_json = json.dumps([uuid.uuid4().hex for _ in range(3)])
+    db.commit()
+
+    spec = registry_tools(db, _context(workspace_id, user_id))["graph_path"]
+    result = spec.executor(
+        db,
+        _context(workspace_id, user_id),
+        {"from_entity": names[0], "to_entity": names[-1], "max_hops": 6},
+    )
+    assert len(result.content) <= MAX_RESULT_CHARS
+    payload = json.loads(result.bounded_content())
+    assert payload["found"] is True
+    assert payload["truncated"] is True
+    assert payload["hops"] == 6, "hops still names the real path length"
+    assert payload["path"], "the refit keeps a payload, not an empty shell"
+    # The shed is provenance-first: surviving steps carry the chain itself.
+    assert all(step["from"] and step["to"] for step in payload["path"])

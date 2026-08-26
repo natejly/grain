@@ -500,3 +500,47 @@ Gate: ruff ✓ mypy ✓ alembic 0048 up/down/up ✓ vitest 663/663 ✓ web lint 
 errors ✓ next build ✓ full pytest exit 0 except the one pre-existing
 password-timing flake (a constant-time-ratio assertion, load-sensitive, passes
 1/1 in isolation — not this build's code).
+
+## Share the knowledge graph over MCP (2026-08-25)
+
+- [x] `graph_export` tool in services/graph_tools.py: whole-graph snapshot
+      (projection status/version/built_at, entities by mention_count, edges
+      named by entity — never rebuild-volatile ids per ADR 0002 — with
+      truncated flags; no provenance id lists, `graph_path` is the citation
+      path). read_only=True, so the existing POST /api/mcp offer filter
+      exposes it with zero MCP wiring.
+- [x] Tests: 3 export tests in test_graph_depth.py + an end-to-end MCP test
+      (`test_the_knowledge_graph_is_shared_over_mcp`) asserting graph_export/
+      graph_neighbors/graph_path are offered and callable over the bearer
+      channel. Updated test_walk_tools_are_read_only's exact-set assertion.
+- [x] Gates: ruff ✓ mypy ✓ full pytest (worktree PYTHONPATH override —
+      the repo venv's editable install otherwise imports the main checkout).
+
+### Post-review fixes (QA session adversarial review, 2026-08-25)
+
+- [x] HIGH: export payload outgrew bounded_content()'s 4000-char clip (caps
+      were sized to GET /api/graph's HTTP ceiling, which never meets the
+      clip) — cut mid-JSON with head-of-dict truncated:false surviving.
+      Fixed with a budget refit before serializing (`_fit_within`; entities
+      get first claim, edges the remainder, flags recomputed, orphaned
+      edges dropped with their endpoints). Same refit applied to
+      graph_neighbors, whose 50-row cap × long names had the same latent
+      overflow. Regression tests round-trip oversized graphs through
+      `bounded_content()` and json.loads the result.
+- [x] MEDIUM: added the missing two-tenant graph_export case to
+      test_tenant_isolation.py (bulk export is the worst tool to leave out
+      of that checklist).
+- [x] LOW: documented the one-call-bulk exposure of workspace-wide tokens
+      and the workflow-scope ToolPolicy deny lever in mcp_server.py's
+      docstring; edge ordering got an id tiebreak so equal-weight exports
+      are stable across calls.
+- [x] Re-verify round 2: my "graph_path is safe by arithmetic" claim was
+      wrong at schema bounds (6 hops × long names × 9 provenance ids ≈
+      6300 chars; ensure_ascii inflates non-ASCII names ~6x past 14k).
+      graph_path now refits like the others — provenance sheds first, the
+      chain's steps only after, `truncated` owns up to either loss, `hops`
+      keeps naming the real path length. CJK long-name regression test.
+      Declined the optional post-assembly assert: read paths must not
+      crash, and the exact pricing is regression-tested on all three
+      tools; the entities-clip-at-60% remainder is documented as a
+      deliberate cosmetic trade in the ENTITY_BUDGET_SHARE comment.
