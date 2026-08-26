@@ -36,4 +36,17 @@ Three things a reader should know before changing anything:
    Background work is in-process. See the header comment in `ec2.tf`.
 
 Validated with OpenTofu 1.12.5 (`fmt`, `init -backend=false`, `validate`).
-Never applied — no AWS account was available. See `docs/DEPLOY-AWS.md` §11–12.
+Applied for real on 2026-08-26 into account 518060119468, `us-east-1`, as two
+workspaces: `default` (prod, `grain.natejly.com`) and `uat` (`uat.grain.natejly.com`,
+`-var-file=uat.tfvars`). Both run **free-tier sizing** — `t4g.small`,
+`db.t4g.micro`, one-day backup retention — because the account is on the AWS
+Free plan, which refuses `m7g.large` outright. The restore-to-real sizing is
+commented at the top of `terraform.tfvars`.
+
+The first apply exposed four bugs in this configuration, all since fixed here:
+the ECS agent's calls arrive without the `ecs:cluster` condition key (`iam.tf`),
+`systemctl restart ecs` deadlocks against `cloud-final` (`user_data.sh.tftpl`),
+`extra_environment` has to reach the migrate task too (`ecs.tf`), and egress
+allowed only 443/5432 so SMTP blackholed and every signup took 45 seconds
+(`network.tf`). See `docs/DEPLOY-AWS.md` §10 for the runbook and the two traps
+worth reading before a deploy or a rollback.
