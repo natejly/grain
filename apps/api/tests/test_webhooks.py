@@ -539,6 +539,48 @@ def test_a_failed_delivery_can_be_requeued_and_then_succeeds(
     assert len([r for r in seen if str(r.url).endswith("/sink")]) == 1
 
 
+def test_a_delivery_that_already_succeeded_cannot_be_redelivered(
+    tenant, public_dns, db, monkeypatch
+):
+    """Redeliver repairs a failure; it is not a "send it again" button.
+
+    A sent row named by an owner who mis-clicked (or by a script walking the
+    deliveries list) must not put a second copy of an already-processed event
+    on the wire, so the route refuses it outright rather than requeueing.
+    """
+    client, identity = tenant
+    created = make_endpoint(client, secret="")
+    delivery_id = emit_one(db, identity, created["id"])
+    transport, seen = capture_transport(200)
+    monkeypatch.setattr(webhook_service, "HTTP_TRANSPORT", transport)
+    assert delivery_id in webhook_service.claim_due(db, limit=500)
+    webhook_service.send_delivery(delivery_id)
+    assert load(db, delivery_id).status == "sent"
+
+    refused = client.post(f"/api/webhooks/deliveries/{delivery_id}/redeliver")
+    assert refused.status_code == 409, refused.text
+    row = load(db, delivery_id)
+    assert row.status == "sent", "a refused redeliver must not reopen the row"
+    assert row.attempts == 1
+
+    # And nothing went back on the wire: one POST, the original.
+    assert len([r for r in seen if str(r.url).endswith("/sink")]) == 1
+    assert delivery_id not in webhook_service.claim_due(db, limit=500)
+
+
+def test_the_stated_retry_horizon_matches_the_schedule():
+    """The docstrings quote a figure; this is what keeps them honest.
+
+    The horizon is the sum of the waits between MAX_ATTEMPTS attempts, not
+    the sum of some other spread — 1+5+15+60+240 = 321 minutes = 5h21m.
+    """
+    assert len(webhook_service.RETRY_BACKOFF_MINUTES) == (
+        webhook_service.MAX_ATTEMPTS - 1
+    ), "every gap between attempts must have a wait"
+    assert webhook_service.RETRY_HORIZON_MINUTES == 321
+    assert webhook_service.RETRY_HORIZON_MINUTES == 5 * 60 + 21
+
+
 # --------------------------------------------------------------------------
 # The chokepoint, end to end
 # --------------------------------------------------------------------------

@@ -162,12 +162,13 @@ def receive_email(
                 message_id=message.id,
             )
 
-    if not address_service.count_delivery(address):
-        # Over the address's daily cap: the same quiet 200 as an unknown
+    verdict = address_service.count_delivery(address)
+    if not verdict.allowed:
+        # Over the address's flood cap: the same quiet 200 as an unknown
         # token — a flood learns nothing and the provider stops retrying.
-        # Audited exactly once, at the trip (the counter's first step past
-        # the cap), so a day-long flood cannot flood the audit trail too.
-        if address.daily_count == address_service.DAILY_CAP + 1:
+        # Audited exactly once, at the trip, so a day-long flood cannot
+        # flood the audit trail too.
+        if verdict.tripped:
             record_audit(
                 db,
                 workspace_id=address.workspace_id,

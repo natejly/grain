@@ -1305,6 +1305,10 @@ class RunUndoRevertedOut(ApiModel):
 class RunUndoSkippedOut(ApiModel):
     tool_name: str
     reason: str
+    #: protected | external | unrecorded | concurrent | failed — the category
+    #: behind the sentence, so the UI can show a protective skip as an outcome
+    #: rather than dressing it up as a failure.
+    outcome: str
 
 
 class RunUndoOut(ApiModel):
@@ -1333,9 +1337,13 @@ def undo_run(
     natural guard, the same shape as the assign endpoint's upsert.
 
     Checkpoints apply newest-first, so a resource created and then written to
-    is unwound in the only order that works. Irreversible rows — external
+    is unwound in the only order that works. Rows that do not restore — external
     effects, clipped captures, resources someone else changed after the run —
-    come back in `skipped` with a reason rather than pretending.
+    come back in `skipped` with a reason and an `outcome` category rather than
+    pretending. A row the clobber guard protected is deliberately *not*
+    consumed (`revert_run` releases it), so this endpoint keeps answering 200
+    for that run: the same undo, run again once the later edits are settled,
+    finishes the job.
     """
     run = db.scalar(
         select(Run).where(Run.id == run_id, Run.workspace_id == actor.workspace_id)

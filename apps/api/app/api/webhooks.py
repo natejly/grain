@@ -249,13 +249,28 @@ def redeliver_delivery(
     actor: Actor = Depends(require_owner),
     db: Session = Depends(get_db),
 ) -> WebhookDeliveryOut:
-    """Requeue one delivery for a fresh round of send attempts.
+    """Requeue one *failed* delivery for a fresh round of send attempts.
 
     The escape hatch for a receiver that was down past the whole backoff
-    horizon: attempts reset, the row goes back to `pending`, and the next
-    tick claims it. Naturally idempotent (a pending row is already queued —
-    returned as-is, no key), and an endpoint that has since been deleted or
-    disabled still fails the requeued row closed at send time.
+    horizon (5h21m — `services/webhooks.RETRY_BACKOFF_MINUTES`): attempts
+    reset, the row goes back to `pending`, and the next tick claims it. An
+    endpoint that has since been deleted or disabled still fails the
+    requeued row closed at send time.
+
+    Only `failed` rows requeue, and that narrowness is the point:
+
+    - a `pending` row is already queued, so asking again is a quiet no-op —
+      returned as-is, which is what makes this route idempotent without an
+      Idempotency-Key;
+    - a `sent` row is refused with a 409. Delivery is at-least-once and
+      receivers key on `delivery_id`, so a replay is *safe* for a correct
+      receiver — but it is not a repair, because nothing failed. The only
+      thing it can produce is a second copy of an event the receiver has
+      already processed, and against a receiver whose idempotency is
+      imperfect that is a duplicate side effect an owner did not intend. A
+      genuine "send it again" affordance would have to be its own, separately
+      labelled action (the deliveries panel offers Redeliver on failed rows
+      only); it is not what the retry button means.
     """
     delivery = db.scalar(
         select(WebhookDelivery).where(
@@ -265,7 +280,12 @@ def redeliver_delivery(
     )
     if delivery is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
-    if delivery.status != "pending":
+    if delivery.status == "sent":
+        raise HTTPException(
+            status_code=409,
+            detail="This delivery already succeeded — there is nothing to retry.",
+        )
+    if delivery.status == "failed":
         delivery.status = "pending"
         delivery.attempts = 0
         delivery.next_attempt_at = None

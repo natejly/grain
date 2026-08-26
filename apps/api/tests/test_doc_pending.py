@@ -6,16 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.api import doc_pending
 from app.database import SessionLocal
-from app.main import app
 from app.models import AgentToolCall, Document, Membership, Run, Workspace
 from app.services.agent_loop import run_agent_turn
 
-# main.py is a shared file wired up separately; registering here when the app
-# has not picked the router up yet keeps this suite meaningful either way.
-if not any(getattr(route, "path", "") == "/api/documents-pending" for route in app.routes):
-    app.include_router(doc_pending.router)
+# main.py wires doc_pending.router into the app; the `client` fixture reaches it from
+# there. Do not re-include it here: FastAPI records an include as an opaque wrapper
+# rather than as flattened routes, so a "have we already got it?" guard that reads
+# route.path can never see it and would double-include on every run.
 
 
 @pytest.fixture

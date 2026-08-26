@@ -16,14 +16,29 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine, inspect, select
+from test_dashboards import make_dataset, unique
 
+from app.auth import DEV_SEED_USER_ID, DEV_SEED_WORKSPACE_ID
 from app.database import SessionLocal, engine
-from app.models import BoardCard, Document, Project, ProjectFile, Run, RunCheckpoint, RunEvent
+from app.models import (
+    Board,
+    BoardCard,
+    Dashboard,
+    DashboardTemplate,
+    Document,
+    Project,
+    ProjectFile,
+    Run,
+    RunCheckpoint,
+    RunEvent,
+)
 from app.services import checkpoints
 from app.services.agent_loop import run_agent_turn
 from app.services.artifacts import boards, documents
-from app.services.llm_tools import ToolContext, ToolResult
+from app.services.llm_tools import ToolContext, ToolResult, build_registry
+from app.services.projects import store as project_store
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -627,7 +642,13 @@ def test_undoing_create_project_refuses_once_it_gained_a_file(client):
 def test_an_interrupted_undo_leaves_no_stranded_rows(client):
     """Consumption is per-row: rows an earlier (crashed) undo never stamped
     are picked up by a retry instead of 409ing forever, and only once all rows
-    are consumed does the endpoint refuse."""
+    are consumed does the endpoint refuse.
+
+    The crash is simulated faithfully — the newest row is stamped *and* its
+    restore applied — because a retry that only reports a number proves
+    nothing. What must hold is that the remaining row is really restored:
+    the board comes back to the state before the run touched it.
+    """
     suffix = os.urandom(4).hex()
     boot = client.get("/api/bootstrap").json()
     workspace_id = boot["identity"]["workspace_id"]
@@ -664,21 +685,30 @@ def test_an_interrupted_undo_leaves_no_stranded_rows(client):
             )
         )
         assert len(rows) == 2
-        # Simulate a crash that consumed (and restored) only the newest row.
+        # Simulate a crash that consumed the newest row *and* applied it: its
+        # restore removed the second card, which is the state the older row's
+        # own guard snapshot expects to find.
         newest = rows[0]
         newest.reverted_at = newest.created_at
         db.commit()
         stamped_id = newest.id
+        board = boards.get_board(db, workspace_id=workspace_id, board_id=board_id)
+        boards.delete_card(db, board=board, card="Second write")
     finally:
         db.close()
     retry = client.post(f"/api/runs/{run_id}/undo")
     assert retry.status_code == 200, retry.text
     body = retry.json()
-    assert len(body["reverted"]) + len(body["skipped"]) == 1, (
-        "only the unconsumed row is processed"
+    assert body["skipped"] == []
+    assert [item["tool_name"] for item in body["reverted"]] == ["board_add_card"], (
+        "only the unconsumed row is processed — and it is really restored"
     )
     db = SessionLocal()
     try:
+        cards = list(
+            db.scalars(select(BoardCard).where(BoardCard.board_id == board_id))
+        )
+        assert cards == [], "the retry put the board back, not just a number"
         rows = list(
             db.scalars(select(RunCheckpoint).where(RunCheckpoint.run_id == run_id))
         )
@@ -687,3 +717,452 @@ def test_an_interrupted_undo_leaves_no_stranded_rows(client):
     finally:
         db.close()
     assert client.post(f"/api/runs/{run_id}/undo").status_code == 409
+
+
+def test_a_protective_skip_is_retryable_once_the_later_edits_are_settled(client):
+    """A skip the clobber guard made is not a verdict on the checkpoint, only
+    on the moment — so it releases the row instead of consuming it. Undo the
+    same run again after clearing the later edit and it finishes the job."""
+    suffix = os.urandom(4).hex()
+    boot = client.get("/api/bootstrap").json()
+    workspace_id = boot["identity"]["workspace_id"]
+    db = SessionLocal()
+    try:
+        board = boards.create_board(
+            db, workspace_id=workspace_id, name=f"Retryable board {suffix}"
+        )
+        board_id = board.id
+    finally:
+        db.close()
+    run_id = _run_writes(
+        client,
+        [
+            _call(
+                "board_add_card",
+                {"board_id": board_id, "column": "Todo", "title": "From the run"},
+                "protect-1",
+            )
+        ],
+    )
+    db = SessionLocal()
+    try:
+        board = boards.get_board(db, workspace_id=workspace_id, board_id=board_id)
+        boards.add_card(
+            db,
+            workspace_id=workspace_id,
+            board=board,
+            column="Todo",
+            title="A human's later card",
+        )
+    finally:
+        db.close()
+
+    first = client.post(f"/api/runs/{run_id}/undo")
+    assert first.status_code == 200, first.text
+    skipped = first.json()["skipped"]
+    assert [item["outcome"] for item in skipped] == ["protected"]
+    assert "changed after this run" in skipped[0]["reason"]
+    db = SessionLocal()
+    try:
+        rows = list(
+            db.scalars(select(RunCheckpoint).where(RunCheckpoint.run_id == run_id))
+        )
+        assert [row.reverted_at for row in rows] == [None], (
+            "a protected row is released, not consumed"
+        )
+        # The user settles the later edit the guard was protecting.
+        board = boards.get_board(db, workspace_id=workspace_id, board_id=board_id)
+        boards.delete_card(db, board=board, card="A human's later card")
+    finally:
+        db.close()
+
+    second = client.post(f"/api/runs/{run_id}/undo")
+    assert second.status_code == 200, second.text
+    assert [item["tool_name"] for item in second.json()["reverted"]] == [
+        "board_add_card"
+    ]
+    db = SessionLocal()
+    try:
+        cards = list(
+            db.scalars(select(BoardCard).where(BoardCard.board_id == board_id))
+        )
+        assert cards == []
+    finally:
+        db.close()
+    # Consumed this time: the retry that worked is still a one-shot undo.
+    assert client.post(f"/api/runs/{run_id}/undo").status_code == 409
+
+
+def test_two_concurrent_undos_cannot_both_apply_one_checkpoint(client):
+    """The conditional UPDATE on `reverted_at IS NULL`, exercised directly.
+
+    Two workers holding the same rows is what the endpoint's 409 cannot
+    prevent — it reads before it writes. The loser must see rowcount 0, report
+    the row as already consumed, and restore *nothing*, or an undo that raced
+    would overwrite whatever was typed between the two attempts.
+    """
+    boot = client.get("/api/bootstrap").json()
+    workspace_id = boot["identity"]["workspace_id"]
+    user_id = boot["identity"]["user_id"]
+    suffix = os.urandom(4).hex()
+    db = SessionLocal()
+    try:
+        document = documents.create_document(
+            db,
+            workspace_id=workspace_id,
+            title=f"Raced brief {suffix}",
+            content="The original sentence.",
+        )
+        document_id = document.id
+    finally:
+        db.close()
+    run_id = _run_writes(
+        client,
+        [
+            _call(
+                "edit_document",
+                {"document_id": document_id, "find": "original", "replace": "edited"},
+                "race-1",
+            )
+        ],
+    )
+    db = SessionLocal()
+    try:
+        run = db.get(Run, run_id)
+        rows = list(
+            db.scalars(
+                select(RunCheckpoint).where(RunCheckpoint.run_id == run_id)
+            )
+        )
+        assert len(rows) == 1
+        reverted, skipped = checkpoints.revert_run(
+            db, run=run, actor_id=user_id, rows=rows
+        )
+        db.commit()
+        assert [item["tool_name"] for item in reverted] == ["edit_document"]
+        assert skipped == []
+        # Between the two undos, someone writes. The second undo must not
+        # reach past the consumed marker and clobber it.
+        documents.replace_content(
+            db,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            content="Words typed after the undo.",
+            summary="Later work",
+            created_by=user_id,
+        )
+        db.commit()
+        loser_reverted, loser_skipped = checkpoints.revert_run(
+            db, run=run, actor_id=user_id, rows=rows
+        )
+        db.commit()
+        assert loser_reverted == []
+        assert [item["outcome"] for item in loser_skipped] == ["concurrent"]
+        assert db.get(Document, document_id).content == "Words typed after the undo."
+    finally:
+        db.close()
+
+
+def test_the_guard_snapshot_does_not_halve_the_reversible_ceiling(client):
+    """`MAX_BEFORE_CHARS` is the before-state's budget, not a budget the guard
+    shares with it: a file that was reversible before the after-state existed
+    is still reversible, because the guard is stored as a fingerprint."""
+    boot = client.get("/api/bootstrap").json()
+    workspace_id = boot["identity"]["workspace_id"]
+    user_id = boot["identity"]["user_id"]
+    suffix = os.urandom(4).hex()
+    # Comfortably over half the ceiling, so before + a second full copy would
+    # not fit — which is exactly what a shared budget would have measured.
+    body = "x" * (checkpoints.MAX_BEFORE_CHARS - 2_000)
+    db = SessionLocal()
+    try:
+        project = project_store.create_project(
+            db,
+            workspace_id=workspace_id,
+            name=f"Ceiling project {suffix}",
+            created_by=user_id,
+            entry_path="big.txt",
+            files={"big.txt": body},
+        )
+        run = Run(
+            workspace_id=workspace_id,
+            conversation_id="",
+            agent_id=boot["default_agent_id"],
+            created_by=user_id,
+            status="completed",
+            prompt="rewrite the big file",
+        )
+        db.add(run)
+        db.commit()
+        context = ToolContext(
+            workspace_id=workspace_id, user_id=user_id, conversation_id=""
+        )
+        args = {"project_id": project.id, "path": "big.txt", "content": "small"}
+        pending = checkpoints.capture_before(db, context, "fs_write", args)
+        assert pending is not None
+        checkpoints.record_checkpoint(
+            db,
+            run=run,
+            tool_call_id="ceiling-1",
+            name="fs_write",
+            pending=pending,
+            result=ToolResult(content="written"),
+        )
+        db.commit()
+        row = db.scalar(select(RunCheckpoint).where(RunCheckpoint.run_id == run.id))
+        assert row.reversible is True, "a file under the ceiling stays reversible"
+        recorded = json.loads(row.before_json)
+        assert recorded["files"]["big.txt"] == body
+        # And the guard is still there, at constant cost.
+        assert recorded["after"]["files"]["big.txt"]
+        assert len(row.before_json) < checkpoints.MAX_BEFORE_CHARS + 1_000
+    finally:
+        db.close()
+
+
+def test_a_reserialized_dashboard_spec_does_not_trip_the_guard(client):
+    """The guard asks whether the dashboard still holds what the run left, not
+    whether its JSON was re-typed the same way. A spec re-serialized with its
+    keys in another order is the same dashboard, and the undo must apply."""
+    dataset = make_dataset(client)
+    boot = client.get("/api/bootstrap").json()
+    workspace_id = boot["identity"]["workspace_id"]
+    user_id = boot["identity"]["user_id"]
+    name = unique("Reserialized")
+    db = SessionLocal()
+    try:
+        context = ToolContext(
+            workspace_id=workspace_id, user_id=user_id, conversation_id=""
+        )
+        registry = build_registry(db, context)
+        created = registry["create_dashboard"].executor(
+            db,
+            context,
+            {
+                "name": name,
+                "dataset_id": dataset["id"],
+                "visualization": "bar",
+                "query": {
+                    "group_by": "territory",
+                    "metrics": [
+                        {"field": "revenue", "operation": "sum", "label": "total"}
+                    ],
+                },
+                "x_field": "territory",
+                "y_fields": ["total"],
+            },
+        )
+        db.commit()
+        assert created.created_ids, created.content
+        dashboard_id = created.created_ids[0]
+        run = Run(
+            workspace_id=workspace_id,
+            conversation_id="",
+            agent_id=boot["default_agent_id"],
+            created_by=user_id,
+            status="completed",
+            prompt="rename it",
+        )
+        db.add(run)
+        db.commit()
+        pending = checkpoints.capture_before(
+            db,
+            context,
+            "update_dashboard",
+            {"dashboard_id": dashboard_id, "name": name},
+        )
+        assert pending is not None
+        dashboard = db.get(Dashboard, dashboard_id)
+        dashboard.name = f"{name} renamed"
+        db.flush()
+        checkpoints.record_checkpoint(
+            db,
+            run=run,
+            tool_call_id="reserialize-1",
+            name="update_dashboard",
+            pending=pending,
+            result=ToolResult(content="updated"),
+        )
+        db.commit()
+        # A benign round trip: identical spec, different key order and spacing.
+        dashboard = db.get(Dashboard, dashboard_id)
+        spec = json.loads(dashboard.spec_json)
+        dashboard.spec_json = json.dumps(
+            dict(sorted(spec.items(), reverse=True)), indent=2
+        )
+        db.commit()
+        assert dashboard.spec_json != json.dumps(spec)
+
+        rows = list(
+            db.scalars(select(RunCheckpoint).where(RunCheckpoint.run_id == run.id))
+        )
+        assert json.loads(rows[0].before_json)["after"], (
+            "the row is guarded — otherwise this proves nothing"
+        )
+        reverted, skipped = checkpoints.revert_run(
+            db, run=db.get(Run, run.id), actor_id=user_id, rows=rows
+        )
+        db.commit()
+        assert skipped == [], skipped
+        assert [item["tool_name"] for item in reverted] == ["update_dashboard"]
+        assert db.get(Dashboard, dashboard_id).name == name
+    finally:
+        db.close()
+
+
+def _created_document(db, context, registry, client):
+    title = unique("Attributed doc")
+    result = registry["create_document"].executor(
+        db, context, {"title": title, "content": "fresh"}
+    )
+    return result, db.scalar(
+        select(Document).where(
+            Document.workspace_id == context.workspace_id, Document.title == title
+        )
+    )
+
+
+def _created_board(db, context, registry, client):
+    name = unique("Attributed board")
+    result = registry["create_board"].executor(db, context, {"name": name})
+    return result, db.scalar(
+        select(Board).where(
+            Board.workspace_id == context.workspace_id, Board.name == name
+        )
+    )
+
+
+def _created_project(db, context, registry, client):
+    name = unique("Attributed project")
+    result = registry["create_project"].executor(
+        db, context, {"name": name, "kind": "web"}
+    )
+    return result, db.scalar(
+        select(Project).where(
+            Project.workspace_id == context.workspace_id, Project.name == name
+        )
+    )
+
+
+def _dashboard_args(name: str, dataset_id: str) -> dict:
+    return {
+        "name": name,
+        "dataset_id": dataset_id,
+        "visualization": "bar",
+        "query": {
+            "group_by": "territory",
+            "metrics": [{"field": "revenue", "operation": "sum", "label": "total"}],
+        },
+        "x_field": "territory",
+        "y_fields": ["total"],
+    }
+
+
+def _created_dashboard(db, context, registry, client):
+    dataset = make_dataset(client)
+    name = unique("Attributed dashboard")
+    result = registry["create_dashboard"].executor(
+        db, context, _dashboard_args(name, dataset["id"])
+    )
+    return result, db.scalar(
+        select(Dashboard).where(
+            Dashboard.workspace_id == context.workspace_id, Dashboard.name == name
+        )
+    )
+
+
+TEMPLATE_ARGS = {
+    "required_columns": [
+        {"name": "region", "type": "string"},
+        {"name": "amount", "type": "number"},
+    ],
+    "visualization": "bar",
+    "query": {
+        "group_by": "region",
+        "metrics": [{"field": "amount", "operation": "sum", "label": "total"}],
+    },
+    "x_field": "region",
+    "y_fields": ["total"],
+}
+
+
+def _created_template(db, context, registry, client):
+    name = unique("Attributed template")
+    result = registry["create_dashboard_template"].executor(
+        db, context, {**TEMPLATE_ARGS, "name": name}
+    )
+    return result, db.scalar(
+        select(DashboardTemplate).where(
+            DashboardTemplate.workspace_id == context.workspace_id,
+            DashboardTemplate.name == name,
+        )
+    )
+
+
+def _bound_template(db, context, registry, client):
+    dataset = make_dataset(client)
+    template_name = unique("Attributed definition")
+    registry["create_dashboard_template"].executor(
+        db, context, {**TEMPLATE_ARGS, "name": template_name}
+    )
+    db.commit()
+    name = unique("Attributed binding")
+    result = registry["bind_dashboard_template"].executor(
+        db,
+        context,
+        {
+            "template": template_name,
+            "dataset_id": dataset["id"],
+            "name": name,
+            "column_bindings": {"region": "territory", "amount": "revenue"},
+        },
+    )
+    return result, db.scalar(
+        select(Dashboard).where(
+            Dashboard.workspace_id == context.workspace_id, Dashboard.name == name
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        _created_document,
+        _created_board,
+        _created_project,
+        _created_dashboard,
+        _created_template,
+        _bound_template,
+    ],
+    ids=[
+        "create_document",
+        "create_board",
+        "create_project",
+        "create_dashboard",
+        "create_dashboard_template",
+        "bind_dashboard_template",
+    ],
+)
+def test_every_creating_executor_reports_the_row_it_created(client, make):
+    """`created_ids` is the only honest attribution channel a creation has.
+
+    The capture for a create runs *before* the executor and has no id to
+    record; it learns one from the result. An executor that forgets to report
+    makes its creation invisible to the undo (`finalize` returns None and no
+    checkpoint is written) — and the alternative it replaced, set-diffing the
+    workspace, attributed whatever else landed in the meantime. So every
+    creating executor owes this, not just the one that was tested.
+    """
+    db = SessionLocal()
+    try:
+        context = ToolContext(
+            workspace_id=DEV_SEED_WORKSPACE_ID,
+            user_id=DEV_SEED_USER_ID,
+            conversation_id="",
+        )
+        result, row = make(db, context, build_registry(db, context), client)
+        db.commit()
+        assert row is not None, result.content
+        assert result.created_ids == [row.id], result.content
+    finally:
+        db.close()

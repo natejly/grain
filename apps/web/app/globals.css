@@ -769,9 +769,11 @@ label,
      the count stayed at four, and the fifth button grid-wrapped onto a phantom
      row BELOW the fixed-height row — overlaying the next thread, which then
      intercepted every click on Delete. Auto-flow columns cannot wrap, whatever
-     the action count — including the favorite star this merge brings in from
-     the Foyer work, which needed no column of its own. The test in
-     thread-rail-css.test.ts pins this mechanism. */
+     the action count — the favorite star this merge adds needed no column of its own.
+     It is now the backstop rather than the load-bearing part: the actions ride
+     in `.thread-actions`, out of flow — see there. `relative` is what makes
+     this row that cluster's containing block, so it can never leave the row. */
+  position: relative;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-flow: column;
   grid-auto-columns: max-content;
@@ -787,7 +789,8 @@ label,
 }
 
 .thread:hover,
-.thread.active {
+.thread.active,
+.thread:focus-within {
   background: var(--surface);
   color: var(--text);
 }
@@ -821,6 +824,86 @@ label,
   font-size: 9px;
 }
 
+/* EVERY trailing action lives in this one cluster, and the cluster is out of
+   flow. That is the whole fix for a title that read "Ne…": in flow, each icon
+   took its width off the title's track, and the open row's five of them (six
+   once mainline's favourite star merges, more later) left the title about two
+   characters. Absolutely positioned, they take none of it — the title track is
+   the full row width for any number of actions, which is the property the rail
+   needs rather than "five happens to fit".
+   The cluster is right-anchored and exactly the row's height, so it can reach
+   neither the row below (the overlap that used to swallow clicks on Delete) nor
+   any other row. It fades in on hover or keyboard focus, carrying the row's own
+   background so the title tail is masked only while you are actually pointing
+   at the row; at rest every row — open one included — reads as title and time.
+
+   `pointer-events` tracks `opacity` in every rule below, and that pairing is
+   deliberate: `opacity: 0` alone leaves an element fully hit-testable, so at
+   rest an invisible cluster still swallowed every click aimed at the row
+   underneath it. Unhittable at rest, a click with no hover in play reaches
+   `.thread-open` instead and opens the thread, which is what clicking a
+   conversation row should do.
+   This is belt to the braces of the in-flow rule below, which is what actually
+   fixes the clicks: a real pointer must cross the row to click it, and that
+   hover puts the cluster back in flow before the click lands. What `none` at
+   rest covers is a click with no pointer movement before it — the rail PREPENDS
+   threads, so a row can arrive under an already-stationary cursor. Chromium was
+   measured to re-run `:hover` on that layout change, so there the icons do
+   appear first; engines that do not would otherwise fire an unseen Delete.
+   Hover targets the parent `.thread`, never the cluster, so the parent raises
+   opacity and pointer-events together and the first click after a hover is
+   live — verified, not assumed. */
+.thread-actions {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  height: 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  padding-left: 20px;
+  background: linear-gradient(to right, transparent, var(--surface) 20px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Revealed, the cluster goes back INTO the flow, and that is the other half of
+   the cure. Out of flow it is 154px of overlay across a 227px row — it covers
+   the row's midpoint, so `.thread-open` (the full-width title button, and the
+   row's whole purpose) could not be clicked at its centre once the row was
+   hovered, which every real click requires. Three e2e specs timed out there,
+   Playwright naming `.thread-rename` as the interceptor mid-click; a person met
+   the same defect as an icon materialising under a cursor aimed at title text
+   and firing Rename or Delete instead of opening the thread.
+   In flow the row's own grid gives the cluster its columns and shrinks the
+   title track beside it, so the two never overlap and both stay clickable. Out
+   of flow AT REST is what still buys the title the full row width, which is the
+   property this cluster exists for; the title only gives that width back while
+   you are actually on the row. */
+.thread:hover .thread-actions,
+.thread:focus-within .thread-actions {
+  position: static;
+  padding-left: 0;
+  background: none;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Nothing hovers on a touch screen, so there the actions simply stay up — and
+   must stay clickable, or every action would be dead on touch. Permanently up
+   means permanently in flow too: overlaying the title with no hover to end it
+   would put a tap on the title's middle onto an icon forever. */
+@media (hover: none) {
+  .thread-actions {
+    opacity: 1;
+    pointer-events: auto;
+    position: static;
+    padding-left: 0;
+    background: none;
+  }
+}
+
 .thread-delete,
 .thread-split {
   width: 26px;
@@ -831,17 +914,7 @@ label,
   border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
-  opacity: 0;
   cursor: pointer;
-}
-
-.thread:hover .thread-delete,
-.thread.active .thread-delete,
-.thread-delete:focus-visible,
-.thread:hover .thread-split,
-.thread.active .thread-split,
-.thread-split:focus-visible {
-  opacity: 1;
 }
 
 .thread-delete:hover,
@@ -850,9 +923,6 @@ label,
   color: var(--text);
 }
 
-/* The share toggle rides only the open thread, so it stays visible rather than
-   revealing on hover the way the split/delete actions do — it is that thread's
-   primary affordance, not an incidental one. */
 .thread-share {
   width: 26px;
   height: 26px;
@@ -4736,13 +4806,21 @@ label,
   background: var(--surface);
 }
 
+/* A field row is usable on its own — the API-tokens and Email-in cards use one
+   as the whole form, with no `.mcp-form` panel around it — so it carries the
+   field styling too rather than only the two-column split. Without this the
+   bare rows fell through to the browser's default label/input rendering: an
+   inline label butted against an unstyled grey box. `end` keeps the submit
+   button on the input's baseline now that the label sits above it. */
 .mcp-form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  align-items: end;
   gap: 14px;
 }
 
-.mcp-form label {
+.mcp-form label,
+.mcp-form-row label {
   display: block;
   color: var(--text-muted);
   font-size: 11px;
@@ -4750,7 +4828,10 @@ label,
 
 .mcp-form input,
 .mcp-form select,
-.mcp-form textarea {
+.mcp-form textarea,
+.mcp-form-row input,
+.mcp-form-row select,
+.mcp-form-row textarea {
   width: 100%;
   margin-top: 5px;
   padding: 8px 10px;
@@ -4866,6 +4947,19 @@ label,
 
 .mcp-tool:hover {
   background: var(--surface-hover);
+}
+
+/* A tool row inside a form is still a `label`, so `.mcp-form label` — a class
+   AND a type — outranked the rule above and flattened the row back to a block:
+   the tick box stretched the row's width and the event name butted against its
+   description. The row keeps its own layout, and the tick box its own size. */
+.mcp-form .mcp-tool {
+  display: flex;
+}
+
+.mcp-tool input[type="checkbox"] {
+  width: auto;
+  margin-top: 0;
 }
 
 .mcp-tool code {

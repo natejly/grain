@@ -290,6 +290,9 @@ test("a chat turn stopped by the ceiling explains itself, and the raise releases
   const threads = page.locator(".thread");
   const before = await threads.count();
   page.once("dialog", (dialog) => dialog.accept());
+  // The row's actions are hidden AND unhittable until the row is hovered, so
+  // hover it first — with a mouse there is no other way to reach Delete.
+  await threads.first().hover();
   await threads.first().getByRole("button", { name: /^Delete / }).click();
   await expect(threads).toHaveCount(before - 1);
 
@@ -373,6 +376,8 @@ test("a workflow held by the ceiling does not claim to be waiting for a decision
   await page.reload();
   const thread = page.getByRole("button", { name: "Delete Workflow: Scripted workflow" });
   page.once("dialog", (dialog) => dialog.accept());
+  // The row's actions only become hittable once the row is hovered.
+  await page.locator(".thread").filter({ hasText: "Workflow: Scripted workflow" }).first().hover();
   await thread.click();
   await expect(thread).toHaveCount(0);
 

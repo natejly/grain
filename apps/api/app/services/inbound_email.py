@@ -15,11 +15,17 @@ engaged. The body is untrusted but is ordinary user message content — the
 same trust level as typed text — and the web renderer keeps it inert:
 chat.tsx prints user-role messages as plain text, never markdown, so a
 hostile mail cannot auto-load remote images (tracking pixels) or dress a
-phishing URL in friendly link text.
+phishing URL in friendly link text. One thing besides the text is read:
+chat.tsx also scans every message for `/apps/<slug>` references, so a mail
+can mount a dashboard this workspace has *already published publicly* into
+the transcript — sandboxed, snapshot-only, no bindings. That is contained
+noise rather than a hole, and the reasoning lives at the call site.
 
 Knowing an address means being able to land mail, so each address carries a
 `DAILY_CAP` — mail beyond it is a quiet 200 that writes nothing but the
-counter (and one audit row at the trip).
+counter (and one audit row at the trip). The cap is a leaky bucket rather
+than a per-calendar-day counter, so it cannot be doubled by waiting for
+midnight; `count_delivery` states the exact bound.
 
 Nothing here commits; the route owns the transaction.
 """
@@ -30,6 +36,7 @@ import html as html_lib
 import re
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from sqlalchemy import select
@@ -42,9 +49,17 @@ from ..models import Conversation, InboundAddress, Message, Space
 #: attacker input; threads are for reading.
 MAX_BODY_CHARS = 10000
 
-#: Deliveries one address may land per UTC day. Anyone who knows an address
-#: can fill threads through it; the cap bounds a flood to a day's reading.
+#: Deliveries one address may land in a burst, and the number it earns back
+#: per day. Anyone who knows an address can fill threads through it; the cap
+#: bounds a flood to a day's reading.
 DAILY_CAP = 200
+
+#: The window the cap is quoted over. One landing drains after
+#: `WINDOW_SECONDS / DAILY_CAP` seconds (a day / the cap), so an address
+#: sitting at the ceiling earns exactly `DAILY_CAP` further landings per
+#: rolling day, evenly spaced. Read at call time, not folded into a constant,
+#: so a test that lowers `DAILY_CAP` gets a coherent drain rate with it.
+WINDOW_SECONDS = 86400
 
 _TOKEN_PATTERN = re.compile(r"inbox\+([A-Za-z0-9_-]{8,128})@", re.IGNORECASE)
 _TAG_PATTERN = re.compile(r"<[^>]*>")
@@ -120,24 +135,94 @@ def strip_html(markup: str) -> str:
     return re.sub(r"[ \t\r\f\v]+", " ", html_lib.unescape(without_tags)).strip()
 
 
-def count_delivery(address: InboundAddress) -> bool:
-    """Count one landing attempt against the address's daily cap.
+@dataclass(frozen=True)
+class CapVerdict:
+    """What the flood cap says about one landing attempt."""
 
-    Rolls the counter to today's UTC date if needed, increments, and answers
-    whether this attempt is still under `DAILY_CAP`. Refused attempts count
-    too, so the day's first over-cap mail leaves the counter at exactly
-    `DAILY_CAP + 1` — the route audits that one trip and stays quiet (but
-    still counting) for the rest of the day. Two racing deliveries can both
-    read the same count; the cap is a bound, not an exact meter. Flushes
-    nothing; the route's commit persists the bump even when the mail is
-    refused.
+    #: Whether this mail may land.
+    allowed: bool
+    #: True only on the single attempt that crosses the cap — the route's
+    #: signal to audit the trip once rather than once per refused mail.
+    tripped: bool
+
+
+def count_delivery(
+    address: InboundAddress, *, now: Optional[datetime] = None
+) -> CapVerdict:
+    """Charge one landing attempt to the address's flood cap.
+
+    A leaky bucket, deliberately not a per-calendar-day counter. `rate_level`
+    is how many landings are still on the clock and `rate_level_at` is the
+    moment that level was last drained; one credit drains every
+    `WINDOW_SECONDS / DAILY_CAP` seconds. What that buys, and the bound it
+    promises:
+
+    - **no burst larger than `DAILY_CAP`** at any instant, ever. The fixed
+      UTC-day window this replaced let a flood spend the whole cap at 23:59
+      and the whole cap again at 00:01 — 2x the cap inside two minutes, from
+      one address, which is exactly the reading-load the cap exists to bound;
+    - **`DAILY_CAP` per rolling day sustained** once the bucket is full: a
+      sender who stops flooding earns one landing back every
+      `WINDOW_SECONDS / DAILY_CAP` seconds as credits drain.
+
+    The honest ceiling: a 24-hour span that *starts* with an empty bucket can
+    still see up to 2x `DAILY_CAP` — a full burst plus a day of drained
+    credits — but the second half arrives evenly spaced, never as a second
+    burst. Bounding a rolling day to a hard `DAILY_CAP` would need a
+    timestamp per delivery (a table), not two columns on the address.
+
+    Two deliberate details about the refusing state:
+
+    - a refused attempt does not add to the level (it clamps at
+      `DAILY_CAP + 1`), but it *does* restart the drain clock. A sender who
+      keeps hammering therefore never drains — the address stays shut for as
+      long as the flood lasts, and reopens a couple of drain intervals after
+      it stops. That is the same posture the fixed window had (over the cap
+      meant shut until midnight), reached without the midnight;
+    - because the clock restarts, `tripped` — the route's audit signal —
+      fires once per refusing episode, not once per refused mail. A flood
+      faster than the drain rate audits exactly once; the worst a sender
+      pacing exactly at the drain rate can produce is one audit per drained
+      credit, which is `DAILY_CAP` a day, the same bound as the mail itself.
+
+    Two racing deliveries can both read the same level; the cap is a bound,
+    not an exact meter. Flushes nothing; the route's commit persists the
+    charge even when the mail is refused.
     """
-    today = utcnow().date().isoformat()
-    if address.daily_count_day != today:
-        address.daily_count_day = today
-        address.daily_count = 0
-    address.daily_count += 1
-    return address.daily_count <= DAILY_CAP
+    moment = now or utcnow()
+    drain = WINDOW_SECONDS / DAILY_CAP
+    level = address.rate_level
+    since = address.rate_level_at
+    if since is None or level <= 0 or since > moment:
+        # Never used, nothing on the clock, or a row stamped by a clock ahead
+        # of ours: the bucket starts here. Anchoring an empty bucket to `now`
+        # is also what stops an idle address from banking credit.
+        level = max(level, 0)
+        since = moment
+    else:
+        drained = int((moment - since).total_seconds() // drain)
+        if drained > 0:
+            level = max(0, level - drained)
+            # Advance by whole credits only, so the remainder carries instead
+            # of being rounded away by a run of frequent deliveries.
+            since = since + timedelta(seconds=drained * drain)
+        if level <= 0:
+            since = moment
+
+    if level > DAILY_CAP:
+        # Mid-episode: hold the clamp, restart the clock, audit nothing.
+        address.rate_level = level
+        address.rate_level_at = moment
+        return CapVerdict(allowed=False, tripped=False)
+    if level >= DAILY_CAP:
+        # Full. This attempt is the one that trips, and `DAILY_CAP + 1` is
+        # what remembers that the trip has already been audited.
+        address.rate_level = DAILY_CAP + 1
+        address.rate_level_at = moment
+        return CapVerdict(allowed=False, tripped=True)
+    address.rate_level = level + 1
+    address.rate_level_at = since
+    return CapVerdict(allowed=True, tripped=False)
 
 
 def deliver(

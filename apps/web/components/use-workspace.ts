@@ -237,8 +237,12 @@ export function useWorkspace() {
   // role="alert" and asserted absent by specs that never expect a failure.
   // Carried with a nonce, not as a bare string: the same line earned twice
   // must re-show and restart the dismiss clock, which identical strings
-  // cannot do through a state setter.
-  const [notice, setNotice] = useState<{ text: string; at: number } | null>(null);
+  // cannot do through a state setter. `sticky` opts one line out of the
+  // dismiss clock: a presentation flip is a thing to glimpse, but an undo's
+  // skipped half is a thing to act on, and must not expire unread.
+  const [notice, setNotice] = useState<
+    { text: string; at: number; sticky?: boolean } | null
+  >(null);
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeConversationRef = useRef<string | null>(null);
@@ -333,9 +337,10 @@ export function useWorkspace() {
 
   // Self-dismissing, unlike the error toast: a presentation change needs no
   // acknowledgement. A fresh notice — the nonce makes even a repeat of the
-  // same line fresh — restarts the clock via the cleanup.
+  // same line fresh — restarts the clock via the cleanup. A `sticky` notice
+  // opts out and waits for the dismiss button instead.
   useEffect(() => {
-    if (!notice) return;
+    if (!notice || notice.sticky) return;
     const timer = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -1036,6 +1041,7 @@ export function useWorkspace() {
     skillArgs,
     clearAttachedSkill: detachSkill,
     setError,
+    setNotice,
     setView,
     setSidebarOpen,
     setConversations,

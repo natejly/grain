@@ -463,3 +463,40 @@ def test_a_failed_send_is_not_audited_as_a_delivery(identity_client, db, monkeyp
     )
     assert digests.deliver(db, membership) is False
     assert audits(db, "digest.sent", membership.id) == []
+
+
+def test_a_mail_that_cannot_be_built_leaves_a_skip_not_silence(
+    identity_client, db, sent_emails, monkeypatch
+):
+    """A render that raises must audit, because `send_digest`'s blanket
+    `except` would otherwise turn a permanently broken mailer into a log line
+    on a host nobody reads — a member with a full waiting set, mailed nothing,
+    every day, with no evidence anywhere the product can show. `WEB_ORIGIN` is
+    guarded at boot now, so this exercises the general case: whatever makes the
+    build raise, the outcome is a `digest.skipped` row and no mail."""
+    client = identity_client()
+    identity = identity_of(client)
+    enable(client)
+    plant_mention(
+        db,
+        workspace_id=identity["workspace_id"],
+        user_id=identity["user_id"],
+        title="Unrenderable",
+    )
+    membership = membership_of(db, identity["workspace_id"], identity["user_id"])
+    db.expire_all()
+
+    def explode(label: str, url: str) -> str:
+        raise ValueError("link button URL must be http(s), got scheme ''")
+
+    monkeypatch.setattr(digests.mail_render, "render_link_button", explode)
+
+    # The background entrypoint the tick enqueues — its own session, and the
+    # `except` that used to swallow this whole failure.
+    digests.send_digest(membership.id)
+
+    assert sent_emails == []
+    assert audits(db, "digest.sent", membership.id) == []
+    skips = audits(db, "digest.skipped", membership.id)
+    assert len(skips) == 1
+    assert "render failed" in skips[0].detail_json

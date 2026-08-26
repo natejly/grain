@@ -678,6 +678,40 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _guard_web_origin(self) -> Settings:
+        """Refuse a `WEB_ORIGIN` entry that is not an absolute http(s) origin.
+
+        `primary_web_origin` is the address every outbound mail links back to,
+        and `mail_render.render_link_button` refuses a URL whose scheme is not
+        http(s) — an allowlist, so a link button can never become a payload.
+        Those two facts meet badly without this guard: `WEB_ORIGIN=app.example
+        .com` (no scheme) boots perfectly, and then *every* digest and *every*
+        dashboard subscription raises while building its HTML, forever, on a
+        deployment whose configuration looked fine. Same defect class as the
+        CR/LF subject: a permanent, invisible mail outage.
+
+        So the same structural gate `_guard_screen` applies to
+        `SCREEN_PROXY_URL` applies here — scheme and host, checked once at
+        boot, where an operator reads the message and fixes the variable.
+        Every comma-separated entry is checked, not only the first: the rest
+        are the CORS allowlist, where a scheme-less entry is silently dead
+        too.
+        """
+        for entry in self.web_origin.split(","):
+            origin = entry.strip().rstrip("/")
+            if not origin:
+                continue
+            parsed = urlparse(origin)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise ValueError(
+                    "WEB_ORIGIN entries must be absolute http:// or https:// "
+                    f"origins — got {origin!r}. Outbound mail links back at "
+                    "the first entry, and a scheme-less origin fails every "
+                    "send silently."
+                )
+        return self
+
+    @model_validator(mode="after")
     def _guard_dev_unrestricted(self) -> Settings:
         """Refuse to boot an agent with the approval gate switched off.
 
@@ -779,8 +813,14 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _guard_web_origin(self) -> Settings:
+    def _guard_web_origin_is_not_localhost(self) -> Settings:
         """Refuse a production deploy still pointing at localhost.
+
+        Distinct from `_guard_web_origin` above, which checks the SHAPE of each
+        entry (absolute http(s)). This one checks the DESTINATION. They arrived
+        from different branches under the same name, and Python keeps only the
+        last definition — so for a while the shape guard was silently shadowed
+        and a scheme-less WEB_ORIGIN booted again. Two guards, two names.
 
         `web_origin` defaults to http://localhost:3000, and unlike the auth
         relaxations above nothing else forces it to change: a deploy that forgets

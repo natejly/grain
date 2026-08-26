@@ -244,21 +244,32 @@ def deliver(
         [row.get(column) for column in result.columns]
         for row in result.rows[:EMAIL_ROW_CAP]
     ]
-    message = email_service.OutboundEmail(
-        to=recipient.email,
-        # The name is collapsed to one line for the Subject header: a CR/LF in
-        # a dashboard name would make the MIME assembly raise inside the
-        # sender on every fire — a permanent, invisible failure. The body and
-        # table keep the raw name; only the header path is whitespace-hostile.
-        subject=f"Dashboard: {_one_line(dashboard.name)}",
-        body=_text_body(dashboard.name, result.columns, rows, settings),
-        html=(
-            mail_render.render_table(dashboard.name, result.columns, rows)
-            + mail_render.render_link_button(
-                "Open in Grain", settings.primary_web_origin
-            )
-        ),
-    )
+    try:
+        message = email_service.OutboundEmail(
+            to=recipient.email,
+            # The name is collapsed to one line for the Subject header: a CR/LF
+            # in a dashboard name would make the MIME assembly raise inside the
+            # sender on every fire — a permanent, invisible failure. The body
+            # and table keep the raw name; only the header path is
+            # whitespace-hostile.
+            subject=f"Dashboard: {_one_line(dashboard.name)}",
+            body=_text_body(dashboard.name, result.columns, rows, settings),
+            html=(
+                mail_render.render_table(dashboard.name, result.columns, rows)
+                + mail_render.render_link_button(
+                    "Open in Grain", settings.primary_web_origin
+                )
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — a build failure must audit, not vanish
+        # Rendering raises on a mail the deployment cannot legally build —
+        # `render_link_button` on a non-http(s) origin is the live example.
+        # `_guard_web_origin` makes that unreachable from configuration, but
+        # the background task's blanket `except` would swallow anything else
+        # into a log line and no audit row: a subscription that appears to be
+        # firing and delivers nothing, invisibly, forever. So a build failure
+        # takes the same honest exit as a refused send.
+        return _skip(db, subscription, reason=f"render failed: {exc}")
     sent = email_service.send_quietly(
         email_service.get_email_sender(settings), message
     )

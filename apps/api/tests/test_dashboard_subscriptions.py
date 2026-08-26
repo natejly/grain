@@ -354,6 +354,35 @@ def test_a_failed_send_is_audited_as_a_skip_not_a_delivery(
     assert "delivery failed" in skips[0].detail_json
 
 
+def test_a_mail_that_cannot_be_built_is_audited_as_a_skip(
+    client, db, sent_emails, monkeypatch
+):
+    """A refused *send* already audits; a refused *build* used to vanish.
+
+    `send_subscription`'s blanket `except` catches what the render raises and logs
+    it, so a subscription that could never build its mail — the live case was
+    a scheme-less `WEB_ORIGIN` reaching `render_link_button`, now refused at
+    boot — appeared to be firing on schedule while delivering nothing, with no
+    audit row anywhere to say otherwise. Whatever the cause, a build failure
+    takes the same honest exit a refused send does."""
+    dashboard = make_dashboard(client)
+    created = subscribe(client, dashboard["id"])
+
+    def explode(label: str, url: str) -> str:
+        raise ValueError("link button URL must be http(s), got scheme ''")
+
+    monkeypatch.setattr(subscription_service.mail_render, "render_link_button", explode)
+
+    # The background entrypoint the sweep enqueues, blanket `except` and all.
+    subscription_service.send_subscription(created["id"])
+
+    assert sent_emails == []
+    assert audits(db, "dashboard.subscription_sent", created["id"]) == []
+    skips = audits(db, "dashboard.subscription_skipped", created["id"])
+    assert len(skips) == 1
+    assert "render failed" in skips[0].detail_json
+
+
 def test_a_newline_bearing_dashboard_name_cannot_break_the_subject(
     client, db, sent_emails
 ):

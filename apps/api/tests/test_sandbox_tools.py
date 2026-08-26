@@ -389,6 +389,18 @@ def test_download_saves_a_file_to_the_workspace(tools, db, context, identity, pr
     assert stored.status == "stored"
 
 
+def test_download_reports_the_source_it_created(tools, db, context, identity, provider):
+    """`created_ids`, not just the sentence: the run's undo trail attributes
+    this creation from the result, so a download that only *mentions* the id
+    in prose would be invisible to it."""
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    _plant(db, provider, identity.workspace_id, f"{SANDBOX_HOME}/trail.csv", b"a\n1\n")
+    result = tools["sandbox_download"].executor(db, context, {"path": "trail.csv"})
+
+    stored = db.query(Source).filter(Source.filename == "trail.csv").one()
+    assert result.created_ids == [stored.id]
+
+
 def test_download_refuses_an_oversize_file(tools, db, context, identity, monkeypatch, provider):
     """A sandbox is untrusted and can hand back a 2 GB file. The refusal is a
     plain sentence, and nothing is written to the workspace."""

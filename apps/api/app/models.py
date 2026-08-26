@@ -2723,12 +2723,13 @@ class InboundAddress(Base):
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    # The per-UTC-day delivery counter (refused attempts included) and the
-    # day it counts — the flood cap the inbound-email door checks
-    # (services/inbound_email.DAILY_CAP).
-    daily_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    daily_count_day: Mapped[str] = mapped_column(
-        String(10), default="", server_default=""
+    # The flood cap's leaky bucket: how many landings are still "on the
+    # clock" and the moment that level was last drained. One credit drains
+    # every DRAIN_SECONDS, so the window rolls instead of resetting at UTC
+    # midnight (services/inbound_email.count_delivery).
+    rate_level: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    rate_level_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
     )
 
 

@@ -29,7 +29,10 @@ standing permission to receive workspace mail ends with its ability to log
 in. An empty digest is not sent (the claim stands: silence, not a re-try), a
 member or user that vanished between claim and send is a quiet skip, and —
 like every sweep — nothing here raises out of the ticker or the background
-task.
+task. A *failure* is louder than a quiet outcome: a waiting set that could
+not be rendered into a mail leaves a `digest.skipped` audit, because the
+background task's blanket `except` would otherwise make a permanently
+broken mailer indistinguishable from a quiet week.
 
 **The mail is titles-only, on purpose (QA F13 #8).** `Notification.body`
 quotes comment and message content, and a digest that shipped it would move
@@ -222,20 +225,23 @@ def deliver(
     noun = "item" if total == 1 else "items"
     subject = f"{total} {noun} waiting in Grain"
     listed = rows[:TOP_ITEMS]
-    message = email_service.OutboundEmail(
-        to=email,
-        subject=subject,
-        body=_text_body(listed, counts=counts, total=total, settings=settings),
-        html=(
-            mail_render.render_table(
-                "Waiting on you", ("What", "Where", "Since"), listed
-            )
-            + f'<p style="margin:8px 0;">{html.escape(counts)}</p>'
-            + mail_render.render_link_button(
-                "Open your Inbox", settings.primary_web_origin
-            )
-        ),
-    )
+    try:
+        message = email_service.OutboundEmail(
+            to=email,
+            subject=subject,
+            body=_text_body(listed, counts=counts, total=total, settings=settings),
+            html=(
+                mail_render.render_table(
+                    "Waiting on you", ("What", "Where", "Since"), listed
+                )
+                + f'<p style="margin:8px 0;">{html.escape(counts)}</p>'
+                + mail_render.render_link_button(
+                    "Open your Inbox", settings.primary_web_origin
+                )
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — a build failure must audit, not vanish
+        return _skip(db, membership, reason=f"render failed: {exc}")
     sent = email_service.send_quietly(
         email_service.get_email_sender(settings), message
     )
@@ -256,6 +262,29 @@ def deliver(
     )
     db.commit()
     return True
+
+
+def _skip(db: Session, membership: Membership, *, reason: str) -> bool:
+    """Record that a digest that *should* have gone out did not, and move on.
+
+    The quiet outcomes above — nothing waiting, no active mailable account —
+    are answers, and they stay unaudited. This one is a failure: the member
+    had a waiting set, and the mail could not be built. `send_digest`'s
+    blanket `except` would otherwise turn that into a log line on a host
+    nobody is reading, so the failure leaves a row where an operator looks.
+    """
+    logger.warning("digest %s skipped: %s", membership.id, reason)
+    record_audit(
+        db,
+        workspace_id=membership.workspace_id,
+        actor_id="",
+        action="digest.skipped",
+        resource_type="membership",
+        resource_id=membership.id,
+        detail={"user_id": membership.user_id, "reason": reason[:300]},
+    )
+    db.commit()
+    return False
 
 
 def _my_approvals(waiting: WaitingSet, *, user_id: str) -> List[Any]:

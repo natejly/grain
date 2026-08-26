@@ -313,6 +313,16 @@ cases, unit tests, and its own commit.
       749 web unit tests, build clean, e2e 76 passed / 1 skipped / 0 failed —
       the first post-merge e2e run surfaced two pieces of four-branch-merge
       fallout, fixed in their own commit and recorded under "QA fix pass")
+- [x] Full gate, second round (2026-08-26, after the three commits closing QA's
+      final-verification findings): ruff + mypy clean (176 source files), full
+      pytest green with no warnings section, `pnpm -r typecheck` clean,
+      753 web unit tests (up from 749), `pnpm -r build` clean, e2e 76 passed /
+      1 skipped / 0 failed. Single alembic head `0065_delivery_hardening`; the
+      committed `packages/api-client/openapi.json` regenerates byte-identical.
+      The three fix commits introduced no regression. One pre-existing defect
+      was found and fixed in the round (the test-side router double-include
+      below), which is what finally cleared the duplicate-operation-id
+      warnings from the pytest output as well as from the openapi export.
 
 ## Later in line (explicitly deferred by user 2026-08-22)
 
@@ -1183,18 +1193,21 @@ was timing:
   verify origin AND refuse replays (verification recipe in the
   services/webhooks docstring and the view copy); retry got a real horizon:
   MAX_ATTEMPTS 6 over an exponential `next_attempt_at` spread (1/5/15/60/240
-  min ≈ 5.6h, migration 0065_delivery_hardening) plus an owner-gated
-  Redeliver affordance on failed rows in the deliveries panel. LOWs
+  min = 321 min = 5h21m between first and sixth attempt, migration
+  0065_delivery_hardening) plus an owner-gated Redeliver affordance on
+  failed rows in the deliveries panel. LOWs
   RECORDED, not built: (QA 5) the caller-supplied signing secret has no min
   length and no rotation path (PUT lacks a secret field; delete+recreate
   loses the trail) — consider server-minted show-once secrets to match the
   ApiToken posture; (QA 6) no endpoint auto-disable after sustained failure
   and no webhook_deliveries retention — retention-sweep candidate; (QA 7)
   the tick's claim is global FIFO 25/tick with no per-workspace fairness.
-- F12 inbound email (QA 8-12): per-address daily cap
-  (services/inbound_email.DAILY_CAP = 200/UTC day; beyond it the same quiet
-  200 as an unknown token, landing nothing, audited exactly once at the
-  trip); message-id dedup now scoped per address (the address id salts the
+- F12 inbound email (QA 8-12): per-address flood cap
+  (services/inbound_email.DAILY_CAP = 200, spent from a rolling leaky bucket
+  — see the verification entry below, which replaced the original fixed
+  UTC-day counter; beyond it the same quiet 200 as an unknown token, landing
+  nothing, audited once per refusing episode); message-id dedup now scoped
+  per address (the address id salts the
   idempotency hash — pre-burning an id cannot suppress a sibling address's
   mail; keys recorded before this change are simply orphaned, worst case one
   historical mail could land again once). QA 9 (remote images / phishing
@@ -1245,7 +1258,31 @@ was timing:
   self-heals on the next bootstrap, so cosmetic. (d) UTC-only scheduling is
   honestly labeled in the UI — UX choice, no action.
 
-## Merge notes (feature-sweep, 2026-08-23)
+### Second verification round (2026-08-26)
+
+Re-ran the whole gate over the three commits that closed QA's
+final-verification findings (`642c577`/`751fd00`/`76556cc`/`1799969`,
+`c577ee5`, `6bbeb32`). Everything passes — see the second-round gate entry at
+the top of this file for the figures. Findings from the round:
+
+- FIXED: the test-side router double-include (full write-up under "ROUTERS
+  RE-INCLUDED FROM TESTS" in the merge notes). It was NOT introduced by the
+  three fix commits; it long pre-dated them, and it was the last source of
+  duplicate-operation-id warnings anywhere in the gate.
+- NO REGRESSIONS from the three fix commits. Checked specifically: the
+  openapi export still regenerates byte-identical, `alembic heads` still
+  reports the single head `0065_delivery_hardening` (0066 remains unclaimed
+  for the peer's integration branch), and the e2e suite is unchanged at 76
+  passed / 1 skipped.
+- CONSCIOUSLY LEFT: `pnpm build` reports six eslint *warnings* (not errors) —
+  unused `RESOLVED_BY_RERUN` in latex-compiler.tsx, unused `actionableCount`
+  and a missing `identityId` dep in inbox.tsx, unused `_dropped` in snooze.ts,
+  and in workspace.tsx an unused `ShieldAlert` import plus an eslint-disable
+  directive that no longer suppresses anything. All six arrive from the
+  four-branch merge `e6b01f6`, none of the files is touched by the fix
+  commits, and the build is green. Clearing them is a tidy-up for a branch
+  that is not mid-review — doing it here would be pure diff noise against an
+  open PR. Worth a follow-up pass once this merges.
 
 - MIGRATION RENUMBERING (QA finding #1): SETTLED at the four-branch merge
   (e6b01f6, gates fixed in 462f03c). Our 0045_templates…0055_digests became
@@ -1254,11 +1291,119 @@ was timing:
   0050_marketplace/0051_listing_installs; single head confirmed. The QA fix
   pass added 0064_open_alert_unique on that head. Fixes now land via branch
   sweep-qa-fixes + PR onto main — no further renumbering expected.
+- WEB_ORIGIN BOOT GUARD (QA verification finding 1): FIXED on sweep-qa-fixes,
+  with a deliberate operator-visible consequence. `render_link_button` refuses
+  a non-http(s) URL, so `WEB_ORIGIN=app.example.com` used to boot fine and
+  then raise on every digest and every subscription mail forever, swallowed by
+  the background `except` with no audit row — a silent permanent outage.
+  `Settings._guard_web_origin` now refuses that at startup, matching
+  `SCREEN_PROXY_URL`. A deployment that has been running on a scheme-less
+  origin will therefore FAIL TO BOOT after this lands instead of failing
+  quietly; that is the intended trade and belongs in release notes. Both mail
+  call sites also degrade honestly now (`digest.skipped` is a new audit
+  action; subscriptions reuse `dashboard.subscription_skipped`).
 - TWO TOKEN UIs (QA F11 LOW 2): SETTLED on sweep-qa-fixes — post-merge both
   mcp.tsx's token panel and webhooks.tsx's TokensSection manage the same
   api_tokens table; kept both on purpose (each page is where its audience
   already is) and cross-linked the copy in each. Fold into one shared
-  component only if a third surface appears.
+  component only if a third surface appears. NOT the same thing as the router
+  double-include below: this entry is about the two web panels.
+- ROUTER DOUBLE-INCLUDE (QA verification finding 2): FIXED on sweep-qa-fixes.
+  `main.py` included `api_tokens.router` twice (a merge splice artifact), and
+  every openapi build emitted three duplicate-operation-id warnings. The
+  redundant include is gone; the first match had always won, so behaviour is
+  unchanged — the regenerated `packages/api-client/openapi.json` is
+  byte-identical, and the export now warns zero times where it warned three.
+  Recorded here because an earlier agent claimed this was already tracked and
+  it was not.
+- ROUTERS RE-INCLUDED FROM TESTS: FIXED on sweep-qa-fixes in the second
+  verification round (recorded as NOT fixed in the first, then closed once the
+  root cause turned out to be smaller than the "build a local FastAPI()"
+  rewrite that entry proposed). `tests/test_board_depth.py` and
+  `tests/test_doc_pending.py` each guarded their `app.include_router(...)` with
+  `any(getattr(route, "path", "")... for route in app.routes)`. That guard can
+  never match: this FastAPI version records an include as an opaque
+  `_IncludedRouter` wrapper instead of flattening it into `app.routes`, so no
+  entry there carries a `.path` at all. Both suites therefore double-included
+  on the shared app on every run — the source of the six remaining
+  duplicate-operation-id warnings. `main.py` has wired both routers for a
+  while, so the includes were vestigial scaffolding from before that landed:
+  they and the imports serving them are gone, the suites reach the routes
+  through the `client` fixture unchanged, and a full pytest run now emits no
+  warnings section at all. Watch for this shape elsewhere — any code that
+  asks "is this router already included?" by reading `route.path` is asking a
+  question `app.routes` stopped being able to answer.
+- REDELIVER SCOPE (QA verification finding 1): FIXED on sweep-qa-fixes.
+  `POST /api/webhooks/deliveries/{id}/redeliver` requeued ANY non-pending
+  row, so an owner (or a script walking the list) could replay a delivery the
+  receiver had already processed. It now requeues `failed` rows only; a
+  `pending` row stays the quiet no-op that makes the route idempotent without
+  an Idempotency-Key, and a `sent` row is a 409. DECIDED, not an oversight: a
+  replay is safe for a receiver that keys on `delivery_id`, but it is not a
+  repair, and against an imperfectly idempotent receiver it is a duplicate
+  side effect nobody asked for — a real "send it again" would have to be its
+  own labelled action. The panel already offered Redeliver on failed rows
+  only, so the web surface is unchanged. Grounds in the route docstring.
+- BACKOFF HORIZON FIGURE (QA verification finding 2): FIXED on
+  sweep-qa-fixes. The schedule is unchanged; the prose was wrong. 1+5+15+60
+  +240 = 321 minutes = 5h21m between the first and sixth attempt, not the
+  "~5.6 hours" claimed in services/webhooks.py and in this file.
+  `RETRY_HORIZON_MINUTES = sum(RETRY_BACKOFF_MINUTES)` now sits beside the
+  schedule and `test_the_stated_retry_horizon_matches_the_schedule` pins the
+  figure, so the next edit to the spread cannot leave the prose behind.
+- INBOUND CAP WINDOW (QA verification finding 3): FIXED on sweep-qa-fixes,
+  inside the unreleased 0065 columns — no new migration (0066 is a peer's).
+  The per-address cap used a fixed UTC-day counter, so a flood could spend
+  the whole cap at 23:59 and the whole cap again at 00:01 — 2x inside two
+  minutes. `inbound_addresses.daily_count`/`daily_count_day` are now
+  `rate_level`/`rate_level_at`, a leaky bucket draining one credit every
+  `WINDOW_SECONDS / DAILY_CAP` (432s at the shipped numbers).
+  `count_delivery` returns a `CapVerdict(allowed, tripped)` instead of a bool
+  plus the route's old `== DAILY_CAP + 1` magic-number check.
+  `test_the_cap_cannot_be_spent_twice_across_midnight` is the boundary case.
+  TWO TRADEOFFS ACCEPTED, both documented in the `count_delivery` docstring:
+  (a) a 24h span starting with an empty bucket can still admit up to 2x the
+  cap — the excess arrives evenly spaced, never as a burst, and a hard
+  rolling-day bound would need a timestamp per delivery (a table), not two
+  columns; (b) a refused attempt restarts the drain clock, so a sender who
+  keeps hammering never drains and the address stays shut until the flood
+  stops (the same posture the fixed window had — over the cap meant shut
+  until midnight — reached without the midnight). Consequence of (b): the
+  `email.capped` audit fires once per refusing *episode*, so a fast flood
+  audits once, while a sender pacing exactly at the drain rate can produce at
+  most one audit per drained credit (≤ DAILY_CAP/day, the same bound as the
+  mail itself).
+- TRANSCRIPT EMBEDS FROM USER-ROLE MESSAGES (QA verification finding 4):
+  VERIFIED CONTAINED, comment corrected, no behaviour change.
+  `chat.tsx` renders `ChatDashboardEmbeds` for every message role, so a
+  hostile inbound mail naming an existing `/apps/<slug>` does mount that
+  dashboard in the transcript. Re-verified against the code, all three legs
+  hold: `referencedSlugs` only matches apps the workspace list already
+  carries with `visibility === "public"` AND a `current_release_id` (the
+  sender cannot name an app into existence or reach a private one); the frame
+  is ADR 0004's `sandbox="allow-scripts"` opaque-origin iframe; and no `api`
+  or `bindings` prop is passed, so `SandboxFrame`'s dataset branch is dead
+  and only the release's frozen snapshots render. So: contained noise beside
+  a message the reader can see is an email. What was wrong was the *comment*
+  — "user content renders as plain text" was load-bearing for a security
+  argument and omitted the embed path. Both call-site comments now state the
+  clause and name the three legs, so widening any of them (private apps, live
+  bindings, a relaxed frame) reads as the finding it would be. The
+  services/inbound_email.py module docstring carries the same clause.
+- LOWs FROM THE VERIFICATION PASS (QA finding 5), RECORDED not built:
+  (a) the deliveries panel offers Redeliver on failed rows only, so the new
+  409 on a sent row is reachable only by API or script — if a "send it again"
+  affordance is ever wanted it needs its own button, its own confirm and its
+  own audit action, not a loosened retry; (b) the `email.capped` audit still
+  has no per-workspace ceiling of its own — the cap's episode rule bounds it
+  to ≤ DAILY_CAP/day per address, but a workspace with many minted addresses
+  under simultaneous flood multiplies that; fold into the cross-cutting
+  door-throttle entry above if abuse appears; (c) an address that is flooded
+  stays shut with no operator-visible signal beyond the audit row — the
+  Email-in panel shows no "capped, reopening in N minutes" state, so a member
+  wondering why mail stopped has to read the audit trail; (d) inbound cap
+  state is per address with no workspace-wide aggregate, so N addresses can
+  land N x DAILY_CAP a day between them.
 - SHARE-LINK AUTHZ (QA F9 LOW 2): decided and documented on sweep-qa-fixes —
   the flat model stands (any member mints/revokes any link; see the
   api/share_links.py router docstring for the grounds), intentionally beside
