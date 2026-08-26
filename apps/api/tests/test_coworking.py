@@ -416,3 +416,78 @@ def test_sanitize_pointer_leaves_a_pointerless_state_alone() -> None:
     keystroke, every idle re-beat — goes through here."""
     state = {"typing": True, "draft": "x"}
     assert coworking.sanitize_pointer(state) is state
+
+
+def test_two_first_heartbeats_race_without_a_500(
+    owner: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first beat on a surface is the one that races itself.
+
+    Every client heartbeats on a timer, so two requests arriving before either
+    has inserted is the ordinary case rather than the unlucky one — and a plain
+    check-then-insert made the loser a 500 (`UNIQUE constraint failed:
+    presences.workspace_id, actor_id, surface`). It fired repeatedly through a
+    full e2e run before this was closed.
+
+    The interleaving is reproduced rather than described: one session looks and
+    finds nothing, the other inserts, and then the first writes while still
+    holding its stale "it does not exist". That is precisely what the
+    constraint used to punish.
+    """
+    surface = "document:race-probe"
+    db = SessionLocal()
+    try:
+        workspace_id = db.scalar(select(Membership.workspace_id))
+        assert workspace_id
+
+        def beat(label: str) -> None:
+            coworking.heartbeat_presence(
+                db,
+                workspace_id=workspace_id,
+                actor_id="racer",
+                actor_kind="user",
+                actor_label=label,
+                surface=surface,
+                state={"typing": True},
+            )
+
+        def rows_now() -> Any:
+            return db.scalars(
+                select(Presence).where(
+                    Presence.workspace_id == workspace_id,
+                    Presence.actor_id == "racer",
+                    Presence.surface == surface,
+                )
+            ).all()
+
+        # The winner's row exists before the loser ever writes.
+        beat("winner")
+        db.commit()
+
+        # Force the loser's stale read. Simply calling the function again would
+        # find the row and take the update path, which is NOT the interleaving
+        # that broke: the bug needs a SELECT that answered None to be acted on
+        # after someone else has inserted. Patching the lookup to answer None
+        # once reproduces exactly that, and drives a real INSERT at a real
+        # constraint rather than a mocked one.
+        real_scalar = db.scalar
+        answered_none = {"count": 0}
+
+        def scalar_once_blind(statement: Any, *args: Any, **kwargs: Any) -> Any:
+            result = real_scalar(statement, *args, **kwargs)
+            if isinstance(result, Presence) and answered_none["count"] == 0:
+                answered_none["count"] = 1
+                return None
+            return result
+
+        monkeypatch.setattr(db, "scalar", scalar_once_blind)
+        beat("loser")
+        db.commit()
+        monkeypatch.undo()
+
+        assert answered_none["count"] == 1, "the blind read never happened"
+        rows = rows_now()
+        assert len(rows) == 1, "the upsert must not duplicate the surface row"
+        assert rows[0].actor_label == "loser", "the racing beat must still apply"
+    finally:
+        db.close()

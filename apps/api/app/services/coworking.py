@@ -20,6 +20,7 @@ from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import utcnow
@@ -127,24 +128,55 @@ def heartbeat_presence(
     purpose — they expire by TTL, and deleting them here would make every
     keystroke a two-statement write for a row the reader already ignores.
     """
-    row = db.scalar(
-        select(Presence).where(
-            Presence.workspace_id == workspace_id,
-            Presence.actor_id == actor_id,
-            Presence.surface == surface,
+    def _find() -> Optional[Presence]:
+        return db.scalar(
+            select(Presence).where(
+                Presence.workspace_id == workspace_id,
+                Presence.actor_id == actor_id,
+                Presence.surface == surface,
+            )
         )
-    )
-    if row is None:
-        row = Presence(
-            workspace_id=workspace_id,
-            actor_id=actor_id,
-            surface=surface,
-        )
-        db.add(row)
-    row.actor_kind = actor_kind
-    row.actor_label = actor_label[:120]
-    row.state_json = json.dumps(state or {}, separators=(",", ":"), default=str)
-    row.updated_at = utcnow()
+
+    def _apply(row: Presence) -> Presence:
+        row.actor_kind = actor_kind
+        row.actor_label = actor_label[:120]
+        row.state_json = json.dumps(state or {}, separators=(",", ":"), default=str)
+        row.updated_at = utcnow()
+        return row
+
+    row = _find()
+    if row is not None:
+        _apply(row)
+        db.flush()
+        return row
+
+    # Check-then-insert, and this one is HOT: every client heartbeats this
+    # surface on a timer, so two requests racing the first beat is the common
+    # case rather than the unlucky one — it fired repeatedly under the e2e
+    # suite as `UNIQUE constraint failed: presences.workspace_id, actor_id,
+    # surface`, a 500 per collision. The insert goes in a SAVEPOINT so the
+    # loser rolls back only its own statement and the caller's transaction
+    # survives; then the winner's row is re-read and updated, which is what
+    # the beat wanted anyway. Same shape as `sandbox/secrets.set_secret`.
+    try:
+        with db.begin_nested():
+            row = _apply(
+                Presence(
+                    workspace_id=workspace_id,
+                    actor_id=actor_id,
+                    surface=surface,
+                )
+            )
+            db.add(row)
+    except IntegrityError:
+        row = _find()
+        if row is None:
+            # Nothing else can delete a presence row — they expire by TTL read,
+            # never by DELETE — so losing the race and then not finding the
+            # winner means something outside this contract happened. Raise
+            # rather than invent a recovery for it.
+            raise
+        _apply(row)
     db.flush()
     return row
 
