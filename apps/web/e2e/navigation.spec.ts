@@ -92,7 +92,10 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
     await expect(tabs(page, "Library").getByRole("button", { name: new RegExp(`^${entry}`) }))
       .toBeVisible();
   }
-  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(12);
+  // Count matches the eleven entries above: the four-branch merge combined the
+  // marketplace's twelve (Boards and Lists still split) with the glyph merge
+  // that fused them, and the count kept the losing side's arithmetic.
+  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(11);
   // The retired "Lists" entry stays gone: one destination, one listing.
   await expect(tabs(page, "Library").getByRole("button", { name: /^Lists/ })).toHaveCount(0);
   await expect(tabs(page, "Library").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
@@ -118,13 +121,21 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
 
   await openSettings(page, "Connections");
   // Sandbox tools sit beside MCP: both register capabilities the agent may
-  // call. Databases left for Library → Data, where the datasets they feed live.
-  // API & Webhooks joins them: wiring the workspace to software, not people.
-  for (const entry of ["MCP", "Sandbox tools", "Integrations", "API & Webhooks"]) {
+  // call, and Sandbox secrets beside them: the credentials that same sandbox
+  // code reads. Databases left for Library → Data, where the datasets they
+  // feed live. API & Webhooks joins them: wiring the workspace to software,
+  // not people.
+  for (const entry of [
+    "MCP",
+    "Sandbox tools",
+    "Sandbox secrets",
+    "Integrations",
+    "API & Webhooks",
+  ]) {
     await expect(tabs(page, "Connections").getByRole("button", { name: entry }))
       .toBeVisible();
   }
-  await expect(tabs(page, "Connections").getByRole("button")).toHaveCount(4);
+  await expect(tabs(page, "Connections").getByRole("button")).toHaveCount(5);
   await tabs(page, "Connections").getByRole("button", { name: /MCP/ }).click();
   await expect(page.getByRole("heading", { name: "MCP servers" })).toBeVisible();
 
