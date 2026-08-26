@@ -251,6 +251,13 @@ export type Citation = {
   ordinal: number;
   excerpt: string;
   score: number;
+  /**
+   * Set only for a web source, whose provenance is a page rather than an
+   * indexed passage — mirrors `schemas.Citation.url`. `chunk_id` is then a
+   * synthetic "web:<digest>" naming no Chunk row, so this URL is the only
+   * address a reader can follow to check the claim.
+   */
+  url?: string | null;
 };
 
 /**
@@ -2760,20 +2767,6 @@ export class WorkspaceApi {
 
   cancelRun(runId: string): Promise<Run> {
     return this.request(`/api/runs/${runId}/cancel`, { method: "POST" }, true);
-  }
-
-  /**
-  /**
-   * Fold guidance into a live run — the same composer, no new turn. The note
-   * lands in the transcript under the run and the loop reads it before its
-   * next model call. A finished run answers 409; send a fresh message instead.
-   */
-  steerRun(runId: string, content: string): Promise<SendMessageResponse> {
-    return this.request(
-      `/api/runs/${runId}/steer`,
-      { method: "POST", body: JSON.stringify({ content }) },
-      true,
-    );
   }
 
   /**

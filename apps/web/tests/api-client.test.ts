@@ -411,26 +411,5 @@ describe("WorkspaceApi", () => {
     expect(events.map((event) => event.id)).toEqual([3, 4]);
     expect(events[0]?.data.delta).toBe("Hello ");
   });
-
-  it("steers a live run as a keyed mutation to the run's own route", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({ message: { id: "m1" }, run: null }),
-        { status: 202, headers: { "Content-Type": "application/json" } },
-      ),
-    );
-    await new WorkspaceApi("http://example.test").steerRun(
-      "run-7",
-      "Shorter, please.",
-    );
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "http://example.test/api/runs/run-7/steer",
-    );
-    const init = fetchMock.mock.calls[0]?.[1];
-    expect(init?.method).toBe("POST");
-    expect(JSON.parse(String(init?.body))).toEqual({ content: "Shorter, please." });
-    // A steer is a mutation: retried sends must not double the note.
-    expect(new Headers(init?.headers).get("Idempotency-Key")).not.toBeNull();
-  });
 });
 

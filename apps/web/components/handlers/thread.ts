@@ -523,30 +523,17 @@ export function createThreadHandlers({
     // stays put rather than an empty note being recorded.
     const aside = parseAside(content);
     if (aside === "") return;
-    // A live run makes the same box a steering wheel: the note joins the
-    // running turn instead of queueing a new one. Asides fall through — they
-    // never belonged to a run in the first place. Per-turn composer state (an
-    // attached skill, the model override) deliberately does NOT ride a steer
-    // and is NOT cleared by one: those controls configure the next full turn,
-    // and the chip staying visible is what says so.
+    // A live run takes no new turn. Mid-run steering used to live here — the
+    // same box became a steering wheel and the note joined the running turn —
+    // and it is gone on purpose. What is left is the plain rule: one turn at a
+    // time. The draft is KEPT rather than cleared, because the person meant to
+    // send it and will the moment the run settles; clearing it would make a
+    // deliberate keystroke look like it was swallowed.
+    //
+    // Asides fall through. "/btw …" starts no run and never joined one, so a
+    // live run is not a reason to refuse it.
     if (activeRun && aside === null) {
-      setDraft("");
-      setError("");
-      try {
-        const steered = await api.steerRun(activeRun, content);
-        setMessages((items) =>
-          items.some((item) => item.id === steered.message.id)
-            ? items
-            : [...items, steered.message],
-        );
-      } catch (caught) {
-        // The likeliest failure is a race with the run finishing (409). The
-        // draft comes back so one more Enter sends it as an ordinary turn.
-        setDraft(content);
-        setError(
-          describeError(caught, "The run finished first — press Enter to send"),
-        );
-      }
+      setError("This turn is still running — wait for it to finish, or stop it.");
       return;
     }
     setDraft("");

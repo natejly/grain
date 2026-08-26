@@ -96,6 +96,19 @@ os.environ["DEV_USER"] = ""
 # of them saying something plausible about scoping or the agent loop, and none
 # of them about the one line that actually did it.
 os.environ["DEV_UNRESTRICTED_AGENT"] = "false"
+# The suite's approval baseline, pinned for exactly the reason above it.
+#
+# The PRODUCT default is `auto_writes`: a new thread runs tool calls without
+# stopping to ask. Most of this suite, though, is about what happens when a call
+# parks — assignment, the inbox, digests, per-thread visibility, document hunks —
+# and none of that has anything to test if nothing parks. So the baseline here is
+# the strict mode, and a test about a bypass says so by setting the mode itself.
+#
+# Pinned rather than left to the shipped default so the two can never be confused
+# again: `test_approval_defaults.py` asserts the product default explicitly, which
+# is the honest place for that claim to live. A suite that got its parking for
+# free from a default would go silently green the day the default changed.
+os.environ["DEFAULT_APPROVAL_MODE"] = "ask_writes"
 # Inbound email, pinned for the same reason as everything above: a developer's
 # repo-root .env must not flip the feature between inert and live under the
 # suite. The domain is set (addresses can be minted everywhere, including the

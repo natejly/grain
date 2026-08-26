@@ -1534,19 +1534,32 @@ export function ChatView({
             it is wider (every thread, every tool) and it cannot be turned off
             from here, so showing the thread-level "Turn off" button beside it
             would offer a fix that does not fix this. */}
+        {/* `auto_writes` is the DEFAULT now, so a standing banner on it would sit
+            on every thread in the product — and a warning that is always there is
+            one nobody reads, which is the exact failure this banner was built to
+            avoid. On the default it therefore waits until it has something to
+            report and renders as a trail of what actually ran unreviewed. The
+            modes a person had to opt INTO (guardian, and the dev bypass above)
+            keep the unconditional treatment: those are still the surprising
+            states, and there the standing reminder is the point. */}
         {unrestricted ? (
           <UnrestrictedIndicator
             approved={autoApprovedCalls(agentCalls, unrestricted.conversationId)}
           />
         ) : (
           approval &&
-          bypassed && (
-            <BypassIndicator
-              conversationTitle={approval.conversationTitle}
-              approved={autoApprovedCalls(agentCalls, approval.conversationId)}
-              stop={() => approval.setMode("ask_writes")}
-            />
-          )
+          bypassed &&
+          (() => {
+            const approved = autoApprovedCalls(agentCalls, approval.conversationId);
+            if (approval.mode === "auto_writes" && approved.length === 0) return null;
+            return (
+              <BypassIndicator
+                conversationTitle={approval.conversationTitle}
+                approved={approved}
+                stop={() => approval.setMode("ask_writes")}
+              />
+            );
+          })()
         )}
         <div className="composer-shell">
           {pickerOpen && (
@@ -1584,7 +1597,7 @@ export function ChatView({
             // screen readers do not depend on whether a source is indexed yet.
             placeholder={
               activeRun
-                ? "Steer the assistant — your note joins this turn…"
+                ? "Working… your next message sends when this turn finishes"
                 : sources.some((source) => source.status === "ready")
                   ? "Ask your workspace…"
                   : "Upload a source, then ask a question…"
@@ -1649,28 +1662,20 @@ export function ChatView({
             )}
             <span className="composer-spacer" />
             {activeRun ? (
-              <>
-                {/* Steering: the same box stays live during a run, and a
-                    non-empty draft sends INTO the running turn. Stop keeps
-                    its place beside it — typing must never hide the brake. */}
-                {draft.trim() !== "" && (
-                  <button
-                    className="send-button"
-                    type="submit"
-                    aria-label="Steer the run"
-                  >
-                    <ArrowUp size={18} />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="send-button stop"
-                  onClick={() => void cancelActiveRun()}
-                  aria-label="Stop generating"
-                >
-                  <Square size={15} />
-                </button>
-              </>
+              /* Stop is the only verb during a run. The send button used to sit
+                 beside it and send INTO the running turn; mid-run steering is
+                 gone, so offering send here would offer something that no longer
+                 happens. The box itself stays editable — drafting the next
+                 message while this one runs is still worth doing, it just does
+                 not go anywhere until the turn settles. */
+              <button
+                type="button"
+                className="send-button stop"
+                onClick={() => void cancelActiveRun()}
+                aria-label="Stop generating"
+              >
+                <Square size={15} />
+              </button>
             ) : (
               <button
                 className="send-button"

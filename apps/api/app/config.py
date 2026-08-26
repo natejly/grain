@@ -67,12 +67,43 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 10 * 1024 * 1024
     max_tool_response_bytes: int = 256 * 1024
     model_provider: Literal["openai", "anthropic", "scripted"] = "openai"
+
+    # --- Approvals ---------------------------------------------------------
+    # The approval mode a NEW conversation starts in. `auto_writes` — tool calls
+    # run without stopping for a per-call approval — is the product default: an
+    # agent that parks on every write is unusable for the work it exists to do,
+    # and a prompt answered reflexively is not review. The ask is a mode you turn
+    # ON, per thread, from the composer's approval picker.
+    #
+    # It is a setting and not a literal in the model because "how much does this
+    # deployment trust its agent" is a deployment's answer, not a constant — and
+    # because the test suite needs the strict baseline to test parking at all
+    # (tests/conftest.py pins it, for the same reason it pins
+    # DEV_UNRESTRICTED_AGENT). Narrowed to the two non-triage modes that make
+    # sense as a starting point: `plan` and `guardian` are things a person opts
+    # into for a piece of work, not states to wake up in.
+    #
+    # This governs new rows only. An existing thread keeps the mode it was stored
+    # with, and changing this never re-decides one — the whole point of the mode
+    # being per conversation is that it is an answer about what is being done
+    # right now.
+    default_approval_mode: Literal["auto_writes", "ask_writes", "ask_all"] = (
+        "auto_writes"
+    )
     # Path to a JSON script for MODEL_PROVIDER=scripted. See services/scripted_model.py.
     scripted_model_script: Optional[Path] = None
     openai_api_key: Optional[SecretStr] = None
     anthropic_api_key: Optional[SecretStr] = None
     anthropic_model: str = "claude-sonnet-5"
-    anthropic_max_output_tokens: int = 1200
+    # Sized for a thinking model, not for a plain completion. Anthropic bills
+    # `max_tokens` as a CEILING, not a reservation, so a generous value costs
+    # nothing on a short answer — while a small one is charged in full and
+    # then truncated. Thinking blocks are drawn from this same budget, so the
+    # old 1200 could be spent entirely on reasoning and leave no text at all,
+    # which surfaced as "Model stream ended early: max_output_tokens". Both
+    # provider paths stream (see services/harness/anthropic.py), which is what
+    # makes a ceiling this size safe against HTTP timeouts.
+    anthropic_max_output_tokens: int = 32000
     anthropic_timeout_seconds: float = 60.0
     # The cheap-model counterpart to `openai_context_model`: small auxiliary
     # calls (today the guardian reviewer) on an Anthropic deployment.
@@ -85,7 +116,11 @@ class Settings(BaseSettings):
     # want user-selectable, or wants to offer one it has not priced.
     selectable_models_raw: str = ""
     openai_timeout_seconds: float = 60.0
-    openai_max_output_tokens: int = 1200
+    # See `anthropic_max_output_tokens`: same ceiling-not-reservation reasoning,
+    # and the same failure it fixes. Reasoning tokens count against this budget
+    # on a reasoning model, so 1200 was routinely exhausted before the first
+    # visible character — a hard error on a turn that had nothing wrong with it.
+    openai_max_output_tokens: int = 32000
     openai_embedding_model: str = "text-embedding-3-small"
     openai_codegen_max_output_tokens: int = 16000
 
