@@ -991,3 +991,27 @@ Design consideration from the F5 QA review, for the F13 digests agent:
   digests should render/send via the background-enqueue path (or keep per-tick
   work strictly bounded), and a future fix could move monitor evaluation there
   too.
+
+## AWS production deploy — 2026-08-25 (branch bg/deploy-aws)
+
+Domains: web https://grain.natejly.com (Vercel), API https://api.grain.natejly.com (ALB).
+Account 518060119468, us-east-1, tag 2026-08-25-462f03c. Per docs/DEPLOY-AWS.md.
+
+- [x] Fix ~/.aws credentials (secret was truncated to 39 chars) + output=json
+- [x] Install OpenTofu 1.12.6
+- [x] Author apps/api/Dockerfile per DEPLOY-AWS.md appendix
+- [x] State bucket grain-tfstate-518060119468 (versioned, SSE, public-access-blocked)
+- [x] ACM cert for api.grain.natejly.com — needed CAA `0 issue "amazon.com"` in
+      Vercel DNS (apex pinned letsencrypt/pki.goog/sectigo → CAA_ERROR twice);
+      issued: .../certificate/104b3405-5f49-4e42-aeae-2599bf16209d
+- [x] tofu init (S3 backend) + targeted apply of ECR repos
+- [x] Sandbox image pushed to grain/sandbox:2026-08-25-462f03c
+- [ ] API image → grain/api:2026-08-25-462f03c (colima Fastly/MTU issue: pypi
+      TLS handshake dies behind docker0 NAT; fixed with docker build --network=host)
+- [ ] Full tofu apply
+- [ ] Secrets: OPENAI_API_KEY (from .env), Fernet integrations key; google left placeholder
+- [ ] SSM /grain/sandbox-image + host pull
+- [ ] DNS: api.grain CNAME -> ALB
+- [ ] Migration task (grain-migrate) exit 0
+- [ ] Vercel: domain grain.natejly.com on grain-web, NEXT_PUBLIC_API_URL at build, redeploy
+- [ ] Health check https://api.grain.natejly.com/health + login smoke
