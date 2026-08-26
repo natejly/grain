@@ -25,3 +25,4 @@ apps/web/e2e/.auth/
 
 # Next.js build output from review runs
 apps/web/.next-review/
+.vercel

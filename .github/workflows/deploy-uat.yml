@@ -1,0 +1,107 @@
+# Continuous deploy to UAT on every push to main, after CI passes.
+#
+# Auth is GitHub OIDC -> arn:aws:iam::518060119468:role/grain-uat-deploy
+# (created by infra/aws with -var-file=uat.tfvars). The role can only: push to
+# the grain-uat/* ECR repos, register task definitions, run the grain-uat
+# migration task, and roll the grain-uat-api service. Infra changes still go
+# through `tofu apply` locally — CI deploys code, not infrastructure.
+#
+# NOTE: this registers new task-definition revisions outside Terraform. When
+# you next `tofu apply` the uat workspace, set api_image_tag/sandbox_image_tag
+# in uat.tfvars to the latest deployed tag or the apply will roll UAT back.
+name: deploy-uat
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-uat
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR: 518060119468.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  gates:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: gates
+    # arm64 runner: images must match the t4g host architecture, and native
+    # arm builds avoid a qemu emulation layer.
+    runs-on: ubuntu-24.04-arm
+    environment:
+      name: uat
+      url: https://api.uat.grain.natejly.com/health
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::518060119468:role/grain-uat-deploy
+          aws-region: us-east-1
+
+      - name: Compute image tag
+        run: echo "TAG=$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Log in to ECR
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR"
+
+      - name: Build and push images
+        run: |
+          docker build -t "$ECR/grain-uat/api:$TAG" -f apps/api/Dockerfile .
+          docker push "$ECR/grain-uat/api:$TAG"
+          docker build -t "$ECR/grain-uat/sandbox:$TAG" infra/sandbox
+          docker push "$ECR/grain-uat/sandbox:$TAG"
+
+      - name: Register task definitions with the new image
+        run: |
+          for FAMILY in grain-uat-api grain-uat-migrate; do
+            aws ecs describe-task-definition --task-definition "$FAMILY" \
+              --query taskDefinition --output json \
+            | python3 -c '
+          import json, os, sys
+          td = json.load(sys.stdin)
+          for c in td["containerDefinitions"]:
+              c["image"] = os.environ["ECR"] + "/grain-uat/api:" + os.environ["TAG"]
+          for k in ("taskDefinitionArn","revision","status","requiresAttributes",
+                    "compatibilities","registeredAt","registeredBy"):
+              td.pop(k, None)
+          json.dump(td, sys.stdout)
+          ' > "/tmp/$FAMILY.json"
+            aws ecs register-task-definition --cli-input-json "file:///tmp/$FAMILY.json" \
+              --query 'taskDefinition.taskDefinitionArn' --output text
+          done
+
+      - name: Run database migration
+        run: |
+          TASK=$(aws ecs run-task --cluster grain-uat-cluster \
+                   --task-definition grain-uat-migrate --launch-type EC2 \
+                   --query 'tasks[0].taskArn' --output text)
+          aws ecs wait tasks-stopped --cluster grain-uat-cluster --tasks "$TASK"
+          CODE=$(aws ecs describe-tasks --cluster grain-uat-cluster --tasks "$TASK" \
+                   --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "migration exit code: $CODE"
+          test "$CODE" = "0"
+
+      - name: Roll the service
+        run: |
+          aws ecs update-service --cluster grain-uat-cluster --service grain-uat-api \
+            --task-definition grain-uat-api --force-new-deployment >/dev/null
+          aws ecs wait services-stable --cluster grain-uat-cluster --services grain-uat-api
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                     https://api.uat.grain.natejly.com/health || true)
+            [ "$code" = "200" ] && { echo healthy; exit 0; }
+            sleep 10
+          done
+          echo "UAT health check failed"; exit 1

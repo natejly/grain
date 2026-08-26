@@ -1010,7 +1010,7 @@ Account 518060119468, us-east-1, tag 2026-08-25-462f03c. Per docs/DEPLOY-AWS.md.
       TLS handshake dies behind docker0 NAT; fixed with docker build --network=host)
 - [x] Full tofu apply — everything created EXCEPT aws_instance.app, aws_db_instance.main,
       aws_ecs_service (AWS account is on the Free plan: m7g.large refused, RDS
-      FreeTierRestrictionError). BLOCKED on account upgrade to paid plan, then re-apply.
+      FreeTierRestrictionError). User chose to stay on Free plan; re-applied with t4g.small / db.t4g.micro / 1-day retention sizing (see tfvars comment for the paid-plan restore path).
 - [x] Secrets: OPENAI_API_KEY (from .env), Fernet integrations key; google left placeholder
 - [x] SSM /grain/sandbox-image (terraform-managed; host pulls at bootstrap)
 - [x] DNS: api.grain CNAME -> grain-api-1869332955.us-east-1.elb.amazonaws.com

@@ -3,6 +3,8 @@ name: ci
 on:
   push:
   pull_request:
+  # deploy-uat reuses this whole workflow as its gate job.
+  workflow_call:
 
 jobs:
   verify:
