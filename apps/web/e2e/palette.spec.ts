@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { newThread, openView } from "./shell";
+import { newThread, openThreadActions, openView } from "./shell";
 
 /**
  * ⌘K and thread rename — the "fast layer" a daily user lives in.
@@ -61,10 +61,9 @@ test("a renamed thread is findable by its new name", async ({ page }) => {
   await composer.press("Enter");
   await expect(page.locator(".message.user")).toBeVisible();
 
-  // Rename rides the open thread only, like share. The row's actions are
-  // hidden AND unhittable until the row is hovered, so hover it first — a
-  // person cannot reach Rename any other way with a mouse either.
-  await page.locator(".thread.active").hover();
+  // Rename rides the open thread only, like share, and the row's actions live
+  // behind its menu — so open that first, which is what a person does too.
+  await openThreadActions(page.locator(".thread.active"));
   await page.getByRole("button", { name: /^Rename / }).click();
   const input = page.getByRole("textbox", { name: /^Rename / });
   await input.fill("Northstar ownership");
@@ -99,8 +98,10 @@ test("a renamed thread is findable by its new name", async ({ page }) => {
 
   // Put the shared workspace back.
   page.once("dialog", (dialog) => dialog.accept());
-  // The row's actions only become hittable once the row is hovered.
-  await page.locator(".thread").filter({ hasText: "Northstar ownership" }).first().hover();
+  // The row's actions live behind its menu.
+  await openThreadActions(
+    page.locator(".thread").filter({ hasText: "Northstar ownership" }).first(),
+  );
   await page
     .getByRole("button", { name: "Delete Northstar ownership" })
     .click();

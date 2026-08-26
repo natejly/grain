@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { STORAGE_STATE } from "./credentials";
-import { createFromMenu, newThread, openSettings, openView } from "./shell";
+import { createFromMenu, newThread, openSettings, openThreadActions, openView } from "./shell";
 
 /**
  * The spend ceiling, from the wall a user hits to the number that releases them.
@@ -292,7 +292,7 @@ test("a chat turn stopped by the ceiling explains itself, and the raise releases
   page.once("dialog", (dialog) => dialog.accept());
   // The row's actions are hidden AND unhittable until the row is hovered, so
   // hover it first — with a mouse there is no other way to reach Delete.
-  await threads.first().hover();
+  await openThreadActions(threads.first());
   await threads.first().getByRole("button", { name: /^Delete / }).click();
   await expect(threads).toHaveCount(before - 1);
 
@@ -381,7 +381,9 @@ test("a workflow held by the ceiling does not claim to be waiting for a decision
   const thread = page.getByRole("button", { name: "Delete Workflow: Scripted workflow" });
   page.once("dialog", (dialog) => dialog.accept());
   // The row's actions only become hittable once the row is hovered.
-  await page.locator(".thread").filter({ hasText: "Workflow: Scripted workflow" }).first().hover();
+  await openThreadActions(
+    page.locator(".thread").filter({ hasText: "Workflow: Scripted workflow" }).first(),
+  );
   await thread.click();
   await expect(thread).toHaveCount(0);
 

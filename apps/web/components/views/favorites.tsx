@@ -172,6 +172,14 @@ export type FavoriteStarProps = {
   favorites: FavoritesApi;
   className?: string;
   size?: number;
+  /**
+   * Draw the verb beside the star, for a menu row rather than an icon strip.
+   * The accessible name is unchanged either way — this only decides whether
+   * sighted readers get the word too, which they need where the control sits
+   * in a list of labelled actions and an unlabelled glyph would be the odd
+   * one out.
+   */
+  withLabel?: boolean;
 };
 
 /**
@@ -187,6 +195,7 @@ export function FavoriteStar({
   favorites,
   className = "icon-button",
   size = 14,
+  withLabel = false,
 }: FavoriteStarProps) {
   const faved = favorites.ids.has(favoriteId(kind, targetId));
   const name = `${faved ? "Unfavorite" : "Favorite"} ${label}`;
@@ -194,7 +203,9 @@ export function FavoriteStar({
     <button
       type="button"
       className={faved ? `${className} faved` : className}
-      title={name}
+      // The tooltip is what an unlabelled glyph needs; with the verb rendered
+      // it would only repeat the visible text on hover.
+      title={withLabel ? undefined : name}
       aria-label={name}
       aria-pressed={faved}
       onClick={(event) => {
@@ -205,6 +216,7 @@ export function FavoriteStar({
       }}
     >
       <Star size={size} fill={faved ? "currentColor" : "none"} />
+      {withLabel && (faved ? "Unfavorite" : "Favorite")}
     </button>
   );
 }

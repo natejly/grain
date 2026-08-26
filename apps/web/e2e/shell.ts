@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * Reaching a view, the way a user does.
@@ -60,6 +60,20 @@ export async function openView(page: Page, group: string, tab?: RegExp | string)
     .click();
   if (!tab) return;
   await tabs(page, group).getByRole("button", { name: tab }).click();
+}
+
+/**
+ * Open one thread row's action menu, so Rename/Share/Delete can be clicked.
+ *
+ * The rail row used to carry its actions as icons revealed on hover, and specs
+ * hovered the row to reach them. Six of them left the title 35px wide, so they
+ * live in a disclosure now: one always-visible trigger, and the actions inside
+ * it. That means a spec must OPEN the menu rather than hover the row — the
+ * same thing a person now has to do, which is the point of routing it through
+ * a helper instead of leaving five specs to each remember.
+ */
+export async function openThreadActions(row: Locator) {
+  await row.getByRole("button", { name: /^Actions for / }).click();
 }
 
 /** Open a destination behind the workspace-settings menu — Connections, Admin. */

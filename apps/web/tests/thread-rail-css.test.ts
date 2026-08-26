@@ -3,23 +3,28 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * The thread row's grid must give every trailing action a column of its own,
- * no matter how many actions the row renders.
+ * The thread row's title must survive however many actions the row can offer.
  *
- * jsdom has no layout engine, so this pins the shape of the rule the way the
- * *-layout-css tests do. The bug this guards against was real and invisible in
- * light use: with fewer declared columns than children the last button
- * grid-wrapped onto an implicit row BELOW the fixed-height row — overlaying
- * the next thread, which then intercepted every click on Delete. With no
- * thread underneath the click landed fine, so nothing noticed until a crowded
- * rail (or the full e2e run) made the overlap load-bearing.
+ * This has been fixed three times, and the first two cures were both about
+ * POSITION — which was never the variable that mattered:
  *
- * The first cure pinned an explicit column count to the action count, with a
- * hardcoded list of action classes — and the four-branch merge beat it: rename
- * (mainline) and comments (feature-sweep) landed on the same row, the new
- * `thread-comments` class was not in the list, and the count stayed one short.
- * The rule now auto-flows implicit COLUMNS instead, which cannot wrap however
- * many actions a merge adds; this test pins that mechanism.
+ *   1. An explicit `auto` grid column per action. The count was kept in step by
+ *      hand, a merge added `thread-comments` without adding a column, and the
+ *      overflowing button wrapped onto an implicit row inside the fixed-height
+ *      row, overlaid the next thread and ate its clicks.
+ *   2. Auto-flowed columns, then the whole cluster taken out of flow. Nothing
+ *      could wrap any more — but in flow N actions still divided the 227px row
+ *      and out of flow they covered it. Measured at six actions the title got
+ *      35px, "Quar…", on precisely the row the reader had just opened.
+ *
+ * The actions are a MENU now, and that is the first arrangement where the count
+ * cannot reach the title at all: a seventh action is a seventh row in the
+ * panel. So this file no longer pins a layout — it pins the property that makes
+ * the layout unnecessary, which is that the row renders exactly one trailing
+ * control and every action lives inside the disclosure.
+ *
+ * jsdom has no layout engine, so the CSS half is asserted as rule shape, the
+ * way the other *-css tests do.
  */
 const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
 const workspace = readFileSync(
@@ -28,99 +33,80 @@ const workspace = readFileSync(
 );
 
 function rule(selector: string): string {
-  const found = css.match(
-    new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`),
-  );
+  const found = css.match(new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`));
   expect(found, `${selector} has no rule in globals.css`).not.toBeNull();
   return found![1];
 }
 
-function threadRule(): string {
-  return rule(".thread");
-}
-
 function declaration(body: string, property: string): string | null {
-  const match = body.match(new RegExp(`${property}:\\s*([^;]+);`));
+  const match = body.match(new RegExp(`(?:^|[;\\s])${property}:\\s*([^;]+);`));
   return match ? match[1].trim() : null;
 }
 
-describe("the thread rail row", () => {
-  it("auto-flows a column per trailing action so extras can never wrap", () => {
-    const body = threadRule();
-    expect(declaration(body, "grid-auto-flow")).toBe("column");
-    // Without sized implicit columns, auto-flowed actions would land in
-    // zero-ambiguity but zero-width tracks on some engines; say the width.
-    expect(declaration(body, "grid-auto-columns")).toBe("max-content");
-  });
+/** Every action the row can offer, by the class each one carries. */
+const ACTIONS = [
+  "thread-favorite",
+  "thread-rename",
+  "thread-share",
+  "thread-split",
+  "thread-comments",
+  "thread-delete",
+];
 
-  it("declares only the shrinkable title track explicitly", () => {
-    const body = threadRule();
-    // Any explicit `auto` action columns beside the title track would reopen
-    // the count-vs-children mismatch this file exists to prevent.
-    expect(declaration(body, "grid-template-columns")).toBe("minmax(0, 1fr)");
-  });
-});
-
-/**
- * The second half of the same story. Not wrapping was never enough: in flow,
- * every action still spent part of the row's width, and the open row's five of
- * them (six once mainline's favourite star merges) left the title rendering as
- * "Ne…". The cure has to hold for N actions rather than for today's count, so
- * the actions were lifted OUT of flow into one absolutely-positioned cluster.
- * The title track is then the full row width whatever the cluster holds.
- *
- * Two things have to stay true for that, and neither is visible to jsdom:
- * the cluster must be out of flow and confined to its own row, and every
- * action must actually be IN the cluster — an action left outside it would be
- * back in the grid, taking the title's width again.
- */
-describe("the thread row's action cluster", () => {
-  it("is out of flow, so no number of actions can starve the title", () => {
-    const body = rule(".thread-actions");
-    expect(declaration(body, "position")).toBe("absolute");
-    // Out of flow only stays out of the row below if the row is the containing
-    // block and the cluster is no taller than it.
-    expect(declaration(threadRule(), "position")).toBe("relative");
-    expect(declaration(body, "top")).toBe("0");
-    expect(declaration(body, "height")).toBe("100%");
-    // A wrapping cluster would grow downward over the next row — the overlap
-    // that used to intercept every click on Delete.
-    expect(declaration(body, "flex-wrap")).toBe("nowrap");
-  });
-
-  it("reveals itself to the mouse AND the keyboard", () => {
-    expect(css).toMatch(/\.thread:hover \.thread-actions/);
-    expect(css).toMatch(/\.thread:focus-within \.thread-actions/);
-    // Touch screens have no hover, so there it never hides.
-    expect(css).toMatch(
-      /@media \(hover: none\) \{\s*\.thread-actions \{\s*opacity: 1;/,
+describe("the thread row's actions", () => {
+  it("puts every action inside the disclosure, not on the row", () => {
+    // The guard that matters: an action added later must land in the panel.
+    // Rendered on the row it would take width from the title again, which is
+    // the whole defect this arrangement exists to end.
+    const menu = workspace.slice(
+      workspace.indexOf("<DisclosureMenu"),
+      workspace.indexOf("</DisclosureMenu>"),
     );
-  });
-
-  it("holds every trailing action the row renders", () => {
-    const body = workspace.slice(
-      workspace.indexOf("const renderThread"),
-      workspace.indexOf("// Per-view badge numbers"),
-    );
-    expect(body).toContain('className="thread-actions"');
-    const clusterAt = body.indexOf('className="thread-actions"');
-    // Everything on the row that is not the title button, the space chip or
-    // the rename field is a trailing action, and must sit inside the cluster.
-    const notActions = new Set([
-      "thread-actions",
-      "thread-open",
-      "thread-space-chip",
-      "thread-rename-input",
-    ]);
-    const classes = [...body.matchAll(/"(thread-[a-z-]+)/g)];
-    const actions = classes.filter(([, name]) => !notActions.has(name));
-    expect(actions.length).toBeGreaterThanOrEqual(5);
-    for (const action of actions) {
+    expect(menu.length, "the rail renders no DisclosureMenu").toBeGreaterThan(0);
+    for (const action of ACTIONS) {
       expect(
-        action.index! > clusterAt,
-        `${action[1]} is rendered outside .thread-actions, which puts it back ` +
-          `in the row's grid where it eats the title's width`,
+        menu.includes(action),
+        `${action} is not inside the row's DisclosureMenu`,
       ).toBe(true);
     }
+  });
+
+  it("leaves exactly one trailing control on the row itself", () => {
+    const row = workspace.slice(
+      workspace.indexOf('<div className="thread-actions">'),
+      workspace.indexOf("<DisclosureMenu"),
+    );
+    // Between the cluster opening and the menu there is nothing but the
+    // trigger — no action may be promoted back onto the row without this
+    // failing, whatever its author's reason.
+    expect((row.match(/<button/g) ?? []).length).toBe(0);
+    expect(workspace).toContain('triggerClassName="thread-more"');
+  });
+
+  it("keeps the title track shrinkable", () => {
+    const thread = rule(".thread");
+    // One shrinkable title column. The first cure's `auto` action columns would
+    // reopen the count-vs-width coupling this file exists to prevent.
+    expect(declaration(thread, "grid-template-columns")).toBe("minmax(0, 1fr)");
+  });
+
+  it("no longer hides a hittable strip over the row", () => {
+    // The cluster used to be `opacity: 0` with `pointer-events: none` at rest,
+    // which does NOT make a no-hover click safe: the pointer's ARRIVAL fires
+    // :hover and restores pointer-events before the button-down lands, so a
+    // click at the row's right edge fired Delete. Verified by dispatching real
+    // events, not by hit-testing a stationary point, which reports the wrong
+    // answer because a pointer is never stationary when it presses. One
+    // always-visible trigger has no such state to be caught in.
+    const actions = rule(".thread-actions");
+    expect(declaration(actions, "opacity")).toBeNull();
+    expect(declaration(actions, "pointer-events")).toBeNull();
+    expect(declaration(actions, "position")).not.toBe("absolute");
+  });
+
+  it("marks the destructive row as destructive", () => {
+    const danger = rule(".disclosure-option.danger");
+    expect(declaration(danger, "color")).toBe("var(--danger)");
+    expect(workspace).toContain("thread-delete danger");
   });
 });

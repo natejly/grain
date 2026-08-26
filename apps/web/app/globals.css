@@ -859,89 +859,48 @@ label,
   display: none;
 }
 
-/* EVERY trailing action lives in this one cluster, and the cluster is out of
-   flow. That is the whole fix for a title that read "Ne…": in flow, each icon
-   took its width off the title's track, and the open row's five of them (six
-   once mainline's favourite star merges, more later) left the title about two
-   characters. Absolutely positioned, they take none of it — the title track is
-   the full row width for any number of actions, which is the property the rail
-   needs rather than "five happens to fit".
-   The cluster is right-anchored and exactly the row's height, so it can reach
-   neither the row below (the overlap that used to swallow clicks on Delete) nor
-   any other row. It fades in on hover or keyboard focus, carrying the row's own
-   background so the title tail is masked only while you are actually pointing
-   at the row; at rest every row — open one included — reads as title and time.
-
-   `pointer-events` tracks `opacity` in every rule below, and that pairing is
-   deliberate: `opacity: 0` alone leaves an element fully hit-testable, so at
-   rest an invisible cluster still swallowed every click aimed at the row
-   underneath it. Hover targets the parent `.thread`, never the cluster, so the
-   parent raises opacity and pointer-events together and the first click after
-   a hover is live — verified, not assumed.
-
-   WHAT IT DOES NOT DO, corrected after measurement: this does NOT make a
-   no-hover click safe. An earlier version of this comment claimed it did, on
-   the strength of a probe that hit-tested a STATIONARY point — and a pointer is
-   never stationary at the moment of a press. Dispatching real events at a row's
-   right edge with no prior hover shows pointerdown, mousedown and click all
-   landing on `.thread-delete`, raising its confirm: the mouse's ARRIVAL fires
-   `:hover`, which restores `pointer-events: auto` before the button-down lands.
-   `elementFromPoint` agrees the resting pixel belongs to `.thread-open`; it is
-   measuring an instant that never occurs during a click.
-   So the row's right end is a live icon strip from the first pointer contact,
-   and at six actions that is ~162px of a 227px row. A confirm dialog is the
-   only thing standing in front of Delete. The real fix is fewer actions in the
-   row — an overflow menu keeping Delete inline and demoting the rare ones —
-   not another positioning scheme. Recorded rather than done. */
+/* One trailing control, so the row's arithmetic stops mattering.
+   This was an out-of-flow cluster of every action, and the position was never
+   the real problem: in flow the icons divided the 227px row and left the title
+   35px, out of flow they covered it, and either way the ACTION COUNT decided
+   how much title survived. The actions live in a menu now, so a seventh one is
+   a seventh row in the panel and costs the title nothing — the only
+   arrangement where the count cannot starve it.
+   Deleting the apparatus also deletes the hazard that came with it: there is
+   no invisible-but-hittable strip over the row's right end, so a click landing
+   there before the pointer settles opens a menu instead of firing Delete. The
+   trigger sits in normal flow, is always visible, and needs no hover to be
+   safe. */
 .thread-actions {
-  position: absolute;
-  top: 0;
-  right: 2px;
-  height: 100%;
   display: flex;
-  flex-wrap: nowrap;
   align-items: center;
-  gap: 2px;
-  padding-left: 20px;
-  background: linear-gradient(to right, transparent, var(--surface) 20px);
-  opacity: 0;
-  pointer-events: none;
 }
 
-/* Revealed, the cluster goes back INTO the flow, and that is the other half of
-   the cure. Out of flow it is 154px of overlay across a 227px row — it covers
-   the row's midpoint, so `.thread-open` (the full-width title button, and the
-   row's whole purpose) could not be clicked at its centre once the row was
-   hovered, which every real click requires. Three e2e specs timed out there,
-   Playwright naming `.thread-rename` as the interceptor mid-click; a person met
-   the same defect as an icon materialising under a cursor aimed at title text
-   and firing Rename or Delete instead of opening the thread.
-   In flow the row's own grid gives the cluster its columns and shrinks the
-   title track beside it, so the two never overlap and both stay clickable. Out
-   of flow AT REST is what still buys the title the full row width, which is the
-   property this cluster exists for; the title only gives that width back while
-   you are actually on the row. */
-.thread:hover .thread-actions,
-.thread:focus-within .thread-actions {
-  position: static;
-  padding-left: 0;
-  background: none;
-  opacity: 1;
-  pointer-events: auto;
+.thread-more {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
 }
 
-/* Nothing hovers on a touch screen, so there the actions simply stay up — and
-   must stay clickable, or every action would be dead on touch. Permanently up
-   means permanently in flow too: overlaying the title with no hover to end it
-   would put a tap on the title's middle onto an icon forever. */
-@media (hover: none) {
-  .thread-actions {
-    opacity: 1;
-    pointer-events: auto;
-    position: static;
-    padding-left: 0;
-    background: none;
-  }
+.thread-more:hover,
+.thread-more[aria-expanded="true"] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* The destructive row reads as destructive before it is pressed, not after. */
+.disclosure-option.danger {
+  color: var(--danger);
+}
+
+.disclosure-option.danger:hover {
+  background: var(--danger-muted);
 }
 
 .thread-delete,

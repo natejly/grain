@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind, FavoriteKind } from "@workspace/api-client";
-import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, LogOut, Menu, MessageSquareText, Pencil, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, LogOut, Menu, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
@@ -16,6 +16,7 @@ import {
 import { CommandPalette } from "./command-palette";
 import { CoworkingStrip } from "./coworking-strip";
 import { CreateMenu } from "./create-menu";
+import { DisclosureMenu } from "./disclosure-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
 import { SystemStatus } from "./system-status";
 import { useWorkspace } from "./use-workspace";
@@ -636,97 +637,123 @@ export function Workspace() {
         )}
         <time>{formatRelative(conversation.updated_at)}</time>
       </button>
-      {/* One cluster for every trailing action, always — the CSS floats it over
-          the row's right end instead of spending the title's width on it, so
-          the row's title survives however many actions land here. Anything
-          added later belongs INSIDE this div; thread-rail-css.test.ts fails if
-          it is not. */}
+      {/* ONE trailing control, whatever the row can do.
+          Six icons in this 227px row left the title 35px — "Quar…" — because
+          in flow they divide the width and out of flow they cover it, and
+          either way the count decides. A menu is the only arrangement where it
+          does not: a seventh action becomes a seventh ROW, and the title keeps
+          the track at every count. That is also why the actions are named here
+          rather than drawn: a labelled row reads without a tooltip, and the
+          icons only ever fitted because they were unlabelled.
+          The trigger is the sole hit target at the row's right end, so a click
+          that lands there before the pointer settles opens a menu instead of
+          firing Delete — the accidental-delete hazard goes with the icons. */}
       <div className="thread-actions">
-        {/* The star rides only the OPEN thread, beside rename, for the same
-            noise argument. The list is the shell's one favorites state, so the
-            sidebar block above updates in the same render. Inside the cluster
-            like every other action: out here it would spend the title's width
-            and thread-rail-css.test.ts would fail. */}
-        {activeConversation === conversation.id && (
-          <FavoriteStar
-            kind="conversation"
-            targetId={conversation.id}
-            label={conversation.title}
-            favorites={favorites}
-            className="thread-favorite"
-            size={13}
-          />
-        )}
-        {/* Rename rides only the OPEN thread, like share: an affordance on
-            every row is sidebar noise. Subject threads are named by what they
-            hang off, so they never offer it — the server refuses anyway. */}
-        {activeConversation === conversation.id && !conversation.subject_id && (
-          <button
-            className="thread-rename"
-            title="Rename thread"
-            aria-label={`Rename ${conversation.title}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              setRenamingId(conversation.id);
-              setRenameDraft(conversation.title);
-            }}
-          >
-            <Pencil size={13} />
-          </button>
-        )}
-        {share && (
-          <button
-            className={share.shared ? "thread-share shared" : "thread-share"}
-            title={share.title}
-            aria-label={share.ariaLabel}
-            aria-pressed={share.pressed}
-            onClick={(event) => {
-              event.stopPropagation();
-              void shareConversation(conversation.id, !conversation.shared);
-            }}
-          >
-            {share.shared ? <Users size={13} /> : <Share2 size={13} />}
-          </button>
-        )}
-        <button
-          className="thread-split"
-          title="Open in a new pane"
-          aria-label={`Open ${conversation.title} in a new pane`}
-          onClick={(event) => {
-            event.stopPropagation();
-            openInNewPane(conversation.id);
-          }}
+        <DisclosureMenu
+          id={`thread-actions-${conversation.id}`}
+          triggerLabel={`Actions for ${conversation.title}`}
+          triggerClassName="thread-more"
+          trigger={<MoreHorizontal size={14} />}
+          menuLabel={`Actions for ${conversation.title}`}
         >
-          <Columns2 size={13} />
-        </button>
-        {/* Comments ride only the OPEN thread, like rename and share: the
-            drawer is about the thread you are looking at, not any row you can
-            reach. */}
-        {activeConversation === conversation.id && (
-          <button
-            className="thread-comments"
-            title="Comments on this thread"
-            aria-label={`Comments on ${conversation.title}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              setCommentSubject({
-                kind: "conversation",
-                id: conversation.id,
-                label: conversation.title,
-              });
-            }}
-          >
-            <MessageSquareText size={13} />
-          </button>
-        )}
-        <button
-          className="thread-delete"
-          title="Delete chat"
-          aria-label={`Delete ${conversation.title}`}
-          onClick={(event) => void removeConversation(conversation, event)}
-        >
-          <Trash2 size={13} />
-        </button>
+          {(close) => (
+            <>
+              {/* The star rides only the OPEN thread, for the same noise
+                  argument that governed it as an icon. The list is the shell's
+                  one favorites state, so the sidebar block above updates in the
+                  same render. */}
+              {activeConversation === conversation.id && (
+                <FavoriteStar
+                  kind="conversation"
+                  targetId={conversation.id}
+                  label={conversation.title}
+                  favorites={favorites}
+                  className="disclosure-option thread-favorite"
+                  size={13}
+                  withLabel
+                />
+              )}
+              {/* Rename rides only the OPEN thread, like share: an affordance on
+                  every row is sidebar noise. Subject threads are named by what
+                  they hang off, so they never offer it — the server refuses
+                  anyway. */}
+              {activeConversation === conversation.id && !conversation.subject_id && (
+                <button
+                  className="disclosure-option thread-rename"
+                  aria-label={`Rename ${conversation.title}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    close();
+                    setRenamingId(conversation.id);
+                    setRenameDraft(conversation.title);
+                  }}
+                >
+                  <Pencil size={13} /> Rename
+                </button>
+              )}
+              {share && (
+                <button
+                  className={share.shared
+                      ? "disclosure-option thread-share shared"
+                      : "disclosure-option thread-share"}
+                  aria-label={share.ariaLabel}
+                  aria-pressed={share.pressed}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    close();
+                    void shareConversation(conversation.id, !conversation.shared);
+                  }}
+                >
+                  {share.shared ? <Users size={13} /> : <Share2 size={13} />}
+                  {share.shared ? "Unshare" : "Share with the workspace"}
+                </button>
+              )}
+              <button
+                className="disclosure-option thread-split"
+                aria-label={`Open ${conversation.title} in a new pane`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  close();
+                  openInNewPane(conversation.id);
+                }}
+              >
+                <Columns2 size={13} /> Open in a new pane
+              </button>
+              {/* Comments ride only the OPEN thread, like rename and share: the
+                  drawer is about the thread you are looking at, not any row you
+                  can reach. */}
+              {activeConversation === conversation.id && (
+                <button
+                  className="disclosure-option thread-comments"
+                  aria-label={`Comments on ${conversation.title}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    close();
+                    setCommentSubject({
+                      kind: "conversation",
+                      id: conversation.id,
+                      label: conversation.title,
+                    });
+                  }}
+                >
+                  <MessageSquareText size={13} /> Comments
+                </button>
+              )}
+              {/* Last, and separated: the destructive one should not sit under
+                  the pointer that just opened the menu. */}
+              <button
+                className="disclosure-option thread-delete danger"
+                aria-label={`Delete ${conversation.title}`}
+                onClick={(event) => {
+                  close();
+                  void removeConversation(conversation, event);
+                }}
+              >
+                <Trash2 size={13} /> Delete
+              </button>
+            </>
+          )}
+        </DisclosureMenu>
       </div>
     </div>
     );
