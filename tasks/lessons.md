@@ -561,3 +561,11 @@
   means adding its two-tenant case in the same commit, and a bulk-read tool
   (one call = the whole map) needs it most, precisely because the walk-tool
   cases next to it already existed and made the gap easy to miss.
+- "Make this more like <harness X>" names a capability bar, not a coat of
+  paint. A plan scoped to rendering (thinking blocks, tool cards, timelines)
+  was rejected because the intent was to ENCAPSULATE what Claude-Code-class
+  harnesses can DO — the tool surface, orchestration, permissions, and
+  extensibility — with the visuals as its presentation layer. Before planning
+  against a named product, enumerate its functionality and diff that against
+  ours; ask "what can it do that we can't" before "what does it show that we
+  don't".
