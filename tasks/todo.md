@@ -1624,3 +1624,53 @@ line, not $?; the theme forbids color literals below the token blocks;
 
 Decisions: no CRDT — one agent + one user per surface in practice; soft claim
 + live mirror + versioned saves. SSE poll tick reused (250ms); no websockets.
+## Mobile pass + full-width chat (2026-08-26)
+
+Ask: "optimize for mobile and make the chat fill the screen in mobile and web."
+
+Done — `apps/web/app/globals.css` only, no component changes.
+
+- [x] The chat fills its panel. `--chat-measure`, declared once on
+      `.chat-layout`, replaces four hard-coded `min(760px, 100%)` widths
+      (`.message-column`, `.composer`, `.composer-shell`, `.bypass-banner`).
+      The four had to agree and nothing made them; the picker shell drifting
+      off-centre from the composer was one edit away. Breathing room now comes
+      from `.message-scroll` / `.composer-zone` padding — `clamp(22px, 3vw,
+      72px)`, so a wide monitor does not get 2000px lines and nothing narrower
+      than a laptop loses room it had.
+- [x] Full-height surfaces size to the *visible* viewport: `100vh` then
+      `100dvh` (vh first, as the fallback) on `.workspace-shell`, `.icon-rail`,
+      `.sidebar`, `.main-panel`, `.auth-shell`, `.published-app-shell`. This was
+      the real "chat doesn't fill the screen" bug on a phone — 100vh is the
+      viewport with the browser toolbars retracted, so the composer sat below
+      the fold and the whole app scrolled to reach it.
+- [x] iOS zoom guard actually wins now. It was leaning on the
+      `.workspace-shell` ancestor for specificity — (0,1,1), beaten by
+      `.composer-tools .composer-select` (0,2,0) and `.composer-tools
+      .agent-chip .agent-select` (0,3,0) — so both composer dropdowns still
+      zoomed iOS in, and iOS does not zoom back out. No ancestor chain outranks
+      an arbitrary descendant selector, so the rule uses `!important`.
+- [x] Composer safe-area inset in all three rules that set its bottom padding
+      (base, the phone block, and `.subject-chat`) — a restated shorthand had
+      been dropping it. A unit test now fails if a fourth one forgets.
+- [x] Composer control row wraps below 900px instead of clipping at a fixed
+      36px, send/stop go to 44px touch targets, message prose gets
+      `overflow-wrap: break-word` so a long URL stops scrolling the page
+      sideways, and the 31px author gutter is dropped below 650px.
+- [x] `apps/web/tests/chat-fill-css.test.ts` pins all of the above (11 tests,
+      in the style of the existing `*-layout-css` tests).
+
+Verified: 748 unit tests, `tsc --noEmit`, `eslint` (0 errors), `next build`.
+Layout measured in headless Chromium at 390x844, 360x640 and 1440x900 —
+composer fully on screen at every size (send bottom 824 of 844), no horizontal
+page scroll, chat column 1046px on a 1440px laptop where it used to be 760px.
+
+Follow-up, deliberately not done here:
+
+- On a phone the composer's control row wraps to three rows (~135px): Attach,
+  agent, Skills, model, effort, Fast, Thinking, approval mode and Send total
+  ~692px of controls against ~338px of width, so no amount of CSS gets it under
+  three. Everything stays visible and reachable, which is why this was the CSS
+  answer — but the real fix is a component change: collapse the rarely-touched
+  turn settings behind one chip on small screens and leave Attach + Send in the
+  row. Worth doing when someone is next in `views/chat.tsx`.
