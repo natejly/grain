@@ -59,8 +59,42 @@ def test_validate_files_rejects_too_many_files():
 
 def test_validate_files_accepts_valid_input():
     files = [{"path": "main.tex", "content": MINIMAL_TEX}]
-    result = _validate_files(files, "main.tex")
-    assert result == {"main.tex": MINIMAL_TEX}
+    file_map, entry = _validate_files(files, "main.tex")
+    assert file_map == {"main.tex": MINIMAL_TEX}
+    assert entry == "main.tex"
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "../../../etc/passwd.tex",
+        "/etc/cron.d/evil.tex",
+        "sub/../../escape.tex",
+        "a\\b.tex",
+    ],
+)
+def test_validate_files_rejects_path_traversal(bad_path):
+    # A file staged as `tmpdir / path` must never be able to leave tmpdir; an
+    # absolute or `..` path is refused before any bytes reach the host.
+    files = [
+        {"path": "main.tex", "content": MINIMAL_TEX},
+        {"path": bad_path, "content": "malicious"},
+    ]
+    with pytest.raises(CompileError):
+        _validate_files(files, "main.tex")
+
+
+def test_validate_files_rejects_absolute_entry():
+    files = [{"path": "main.tex", "content": MINIMAL_TEX}]
+    with pytest.raises(CompileError):
+        _validate_files(files, "/etc/main.tex")
+
+
+def test_validate_files_normalizes_paths():
+    files = [{"path": "./sub//main.tex", "content": MINIMAL_TEX}]
+    file_map, entry = _validate_files(files, "./sub/main.tex")
+    assert file_map == {"sub/main.tex": MINIMAL_TEX}
+    assert entry == "sub/main.tex"
 
 
 # ---------------------------------------------------------------------------

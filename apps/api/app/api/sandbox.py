@@ -35,6 +35,7 @@ from ..services.sandbox import outputs
 from ..services.sandbox import provider as provider_module
 from ..services.sandbox import session as sessions
 from ..services.sandbox.types import ExecResult, Language, SandboxError, SandboxQuotaError
+from .ratelimit import rate_limit
 
 router = APIRouter(prefix="/api/sandbox", tags=["sandbox"])
 
@@ -214,7 +215,12 @@ def list_sandbox_sessions(
     ]
 
 
-@router.post("", response_model=SandboxSessionOut, status_code=201)
+@router.post(
+    "",
+    response_model=SandboxSessionOut,
+    status_code=201,
+    dependencies=[Depends(rate_limit("sandbox-create", tier="heavy"))],
+)
 def create_sandbox_session(
     payload: SessionRequest,
     actor: Actor = Depends(get_actor),
@@ -281,7 +287,11 @@ def list_sandbox_executions(
     return [_execution_out(row) for row in rows]
 
 
-@router.post("/{session_id}/run", response_model=SandboxRunOut)
+@router.post(
+    "/{session_id}/run",
+    response_model=SandboxRunOut,
+    dependencies=[Depends(rate_limit("sandbox-run", tier="heavy"))],
+)
 def run_in_sandbox(
     session_id: str,
     payload: RunRequest,

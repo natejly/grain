@@ -41,6 +41,7 @@ from ..services.analytics import AnalyticsValidationError, execute_dataset_query
 from ..services.audit import record_audit
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
+from .ratelimit import public_rate_limit, rate_limit
 
 router = APIRouter(tags=["share-links"])
 
@@ -155,7 +156,12 @@ def _load_link(db: Session, actor: Actor, link_id: str) -> ShareLink:
 # The authenticated side
 
 
-@router.post("/api/share-links", response_model=ShareLinkCreatedOut, status_code=201)
+@router.post(
+    "/api/share-links",
+    response_model=ShareLinkCreatedOut,
+    status_code=201,
+    dependencies=[Depends(rate_limit("share-link-mint", tier="mint"))],
+)
 def create_share_link(
     payload: ShareLinkCreateRequest,
     key: str = Depends(idempotency_key),
@@ -277,7 +283,11 @@ def _shared_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail="Share link not found")
 
 
-@router.get("/shared/{token}", response_model=SharedResourceOut)
+@router.get(
+    "/shared/{token}",
+    response_model=SharedResourceOut,
+    dependencies=[Depends(public_rate_limit("shared-resource"))],
+)
 def read_shared_resource(
     token: str,
     db: Session = Depends(get_db),

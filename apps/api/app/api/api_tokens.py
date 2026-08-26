@@ -24,6 +24,7 @@ from ..services import api_tokens as token_service
 from ..services.audit import record_audit
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
+from .ratelimit import rate_limit
 
 router = APIRouter(prefix="/api", tags=["api-tokens"])
 
@@ -68,7 +69,12 @@ def list_api_tokens(
     return [_out(token) for token in rows]
 
 
-@router.post("/api-tokens", response_model=ApiTokenMintedOut, status_code=201)
+@router.post(
+    "/api-tokens",
+    response_model=ApiTokenMintedOut,
+    status_code=201,
+    dependencies=[Depends(rate_limit("api-token-mint", tier="mint"))],
+)
 def create_api_token(
     payload: ApiTokenCreate,
     key: str = Depends(idempotency_key),

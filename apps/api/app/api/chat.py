@@ -53,6 +53,7 @@ from ..services.projects import store as project_store
 from ..services.runs import TERMINAL_RUN_STATES, process_run
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
+from .ratelimit import rate_limit
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -890,6 +891,7 @@ def _stage_turn(
     "/conversations/{conversation_id}/messages",
     response_model=SendMessageResponse,
     status_code=202,
+    dependencies=[Depends(rate_limit("chat-send", tier="heavy"))],
 )
 def send_message(
     conversation_id: str,
@@ -1014,6 +1016,7 @@ def send_message(
     "/conversations/{conversation_id}/messages/{message_id}/edit",
     response_model=SendMessageResponse,
     status_code=202,
+    dependencies=[Depends(rate_limit("chat-edit", tier="heavy"))],
 )
 def edit_message(
     conversation_id: str,

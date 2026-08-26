@@ -59,6 +59,7 @@ from ..services.workflows import (
     schedule,
     summarize,
 )
+from .ratelimit import public_rate_limit, rate_limit
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -379,7 +380,11 @@ def _apply(workflow: Workflow, compiled: CompiledWorkflow, *, source_prompt: str
     workflow.schedule_timezone = graph.trigger.timezone
 
 
-@router.post("/compile", response_model=WorkflowCompileOut)
+@router.post(
+    "/compile",
+    response_model=WorkflowCompileOut,
+    dependencies=[Depends(rate_limit("workflow-compile", tier="heavy"))],
+)
 def compile_workflow_preview(
     payload: WorkflowCompileRequest,
     actor: Actor = Depends(get_actor),
@@ -616,7 +621,12 @@ def delete_workflow(
     db.commit()
 
 
-@router.post("/{workflow_id}/run", response_model=WorkflowRunOut, status_code=202)
+@router.post(
+    "/{workflow_id}/run",
+    response_model=WorkflowRunOut,
+    status_code=202,
+    dependencies=[Depends(rate_limit("workflow-run", tier="heavy"))],
+)
 def run_workflow(
     workflow_id: str,
     payload: WorkflowRunRequest,
@@ -694,7 +704,11 @@ def get_workflow_run(
     )
 
 
-@router.post("/tick", response_model=WorkflowTickOut)
+@router.post(
+    "/tick",
+    response_model=WorkflowTickOut,
+    dependencies=[Depends(public_rate_limit("workflow-tick"))],
+)
 def tick(
     background_tasks: BackgroundTasks,
     authorization: str = Header(default=""),
@@ -714,7 +728,12 @@ def tick(
             status_code=503, detail="Workflow scheduling is not configured"
         )
     presented = authorization.removeprefix("Bearer ").strip()
-    if not secrets.compare_digest(presented, configured.get_secret_value()):
+    # Compare as bytes: `compare_digest` raises TypeError on a non-ASCII str,
+    # and Starlette decodes headers as latin-1, so a header with a non-ASCII
+    # byte would 500 instead of returning a clean 401.
+    if not secrets.compare_digest(
+        presented.encode("utf-8"), configured.get_secret_value().encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="Not authorised")
 
     started = schedule.dispatch_due(db)

@@ -797,6 +797,7 @@ def _production(**overrides: Any) -> Settings:
         # sandbox one, so the others are satisfied rather than tripped.
         email_sender="smtp",
         smtp_host="smtp.example.com",
+        web_origin="https://app.example.com",
     )
     base.update(overrides)
     return Settings(**base)

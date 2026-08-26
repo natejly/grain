@@ -36,6 +36,7 @@ def _settings_kwargs(**overrides) -> dict:
         "openai_api_key": "test-key",
         "email_sender": "smtp",
         "smtp_host": "smtp.example.com",
+        "web_origin": "https://app.example.com",
     }
     base.update(overrides)
     return base

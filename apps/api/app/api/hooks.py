@@ -34,13 +34,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import Actor, get_token_actor
+from ..auth import Actor
 from ..database import get_db
 from ..models import Message, Workflow
 from ..schemas import ApiModel
 from ..services.audit import record_audit
 from ..services.conversations import resolve_visible
 from ..services.workflows import executor, inputs, parse_graph
+from .ratelimit import public_rate_limit, token_rate_limit
 
 router = APIRouter(prefix="/api/hooks", tags=["hooks"])
 
@@ -75,12 +76,13 @@ class HookMessageOut(ApiModel):
     "/workflows/{workflow_id}/trigger",
     response_model=HookTriggeredOut,
     status_code=202,
+    dependencies=[Depends(public_rate_limit("hooks-ip"))],
 )
 def trigger_workflow(
     workflow_id: str,
     payload: HookTriggerRequest,
     background_tasks: BackgroundTasks,
-    actor: Actor = Depends(get_token_actor),
+    actor: Actor = Depends(token_rate_limit("hook-trigger", tier="heavy")),
     db: Session = Depends(get_db),
 ) -> HookTriggeredOut:
     """Start a run of one of the token workspace's own workflows. 202.
@@ -138,11 +140,12 @@ def trigger_workflow(
     "/conversations/{conversation_id}/messages",
     response_model=HookMessageOut,
     status_code=201,
+    dependencies=[Depends(public_rate_limit("hooks-ip"))],
 )
 def post_message(
     conversation_id: str,
     payload: HookMessageRequest,
-    actor: Actor = Depends(get_token_actor),
+    actor: Actor = Depends(token_rate_limit("hook-message", tier="heavy")),
     db: Session = Depends(get_db),
 ) -> HookMessageOut:
     """Append an external note to a thread the token's member can see.

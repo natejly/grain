@@ -14,6 +14,7 @@ from ..schemas import GraphEdgeOut, GraphEntityOut, GraphOut
 from ..services.graph import rebuild_graph
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key
+from .ratelimit import rate_limit
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -86,7 +87,12 @@ def get_graph(
     return _graph_out(db, actor.workspace_id, limit)
 
 
-@router.post("/rebuild", response_model=GraphOut, status_code=202)
+@router.post(
+    "/rebuild",
+    response_model=GraphOut,
+    status_code=202,
+    dependencies=[Depends(rate_limit("graph-rebuild", tier="heavy"))],
+)
 def request_graph_rebuild(
     background_tasks: BackgroundTasks,
     key: str = Depends(idempotency_key),

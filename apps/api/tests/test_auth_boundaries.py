@@ -465,13 +465,15 @@ def test_session_tokens_are_stored_only_as_hashes():
 
 
 def _settings_kwargs(**overrides) -> dict:
-    # A production-shaped Settings needs the production model provider and a
-    # real mail transport, since each dev-only default has a guard of its own.
+    # A production-shaped Settings needs the production model provider, a real
+    # mail transport, and a real web origin, since each dev-only default has a
+    # guard of its own (`_guard_web_origin` refuses the localhost default).
     base = {
         "model_provider": "openai",
         "openai_api_key": "test-key",
         "email_sender": "smtp",
         "smtp_host": "smtp.example.com",
+        "web_origin": "https://app.example.com",
     }
     base.update(overrides)
     return base
@@ -553,6 +555,23 @@ def test_the_console_email_sender_cannot_be_left_on_outside_development():
             **_settings_kwargs(app_env="production", email_sender="smtp", smtp_host=" ")
         )
     assert Settings(**_settings_kwargs(app_env="production")).email_sender == "smtp"
+
+
+def test_a_production_web_origin_cannot_be_left_at_localhost():
+    """`web_origin` defaults to localhost and nothing else forces it to change,
+    so a deploy that forgets WEB_ORIGIN would serve *credentialed* CORS to the
+    visitor's own machine and mail localhost links. It fails at boot instead."""
+    for bad in ("http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3000,http://127.0.0.1:3000"):
+        with pytest.raises(ValueError, match="WEB_ORIGIN"):
+            Settings(**_settings_kwargs(app_env="production", web_origin=bad))
+    # A real origin is accepted, and localhost is fine in development.
+    assert Settings(
+        **_settings_kwargs(app_env="production", web_origin="https://app.example.com")
+    ).primary_web_origin == "https://app.example.com"
+    for env in ("development", "test"):
+        assert Settings(
+            **_settings_kwargs(app_env=env, web_origin="http://localhost:3000")
+        ).is_dev_env
 
 
 def test_the_dev_seed_refuses_to_run_outside_development():

@@ -411,6 +411,29 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = 15
     auth_rate_limit_attempts: int = 20
     auth_rate_limit_window_seconds: int = 300
+    # --- API rate limiting (in-process, per-identity or per-IP) ---
+    # A blunt ceiling on how much work one caller can buy per window, layered on
+    # top of the auth limiter above. It counts in this process's memory and
+    # resets on restart — the same scope, and the same caveats, as
+    # `services/auth/ratelimit.py` (a multi-replica deploy needs a shared store
+    # to be exact; today's topology is single-process). Master switch first so a
+    # deployment can turn the whole layer off without touching every tier.
+    rate_limit_enabled: bool = True
+    # Expensive work: an LLM run, a docker/LaTeX compile, a codegen pass, a
+    # whole-workspace graph rebuild, a file ingestion. Keyed per (workspace,
+    # user). Deliberately generous — this stops a runaway loop, not normal use.
+    rate_limit_heavy_attempts: int = Field(default=30, ge=1)
+    rate_limit_heavy_window_seconds: int = Field(default=60, ge=1)
+    # Credential minting: API tokens, share links, inbound addresses. Standing
+    # secrets, so a much slower drip than ordinary writes.
+    rate_limit_mint_attempts: int = Field(default=20, ge=1)
+    rate_limit_mint_window_seconds: int = Field(default=3600, ge=1)
+    # Unauthenticated / bearer public endpoints, keyed per source IP: the
+    # anonymous share and published-app reads, the machine-door hooks, the MCP
+    # endpoint, inbound email, the workflow tick. Throttles both real traffic
+    # and invalid-token guessing, which never reaches an identity to key on.
+    rate_limit_public_attempts: int = Field(default=60, ge=1)
+    rate_limit_public_window_seconds: int = Field(default=60, ge=1)
     email_sender: Literal["console", "smtp"] = "console"
     # Unlike session_cookie_name above, this one *is* a user-visible surface:
     # it is the From address a recipient reads in their mail client, so it
@@ -754,6 +777,32 @@ class Settings(BaseSettings):
                 "mint must not ride an insecure cross-site cookie."
             )
         return self
+
+    @model_validator(mode="after")
+    def _guard_web_origin(self) -> Settings:
+        """Refuse a production deploy still pointing at localhost.
+
+        `web_origin` defaults to http://localhost:3000, and unlike the auth
+        relaxations above nothing else forces it to change: a deploy that forgets
+        WEB_ORIGIN boots fine and serves *credentialed* CORS to localhost, so a
+        malicious app on the victim's own machine (a dev server, an Electron app)
+        can make cookie-bearing requests to the production API and read the
+        responses. The same default also sends reset/verify email links to
+        localhost. Same structural gate as `_guard_auth`: fail at boot rather
+        than serve a browser-trusting misconfiguration.
+        """
+        if self.is_dev_env:
+            return self
+        for origin in self.allowed_web_origins:
+            host = origin.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+            if host not in {"localhost", "127.0.0.1", "::1", ""}:
+                return self
+        raise ValueError(
+            "WEB_ORIGIN must be set to the deployment's real web origin outside "
+            "development — it still resolves to localhost, which would serve "
+            "credentialed CORS to the visitor's own machine and mail localhost "
+            "links."
+        )
 
     @property
     def is_dev_env(self) -> bool:
