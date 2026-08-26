@@ -15,9 +15,11 @@ receiver gets "something happened to X", not the workspace's words.
 and the tick enqueues `send_delivery` per claimed row on a background task,
 so the HTTP conversations never delay the tick itself (the F5 QA note). A
 failed attempt stamps `next_attempt_at` from `RETRY_BACKOFF_MINUTES` — an
-exponential spread giving a receiver that is down for a deploy hours of
-horizon, not minutes — and `MAX_ATTEMPTS` claims without a 2xx mark the row
-`failed` (an owner can requeue it from the deliveries panel). Retried sends
+exponential spread putting the sixth attempt 5h21m after the first, so a
+receiver down for a deploy window loses nothing — and `MAX_ATTEMPTS` claims
+without a 2xx mark the row `failed` (an owner can requeue a *failed* row
+from the deliveries panel; see `api/webhooks.redeliver_delivery` for why a
+sent one is refused). Retried sends
 make delivery at-least-once, as webhooks are everywhere; receivers key on
 the `delivery_id` in the body.
 
@@ -77,9 +79,14 @@ EVENTS = (
 MAX_ATTEMPTS = 6
 
 #: Minutes a failed attempt N waits before attempt N+1 may be claimed — an
-#: exponential spread totalling ~5.6 hours of horizon, so a receiver that is
-#: down for a deploy window loses nothing.
+#: exponential spread. Six attempts separated by these five waits put the
+#: last one 1+5+15+60+240 = 321 minutes (5h21m) after the first, so a
+#: receiver that is down for a deploy window loses nothing.
 RETRY_BACKOFF_MINUTES = (1, 5, 15, 60, 240)
+
+#: The stated horizon, in minutes, kept next to the schedule it is derived
+#: from so a future edit to the spread cannot leave the prose behind.
+RETRY_HORIZON_MINUTES = sum(RETRY_BACKOFF_MINUTES)
 
 #: How many pending rows one tick may claim — the sweep stays bounded however
 #: deep the backlog is; the rest waits a minute.
