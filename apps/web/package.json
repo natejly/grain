@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.10",
     "@workspace/api-client": "workspace:*",
     "@xyflow/react": "^12.11.2",
     "d3-force-3d": "^3.0.6",
