@@ -971,6 +971,36 @@ was timing:
   insert of the second alert loses to the still-open first one, landing as a
   skip. One un-acked Inbox card per monitor is the contract; ack (resolve) the
   alert to re-arm the page.
+- F6 undo fixed (clobber guard from after-state snapshots; creation
+  attribution from ToolResult.created_ids; per-row conditional-UPDATE
+  consumption). NOTE, cosmetic (QA F6 LOW c): the undo's newest-first ordering
+  tie-breaks on id.desc(), which is random-uuid order for two checkpoints in
+  the same created_at tick — harmless today because same-tick rows come from
+  one sequential run.
+- F7 accepted designs, recorded per QA: monitor/digest claim commits ride the
+  tick's shared session (any unrelated pending state commits along — the same
+  accepted pattern as the monitor sweep), and resolve-re-arms means a
+  sustained spike re-pages after each resolve; both deliberate.
+- Assign races: FIXED (a) remove_member's release sweep can no longer be
+  undone by an in-flight assign — the membership EXISTS now rides the assign's
+  CAS WHERE, and (b) _claim_decision refuses assignee_gate for any model but
+  AgentToolCall instead of silently gating on the wrong table. RECORDED, not
+  fixed: assign's run-visibility check for the assignee stays pre-CAS, so a
+  concurrent un-share can still route a park to a member who just lost sight
+  of the thread — same accepted TOCTOU class as catalogued QA #9.
+- RECORDED, revisit only if a surface appears: (1) mentions resolved before a
+  comment delete keep their 10KB body snapshots forever (feed lists open-only,
+  so invisible today) — do a redaction sweep if a history view ever shows
+  resolved rows; (2) resolved alerts keep dangling monitor_id deep-links after
+  monitor delete (cosmetic 404 on click).
+- Full-stack audit (13 features, standing reachable-UI rule): PASSED. The one
+  confirmed gap — Monitors UI could not edit an existing monitor's definition
+  — is fixed (Edit affordance pre-filling the create form, changed-fields-only
+  PUT; API-authored filter/grouping queries kept verbatim with scalar fields
+  editable). F8's mail helpers remain backend by design, surfaced through the
+  F10 subscription and F13 digest mails.
+- packages/api-client/openapi.json on main was stale (predated the four-branch
+  merge; missing 19 paths / 23 schemas) — regenerated on this branch.
 
 ## Merge notes (feature-sweep, 2026-08-23)
 

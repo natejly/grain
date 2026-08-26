@@ -141,6 +141,11 @@ def _claim_decision(
         model.status == "proposed",
     ]
     if assignee_gate:
+        # The gate reads AgentToolCall.assigned_to, so it is only sound when
+        # that is the model being updated — refuse a misuse loudly rather than
+        # silently gating table A's UPDATE on table B's column.
+        if model is not AgentToolCall:
+            raise ValueError("assignee_gate applies only to AgentToolCall")
         criteria.append(AgentToolCall.assigned_to.in_(("", actor_id)))
     # The cast is only about typing: an ORM-enabled UPDATE really does return a
     # CursorResult, but Session.execute is annotated as the generic Result.
@@ -676,20 +681,45 @@ def assign_agent_tool_call(
     # The write is a compare-and-set on `status = 'proposed'`, not the plain
     # attribute write the 409 above pre-checked: assign racing decide would
     # otherwise re-park an already-decided row's `assigned_to`. Same shape as
-    # `_claim_decision`, settled by the database while the row is held.
+    # `_claim_decision`, settled by the database while the row is held. The
+    # membership EXISTS rides in the same WHERE: an assign racing the member's
+    # removal (whose release sweep runs before this lands) would otherwise
+    # re-strand the call on a user who is no longer here to decide it.
+    assign_criteria = [
+        AgentToolCall.id == call.id,
+        AgentToolCall.workspace_id == actor.workspace_id,
+        AgentToolCall.status == "proposed",
+    ]
+    if payload.user_id:
+        assign_criteria.append(
+            select(Membership.id)
+            .where(
+                Membership.workspace_id == actor.workspace_id,
+                Membership.user_id == payload.user_id,
+            )
+            .exists()
+        )
     claimed = cast(
         "CursorResult[Any]",
         db.execute(
             update(AgentToolCall)
-            .where(
-                AgentToolCall.id == call.id,
-                AgentToolCall.workspace_id == actor.workspace_id,
-                AgentToolCall.status == "proposed",
-            )
+            .where(*assign_criteria)
             .values(assigned_to=payload.user_id)
         ),
     ).rowcount
     if not claimed:
+        # Which race lost? Re-read so the refusal names the true reason: a
+        # vanished member answers exactly like the pre-check above did.
+        if payload.user_id and (
+            db.scalar(
+                select(Membership.id).where(
+                    Membership.workspace_id == actor.workspace_id,
+                    Membership.user_id == payload.user_id,
+                )
+            )
+            is None
+        ):
+            raise HTTPException(status_code=404, detail="Member not found")
         raise HTTPException(status_code=409, detail="Tool call already decided")
     append_event(
         db,

@@ -215,6 +215,55 @@ def test_removing_a_member_releases_their_parked_assignments(client, _no_resume)
     assert _no_resume, "a released approval must be decidable again"
 
 
+def test_an_assign_racing_the_removal_cannot_restrand_the_call(
+    client, _no_resume, monkeypatch
+):
+    """The membership EXISTS rides the assign's CAS: an assign whose member
+    pre-check passed but whose member vanished before the UPDATE lands must
+    lose — otherwise the call is stranded on a user no longer here to decide
+    it, undoing the removal route's release sweep."""
+    from app.api import tools as tools_module
+
+    run_id, call_id = _park_run(client)
+    _share_thread(run_id)
+    workspace_id = _identity(client)["workspace_id"]
+    _client_b, user_b = _member(workspace_id, name="Vanishing assignee")
+
+    real = tools_module.conversations.run_activity_visible
+
+    def removal_lands_mid_request(db, *, actor_workspace_id, actor_user_id, run):
+        visible = real(
+            db,
+            actor_workspace_id=actor_workspace_id,
+            actor_user_id=actor_user_id,
+            run=run,
+        )
+        if actor_user_id == user_b:
+            # The assignee's visibility probe runs between the membership
+            # pre-check and the CAS — exactly where the removal can land.
+            db.query(Membership).filter(
+                Membership.workspace_id == workspace_id,
+                Membership.user_id == user_b,
+            ).delete()
+            db.flush()
+        return visible
+
+    monkeypatch.setattr(
+        tools_module.conversations, "run_activity_visible", removal_lands_mid_request
+    )
+    refused = _assign(client, call_id, user_b)
+    assert refused.status_code == 404, refused.text
+    monkeypatch.setattr(
+        tools_module.conversations, "run_activity_visible", real
+    )
+
+    # The losing assign changed nothing: the call still waits on anyone, and
+    # the simulated removal rolled back with the refused request.
+    inbox = client.get("/api/inbox").json()
+    row = next(row for row in inbox["approvals"] if row["id"] == call_id)
+    assert row["assigned_to"] == ""
+
+
 def test_a_decided_call_refuses_routing(client, _no_resume):
     _run_id, call_id = _park_run(client)
     assert _decide(client, call_id, "denied").status_code == 200
