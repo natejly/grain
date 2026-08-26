@@ -292,22 +292,39 @@ label,
   outline-offset: 2px;
 }
 
-/* iOS auto-zooms when a text input smaller than 16px is focused. The workspace
-   deliberately sets 12–13px on dense inputs for the desktop layout; on mobile
-   that density is wrong anyway, so bump every form control to 16px there. The
-   `.workspace-shell` ancestor raises specificity above the per-input rules so
-   this actually wins. Buttons and checkboxes are included harmlessly — only
-   text inputs, textareas, and selects trigger the zoom. */
+/* iOS auto-zooms when a text input smaller than 16px is focused — and does not
+   zoom back out, so one tap on the model dropdown leaves the whole app scaled
+   up and scrolled sideways. The workspace deliberately sets 11–13px on dense
+   inputs for the desktop layout; on mobile that density is wrong anyway, so
+   every form control goes to 16px there.
+
+   `!important`, and it has to be. The `.workspace-shell` ancestor was meant to
+   carry this over the per-input rules, but (0,1,1) does not beat the two- and
+   three-class selectors that set the dense sizes — `.composer-tools
+   .composer-select` (0,2,0) and `.composer-tools .agent-chip .agent-select`
+   (0,3,0) both won, which is why the composer's dropdowns still zoomed. There
+   is no ancestor chain that outranks an arbitrary descendant selector, so the
+   guard stops competing on specificity. It is a platform correctness rule
+   rather than a style, which is the case `!important` is actually for.
+
+   Buttons and checkboxes are included harmlessly — only text inputs,
+   textareas, and selects trigger the zoom. */
 @media (max-width: 900px) {
   .workspace-shell input,
   .workspace-shell select,
   .workspace-shell textarea {
-    font-size: 16px;
+    font-size: 16px !important;
   }
 }
 
 .workspace-shell {
+  /* 100vh on a phone is the viewport with the browser toolbars *retracted*, so
+     a 100vh shell is taller than what is actually on screen: the composer sat
+     below the fold and the whole app scrolled to reach it. `dvh` tracks the
+     visible viewport, toolbars in or out. The `vh` line stays as the fallback
+     for anything that does not know `dvh`. */
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-columns: 56px 252px minmax(0, 1fr);
   background: var(--bg);
@@ -320,6 +337,7 @@ label,
   position: relative;
   z-index: 21;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -402,6 +420,7 @@ label,
   position: relative;
   z-index: 20;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -947,6 +966,7 @@ label,
   position: relative;
   min-width: 0;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1181,7 +1201,19 @@ label,
   cursor: pointer;
 }
 
+/* The chat's measure — one knob, three users: the transcript, the composer,
+   and the picker shell that has to line up with the composer or the slash menu
+   floats off-centre above it. The chat now fills the panel it is given instead
+   of reserving a 760px column down the middle: on a phone that column was the
+   only width there was, and on a desktop the two empty gutters were the
+   loudest thing on the screen. The breathing room the measure used to supply
+   comes from `.message-scroll` / `.composer-zone` padding instead, which is a
+   padding a narrow screen can shrink and a centred track is not.
+
+   A token rather than three copies of a width because the three have to agree:
+   `.chat-pane` and `.subject-chat` re-point it for their own narrower rails. */
 .chat-layout {
+  --chat-measure: 100%;
   min-height: 0;
   flex: 1;
   display: flex;
@@ -1192,7 +1224,13 @@ label,
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  padding: 0 22px;
+  /* Grows with the window so a full-width transcript on a wide monitor is not
+     one 2000px line of prose, and floors at the old 22px so nothing narrower
+     than a laptop loses room it used to have. */
+  padding: 0 clamp(22px, 3vw, 72px);
+  /* A flick that reaches the top of the transcript must not hand the rest of
+     the gesture to the page behind it — on iOS that is the pull-to-refresh. */
+  overscroll-behavior: contain;
 }
 
 .message-scroll.empty {
@@ -1213,7 +1251,7 @@ label,
 }
 
 .message-column {
-  width: min(760px, 100%);
+  width: var(--chat-measure, 100%);
   margin: 0 auto;
   padding: 34px 0 24px;
 }
@@ -1252,6 +1290,13 @@ label,
   color: var(--text);
   font-size: 13px;
   line-height: 1.65;
+  /* One unbroken token in prose — a URL, a hash, an absolute path — is wider
+     than a phone, and without this it widens the whole transcript and the page
+     scrolls sideways. Code blocks and diffs already scroll on their own axis;
+     prose had nothing. `break-word` rather than `anywhere` so it only breaks
+     what genuinely cannot fit and leaves intrinsic widths (the user bubble's
+     `fit-content`) measuring the way they did. */
+  overflow-wrap: break-word;
 }
 
 .message.user .message-body {
@@ -1498,12 +1543,15 @@ label,
 
 .composer-zone {
   flex: none;
-  padding: 12px 22px 16px;
+  /* Tracks `.message-scroll` so the composer and the transcript share an edge.
+     The safe-area inset is what keeps the send button clear of the iOS home
+     indicator; it resolves to 0 everywhere else. */
+  padding: 12px clamp(22px, 3vw, 72px) calc(16px + env(safe-area-inset-bottom, 0px));
   background: var(--bg);
 }
 
 .composer {
-  width: min(760px, 100%);
+  width: var(--chat-measure, 100%);
   min-height: 84px;
   margin: 0 auto;
   overflow: hidden;
@@ -2340,7 +2388,7 @@ label,
    to the same centred width, without pushing the textarea down as it opens. */
 .composer-shell {
   position: relative;
-  width: min(760px, 100%);
+  width: var(--chat-measure, 100%);
   margin: 0 auto;
 }
 
@@ -3775,6 +3823,7 @@ label,
 
 .published-app-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   padding: 48px clamp(18px, 5vw, 72px);
   background: var(--bg);
 }
@@ -3987,11 +4036,25 @@ label,
   }
 
   .composer-zone {
-    padding: 9px 11px 12px;
+    /* Restating the shorthand here would drop the safe-area inset the base
+       rule sets, and the send button would sit under the iOS home indicator. */
+    padding: 9px 11px calc(12px + env(safe-area-inset-bottom, 0px));
   }
 
   .composer-hint {
     display: none;
+  }
+
+  /* The gutter that lines a message up under its author avatar is 31px of a
+     phone's ~360px — an eighth of the screen spent on indentation. The author
+     row keeps its own alignment; the prose starts at the edge. */
+  .message-body {
+    padding-left: 0;
+  }
+
+  .message.user .message-body {
+    max-width: 100%;
+    margin-left: 0;
   }
 
   .content-page {
@@ -5798,7 +5861,11 @@ label,
 }
 
 .subject-chat .composer-zone {
-  padding: 8px 12px 12px;
+  /* Same reason as the phone block: restating the shorthand drops the base
+     rule's safe-area inset, and this rail is bottom-docked too — on a notched
+     phone, where the layout stacks and the rail becomes the full width, its
+     send button would sit under the home indicator. */
+  padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
   background: var(--surface);
 }
 
@@ -6665,6 +6732,7 @@ label,
 
 .auth-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -9856,7 +9924,10 @@ label,
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  width: min(760px, 100%);
+  /* Shares the composer's measure — it sits directly above it and a banner
+     that does not line up with the box it is warning about reads as belonging
+     to something else. */
+  width: var(--chat-measure, 100%);
   margin: 0 auto 10px;
   padding: 10px 12px;
   border: 1px solid var(--clay);
@@ -10501,4 +10572,102 @@ label,
 .mention-option:hover,
 .mention-option.first {
   background: var(--surface-hover);
+}
+
+/* ==========================================================================
+   Mobile refinements
+   ==========================================================================
+
+   Last in the sheet on purpose. Most of what follows re-points a rule that is
+   already declared above at the same specificity — `.composer-tools > button`,
+   `.composer-spacer` — and at equal specificity the later rule is the one that
+   wins. Declared any earlier, these would lose to the desktop rules they exist
+   to override, so this section stays at the bottom of the file.
+
+   The breakpoints match the ones the sheet already uses: 900px is where the
+   icon rail becomes a drawer, 650px is where the phone layout starts. */
+
+@media (max-width: 900px) {
+  /* One row of chips — Attach, agent, Skills, model, Fast, Thinking, approval
+     mode, Send — is about 560px of controls. In a 380px composer the fixed
+     36px row clipped everything past the third chip, including Send, with no
+     scrollbar to say so. Wrapping is the fix rather than horizontal scroll:
+     a wrapped chip is visible and reachable, a scrolled-off one is neither,
+     and the composer is free to grow a row taller because the transcript
+     above it is the flexing element. */
+  .composer-tools {
+    height: auto;
+    min-height: 36px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* The two dropdowns are the widest things in the row, and forcing them to
+     16px (the iOS zoom guard, above) makes them wider still — "Default model"
+     at 16px is most of a phone's width on its own. Capping them is what turns
+     three wrapped rows into two; the full name is still in the open menu,
+     which is where you read it. */
+  .composer-tools .composer-select,
+  .composer-tools .agent-chip .agent-select {
+    max-width: 108px;
+  }
+
+  /* `flex: 1` on a spacer inside a wrapping row makes the spacer a full-width
+     line of its own, pushing Send onto a third row all by itself. Zero-basis
+     keeps it doing its one job — eating the slack on whichever row it lands
+     on — without claiming a row. */
+  .composer-spacer {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  /* 30px is a comfortable mouse target and a poor thumb one; 44px is the
+     platform minimum on both iOS and Android. The composer's controls are the
+     ones a phone user actually hits, so they get the size. */
+  .composer-tools .send-button,
+  .editor-input .send-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .composer-tools .composer-chip,
+  .composer-tools .composer-toggle,
+  .composer-tools .composer-select {
+    min-height: 36px;
+  }
+
+  /* The transcript is the tallest thing on the screen and the composer must
+     stay reachable, so the message area gives up padding before the composer
+     does. */
+  .message-column {
+    padding: 20px 0 16px;
+  }
+
+  /* The rail drawer slides in from the left edge; on a notched phone held
+     sideways that edge is under the notch. */
+  .sidebar {
+    padding-left: calc(12px + env(safe-area-inset-left, 0px));
+  }
+
+}
+
+@media (max-width: 650px) {
+  /* The chips keep their words. They were bare icons once and were made
+     labelled deliberately — "the composer is the product's front door; its
+     verbs say their names" — so the phone layout wraps them onto a second row
+     rather than stripping the labels back off. Row height is the cheap thing
+     here; discoverability is not.
+
+     The composer's own chrome shrinks so the textarea keeps the room: at 16px
+     type (forced above, to stop iOS zooming on focus) three lines of a draft
+     need more height than the desktop minimum reserved. */
+  .composer {
+    min-height: 0;
+  }
+
+  .composer textarea {
+    min-height: 44px;
+    max-height: 40dvh;
+    padding: 11px 12px 4px;
+  }
 }
