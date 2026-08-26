@@ -259,6 +259,13 @@ export type Citation = {
   ordinal: number;
   excerpt: string;
   score: number;
+  /**
+   * Set only for a web source, whose provenance is a page rather than an
+   * indexed passage - mirrors `schemas.Citation.url`. `chunk_id` is then a
+   * synthetic "web:<digest>" naming no Chunk row, so this URL is the only
+   * address a reader can follow to check the claim.
+   */
+  url?: string | null;
 };
 
 /**
