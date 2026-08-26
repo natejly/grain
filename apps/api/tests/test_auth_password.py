@@ -235,18 +235,32 @@ def test_reset_request_does_the_same_work_for_a_known_and_unknown_address(monkey
         assert response.status_code == 202
         return time.perf_counter() - start
 
-    unknown = unique_email()
-    known_elapsed = timed(known)
-    unknown_elapsed = timed(unknown)
+    def best_of(address: str, attempts: int = 3) -> float:
+        """The fastest of several runs, not one sample.
 
-    # One message per request, whichever branch ran.
-    assert len(delivered) == 2
-    assert [m.to for m in delivered] == [known, unknown]
+        Scheduler noise on a shared runner only ever ADDS time, so the minimum
+        is the closest estimate of the work a branch actually performs — and an
+        oracle, a branch that genuinely skips the 50ms send, is slower in every
+        sample including its best. One sample each made this assertion fail on
+        CI at 0.206s vs 0.054s while passing five times out of five locally on
+        the same commit: it was measuring the runner, not the endpoint.
+        """
+        return min(timed(address) for _ in range(attempts))
+
+    unknown = unique_email()
+    attempts = 3
+    known_elapsed = best_of(known, attempts)
+    unknown_elapsed = best_of(unknown, attempts)
+
+    # One message per request, whichever branch ran — the deterministic half of
+    # this test, and the one that would catch the skipped send outright.
+    assert len(delivered) == attempts * 2
+    assert [m.to for m in delivered] == [known] * attempts + [unknown] * attempts
     assert delivered[0].subject == "Reset your password"
-    assert delivered[1].subject == "Password reset requested"
+    assert delivered[attempts].subject == "Password reset requested"
     # And no reset token was minted for an address with no account.
     assert "token=" in delivered[0].body
-    assert "token=" not in delivered[1].body
+    assert "token=" not in delivered[attempts].body
     # The wall clock must not separate them. Before the fix the unknown branch
     # skipped the 50ms send entirely; the bound is deliberately far looser than
     # that gap so the assertion is about the oracle, not about scheduler noise.
