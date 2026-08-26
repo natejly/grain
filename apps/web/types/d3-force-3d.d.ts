@@ -27,6 +27,8 @@ declare module "d3-force-3d" {
     restart(): this;
     alpha(): number;
     alpha(value: number): this;
+    alphaMin(): number;
+    alphaMin(value: number): this;
     alphaTarget(value: number): this;
     nodes(): Node[];
     nodes(nodes: Node[]): this;
@@ -55,6 +57,13 @@ declare module "d3-force-3d" {
     strength(value: number): this;
   }
 
+  export interface CollideForce<Node> {
+    (alpha: number): void;
+    radius(value: number | ((node: Node, index: number, nodes: Node[]) => number)): this;
+    strength(value: number): this;
+    iterations(value: number): this;
+  }
+
   /** `numDimensions` is the 3D part: pass 3 for x/y/z. */
   export function forceSimulation<Node extends SimulationNode>(
     nodes?: Node[],
@@ -64,4 +73,7 @@ declare module "d3-force-3d" {
   export function forceLink<Link>(links?: Link[]): LinkForce<Link>;
   export function forceManyBody(): ManyBodyForce;
   export function forceCenter(x?: number, y?: number, z?: number): CenterForce;
+  export function forceCollide<Node extends SimulationNode>(
+    radius?: number | ((node: Node, index: number, nodes: Node[]) => number),
+  ): CollideForce<Node>;
 }
