@@ -62,7 +62,11 @@ export function useSubjectThread({
   // panel can carry the same control the rail composer does. Subject panels
   // used to HIDE the control, which meant a subject thread's mode was
   // unreadable and unchangeable from the one surface that uses it.
-  const [approvalMode, setApprovalModeState] = useState<ApprovalMode>("ask_writes");
+  // Seeded with the product default rather than the strict mode: this is a
+  // placeholder the server's value replaces as soon as the thread loads, and a
+  // placeholder that disagrees with what the thread will say is a control that
+  // visibly changes its mind a beat after the panel opens.
+  const [approvalMode, setApprovalModeState] = useState<ApprovalMode>("auto_writes");
   const [messages, setMessages] = useState<Message[]>([]);
   const [agentCalls, setAgentCalls] = useState<AgentToolCall[]>([]);
   const [draft, setDraft] = useState("");
@@ -89,7 +93,7 @@ export function useSubjectThread({
     loadingFor.current = key;
     setConversationId(null);
     conversationRef.current = null;
-    setApprovalModeState("ask_writes");
+    setApprovalModeState("auto_writes");
     setMessages([]);
     setAgentCalls([]);
     setDraft("");

@@ -5,6 +5,7 @@ import os
 from types import SimpleNamespace
 
 import pytest
+from conftest import ask_before_writes
 
 from app.database import SessionLocal
 from app.models import SHARED_OWNER, AgentToolCall, Run, ToolPolicy
@@ -26,6 +27,8 @@ def _park_run(client) -> tuple[str, str]:
         headers={"Idempotency-Key": "approval-conv-" + os.urandom(6).hex()},
         json={"title": "Approvals"},
     ).json()
+    # This whole module is about what happens when a call parks.
+    ask_before_writes(client, conversation["id"])
     db = SessionLocal()
     try:
         run = Run(

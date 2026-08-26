@@ -105,6 +105,12 @@ def bootstrap(
             enabled=bool(membership.digest_enabled) if membership else False,
             hour_utc=membership.digest_hour_utc if membership else 9,
         ),
+        # False with no membership, matching the digest above. The seeding side
+        # (`conversations.default_approval_mode`) takes the cautious branch for
+        # the same missing row; this is the read, and a toggle that rendered
+        # "on" for a member who has no row to write to would be a lie the very
+        # next time they touched it.
+        safe_mode=bool(membership.safe_mode) if membership else False,
         unrestricted_agent=settings.dev_unrestricted_agent,
         feature_flags={
             "cited_memory": True,

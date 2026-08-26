@@ -27,14 +27,14 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import pytest
-from conftest import Identity
+from conftest import Identity, ask_before_writes
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import select
 
 from app.config import Settings
 from app.database import SessionLocal
-from app.models import Agent, AgentToolCall, Conversation, Run, ToolPolicy
+from app.models import Agent, AgentToolCall, Conversation, Membership, Run, ToolPolicy
 from app.services import agent_loop
 from app.services.agent_loop import (
     ASK_WRITES,
@@ -158,6 +158,11 @@ def new_conversation(client: TestClient, title: str = "Planning") -> Dict[str, A
     )
     assert response.status_code == 201, response.text
     payload: Dict[str, Any] = response.json()
+    # Plan mode is defined against the mode a thread was in before it, and this
+    # module's setups queue a call under "asks before writes" and then switch.
+    # Pinned here rather than left to the default, which is agentic since 0064.
+    ask_before_writes(client, payload["id"])
+    payload["approval_mode"] = "ask_writes"
     return payload
 
 
@@ -402,10 +407,17 @@ def test_a_standing_allow_cannot_pre_answer_the_plan_review(
 def test_approving_the_plan_lifts_the_mode_and_the_turn_implements(
     owner: TestClient, db: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The whole handshake. The decision endpoint restores `ask_writes` before
-    the resume — audited, attributed to the exit — so the resumed turn re-enters
-    under the full registry with the plan block gone, and "always allow" on the
-    card is deliberately not remembered as a policy row."""
+    """The whole handshake. The decision endpoint restores the approver's own
+    default before the resume — audited, attributed to the exit — so the resumed
+    turn re-enters under the full registry with the plan block gone, and "always
+    allow" on the card is deliberately not remembered as a policy row.
+
+    "Their default" and not a fixed `ask_writes`: leaving plan mode lands where
+    this member's threads live, which since 0064 is `auto_writes` unless they
+    turned Safe mode on. What has not changed is that it never restores
+    *whatever preceded plan* — see
+    `test_leaving_plan_mode_lands_on_safe_mode_for_a_member_who_asked_for_it`
+    for the other side of it."""
     conversation, run, call = _park_on_exit(owner, db, monkeypatch)
     identity = identity_of(owner)
 
@@ -423,7 +435,7 @@ def test_approving_the_plan_lifts_the_mode_and_the_turn_implements(
 
     db.expire_all()
     stored = db.get(Conversation, conversation["id"])
-    assert stored is not None and stored.approval_mode == ASK_WRITES
+    assert stored is not None and stored.approval_mode == AUTO_WRITES
     lifted = [
         row
         for row in owner.get("/api/audit-events").json()
@@ -432,7 +444,7 @@ def test_approving_the_plan_lifts_the_mode_and_the_turn_implements(
         and row["detail"].get("via") == EXIT_PLAN_MODE
     ]
     assert [(row["detail"]["from"], row["detail"]["to"]) for row in lifted] == [
-        (PLAN, ASK_WRITES)
+        (PLAN, AUTO_WRITES)
     ]
     assert (
         db.scalar(
@@ -464,6 +476,52 @@ def test_approving_the_plan_lifts_the_mode_and_the_turn_implements(
     executed = only_call(db, run.id)
     assert executed.status == "succeeded"
     assert "approved" in executed.result_preview
+
+
+def test_leaving_plan_mode_lands_on_safe_mode_for_a_member_who_asked_for_it(
+    owner: TestClient, db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of the exit: a Safe-mode member lands back on `ask_writes`.
+
+    Both halves of the rule are load-bearing and they pull opposite ways. A
+    member who never asked to be asked must not find themselves being asked
+    because they once used plan mode — that is the test above. A member who DID
+    ask must not have plan mode be the thing that quietly turns it off. One
+    lookup answers both, which is why the exit reads the member's default
+    rather than either constant.
+    """
+    identity = identity_of(owner)
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.workspace_id == identity.workspace_id,
+            Membership.user_id == identity.user_id,
+        )
+    )
+    assert membership is not None
+    membership.safe_mode = True
+    db.commit()
+    try:
+        conversation, _run, call = _park_on_exit(owner, db, monkeypatch)
+        monkeypatch.setattr(
+            "app.api.tools.resume_run", lambda *args, **kwargs: None
+        )
+        response = owner.post(
+            f"/api/agent-tool-calls/{call.id}/decision",
+            headers=_key(),
+            json={"decision": "approved"},
+        )
+        assert response.status_code == 200, response.text
+        db.expire_all()
+        stored = db.get(Conversation, conversation["id"])
+        assert stored is not None and stored.approval_mode == ASK_WRITES
+    finally:
+        # The owner client is session-scoped; leaving it opted in would make
+        # every later test in this process run as a different kind of member.
+        db.expire_all()
+        restored = db.get(Membership, membership.id)
+        assert restored is not None
+        restored.safe_mode = False
+        db.commit()
 
 
 def test_denying_the_plan_stays_in_plan_mode(

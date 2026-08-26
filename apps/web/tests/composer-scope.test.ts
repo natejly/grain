@@ -38,6 +38,7 @@ const APPROVAL = {
   setMode: async () => undefined,
   conversationId: "conv-1",
   conversationTitle: "Chat about this document",
+  safeMode: false,
 };
 
 const TURN_CONTROLS = {

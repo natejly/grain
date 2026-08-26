@@ -23,6 +23,7 @@ from ..models import (
     AgentToolCall,
     Conversation,
     ConversationChunk,
+    Membership,
     MemoryItem,
     Message,
     Run,
@@ -30,6 +31,45 @@ from ..models import (
     ToolCall,
     WorkflowRun,
 )
+
+#: The two modes a new thread can be seeded with, spelled here rather than
+#: imported from `agent_loop` — importing the loop to create a row would pull
+#: the whole harness into every creation site, and these two strings are part of
+#: the `approval_mode` column's contract either way. `agent_loop.ApprovalMode`
+#: remains the enum of record; `tests/test_safe_mode.py` pins these against it.
+AGENTIC_MODE = "auto_writes"
+SAFE_MODE = "ask_writes"
+
+
+def default_approval_mode(db: Session, *, workspace_id: str, user_id: str) -> str:
+    """The mode a thread this member is about to create should start in.
+
+    One function because there are six places that make a Conversation — the
+    chat route, the fork route, the subject panel, two cron paths and the
+    workflow executor — and a default that lived in each of them is a default
+    that would drift in five.
+
+    Agentic unless the member asked otherwise: `Membership.safe_mode` off (the
+    default, for everyone who has never touched it) seeds `auto_writes`, on
+    seeds `ask_writes`. Nothing else is read, and nothing reads back — the
+    preference seeds a thread once, at creation, and the per-thread picker is
+    the last word from then on.
+
+    A missing membership row seeds the safe mode, not the agentic one. That is
+    the only branch here where the answer is not the member's preference, so it
+    takes the cautious end: an actor whose membership cannot be found is a
+    situation nobody predicted, and the mode that asks first is the one that
+    survives being wrong about it.
+    """
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.workspace_id == workspace_id,
+            Membership.user_id == user_id,
+        )
+    )
+    if membership is None:
+        return SAFE_MODE
+    return SAFE_MODE if membership.safe_mode else AGENTIC_MODE
 
 
 def resolve_visible(
@@ -162,6 +202,9 @@ def for_subject(
         title=title[:200],
         subject_kind=subject_kind,
         subject_id=subject_id,
+        approval_mode=default_approval_mode(
+            db, workspace_id=workspace_id, user_id=user_id
+        ),
     )
     db.add(conversation)
     db.flush()

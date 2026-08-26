@@ -1727,3 +1727,38 @@ them into `report` would have had a mouse move erase a live draft and a
 keystroke erase the cursor, because `report` replaces a surface's state by
 design (that is how a save retires a draft). Smoothness comes from a CSS
 transition matched to the send rate, not from a higher send rate.
+## Safe mode — agentic default (2026-08-26, worktree bg/safe-mode-default-agentic)
+
+Ask: "why does the llm keep having to ask for permission — let it do everything,
+but if safe mode is on then have it ask." Two halves, both shipped.
+
+- [x] `conversations.approval_mode` default flipped `ask_writes` → `auto_writes`
+      (migration 0064, which also backfills rows still on the old default —
+      correct only in that migration, argued in its docstring).
+- [x] `memberships.safe_mode`: per-member opt-in that seeds `ask_writes` instead.
+      `services/conversations.default_approval_mode` is the single seeding rule;
+      every creation site calls it (chat create, fork, subject panel, both cron
+      paths). It SEEDS and never re-governs — flipping it moves no open thread.
+- [x] Full-stack surface: `PUT /api/me/safe-mode`, `safe_mode` on bootstrap,
+      toggle in the workspace settings menu beside the digest opt-in.
+- [x] `exit_plan_mode` now restores the approver's own default instead of a
+      hardcoded `ask_writes`.
+- [x] Banner made two-toned: the trail still renders whenever writes run
+      unreviewed, but the alarm treatment is reserved for a Safe-mode member.
+      An alarm on every thread is furniture in a week.
+- [x] `describeMode`'s unknown-mode fallback resolves by NAME — reordering the
+      picker had silently made it a bypass.
+
+Deliberately not the member's preference: inbound email threads are pinned to
+`ask_writes` (untrusted body, unattended).
+
+Test-suite consequence, worth knowing before the next default move: ~53 API
+tests were reading the default for something they were not testing. They now
+state their baseline via `conftest.ask_before_writes`. `serve_e2e.py` seeds its
+memberships with `safe_mode = True` for the same reason.
+
+OPEN — overlaps another branch. `worktree-bg+steer-removal-tokens-approvals`
+(pushed, unmerged) ships the same default flip via a `DEFAULT_APPROVAL_MODE`
+env var and no user-facing toggle. Whoever merges second should take the
+Membership.safe_mode surface from here and drop the duplicate default plumbing;
+the two must not both land.

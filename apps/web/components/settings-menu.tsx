@@ -15,9 +15,17 @@ import { SETTINGS_GROUPS, type GroupId } from "./views/navigation";
  * remains really is configuration — Connections and Admin — visited rarely
  * and on purpose.
  *
- * The one preference living directly in the panel is the daily digest: a
- * per-member mail opt-in, so it belongs beside the member's own controls
- * rather than on an admin page that implies it is done to the workspace.
+ * The preferences living directly in the panel are the per-member ones — the
+ * daily digest and Safe mode — because they belong beside the member's own
+ * controls rather than on an admin page that implies they are done to the
+ * workspace.
+ *
+ * Safe mode is here and NOT in the composer on purpose. The composer already
+ * has the approval picker, and that one governs the thread you are looking at;
+ * this one only decides what the NEXT thread starts as. Two controls that both
+ * said "ask before writes" in the same corner of the screen would be read as
+ * one control, and the one that did not change the thread in front of you
+ * would be the one that got blamed.
  */
 export type WorkspaceSettingsMenuProps = {
   activeGroup: GroupId;
@@ -25,6 +33,9 @@ export type WorkspaceSettingsMenuProps = {
   /** The caller's digest opt-in; null until bootstrap lands (controls hidden). */
   digest: DigestPrefs | null;
   onDigestChange: (prefs: DigestPrefs) => void;
+  /** Safe mode: new threads start by asking before they write. */
+  safeMode: boolean;
+  onSafeModeChange: (enabled: boolean) => void;
 };
 
 /** "9" reads as "09:00 UTC" — the mail goes out after the hour, on the tick. */
@@ -37,6 +48,8 @@ export function WorkspaceSettingsMenu({
   open,
   digest,
   onDigestChange,
+  safeMode,
+  onSafeModeChange,
 }: WorkspaceSettingsMenuProps) {
   const inSettings = SETTINGS_GROUPS.some((group) => group.id === activeGroup);
 
@@ -77,6 +90,24 @@ export function WorkspaceSettingsMenu({
               </button>
             );
           })}
+          <p className="disclosure-note">Safe mode</p>
+          <label className="approval-remember">
+            <input
+              type="checkbox"
+              checked={safeMode}
+              onChange={(event) => onSafeModeChange(event.target.checked)}
+            />
+            Ask me before the assistant writes anything
+          </label>
+          {/* Says what the setting DOES rather than what it is, and names the
+              boundary the toggle actually has: it seeds new threads, so a
+              member who flips it looking for the thread on screen to change is
+              told here instead of by the thread not changing. */}
+          <p className="disclosure-hint">
+            {safeMode
+              ? "New threads start in “Ask before writes”. Threads already open keep the mode they are in."
+              : "New threads act on their own and show you what ran. Denied tools stay denied, and anything flagged still asks."}
+          </p>
           {digest && (
             <>
               <p className="disclosure-note">Daily digest</p>

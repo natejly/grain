@@ -12,6 +12,8 @@ import json
 import os
 from types import SimpleNamespace
 
+from conftest import ask_before_writes
+
 from app.database import SessionLocal
 from app.models import AgentToolCall, Conversation, Run, RunEvent, ToolPolicy
 from app.services.agent_loop import (
@@ -54,6 +56,7 @@ def _make_run(client) -> tuple[str, str, str]:
         headers={"Idempotency-Key": "steer-conv-" + os.urandom(6).hex()},
         json={"title": "Steering"},
     ).json()
+    ask_before_writes(client, conversation["id"])
     db = SessionLocal()
     try:
         run = Run(

@@ -5296,6 +5296,17 @@ label,
   text-transform: uppercase;
 }
 
+/* The sentence under a preference in a popover — what the setting does, and
+   where it stops. Sentence case and not uppercase: `.disclosure-note` above is
+   a label for the group, this is prose to be read. */
+.disclosure-hint {
+  margin: 0 8px 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+  max-width: 30ch;
+}
+
 .document-editor {
   display: flex;
   flex-direction: column;
@@ -10023,6 +10034,18 @@ label,
   border-radius: 4px;
   background: var(--clay-muted);
   color: var(--amber);
+}
+
+/* The same banner with the alarm taken out, for the member whose default this
+   is (see BypassIndicator's `tone`). Still bordered and still in the
+   non-scrolling zone — the trail is not being hidden, it is being said at the
+   volume of a status line instead of a warning, so that the warning treatment
+   above still means something when it does appear. */
+.bypass-banner.notice {
+  padding: 7px 12px;
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
 }
 
 .bypass-copy {

@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import utcnow
 from ..models import Agent, Conversation, Cron, Message, Run, new_id
+from . import conversations
 from .audit import record_audit
 from .events import append_event
 from .workflows import schedule
@@ -164,6 +165,13 @@ def _post_message(db: Session, cron: Cron) -> None:
             workspace_id=cron.workspace_id,
             created_by=cron.created_by,
             title=cron.name[:200] or "Automation",
+            # The cron's owner is the member whose preference this reads: an
+            # automation nobody is watching still belongs to whoever scheduled
+            # it. Safe mode parks its writes for that person to answer, which
+            # is slow but is what they asked for; off, it just runs.
+            approval_mode=conversations.default_approval_mode(
+                db, workspace_id=cron.workspace_id, user_id=cron.created_by
+            ),
         )
         db.add(conv)
         db.flush()
@@ -220,6 +228,9 @@ def _start_task_run(db: Session, cron: Cron) -> Optional[str]:
         workspace_id=cron.workspace_id,
         created_by=cron.created_by,
         title=f"Cron: {cron.name}"[:200],
+        approval_mode=conversations.default_approval_mode(
+            db, workspace_id=cron.workspace_id, user_id=cron.created_by
+        ),
     )
     db.add(conv)
     db.flush()

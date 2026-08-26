@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import uvicorn
+from sqlalchemy import select
 
 DATABASE = Path("./data/e2e_workspace.db")
 OBJECTS = Path("./data/e2e_objects")
@@ -108,6 +109,21 @@ try:
             title=E2E_SECOND_CONVERSATION,
         )
     )
+    _db.flush()
+    # Safe mode ON for every membership this harness seeds — both workspaces —
+    # pinned for the same reason `DEV_UNRESTRICTED_AGENT` is pinned off above.
+    # Several specs are ABOUT the approval card: they click Approve and assert
+    # what changed, and the product default since 0064 is agentic, which would
+    # leave them nothing to click.
+    #
+    # Set on the membership rather than through an env override, because that is
+    # the real switch a person has. The specs then run as a member who asked to
+    # be asked — a member the product actually has — instead of in a
+    # harness-only state no user is ever in.
+    #
+    # Last, after both memberships exist, so neither is missed.
+    for _membership in _db.scalars(select(Membership)).all():
+        _membership.safe_mode = True
     _db.commit()
 finally:
     _db.close()

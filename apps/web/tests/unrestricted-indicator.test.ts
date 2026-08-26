@@ -59,6 +59,9 @@ const THREAD_BYPASS = {
   setMode: async () => undefined,
   conversationId: "conv-1",
   conversationTitle: "Widget",
+  // Safe mode on: this module is about the LOUD banner, which is the treatment
+  // a thread running unreviewed gets when its member asked to be asked.
+  safeMode: true,
 };
 
 function view(props: Partial<ChatViewProps> = {}) {

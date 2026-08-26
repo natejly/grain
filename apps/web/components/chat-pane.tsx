@@ -211,6 +211,7 @@ export function ChatPane({
           setMode: thread.setApprovalMode,
           conversationId: conversation.id,
           conversationTitle: conversation.title,
+          safeMode: Boolean(bootstrap?.safe_mode),
         }}
         turnControls={{
           models: bootstrap?.model_provider.selectable_models ?? [],

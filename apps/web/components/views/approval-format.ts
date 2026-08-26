@@ -5,13 +5,18 @@ import type {
 } from "@workspace/api-client";
 
 /**
- * The four approval modes, as a person has to understand them.
+ * The five approval modes, as a person has to understand them.
  *
- * The failure mode this whole surface is designed around is not switching the
- * bypass *on* — it is forgetting it is on. So every string here is written to
- * be read later, by someone who does not remember making the choice: each mode
- * says what will happen the next time the assistant wants to write, not what
- * the setting is called.
+ * Every string here is written to be read later, by someone who does not
+ * remember making the choice: each mode says what will happen the next time the
+ * assistant wants to write, not what the setting is called.
+ *
+ * Ordered loosest-first because the first entry is the default a new thread
+ * arrives in, and a list whose default sits in the middle reads as though the
+ * top one is. `bypass` still marks the two modes that let a write through
+ * unreviewed — that flag decides what the trail SAYS, not how alarmed it is;
+ * `BypassIndicator`'s `tone` is what decides that, and it is calm for a member
+ * whose default this is.
  */
 export type ApprovalModeInfo = {
   mode: ApprovalMode;
@@ -25,6 +30,13 @@ export type ApprovalModeInfo = {
 
 export const APPROVAL_MODES: ApprovalModeInfo[] = [
   {
+    mode: "auto_writes",
+    label: "Act on its own",
+    detail:
+      "The default. Writes go through and show up in the trail. Denied tools stay denied, and a flagged turn still asks.",
+    bypass: true,
+  },
+  {
     mode: "ask_writes",
     label: "Ask before writes",
     detail: "Searches run on their own; anything that changes something waits for you.",
@@ -35,12 +47,6 @@ export const APPROVAL_MODES: ApprovalModeInfo[] = [
     label: "Ask before everything",
     detail: "Every tool waits, searches included.",
     bypass: false,
-  },
-  {
-    mode: "auto_writes",
-    label: "Auto-approve writes",
-    detail: "Writes go through without asking. Denied tools stay denied.",
-    bypass: true,
   },
   {
     mode: "plan",
@@ -67,8 +73,29 @@ export const APPROVAL_MODES: ApprovalModeInfo[] = [
  * the *narrow* answer rather than as whatever string the column happens to
  * hold — an unrecognised value must never render as "no approvals needed".
  */
+/**
+ * The mode's copy, with an unknown value landing on the strict answer.
+ *
+ * The fallback is looked up BY NAME, never `APPROVAL_MODES[0]`. The list is
+ * ordered for the picker, and it was reordered the day the default became
+ * `auto_writes` — with an index fallback, that edit alone would have made every
+ * unrecognised mode render, and answer `isBypass`, as a bypass. A display
+ * default has to be the strict one on purpose, not by position.
+ */
 export function describeMode(mode: string): ApprovalModeInfo {
-  return APPROVAL_MODES.find((item) => item.mode === mode) ?? APPROVAL_MODES[0];
+  const known = APPROVAL_MODES.find((item) => item.mode === mode);
+  if (known) return known;
+  const strict = APPROVAL_MODES.find((item) => item.mode === "ask_writes");
+  // Non-null in practice; the literal keeps this total even if the entry is
+  // ever renamed out from under it, and keeps `bypass` false either way.
+  return (
+    strict ?? {
+      mode: "ask_writes",
+      label: "Ask before writes",
+      detail: "Anything that changes something waits for you.",
+      bypass: false,
+    }
+  );
 }
 
 export function isBypass(mode: string): boolean {

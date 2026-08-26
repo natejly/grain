@@ -112,6 +112,9 @@ def scoped_thread():
             workspace_id=identity.workspace_id,
             created_by=identity.user_id,
             title="Scoped",
+            # The "off" half of this module asserts that the same write PARKS
+            # without the flag, which needs a thread that would park.
+            approval_mode="ask_writes",
             subject_kind=subjects.PROJECT,
             # A subject id that resolves to nothing: this fixture is about the
             # registry and the park, and a real project would only add rows.

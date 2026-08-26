@@ -62,6 +62,8 @@ export type ProjectChatDeps = {
   reloadProject: () => Promise<void>;
   /** `DEV_UNRESTRICTED_AGENT` is on, so the panel wears the warning. */
   unrestricted?: boolean;
+  /** Safe mode is on for this member; only changes how loud the panel is. */
+  safeMode?: boolean;
 };
 
 function directoryOf(path: string): string {
@@ -440,6 +442,7 @@ export function ProjectsView({
           apps={chat.apps}
           openCitation={chat.openCitation}
           unrestricted={chat.unrestricted}
+          safeMode={chat.safeMode}
         />
       )}
     </div>

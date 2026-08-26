@@ -350,6 +350,23 @@ class Membership(Base):
     digest_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True
     )
+    #: Safe mode: whether THIS member's new threads start asking before they
+    #: write. Off by default, which is the product's posture — the assistant
+    #: acts, and the trail says what it did — and on for a member who would
+    #: rather approve each write first.
+    #:
+    #: It seeds `Conversation.approval_mode` at creation and never reads back:
+    #: a running thread keeps whatever mode it is in, so flipping this cannot
+    #: silently re-govern work already under way, and the per-thread picker
+    #: stays the last word (see `services.conversations.default_approval_mode`).
+    #:
+    #: Per membership rather than per workspace because it is a working
+    #: preference, not a policy — one member wanting the approval step is not a
+    #: reason to put every colleague behind it. The workspace-wide lever is
+    #: `OrgToolPolicy`/`ToolPolicy`, whose `deny` this can never soften.
+    safe_mode: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -376,15 +393,28 @@ class Conversation(Base):
         String(36), default="", server_default="", index=True
     )
     #: How much this thread asks before acting: ask_writes | ask_all |
-    #: auto_writes | plan. See `agent_loop.ApprovalMode`.
+    #: auto_writes | plan | guardian. See `agent_loop.ApprovalMode`.
     #:
     #: Per conversation and not per workspace, because the mode is an answer to
-    #: what is being done *right now*. A bypass switched on to get through one
-    #: refactor would otherwise still be on next week, governing chats nobody
-    #: turned it on for — and the whole value of the ask is that it is still
-    #: there when the work changes.
+    #: what is being done *right now*: the thread that needs watching and the
+    #: thread that does not are two threads, and one control that governed both
+    #: would be wrong for one of them all the time.
+    #:
+    #: The default is `auto_writes` — the assistant acts, and the trail says
+    #: what it did. Two things make that a default rather than a bypass. Every
+    #: auto-approved call is still recorded and rendered as one (the banner and
+    #: its "what ran" trail are the point, not decoration), and nothing here can
+    #: soften a policy `deny` or the prompt-injection escalation, which forces
+    #: `ask_all` over any stored mode (`agent_loop.approval_mode_for_run`).
+    #: A member who wants the approval step back turns Safe mode on
+    #: (`Membership.safe_mode`), which seeds `ask_writes` instead; either way
+    #: the per-thread picker overrides whatever was seeded.
+    #:
+    #: Seeded through `services.conversations.default_approval_mode` at every
+    #: creation site, so this column default is the fallback for a row made
+    #: without an actor, not the product decision.
     approval_mode: Mapped[str] = mapped_column(
-        String(24), default="ask_writes", server_default="ask_writes"
+        String(24), default="auto_writes", server_default="auto_writes"
     )
     #: Personal (False) vs shared (True). A personal thread is visible only to
     #: its creator within the workspace; a shared thread is visible to every

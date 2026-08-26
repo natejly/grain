@@ -123,10 +123,71 @@ export type BypassIndicatorProps = {
   /** What the bypass has let through, oldest first. */
   approved: AgentToolCall[];
   stop: () => Promise<void>;
+  /**
+   * How loudly to say it.
+   *
+   * "warning" is the original treatment, and it is for the case this component
+   * was built for: writes running unreviewed in a thread belonging to someone
+   * who asked to be asked. "notice" is the same trail — same list, same "Turn
+   * off" — with the alarm taken out, for a member whose default this simply is.
+   *
+   * The split is not cosmetic. An alarm that is on by default on every thread
+   * stops being read within a week, and then it is not there for the thread
+   * that needed it. Defaults to the warning: a caller that has not thought
+   * about which case it is in should get the louder one.
+   */
+  tone?: "warning" | "notice";
 };
 
-export function BypassIndicator({ conversationTitle, approved, stop }: BypassIndicatorProps) {
+export function BypassIndicator({
+  conversationTitle,
+  approved,
+  stop,
+  tone = "warning",
+}: BypassIndicatorProps) {
   const [open, setOpen] = useState(false);
+  const notice = tone === "notice";
+
+  if (notice) {
+    return (
+      <div className="bypass-banner notice" role="status">
+        <Zap size={14} aria-hidden="true" />
+        <div className="bypass-copy">
+          <span>
+            {approved.length === 0
+              ? "Acting without asking — anything it runs shows up here."
+              : `${approved.length} ${approved.length === 1 ? "call" : "calls"} ran without asking · ${summariseAutoApproved(approved)}`}
+          </span>
+        </div>
+        {approved.length > 0 && (
+          <button
+            type="button"
+            className="ghost-button"
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {open ? "Hide" : "Show"} what ran
+          </button>
+        )}
+        {/* Kept even in the quiet treatment: the whole argument for an agentic
+            default is that stopping it is always one click away, wherever the
+            person happens to be looking when they change their mind. */}
+        <button type="button" className="ghost-button" onClick={() => void stop()}>
+          Ask me first
+        </button>
+        {open && (
+          <ul className="bypass-trail">
+            {approved.map((call) => (
+              <li key={call.id}>
+                <span className="tool-name">{call.name}</span>
+                <span>{call.proposal_preview || call.result_preview}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
 
   return (
     // role="status" and not "alert": this is a standing condition, not an event

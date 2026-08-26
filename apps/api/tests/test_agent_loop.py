@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from conftest import ask_before_writes
 
 from app.database import SessionLocal
 from app.models import AgentToolCall, Run, RunEvent, ToolPolicy
@@ -42,6 +43,7 @@ def _make_run(client) -> str:
         headers={"Idempotency-Key": "agent-loop-conversation-" + identity["user_id"][:4]},
         json={"title": "Agent loop"},
     ).json()
+    ask_before_writes(client, conversation["id"])
     db = SessionLocal()
     try:
         run = Run(

@@ -25,7 +25,13 @@ import os
 from types import SimpleNamespace
 
 import pytest
-from conftest import TEST_BASE_URL, Identity, create_identity, issue_session
+from conftest import (
+    TEST_BASE_URL,
+    Identity,
+    ask_before_writes,
+    create_identity,
+    issue_session,
+)
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
@@ -110,6 +116,7 @@ def _park_agent_call(
     conversation = client.post(
         "/api/conversations", headers=_key(), json={"title": "Personal"}
     ).json()
+    ask_before_writes(client, conversation["id"])
 
     db = SessionLocal()
     try:
