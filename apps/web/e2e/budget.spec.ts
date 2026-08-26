@@ -374,6 +374,10 @@ test("a workflow held by the ceiling does not claim to be waiting for a decision
   await expect(page.locator(".workflow-item")).toHaveCount(0);
 
   await page.reload();
+  // `?view=` survives a reload now, so this comes back on the door the test was
+  // last standing on, not the default one -- and the thread rail only renders
+  // behind Chat (workspace.tsx gates the whole list on activeGroup.id).
+  await openView(page, "Chat");
   const thread = page.getByRole("button", { name: "Delete Workflow: Scripted workflow" });
   page.once("dialog", (dialog) => dialog.accept());
   // The row's actions only become hittable once the row is hovered.

@@ -20,7 +20,9 @@ from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from ..clock import utcnow
 from ..models import Agent, BoardCard, Presence, Run, WorkspaceEvent
@@ -111,7 +113,14 @@ def events_after(
 # Presence
 
 
-def heartbeat_presence(
+#: How many times the upsert re-reads after losing a write race. Two writers
+#: for one (actor, surface) is the shape the client actually produces, so one
+#: retry is the case that matters; the third attempt is slack, not a
+#: prediction about a third writer.
+_PRESENCE_UPSERT_ATTEMPTS = 3
+
+
+def _write_presence(
     db: Session,
     *,
     workspace_id: str,
@@ -119,14 +128,9 @@ def heartbeat_presence(
     actor_kind: str,
     actor_label: str,
     surface: str,
-    state: Optional[Dict[str, Any]] = None,
+    state: Optional[Dict[str, Any]],
 ) -> Presence:
-    """Upsert this actor's position on one surface. Caller commits.
-
-    An actor moving from surface to surface leaves stale rows behind on
-    purpose — they expire by TTL, and deleting them here would make every
-    keystroke a two-statement write for a row the reader already ignores.
-    """
+    """One read-modify-write attempt. Raises on a lost race; see the caller."""
     row = db.scalar(
         select(Presence).where(
             Presence.workspace_id == workspace_id,
@@ -147,6 +151,65 @@ def heartbeat_presence(
     row.updated_at = utcnow()
     db.flush()
     return row
+
+
+def heartbeat_presence(
+    db: Session,
+    *,
+    workspace_id: str,
+    actor_id: str,
+    actor_kind: str,
+    actor_label: str,
+    surface: str,
+    state: Optional[Dict[str, Any]] = None,
+) -> Presence:
+    """Upsert this actor's position on one surface. Caller commits.
+
+    An actor moving from surface to surface leaves stale rows behind on
+    purpose — they expire by TTL, and deleting them here would make every
+    keystroke a two-statement write for a row the reader already ignores.
+
+    Two writers for one (actor, surface) is the NORMAL case here, not a corner
+    worth ignoring, so the read-modify-write is retried instead of assumed to
+    hold. `use-coworking.ts` sends a throttled beat while the pointer clear
+    deliberately bypasses the throttle to go out immediately, and a surface
+    being left sends its `leave` DELETE on the heels of a beat already in
+    flight. Each request runs on its own session, so two of them interleave:
+
+      * both read "no row yet" and both INSERT — the loser violates the
+        (workspace_id, actor_id, surface) unique constraint (IntegrityError);
+      * one reads a row that `leave` then deletes — the UPDATE matches nothing
+        and SQLAlchemy raises StaleDataError.
+
+    Re-reading resolves both: the retry finds the winner's row and updates it,
+    or finds none and inserts. Left unhandled these unwound past CORSMiddleware,
+    which only stamps Access-Control-Allow-Origin on responses it actually
+    sees pass through —
+    so the browser reported a phantom CORS failure on this one endpoint rather
+    than the 500 it actually was.
+
+    The rollback below discards the session's pending work, so a caller must
+    not stack unrelated writes behind a heartbeat: the one caller
+    (`api/coworking.heartbeat`) commits immediately after this returns.
+    """
+    for attempt in range(1, _PRESENCE_UPSERT_ATTEMPTS + 1):
+        try:
+            return _write_presence(
+                db,
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                actor_kind=actor_kind,
+                actor_label=actor_label,
+                surface=surface,
+                state=state,
+            )
+        except (IntegrityError, StaleDataError):
+            # The losing writer's transaction is now poisoned; only a rollback
+            # makes the session usable for the re-read.
+            db.rollback()
+            if attempt == _PRESENCE_UPSERT_ATTEMPTS:
+                raise
+    raise AssertionError("unreachable: the loop returns or re-raises")
 
 
 #: Pointer coordinates ride the heartbeat as a fraction of the surface's own

@@ -270,6 +270,10 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   // The backing run hangs off a conversation, so the approval card had an
   // inbox to land in. It is still a stray thread once the workflow is gone.
   await page.reload();
+  // `?view=` survives a reload now, so this comes back on the door the test was
+  // last standing on, not the default one -- and the thread rail only renders
+  // behind Chat (workspace.tsx gates the whole list on activeGroup.id).
+  await openView(page, "Chat");
   const thread = page.getByRole("button", { name: `Delete ${WORKFLOW_CONVERSATION}` });
   page.once("dialog", (dialog) => dialog.accept());
   // The row's actions only become hittable once the row is hovered.
@@ -346,6 +350,10 @@ test("workflows: a declared input is a form, and a refusal names the field", asy
   await expect(page.locator(".workflow-item")).toHaveCount(0);
 
   await page.reload();
+  // `?view=` survives a reload now, so this comes back on the door the test was
+  // last standing on, not the default one -- and the thread rail only renders
+  // behind Chat (workspace.tsx gates the whole list on activeGroup.id).
+  await openView(page, "Chat");
   const thread = page.getByRole("button", { name: `Delete ${PARAMETERISED_CONVERSATION}` });
   page.once("dialog", (dialog) => dialog.accept());
   // The row's actions only become hittable once the row is hovered.

@@ -20,6 +20,8 @@ import pytest
 from conftest import Identity
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.clock import utcnow
 from app.database import SessionLocal
@@ -416,3 +418,98 @@ def test_sanitize_pointer_leaves_a_pointerless_state_alone() -> None:
     keystroke, every idle re-beat — goes through here."""
     state = {"typing": True, "draft": "x"}
     assert coworking.sanitize_pointer(state) is state
+
+
+# ---------------------------------------------------------------------------
+# The presence upsert under two writers
+#
+# Two heartbeats for one (actor, surface) is the ordinary case, not a corner:
+# `use-coworking.ts` sends a throttled beat while the pointer clear bypasses
+# the throttle to go out immediately, and a surface being left sends `leave`
+# on the heels of a beat already in flight. Each lands on its own session, so
+# they interleave two ways -- both INSERT (the loser breaks the unique
+# constraint) or one UPDATEs a row `leave` has already deleted.
+#
+# Unhandled, either raised straight out of the endpoint and past CORSMiddleware,
+# which only stamps Access-Control-Allow-Origin on responses it sees pass
+# through. The browser then reported "blocked by CORS policy" on this one
+# endpoint and features.spec.ts's `expect(errors).toEqual([])` failed on a
+# phantom CORS error that was really a 500. These pin the retry, not the
+# message, because the retry is what keeps the 500 from happening at all.
+
+
+class _SessionSpy:
+    """Only what the retry touches: a session is otherwise irrelevant here."""
+
+    def __init__(self) -> None:
+        self.rollbacks = 0
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def _raise_then_return(exc: Exception, attempts_before_success: int):
+    calls: list[int] = []
+
+    def fake_write(db: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        if len(calls) <= attempts_before_success:
+            raise exc
+        return "presence-row"
+
+    return fake_write, calls
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        IntegrityError("INSERT INTO presences", {}, Exception("UNIQUE constraint")),
+        StaleDataError("UPDATE statement on table 'presences' expected to update 1 row"),
+    ],
+    ids=["lost-the-insert", "row-deleted-under-the-update"],
+)
+def test_a_lost_presence_write_race_is_retried(monkeypatch: Any, exc: Exception) -> None:
+    """The loser re-reads and succeeds instead of 500ing."""
+    fake_write, calls = _raise_then_return(exc, attempts_before_success=1)
+    monkeypatch.setattr(coworking, "_write_presence", fake_write)
+    db = _SessionSpy()
+
+    row = coworking.heartbeat_presence(
+        db,
+        workspace_id="w1",
+        actor_id="u1",
+        actor_kind="user",
+        actor_label="Ann",
+        surface="document:d1",
+    )
+
+    assert row == "presence-row"
+    # Rolled back once -- the losing transaction is poisoned, and only a
+    # rollback makes the session usable for the re-read that follows.
+    assert calls == [1, 1]
+    assert db.rollbacks == 1
+
+
+def test_a_presence_race_that_never_settles_still_raises(monkeypatch: Any) -> None:
+    """The retry is a bounded concession, not a promise to succeed.
+
+    A permanent IntegrityError is a real defect somewhere else; swallowing it
+    would turn a loud 500 into presence that silently stops updating.
+    """
+    exc = IntegrityError("INSERT INTO presences", {}, Exception("UNIQUE constraint"))
+    fake_write, calls = _raise_then_return(exc, attempts_before_success=99)
+    monkeypatch.setattr(coworking, "_write_presence", fake_write)
+    db = _SessionSpy()
+
+    with pytest.raises(IntegrityError):
+        coworking.heartbeat_presence(
+            db,
+            workspace_id="w1",
+            actor_id="u1",
+            actor_kind="user",
+            actor_label="Ann",
+            surface="document:d1",
+        )
+
+    assert len(calls) == coworking._PRESENCE_UPSERT_ATTEMPTS
+    assert db.rollbacks == coworking._PRESENCE_UPSERT_ATTEMPTS
