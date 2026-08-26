@@ -491,3 +491,92 @@ def test_two_first_heartbeats_race_without_a_500(
         assert rows[0].actor_label == "loser", "the racing beat must still apply"
     finally:
         db.close()
+
+
+def test_a_beat_survives_the_leave_that_deletes_its_row(
+    owner: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the same race: `leave` deletes what the beat is updating.
+
+    The insert race above is not the only way two writers meet here. A closing
+    surface sends DELETE /api/coworking/presence (`drop_presence`), and
+    use-coworking.ts sends it immediately rather than waiting for the beat
+    already in flight. So a beat can read its row, have it deleted underneath,
+    and then UPDATE nothing — which SQLAlchemy raises as StaleDataError, not
+    IntegrityError, and which the insert-side savepoint does not catch.
+
+    That matters because presence is a best-effort courtesy surface: an
+    unhandled raise leaves the endpoint 500ing, and because the exception
+    unwinds past CORSMiddleware (which only stamps its header on responses it
+    sees pass through) the browser reports it as a phantom CORS failure rather
+    than the server error it is. features.spec.ts asserts a clean console and
+    was failing on exactly that shape.
+
+    The interleaving is driven, not mocked: the row really is deleted, on a
+    separate session, in the window between this beat's read and its flush.
+    `utcnow` is the hook only because `_apply` calls it there — it is a clock,
+    so borrowing it costs the assertion nothing.
+    """
+    surface = "document:leave-probe"
+    db = SessionLocal()
+    try:
+        workspace_id = db.scalar(select(Membership.workspace_id))
+        assert workspace_id
+
+        def beat(label: str) -> Any:
+            return coworking.heartbeat_presence(
+                db,
+                workspace_id=workspace_id,
+                actor_id="leaver",
+                actor_kind="user",
+                actor_label=label,
+                surface=surface,
+                state={"typing": True},
+            )
+
+        beat("before")
+        db.commit()
+
+        # Delete the row from a DIFFERENT session at the moment this beat has
+        # already read it — the real ordering `leave` produces.
+        real_utcnow = coworking.utcnow
+        fired = {"count": 0}
+
+        def utcnow_that_leaves() -> Any:
+            if fired["count"] == 0:
+                fired["count"] = 1
+                other = SessionLocal()
+                try:
+                    for row in other.scalars(
+                        select(Presence).where(
+                            Presence.workspace_id == workspace_id,
+                            Presence.actor_id == "leaver",
+                            Presence.surface == surface,
+                        )
+                    ):
+                        other.delete(row)
+                    other.commit()
+                finally:
+                    other.close()
+            return real_utcnow()
+
+        monkeypatch.setattr(coworking, "utcnow", utcnow_that_leaves)
+        # Must not raise: before the fix this was StaleDataError out of db.flush().
+        beat("after")
+        db.commit()
+        monkeypatch.undo()
+
+        assert fired["count"] == 1, "the interleaved delete never happened"
+        rows = list(
+            db.scalars(
+                select(Presence).where(
+                    Presence.workspace_id == workspace_id,
+                    Presence.actor_id == "leaver",
+                    Presence.surface == surface,
+                )
+            )
+        )
+        assert len(rows) == 1, "the beat must re-create exactly one row"
+        assert rows[0].actor_label == "after", "the surviving beat must be applied"
+    finally:
+        db.close()

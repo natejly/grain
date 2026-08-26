@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from ..clock import utcnow
 from ..models import Agent, BoardCard, Presence, Run, WorkspaceEvent
@@ -146,9 +147,20 @@ def heartbeat_presence(
 
     row = _find()
     if row is not None:
-        _apply(row)
-        db.flush()
-        return row
+        try:
+            with db.begin_nested():
+                _apply(row)
+                db.flush()
+            return row
+        except StaleDataError:
+            # The row CAN go while this beat is in flight: `leave`
+            # (DELETE /api/coworking/presence -> drop_presence) deletes it, and
+            # use-coworking.ts sends that immediately after a beat rather than
+            # waiting for one. The UPDATE then matches nothing and SQLAlchemy
+            # raises here. The savepoint has already undone it, so drop the dead
+            # identity and fall through to the insert below, which re-creates the
+            # row this beat is reporting.
+            db.expunge(row)
 
     # Check-then-insert, and this one is HOT: every client heartbeats this
     # surface on a timer, so two requests racing the first beat is the common
@@ -171,10 +183,12 @@ def heartbeat_presence(
     except IntegrityError:
         row = _find()
         if row is None:
-            # Nothing else can delete a presence row — they expire by TTL read,
-            # never by DELETE — so losing the race and then not finding the
-            # winner means something outside this contract happened. Raise
-            # rather than invent a recovery for it.
+            # Losing the insert and then not finding the winner means a `leave`
+            # deleted it in the window between the two — a real but very narrow
+            # interleaving (drop_presence DOES delete these rows; they are not
+            # TTL-only). Raise rather than loop: a beat for a surface the actor
+            # has just left has nothing left to report, and inventing a recovery
+            # here would race the same DELETE again.
             raise
         _apply(row)
     db.flush()
