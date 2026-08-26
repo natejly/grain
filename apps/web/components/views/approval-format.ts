@@ -34,9 +34,8 @@ export const APPROVAL_MODES: ApprovalModeInfo[] = [
   },
   {
     mode: "auto_writes",
-    label: "Allow all tool calls",
-    detail:
-      "The default. Every tool runs without stopping to ask. Denied tools stay denied.",
+    label: "Auto-approve writes",
+    detail: "Writes go through without asking. Denied tools stay denied.",
     bypass: true,
   },
   {
@@ -58,18 +57,6 @@ export const APPROVAL_MODES: ApprovalModeInfo[] = [
 ];
 
 /**
- * The unknown-mode fallback, looked up BY NAME rather than taken as
- * `APPROVAL_MODES[0]`.
- *
- * Position is not a safety property. Reordering that list for the picker is a
- * presentation decision, and it must never be able to turn this fallback into a
- * bypass — naming the entry keeps the strict answer strict wherever it sits.
- */
-const STRICT_MODE: ApprovalModeInfo = APPROVAL_MODES.find(
-  (item) => item.mode === "ask_writes",
-)!;
-
-/**
  * The mode's description, falling back to the strict one.
  *
  * A conversation stored with a mode this build has since dropped must read as
@@ -77,7 +64,7 @@ const STRICT_MODE: ApprovalModeInfo = APPROVAL_MODES.find(
  * hold — an unrecognised value must never render as "no approvals needed".
  */
 export function describeMode(mode: string): ApprovalModeInfo {
-  return APPROVAL_MODES.find((item) => item.mode === mode) ?? STRICT_MODE;
+  return APPROVAL_MODES.find((item) => item.mode === mode) ?? APPROVAL_MODES[0];
 }
 
 export function isBypass(mode: string): boolean {

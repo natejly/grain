@@ -1481,26 +1481,13 @@ export function ChatView({
           />
         ) : (
           approval &&
-          bypassed &&
-          (() => {
-            /* `auto_writes` is the DEFAULT now, so a standing banner on it would
-               sit on every thread in the product — and a warning that is always
-               there is one nobody reads, which is the exact failure this banner
-               was built to avoid. On the default it waits until it has something
-               to report and renders as a trail of what actually ran unreviewed.
-               The modes a person had to opt INTO (guardian, and the dev bypass
-               above) keep the unconditional treatment: those are still the
-               surprising states, and there the standing reminder is the point. */
-            const approved = autoApprovedCalls(agentCalls, approval.conversationId);
-            if (approval.mode === "auto_writes" && approved.length === 0) return null;
-            return (
-              <BypassIndicator
-                conversationTitle={approval.conversationTitle}
-                approved={approved}
-                stop={() => approval.setMode("ask_writes")}
-              />
-            );
-          })()
+          bypassed && (
+            <BypassIndicator
+              conversationTitle={approval.conversationTitle}
+              approved={autoApprovedCalls(agentCalls, approval.conversationId)}
+              stop={() => approval.setMode("ask_writes")}
+            />
+          )
         )}
         <div className="composer-shell">
           {pickerOpen && (

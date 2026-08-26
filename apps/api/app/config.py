@@ -68,25 +68,6 @@ class Settings(BaseSettings):
     max_tool_response_bytes: int = 256 * 1024
     model_provider: Literal["openai", "anthropic", "scripted"] = "openai"
 
-    # --- Approvals ---------------------------------------------------------
-    # The approval mode a NEW conversation starts in. `auto_writes` - tool calls
-    # run without stopping for a per-call approval - is the product default: an
-    # agent that parks on every write is unusable for the work it exists to do,
-    # and a prompt answered reflexively is not review. The ask is a mode you turn
-    # ON, per thread, from the composer's approval picker.
-    #
-    # A setting and not a literal in the model because "how much does this
-    # deployment trust its agent" is a deployment's answer - and because the test
-    # suites need the strict baseline to test parking at all (tests/conftest.py
-    # and scripts/serve_e2e.py pin it, for the same reason they pin
-    # DEV_UNRESTRICTED_AGENT). Narrowed to the three modes that make sense as a
-    # starting point: `plan` and `guardian` are opted into for a piece of work,
-    # not states to wake up in.
-    #
-    # Governs new rows only. An existing thread keeps the mode it was stored with.
-    default_approval_mode: Literal["auto_writes", "ask_writes", "ask_all"] = (
-        "auto_writes"
-    )
     # Path to a JSON script for MODEL_PROVIDER=scripted. See services/scripted_model.py.
     scripted_model_script: Optional[Path] = None
     openai_api_key: Optional[SecretStr] = None
