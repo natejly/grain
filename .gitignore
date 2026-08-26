@@ -19,7 +19,12 @@ node_modules/
 # Regenerated from node_modules by apps/web/scripts/sync-sandbox-assets.mjs.
 apps/web/public/sandbox/
 .next/
-.next-e2e/
+# Every Next dist dir, not a list of the ones we happened to think of. Runs set
+# NEXT_DIST_DIR to keep out of each other's way (.next-e2e, .next-measure,
+# .next-review, …), and enumerating them meant a new one was untracked-by-luck:
+# a blanket `git add -A` during one such run committed 212 build artifacts.
+.next-*/
+apps/web/.next-*/
 dist/
 coverage/
 playwright-report/
