@@ -674,17 +674,6 @@ class SkillImportRequest(BaseModel):
     markdown: str = Field(min_length=1, max_length=30000)
 
 
-class SteerRequest(BaseModel):
-    """A mid-turn message for a run already in flight (`POST /runs/{id}/steer`).
-
-    Not a new turn: the text is appended to the running turn's transcript at the
-    head of its next iteration, so it shapes the very next model step. Runs that
-    are parked or finished refuse it — the composer is the right channel there.
-    """
-
-    content: str = Field(min_length=1, max_length=4000)
-
-
 class RunOut(ApiModel):
     id: str
     conversation_id: str

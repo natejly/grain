@@ -1480,7 +1480,7 @@ def _delegate_parallel_batch(
             run,
             kind="tool_output",
             text="\n\n".join(
-                [result.content or "", *(item.excerpts for item in result.evidence)]
+                [result.content or "", *(item.excerpt for item in result.evidence)]
             ),
             settings=settings,
         )
@@ -1494,6 +1494,11 @@ def _delegate_parallel_batch(
         state.evidence.extend(result.evidence)
     del state.pending_calls[: len(batch)]
     return True
+
+
+#: The event the steer endpoint writes and `_absorb_steering` reads. One name,
+#: defined beside the reader, imported by the writer and the tests.
+STEER_REQUESTED = "run.steer"
 
 
 def _steering_pending(db: Session, run: Run, state: LoopState) -> bool:
@@ -1538,7 +1543,9 @@ def _absorb_steering(db: Session, run: Run, state: LoopState) -> int:
         except ValueError:
             content = ""
         if content.strip():
-            state.input_items.append({"role": "user", "content": content})
+            state.input_items.append(
+                {"role": "user", "content": f"[The user adds, mid-task]: {content}"}
+            )
             absorbed += 1
         state.steered_sequence = event.sequence
     return absorbed

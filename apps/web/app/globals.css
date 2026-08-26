@@ -762,12 +762,13 @@ label,
 .thread {
   width: 100%;
   height: 34px;
-  display: flex;
-  /* Flex, not a fixed-column grid: the trailing actions vary per row (rename,
-     share and comments ride only the open thread, split and delete every row),
-     and a grid with fewer columns than children wrapped the overflow into a
-     phantom second row — Delete rendered over the next row's timestamp and
-     stopped being clickable. Flex keeps every action on the one 34px line. */
+  display: grid;
+  /* One column per trailing action (rename, share, split, delete) beside a
+     shrinkable title track. A grid with fewer columns than children wraps the
+     overflow into a phantom second row — Delete rendered over the next row's
+     timestamp and stopped being clickable. The test in thread-rail-css.test.ts
+     pins the column count to the action count. */
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;

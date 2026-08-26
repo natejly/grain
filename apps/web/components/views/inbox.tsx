@@ -675,6 +675,9 @@ export function InboxView({
                     : undefined
                 }
                 onDecided={refreshFeed}
+                selfId={identityId}
+                members={members}
+                assign={assignApproval}
                 snoozedUntil={snoozes[row.id]}
                 onUnsnooze={() => persistSnoozes(removeSnooze(snoozes, row.id))}
               />

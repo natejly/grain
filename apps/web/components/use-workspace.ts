@@ -630,7 +630,7 @@ export function useWorkspace() {
         api.listSandboxSecrets(),
       ]);
       setBootstrap(boot);
-      setDigest(boot.digest);
+      setDigest(boot.digest ?? null);
       setConversations((current) => {
         const listed = new Set(chats.map((item) => item.id));
         const createdDuringLoad = current.filter(

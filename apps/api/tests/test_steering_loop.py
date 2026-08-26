@@ -1,8 +1,8 @@
 """Loop-level coverage for mid-turn steering absorption.
 
-`POST /api/runs/{id}/steer` appends `steer.requested` events; `_absorb_steering`
+`POST /api/runs/{id}/steer` appends `run.steer` events; `_absorb_steering`
 folds them into the transcript at the head of each iteration, and the cursor on
-`LoopState.last_steer_sequence` guarantees a park/resume neither replays nor
+`LoopState.steered_sequence` guarantees a park/resume neither replays nor
 drops one.
 """
 
@@ -243,7 +243,7 @@ def test_blank_steer_content_is_skipped_but_still_advances_the_cursor(client):
         state = LoopState()
         _absorb_steering(db, run, state)
         assert state.input_items == []
-        assert state.last_steer_sequence == blank_sequence
+        assert state.steered_sequence == blank_sequence
 
         # A later, real steer still lands — the blank one consumed nothing but
         # its own sequence number.
@@ -251,7 +251,7 @@ def test_blank_steer_content_is_skipped_but_still_advances_the_cursor(client):
         _absorb_steering(db, run, state)
         assert len(_steer_items(state.input_items)) == 1
         assert "Now the real request" in state.input_items[0]["content"]
-        assert state.last_steer_sequence == real_sequence
+        assert state.steered_sequence == real_sequence
 
         # Absorbing again re-injects nothing: the cursor already passed it.
         _absorb_steering(db, run, state)

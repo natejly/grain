@@ -1,5 +1,5 @@
 import type {
-  ApiTokenRow,
+  ApiToken,
   WebhookDelivery,
   WebhookEvent,
 } from "@workspace/api-client";
@@ -30,7 +30,7 @@ export function eventLabel(event: string): string {
 export type TokenState = "active" | "revoked";
 
 export function tokenState(
-  token: Pick<ApiTokenRow, "revoked_at">,
+  token: Pick<ApiToken, "revoked_at">,
 ): TokenState {
   return token.revoked_at ? "revoked" : "active";
 }
@@ -40,7 +40,7 @@ export function tokenState(
  * loud: a stale credential nobody calls with is the one worth revoking.
  */
 export function tokenUseLabel(
-  token: Pick<ApiTokenRow, "last_used_at">,
+  token: Pick<ApiToken, "last_used_at">,
 ): string {
   if (!token.last_used_at) return "Never used";
   return `Last used ${new Date(token.last_used_at).toLocaleDateString()}`;

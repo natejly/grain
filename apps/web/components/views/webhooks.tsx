@@ -1,7 +1,7 @@
 "use client";
 
 import type {
-  ApiTokenRow,
+  ApiToken,
   InboundAddressRow,
   WebhookDelivery,
   WebhookEndpoint,
@@ -36,7 +36,7 @@ import { describeError } from "./shared";
  * echoed, so a stored one is only ever the `secret stored` pill.
  */
 export function WebhooksView({ setError }: { setError: (message: string) => void }) {
-  const [tokens, setTokens] = useState<ApiTokenRow[]>([]);
+  const [tokens, setTokens] = useState<ApiToken[]>([]);
   const [addresses, setAddresses] = useState<InboundAddressRow[]>([]);
   const [endpoints, setEndpoints] = useState<WebhookEndpoint[]>([]);
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
@@ -125,8 +125,8 @@ function TokensSection({
   setTokens,
   setError,
 }: {
-  tokens: ApiTokenRow[];
-  setTokens: (update: (rows: ApiTokenRow[]) => ApiTokenRow[]) => void;
+  tokens: ApiToken[];
+  setTokens: (update: (rows: ApiToken[]) => ApiToken[]) => void;
   setError: (message: string) => void;
 }) {
   const [name, setName] = useState("");
@@ -153,7 +153,7 @@ function TokensSection({
     }
   }
 
-  async function revoke(token: ApiTokenRow) {
+  async function revoke(token: ApiToken) {
     try {
       await api.revokeApiToken(token.id);
       const stamp = new Date().toISOString();

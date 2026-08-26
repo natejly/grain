@@ -128,7 +128,7 @@ export type Bootstrap = {
   /** The prompt-injection screen's posture, for a status indicator. */
   screen: ScreenStatus;
   /** The caller's daily "items waiting on me" mail opt-in. */
-  digest: DigestPrefs;
+  digest?: DigestPrefs;
   /**
    * The development agent bypass is on: every tool available, nothing parked.
    * The server refuses to boot with this outside development, so it is false
@@ -472,7 +472,7 @@ export type AgentToolCall = {
   approved_by_mode: string;
   /** The member this approval is routed to, "" for anyone. Routing only —
    * the decision machinery and its attribution are untouched. */
-  assigned_to: string;
+  assigned_to?: string;
   created_at: string;
 };
 
@@ -1474,30 +1474,6 @@ export type DashboardSubscriptionCreateInput = {
   schedule_timezone?: string;
   /** Omit (or "") to subscribe yourself; naming another member is an owner's move. */
   recipient_user_id?: string;
-};
-
-/**
- * A workspace API token — the bearer credential for the machine hooks
- * (`/api/hooks/...`). No secret appears here in any form: the server stores
- * only a hash, and the raw value exists in exactly one response —
- * `ApiTokenMinted`, at mint time.
- */
-export type ApiTokenRow = {
-  id: string;
-  name: string;
-  created_at: string;
-  last_used_at: string | null;
-  revoked_at: string | null;
-};
-
-/**
- * The 201 body, and the only time the raw secret is ever available. Show it,
- * let the person copy it, do not persist it; an idempotent replay answers
- * with `secret` blank because the raw value cannot be re-derived from its
- * hash.
- */
-export type ApiTokenMinted = ApiTokenRow & {
-  secret: string;
 };
 
 /** The events an outbound webhook endpoint may subscribe to. */
@@ -2972,8 +2948,6 @@ export class WorkspaceApi {
       { method: "POST", body: JSON.stringify({ user_id: userId }) },
       true,
     );
-      true,
-    );
   }
 
   // --- Agents (authored system prompts + provisioned tools) ---
@@ -3843,36 +3817,6 @@ export class WorkspaceApi {
   deleteDashboardSubscription(subscriptionId: string): Promise<void> {
     return this.request(
       `/api/dashboard-subscriptions/${subscriptionId}`,
-      { method: "DELETE" },
-      true,
-    );
-  }
-
-  // --- API tokens -----------------------------------------------------------
-  // The machine door's credentials. Owner-gated end to end, like the spend
-  // ceiling: standing machine access to the workspace is an owner decision.
-
-  /** Every token the workspace has minted, live and revoked. Never a secret. */
-  listApiTokens(): Promise<ApiTokenRow[]> {
-    return this.request("/api/api-tokens");
-  }
-
-  /**
-   * Mint a bearer token. The response is the only place the raw secret ever
-   * appears — see `ApiTokenMinted`.
-   */
-  createApiToken(name: string): Promise<ApiTokenMinted> {
-    return this.request(
-      "/api/api-tokens",
-      { method: "POST", body: JSON.stringify({ name }) },
-      true,
-    );
-  }
-
-  /** Stop a token working, now. Revocation is a stamp, not a delete. */
-  revokeApiToken(tokenId: string): Promise<void> {
-    return this.request(
-      `/api/api-tokens/${tokenId}`,
       { method: "DELETE" },
       true,
     );

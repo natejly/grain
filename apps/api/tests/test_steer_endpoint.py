@@ -3,7 +3,7 @@
 The loop-side half — how `_absorb_steering` folds the event into the transcript
 — belongs to the agent-loop tests. These prove the route's contract: only an
 in-flight run accepts a steer, and an accepted one leaves exactly two traces —
-a `steer.requested` run event for the loop to poll, and a user Message carrying
+a `run.steer` run event for the loop to poll, and a user Message carrying
 the run's own id — the same shape as the turn's prompt message, so a queued
 start or a lease-recovery re-run (which excludes the current run's messages
 from its transcript) cannot meet the steer twice.
@@ -59,7 +59,7 @@ def _purge(client, conversation_id: str) -> None:
 def _steer_events(db, run_id: str) -> list[RunEvent]:
     return (
         db.query(RunEvent)
-        .filter(RunEvent.run_id == run_id, RunEvent.event_type == "steer.requested")
+        .filter(RunEvent.run_id == run_id, RunEvent.event_type == "run.steer")
         .all()
     )
 
@@ -72,8 +72,8 @@ def test_steering_a_running_run_records_the_event_and_a_user_message(client):
             headers=_headers(),
             json={"content": "Focus on the Q3 numbers instead."},
         )
-        assert response.status_code == 200
-        assert response.json()["id"] == run_id
+        assert response.status_code == 202
+        assert response.json()["message"]["run_id"] == run_id
 
         db = SessionLocal()
         try:
@@ -112,7 +112,7 @@ def test_steering_a_completed_run_is_refused_with_a_409(client):
             json={"content": "Too late for this."},
         )
         assert response.status_code == 409
-        assert response.json()["detail"] == "Run is not in flight; send a message instead"
+        assert response.json()["detail"] == "This run has finished — send the note as a new message"
         db = SessionLocal()
         try:
             assert _steer_events(db, run_id) == []
@@ -157,14 +157,14 @@ def test_a_replayed_steer_writes_one_event_and_one_message(client):
             headers=headers,
             json={"content": "Check the appendix."},
         )
-        assert first.status_code == 200
+        assert first.status_code == 202
         replay = client.post(
             f"/api/runs/{run_id}/steer",
             headers=headers,
             json={"content": "Check the appendix."},
         )
-        assert replay.status_code == 200
-        assert replay.json()["id"] == run_id
+        assert replay.status_code == 202
+        assert replay.json()["message"]["run_id"] == run_id
 
         db = SessionLocal()
         try:

@@ -2431,6 +2431,7 @@ ROUTE_CASES: List[RouteCase] = [
         body={"entries": [{"kind": "conversation", "target_id": "", "ordinal": 0}]},
         body_ids={"entries.0.target_id": "conversation"},
         note="reorders an entry the caller never favorited",
+    ),
     # -- share links --------------------------------------------------------
     RouteCase("GET", "/api/share-links", SCOPED),
     RouteCase(

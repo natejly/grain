@@ -155,8 +155,8 @@ def test_absorption_folds_notes_once_in_order_and_survives_a_resume(client):
         state = LoopState(input_items=[{"role": "user", "content": "prompt"}])
         _absorb_steering(db, run, state)
         assert [item["content"] for item in state.input_items[1:]] == [
-            "First note.",
-            "Second note.",
+            "[The user adds, mid-task]: First note.",
+            "[The user adds, mid-task]: Second note.",
         ]
         cursor = state.steered_sequence
         # Idempotent: the cursor, not the query, decides what is new.
@@ -179,7 +179,7 @@ def test_absorption_folds_notes_once_in_order_and_survives_a_resume(client):
         )
         db.commit()
         _absorb_steering(db, run, revived)
-        assert revived.input_items[-1]["content"] == "Sent while parked."
+        assert revived.input_items[-1]["content"] == "[The user adds, mid-task]: Sent while parked."
     finally:
         db.close()
 
@@ -213,7 +213,7 @@ def test_a_note_reaches_the_very_next_model_call(client):
     assert any(
         isinstance(item, dict)
         and item.get("role") == "user"
-        and item.get("content") == "Keep it to one sentence."
+        and item.get("content") == "[The user adds, mid-task]: Keep it to one sentence."
         for item in seen[0]
     )
 
