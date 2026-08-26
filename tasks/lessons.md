@@ -561,3 +561,26 @@
   means adding its two-tenant case in the same commit, and a bulk-read tool
   (one call = the whole map) needs it most, precisely because the walk-tool
   cases next to it already existed and made the gap easy to miss.
+- "Deployed" is not "reachable": verify the URL a user would type, not the one
+  the tool prints. I reported grain.natejly.com live because `vercel deploy
+  --prod` printed "Aliased https://grain.natejly.com" and a curl of
+  `grain-web-ten.vercel.app` returned 200 — but the apex zone had no DNS record
+  for `grain` at all, so the real hostname was NXDOMAIN for the whole session
+  and the user hit a dead site twice while I described it as working. A Vercel
+  domain can be attached AND verified in the project API and still not resolve;
+  in a Vercel-managed zone the subdomain needs its own `CNAME -> cname.vercel-
+  dns.com`. Curl the customer-facing hostname before saying it is up, and when
+  the user says "it isn't working", re-probe rather than re-explaining the
+  wiring — the wiring was in fact correct, and the missing record was one dig
+  away the whole time.
+- A schema constraint that only one engine enforces is a production-only bug
+  waiting for the first real deploy. Alembic hardcodes
+  `alembic_version.version_num` as VARCHAR(32); three revision ids in this tree
+  are longer (up to 42 chars). SQLite ignores VARCHAR lengths, so 63 migrations
+  passed locally and in CI forever, and the chain died at 0013 -> 0014 on RDS
+  with StringDataRightTruncation. Fix in `alembic/env.py` by widening (or
+  pre-creating) the version table before `run_migrations()` — renaming applied
+  revisions would break every database that already recorded them. General
+  rule: when dev is SQLite and prod is PostgreSQL, prove the migration chain
+  against a real postgres container before calling a deploy done; one local run
+  found it in 90 seconds after three ~10-minute ECS round-trips found it once.

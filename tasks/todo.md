@@ -1018,4 +1018,46 @@ Account 518060119468, us-east-1, tag 2026-08-25-462f03c. Per docs/DEPLOY-AWS.md.
 - [ ] Migration task (grain-migrate) exit 0
 - [x] Vercel: grain.natejly.com live on grain-web, NEXT_PUBLIC_API_URL inlined at build
       (CLI 46 was too old for deploy endpoint; upgraded to 59.5.0)
-- [ ] Health check https://api.grain.natejly.com/health + login smoke
+- [x] Health check + full-stack handshake (see "Bugs the first deploy found")
+
+### Bugs the first real deploy found (all fixed on this branch)
+
+1. `alembic_version` is VARCHAR(32) but three revision ids are longer (up to 42
+   chars). SQLite ignores VARCHAR lengths, PostgreSQL does not — 63 migrations
+   passed locally forever and died at 0013 -> 0014 on RDS. `alembic/env.py` now
+   widens/pre-creates the version table to VARCHAR(128) before running
+   migrations. Verified against a real postgres:16 container: 63 revisions, 84
+   tables, exit 0.
+2. ECS agent IAM: RegisterContainerInstance and SubmitTaskStateChange arrive
+   without the `ecs:cluster` condition key, so conditioning on it denies. The
+   agent crash-looped, then tasks hung PENDING. Pinned by resource ARN instead.
+3. Boot deadlock: user_data runs under cloud-final.service and ecs.service is
+   ordered After=cloud-final, so a synchronous `systemctl restart ecs`
+   deadlocked the first boot. Now `--no-block`.
+4. `grain.natejly.com` and `uat.grain.natejly.com` were attached and verified in
+   the Vercel project but had no DNS record in the Vercel-managed zone — the
+   hostnames were NXDOMAIN. Each needs its own CNAME -> cname.vercel-dns.com.
+5. `EMAIL_SENDER=console` is refused outside development, and
+   `extra_environment` was not merged into the migrate task, so the migration
+   could not construct Settings even after SMTP was configured.
+
+### Environments
+
+- prod: https://grain.natejly.com + https://api.grain.natejly.com (workspace
+  `default`, cluster grain-cluster)
+- UAT: https://uat.grain.natejly.com + https://api.uat.grain.natejly.com
+  (workspace `uat`, `-var-file=uat.tfvars`, cluster grain-uat-cluster)
+- QA: ci.yml gates on every PR + Vercel preview deployments per branch
+- CI/CD: deploy-uat.yml auto-deploys main; deploy-prod.yml is
+  workflow_dispatch gated by the `production` environment reviewer and
+  fast-forwards `release`, which is Vercel's production branch
+
+### Open follow-ups
+
+- [ ] Root AWS access keys are in use — create an IAM user and retire them
+- [ ] SES identity natejly@gmail.com is unverified and the account is in the
+      SES sandbox; mail will not deliver until both are resolved
+- [ ] SMTP_PASSWORD sits in the task definition (readable via
+      ecs:DescribeTaskDefinition) — move it into Secrets Manager
+- [ ] Keep api_image_tag in tfvars in sync with what CI last deployed, or the
+      next local `tofu apply` rolls the service back
