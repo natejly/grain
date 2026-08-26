@@ -272,6 +272,8 @@ test("workflows: compile a sentence, review the graph, run it, and answer the pa
   await page.reload();
   const thread = page.getByRole("button", { name: `Delete ${WORKFLOW_CONVERSATION}` });
   page.once("dialog", (dialog) => dialog.accept());
+  // The row's actions only become hittable once the row is hovered.
+  await page.locator(".thread").filter({ hasText: WORKFLOW_CONVERSATION }).first().hover();
   await thread.click();
   await expect(thread).toHaveCount(0);
 
@@ -346,6 +348,8 @@ test("workflows: a declared input is a form, and a refusal names the field", asy
   await page.reload();
   const thread = page.getByRole("button", { name: `Delete ${PARAMETERISED_CONVERSATION}` });
   page.once("dialog", (dialog) => dialog.accept());
+  // The row's actions only become hittable once the row is hovered.
+  await page.locator(".thread").filter({ hasText: PARAMETERISED_CONVERSATION }).first().hover();
   await thread.click();
   await expect(thread).toHaveCount(0);
 

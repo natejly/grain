@@ -837,8 +837,23 @@ label,
    any other row. It fades in on hover or keyboard focus, carrying the row's own
    background so the title tail is masked only while you are actually pointing
    at the row; at rest every row — open one included — reads as title and time.
-   Kept interactive at all times rather than collapsed to nothing, so a click
-   never has to wait for a transition and the buttons stay hit-testable. */
+
+   `pointer-events` tracks `opacity` in every rule below, and that pairing is
+   deliberate: `opacity: 0` alone leaves an element fully hit-testable, so at
+   rest an invisible cluster still swallowed every click aimed at the row
+   underneath it. Unhittable at rest, a click with no hover in play reaches
+   `.thread-open` instead and opens the thread, which is what clicking a
+   conversation row should do.
+   This is belt to the braces of the in-flow rule below, which is what actually
+   fixes the clicks: a real pointer must cross the row to click it, and that
+   hover puts the cluster back in flow before the click lands. What `none` at
+   rest covers is a click with no pointer movement before it — the rail PREPENDS
+   threads, so a row can arrive under an already-stationary cursor. Chromium was
+   measured to re-run `:hover` on that layout change, so there the icons do
+   appear first; engines that do not would otherwise fire an unseen Delete.
+   Hover targets the parent `.thread`, never the cluster, so the parent raises
+   opacity and pointer-events together and the first click after a hover is
+   live — verified, not assumed. */
 .thread-actions {
   position: absolute;
   top: 0;
@@ -851,17 +866,42 @@ label,
   padding-left: 20px;
   background: linear-gradient(to right, transparent, var(--surface) 20px);
   opacity: 0;
+  pointer-events: none;
 }
 
+/* Revealed, the cluster goes back INTO the flow, and that is the other half of
+   the cure. Out of flow it is 154px of overlay across a 227px row — it covers
+   the row's midpoint, so `.thread-open` (the full-width title button, and the
+   row's whole purpose) could not be clicked at its centre once the row was
+   hovered, which every real click requires. Three e2e specs timed out there,
+   Playwright naming `.thread-rename` as the interceptor mid-click; a person met
+   the same defect as an icon materialising under a cursor aimed at title text
+   and firing Rename or Delete instead of opening the thread.
+   In flow the row's own grid gives the cluster its columns and shrinks the
+   title track beside it, so the two never overlap and both stay clickable. Out
+   of flow AT REST is what still buys the title the full row width, which is the
+   property this cluster exists for; the title only gives that width back while
+   you are actually on the row. */
 .thread:hover .thread-actions,
 .thread:focus-within .thread-actions {
+  position: static;
+  padding-left: 0;
+  background: none;
   opacity: 1;
+  pointer-events: auto;
 }
 
-/* Nothing hovers on a touch screen, so there the actions simply stay up. */
+/* Nothing hovers on a touch screen, so there the actions simply stay up — and
+   must stay clickable, or every action would be dead on touch. Permanently up
+   means permanently in flow too: overlaying the title with no hover to end it
+   would put a tap on the title's middle onto an icon forever. */
 @media (hover: none) {
   .thread-actions {
     opacity: 1;
+    pointer-events: auto;
+    position: static;
+    padding-left: 0;
+    background: none;
   }
 }
 
