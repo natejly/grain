@@ -47,4 +47,19 @@ describe("the claim affordance reaches both card surfaces", () => {
     // focusable and permanently invisible to a mouse.
     expect(css).toMatch(/\.kanban-card:hover \.todo-claim\.free/);
   });
+
+  it("keeps the keyboard reveal unscoped", () => {
+    // Load-bearing by accident, and one tidy-up away from an a11y bug that
+    // does not currently exist: `.todo-claim.free:focus-visible` has no
+    // ancestor, so it reveals a free claim on EVERY surface the component
+    // mounts on. Scoping it under `.todo-item` for symmetry with the hover
+    // half beside it would make the Claim button reachable by Tab and
+    // invisible once reached, everywhere that is not a checklist.
+    //
+    // Asserted as "appears with no ancestor" rather than by matching the
+    // whole rule, so reformatting the stylesheet cannot fail this while
+    // re-scoping it — the actual thing being protected — still does.
+    expect(css).toMatch(/(^|[,{}\s])\.todo-claim\.free:focus-visible/m);
+    expect(css).not.toMatch(/\.todo-item[^,{}]*\.todo-claim\.free:focus-visible/);
+  });
 });

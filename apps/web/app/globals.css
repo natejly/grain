@@ -10586,6 +10586,13 @@ label,
   transition: opacity 120ms ease;
 }
 
+/* The :focus-visible half is deliberately UNSCOPED — do not "tidy" it under
+   `.todo-item` for symmetry with the line above it. ClaimBadge mounts on
+   kanban cards too, and this selector is the only thing that reveals a free
+   claim to a keyboard user there; the hover half needs a per-surface rule
+   (see `.kanban-card:hover`) precisely because it IS scoped. Scoping this one
+   would make the Claim button reachable by Tab and invisible once reached, on
+   every surface that is not a checklist. Pinned by claim-surfaces.test.ts. */
 .todo-item:hover .todo-claim.free,
 .todo-claim.free:focus-visible {
   opacity: 1;
