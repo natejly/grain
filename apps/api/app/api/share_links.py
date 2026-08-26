@@ -48,7 +48,6 @@ from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..clock import utcnow
-from ..config import get_settings
 from ..database import get_db
 from ..models import Dashboard, Document, ShareLink
 from ..schemas import ApiModel, DashboardSpec

@@ -179,9 +179,18 @@ def sanitize_pointer(state: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         out.pop("pointer", None)
         return out
+    # A missing key lands in the same place as an unparseable one: `float(None)`
+    # raises TypeError straight into the handler below. Checked explicitly
+    # rather than left to that, because `raw` is untyped JSON — `.get` is
+    # `Any | None`, and mypy rejects the None arm even though the except catches
+    # it. Same behaviour, stated instead of caught.
+    raw_x, raw_y = raw.get("x"), raw.get("y")
+    if raw_x is None or raw_y is None:
+        out.pop("pointer", None)
+        return out
     try:
-        x = float(raw.get("x"))
-        y = float(raw.get("y"))
+        x = float(raw_x)
+        y = float(raw_y)
     except (TypeError, ValueError):
         out.pop("pointer", None)
         return out
