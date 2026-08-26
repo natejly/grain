@@ -1,6 +1,10 @@
 .DS_Store
 .env
 .venv/
+# The pattern above only matches a directory; worktrees use a symlink to the
+# main checkout's .venv so e2e's webServer command resolves, and that symlink
+# must never be committed either (it once was, as a blob).
+.venv
 __pycache__/
 .pytest_cache/
 .ruff_cache/
