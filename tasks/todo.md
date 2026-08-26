@@ -1004,15 +1004,13 @@ was timing:
 
 ## Merge notes (feature-sweep, 2026-08-23)
 
-- MIGRATION RENUMBERING (QA finding #1, do at merge time): this branch's
-  migration chain 0045–0055 must be renumbered onto the then-current head at
-  merge. Last common revision is 0044_conversation_index; mainline
-  feat/agentic-workspace and bg/marketplace-todo both claimed 0045+
-  independently (mainline: 0045_conversation_defaults → 0046_model_usage_agent
-  → 0047_favorites; marketplace: 0045_marketplace → 0046_listing_installs).
-  Whoever merges second re-parents their whole chain (rename files, update
-  revision/down_revision pairs) and coordinates with the marketplace session so
-  both don't take the same slots.
+- MIGRATION RENUMBERING (QA finding #1): SETTLED at the four-branch merge
+  (e6b01f6, gates fixed in 462f03c). Our 0045_templates…0055_digests became
+  0053_templates…0063_digests on main, re-parented past mainline's
+  0045_conversation_defaults…0048_api_tokens and marketplace's
+  0050_marketplace/0051_listing_installs; single head confirmed. The QA fix
+  pass added 0064_open_alert_unique on that head. Fixes now land via branch
+  sweep-qa-fixes + PR onto main — no further renumbering expected.
 
 Known follow-ups deferred from the F3 QA review:
 
