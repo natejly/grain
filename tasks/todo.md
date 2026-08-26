@@ -1079,6 +1079,27 @@ was timing:
   credential — a leaked API token can queue workflow runs bounded only by
   spend ceilings. Fold into a shared door-throttle (the auth_rate_limiter
   pattern F9 reused) if abuse appears.
+- F13 digests (QA 7-9): both mailers (digests, dashboard subscriptions) now
+  require `User.status == "active"` on recipient resolution — deactivation
+  keeps the membership rows, but a deactivated account no longer receives
+  workspace-internal mail (regression-tested per mailer; the subscription
+  fire audits it as the same honest skip a departed member gets). Digest
+  delivery mirrors the F10 honesty branch: `digest.sent` is only recorded
+  when `send_quietly` reports the sender accepted the message. CONTENT-BAR
+  DECISION (QA F13 #8), recorded in the digests.py module docstring: digest
+  mail is TITLES-ONLY — `Notification.body` quotes comment/message content
+  and stays in-app behind the deep link; the render test now asserts the
+  body never reaches either mail body. LOWs RECORDED, not built (QA F13 #9):
+  (a) the digest claim is claim-before-send with no retry — an SMTP failure
+  after the claim costs the member the whole day (asymmetric with webhook
+  retries; a retry column would need to not re-render stale content); (b) a
+  member whose digest_hour_utc is 23 gets no same-day recovery from ticker
+  downtime — the period-start comparison only forgives lateness within the
+  same UTC day; (c) use-workspace.ts's updateDigest captures `previous`
+  inside the setDigest updater closure — an unmount mid-PUT can roll the
+  local value back to null and rapid toggles can interleave echoes; it
+  self-heals on the next bootstrap, so cosmetic. (d) UTC-only scheduling is
+  honestly labeled in the UI — UX choice, no action.
 
 ## Merge notes (feature-sweep, 2026-08-23)
 

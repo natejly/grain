@@ -357,6 +357,11 @@ def test_the_mail_lists_the_waiting_items_with_markup_escaped(
     assert "list_datasets" in message.body
     assert "<b>Ping</b> from a teammate" in message.body
     assert "Open your Inbox" in message.html
+    # Titles-only, on purpose (QA F13 #8): the notification BODY quotes
+    # comment/message content and must stay in-app behind the deep link —
+    # the marker planted in the body may never reach either mail body.
+    assert MARKER not in message.html
+    assert MARKER not in message.body
     assert len(audits(db, "digest.sent", membership.id)) == 1
 
 
@@ -405,3 +410,56 @@ def test_a_digest_never_carries_another_members_personal_approvals(
 def test_a_membership_gone_between_claim_and_send_is_a_quiet_skip(sent_emails):
     digests.send_digest("membership-that-never-existed")
     assert sent_emails == []
+
+
+def test_a_deactivated_user_receives_no_digest(identity_client, db, sent_emails):
+    """QA F13 #7: deactivation keeps the membership row, but workspace mail
+    stops with the account — a deactivated-but-still-membered user's deliver
+    is a quiet skip, never a mail to the address the user row still holds."""
+    client = identity_client()
+    identity = identity_of(client)
+    enable(client)
+    plant_mention(
+        db,
+        workspace_id=identity["workspace_id"],
+        user_id=identity["user_id"],
+        title="Still waiting",
+    )
+    membership = membership_of(db, identity["workspace_id"], identity["user_id"])
+    user = db.scalar(select(User).where(User.id == identity["user_id"]))
+    assert user is not None
+    user.status = "disabled"
+    db.commit()
+    db.expire_all()
+
+    assert digests.deliver(db, membership) is False
+    assert sent_emails == []
+    assert audits(db, "digest.sent", membership.id) == []
+
+
+def test_a_failed_send_is_not_audited_as_a_delivery(identity_client, db, monkeypatch):
+    """`send_quietly` swallows SMTP failures by design; the audit must not
+    then claim a delivery that never happened — the subscription mailer's
+    honesty branch, mirrored. The per-member claim stands: best effort, no
+    same-day retry."""
+    client = identity_client()
+    identity = identity_of(client)
+    enable(client)
+    plant_mention(
+        db,
+        workspace_id=identity["workspace_id"],
+        user_id=identity["user_id"],
+        title="Never delivered",
+    )
+    membership = membership_of(db, identity["workspace_id"], identity["user_id"])
+    db.expire_all()
+
+    class Exploding:
+        def send(self, message: email_service.OutboundEmail) -> None:
+            raise RuntimeError("mail host down")
+
+    monkeypatch.setattr(
+        email_service, "get_email_sender", lambda settings: Exploding()
+    )
+    assert digests.deliver(db, membership) is False
+    assert audits(db, "digest.sent", membership.id) == []

@@ -219,12 +219,17 @@ def deliver(
         .where(
             Membership.workspace_id == subscription.workspace_id,
             Membership.user_id == subscription.recipient_user_id,
+            # `auth` refuses a non-active user at every login door; the mailer
+            # honours the same gate — a deactivated account with a surviving
+            # membership must not keep receiving workspace data over SMTP.
+            User.status == "active",
         )
     ).first()
     if recipient is None:
-        # The membership row is the standing permission to receive this
-        # workspace's data; the moment it goes, so does the mail.
-        return _skip(db, subscription, reason="recipient is no longer a member")
+        # The membership row — on an active account — is the standing
+        # permission to receive this workspace's data; the moment either
+        # goes, so does the mail.
+        return _skip(db, subscription, reason="recipient is not an active member")
     try:
         spec = DashboardSpec.model_validate(json.loads(dashboard.spec_json))
         result = execute_dataset_query(

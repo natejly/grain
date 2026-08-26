@@ -23,10 +23,20 @@ shared tick).
 **What a member is told about is what they could see themselves.** Content
 comes from `services/inbox_feed.waiting_for` — the same queries `GET
 /api/inbox` answers with, `run_activity_predicate` included, so one member's
-digest can never carry another member's personal-thread approvals. An empty
-digest is not sent (the claim stands: silence, not a re-try), a member or
-user that vanished between claim and send is a quiet skip, and — like every
-sweep — nothing here raises out of the ticker or the background task.
+digest can never carry another member's personal-thread approvals. Only an
+active user is mailed: a deactivated account keeps its memberships, but its
+standing permission to receive workspace mail ends with its ability to log
+in. An empty digest is not sent (the claim stands: silence, not a re-try), a
+member or user that vanished between claim and send is a quiet skip, and —
+like every sweep — nothing here raises out of the ticker or the background
+task.
+
+**The mail is titles-only, on purpose (QA F13 #8).** `Notification.body`
+quotes comment and message content, and a digest that shipped it would move
+workspace-internal conversation over SMTP — through relays and into mailbox
+providers the platform does not control. So `_item_rows` puts titles and
+provenance in the mail and leaves every body in-app, one deep-link click
+away. Loosening this is a content-bar decision, not a formatting tweak.
 """
 from __future__ import annotations
 
@@ -183,10 +193,18 @@ def deliver(
     member's day, and today's answer was silence.
     """
     settings = settings or get_settings()
-    email = db.scalar(select(User.email).where(User.id == membership.user_id))
+    email = db.scalar(
+        select(User.email).where(
+            User.id == membership.user_id,
+            # `auth` refuses a non-active user at every login door; the mailer
+            # honours the same gate — a deactivated account with surviving
+            # memberships must not keep receiving workspace-internal mail.
+            User.status == "active",
+        )
+    )
     if not email:
         logger.warning(
-            "digest %s skipped: user %s has no address",
+            "digest %s skipped: user %s has no active mailable account",
             membership.id,
             membership.user_id,
         )
@@ -218,7 +236,13 @@ def deliver(
             )
         ),
     )
-    email_service.send_quietly(email_service.get_email_sender(settings), message)
+    sent = email_service.send_quietly(
+        email_service.get_email_sender(settings), message
+    )
+    if not sent:
+        # A refused mail must not audit as a delivery. The per-member claim
+        # stands regardless — best-effort by design, no same-day retry.
+        return False
     record_audit(
         db,
         workspace_id=membership.workspace_id,
@@ -250,7 +274,9 @@ def _item_rows(waiting: WaitingSet, *, user_id: str) -> List[Tuple[str, str, str
     """(What, Where, Since) rows, oldest first within each kind.
 
     Plain strings only — `mail_render` escapes every cell, so a workflow named
-    `<script>` arrives as text.
+    `<script>` arrives as text. Titles only, never `Notification.body`: a
+    mention or alert body quotes comment/message content, and that stays
+    in-app behind the deep link (see the module docstring).
     """
     rows: List[Tuple[str, str, str]] = []
     for item in _my_approvals(waiting, user_id=user_id):
@@ -260,12 +286,12 @@ def _item_rows(waiting: WaitingSet, *, user_id: str) -> List[Tuple[str, str, str
         where = hold.workflow_name or hold.origin
         rows.append(("Budget hold", where, _since(hold.created_at)))
     for mention in waiting.mentions:
-        rows.append((f"Mention: {mention.title}", mention.body, _since(mention.created_at)))
+        rows.append((f"Mention: {mention.title}", "", _since(mention.created_at)))
     for alert in waiting.alerts:
-        rows.append((f"Alert: {alert.title}", alert.body, _since(alert.created_at)))
+        rows.append((f"Alert: {alert.title}", "", _since(alert.created_at)))
     for anomaly in waiting.anomalies:
         rows.append(
-            (f"Spend anomaly: {anomaly.title}", anomaly.body, _since(anomaly.created_at))
+            (f"Spend anomaly: {anomaly.title}", "", _since(anomaly.created_at))
         )
     return rows
 

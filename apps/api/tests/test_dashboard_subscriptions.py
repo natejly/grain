@@ -396,7 +396,28 @@ def test_a_departed_member_stops_receiving_mail(client, db, sent_emails):
     assert sent_emails == []
     skips = audits(db, "dashboard.subscription_skipped", created["id"])
     assert len(skips) == 1
-    assert "no longer a member" in skips[0].detail_json
+    assert "not an active member" in skips[0].detail_json
+
+
+def test_a_deactivated_recipient_stops_receiving_mail(client, db, sent_emails):
+    """QA F13 #7: deactivation keeps the membership row, but the standing
+    permission to receive workspace data ends with the account's ability to
+    log in — a deactivated-but-still-membered user gets no mail, and the fire
+    lands as the same honest skip a departed member does."""
+    dashboard = make_dashboard(client)
+    member = make_member(created_workspace_id(client))
+    created = subscribe(client, dashboard["id"], recipient_user_id=member.user_id)
+
+    user = db.scalar(select(User).where(User.id == member.user_id))
+    assert user is not None
+    user.status = "disabled"
+    db.commit()
+
+    assert subscription_service.deliver(db, load(db, created["id"])) is False
+    assert sent_emails == []
+    skips = audits(db, "dashboard.subscription_skipped", created["id"])
+    assert len(skips) == 1
+    assert "not an active member" in skips[0].detail_json
 
 
 def test_removing_a_member_disables_their_subscriptions(client, db):
