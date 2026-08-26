@@ -9,12 +9,20 @@ monitor ids, so every other notification kind (monitor_id '') is untouched.
 
 Before creating the index, any duplicates the race already produced are
 resolved down to one surviving open row per monitor — otherwise the CREATE
-UNIQUE INDEX itself would fail on exactly the databases that need it.
+UNIQUE INDEX itself would fail on exactly the databases that need it. The
+survivor is the *most recent* crossing (`created_at`, ties broken by id so the
+choice is deterministic and the same on every replica), because that is the one
+whose title and body describe the state the monitor is actually in; the rows it
+supersedes are resolved the way the app resolves a notification — status and
+`resolved_at` together — rather than left in a third state that is neither open
+nor honestly acknowledged.
 
 Revision ID: 0064_open_alert_unique
 Revises: 0063_digests
 """
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import sqlalchemy as sa
 
@@ -42,15 +50,31 @@ def upgrade() -> None:
         return
     if INDEX in _indexes("notifications"):
         return
-    # Duplicates the check-then-insert race already landed: keep one open row
-    # per monitor, resolve the rest so the unique index can be built.
-    op.execute(
+    # Duplicates the check-then-insert race already landed: keep the newest
+    # open row per monitor, resolve the rest so the unique index can be built.
+    # "Has a later sibling" rather than a MAX() over the id — ids are uuid4
+    # strings, so MAX(id) picks a lexicographic winner, not a recent one. The
+    # id only breaks ties on identical `created_at`, which the race can produce.
+    # The newest row is by construction not a loser, so no evaluation order
+    # inside this statement can leave a monitor with nothing open.
+    op.get_bind().execute(
         sa.text(
-            "UPDATE notifications SET status = 'resolved' "
-            f"WHERE {WHERE} AND id NOT IN ("
-            "SELECT keep FROM (SELECT MAX(id) AS keep FROM notifications "
-            f"WHERE {WHERE} GROUP BY monitor_id) AS survivors)"
-        )
+            "UPDATE notifications SET status = 'resolved', resolved_at = :moment "
+            f"WHERE {WHERE} AND EXISTS ("
+            "SELECT 1 FROM notifications AS later "
+            "WHERE later.kind = 'monitor_alert' AND later.status = 'open' "
+            "AND later.monitor_id != '' "
+            "AND later.monitor_id = notifications.monitor_id "
+            "AND (later.created_at > notifications.created_at "
+            "OR (later.created_at = notifications.created_at "
+            "AND later.id > notifications.id)))"
+        ),
+        # The app stamps `resolved_at` whenever it flips a notification out of
+        # the waiting set, and this migration is what flipped these: now is the
+        # honest moment, naive UTC per the house clock. `resolved_by` stays ''
+        # — no member acknowledged these, and saying one did would be a
+        # nicer-looking lie.
+        {"moment": datetime.now(timezone.utc).replace(tzinfo=None)},
     )
     op.create_index(
         INDEX,
