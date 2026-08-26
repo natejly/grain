@@ -248,7 +248,7 @@ def test_reset_request_does_the_same_work_for_a_known_and_unknown_address(monkey
         return min(timed(address) for _ in range(attempts))
 
     unknown = unique_email()
-    attempts = 3
+    attempts = 5
     known_elapsed = best_of(known, attempts)
     unknown_elapsed = best_of(unknown, attempts)
 
@@ -265,19 +265,16 @@ def test_reset_request_does_the_same_work_for_a_known_and_unknown_address(monkey
     # skipped the 50ms send entirely; the bound is deliberately far looser than
     # that gap so the assertion is about the oracle, not about scheduler noise.
     #
-    # Compare the FASTEST of several samples rather than one pair. Noise only
-    # ever ADDS time -- a commit's fsync, a scheduler stall, a neighbour on a
-    # shared runner -- so the minimum is the closest estimate of what the
-    # endpoint really costs, and a systematic gap survives every sample while a
-    # one-off stall survives none. Measuring one pair made this test fail in CI
-    # at 206ms vs 54ms on a run where both branches provably sent their mail
-    # (the assertions above passed), i.e. it failed on the noise it says here it
-    # does not want to be about. The known branch legitimately does a little
-    # more work -- issue_email_token's UPDATE and INSERT, and the commit that
-    # follows -- and on a loaded runner that alone can clear 40ms.
-    known_best = min([known_elapsed, *(timed(known) for _ in range(4))])
-    unknown_best = min([unknown_elapsed, *(timed(unknown) for _ in range(4))])
-    assert abs(known_best - unknown_best) < 0.04, (known_best, unknown_best)
+    # `best_of` above already takes the fastest of `attempts` samples, which is
+    # what keeps this honest: a systematic gap survives every sample while a
+    # one-off stall survives none. Worth naming why the margin has to absorb
+    # anything at all — the known branch legitimately does a little more work
+    # (issue_email_token's UPDATE and INSERT, and the commit after), and on a
+    # loaded runner that alone can approach the bound.
+    assert abs(known_elapsed - unknown_elapsed) < 0.04, (
+        known_elapsed,
+        unknown_elapsed,
+    )
 
 
 def test_lockout_engages_and_does_not_announce_itself(sent_emails):
