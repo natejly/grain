@@ -19,9 +19,10 @@ link row, never from the request, and a dashboard's answer is re-run LIVE
 against its dataset at request time: a share link is a window, not a snapshot,
 and must never leak a stale copy of data the workspace has since corrected
 (nor reuse a frozen release manifest, which answers a different question).
-It is also rate limited per source address (`_throttle`): every hit on a
-shared dashboard runs a live DuckDB query, so an anonymous surface with no
-budget would be a compute amplifier for whoever holds — or guesses at — URLs.
+It is also rate limited per source address (the shared `public_rate_limit`
+dependency, public tier): every hit on a shared dashboard runs a live DuckDB
+query, so an anonymous surface with no budget would be a compute amplifier for
+whoever holds — or guesses at — URLs.
 
 AUTHZ, decided (QA F9): share-link authority is FLAT — any member may publish
 any dashboard or document their workspace holds, and any member may revoke any
@@ -40,7 +41,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,9 +55,9 @@ from ..schemas import ApiModel, DashboardSpec
 from ..services import share_links as service
 from ..services.analytics import AnalyticsValidationError, execute_dataset_query
 from ..services.audit import record_audit
-from ..services.auth.ratelimit import auth_rate_limiter
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
+from .ratelimit import public_rate_limit, rate_limit
 
 router = APIRouter(tags=["share-links"])
 
@@ -175,7 +176,12 @@ def _load_link(db: Session, actor: Actor, link_id: str) -> ShareLink:
 # The authenticated side
 
 
-@router.post("/api/share-links", response_model=ShareLinkCreatedOut, status_code=201)
+@router.post(
+    "/api/share-links",
+    response_model=ShareLinkCreatedOut,
+    status_code=201,
+    dependencies=[Depends(rate_limit("share-link-mint", tier="mint"))],
+)
 def create_share_link(
     payload: ShareLinkCreateRequest,
     key: str = Depends(idempotency_key),
@@ -315,35 +321,23 @@ def _shared_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail="Share link not found")
 
 
-def _throttle(request: Request) -> None:
-    """Budget the anonymous surface per source address, before any lookup.
-
-    Reuses `auth_rate_limiter` under its own `shared:` bucket (same knobs, same
-    per-process caveat as `api/auth.py` — the durable half there is the account
-    lockout; here it is revocation). Two things are being blunted at once: a
-    shared dashboard runs a live DuckDB query per hit, and the token path is
-    the credential, so the same budget also prices token guessing. Counted
-    before resolution on purpose — a miss must spend budget too.
-    """
-    settings = get_settings()
-    client = request.client.host if request.client else "unknown"
-    if not auth_rate_limiter.allow(
-        f"shared:{client}",
-        limit=settings.auth_rate_limit_attempts,
-        window_seconds=settings.auth_rate_limit_window_seconds,
-    ):
-        raise HTTPException(
-            status_code=429, detail="Too many attempts. Try again later."
-        )
-
-
-@router.get("/shared/{token}", response_model=SharedResourceOut)
+# The anonymous surface is budgeted per source address by the shared
+# `public_rate_limit` dependency rather than a local throttle: it counts before
+# the token is resolved (so a miss spends budget too, pricing token guessing),
+# it carries its own public tier and `Retry-After` instead of borrowing the far
+# tighter credential-endpoint knobs, and `RATE_LIMITED_ROUTES` keeps a test
+# asserting this route stays covered. Two things are blunted at once — a shared
+# dashboard runs a live DuckDB query per hit, and the token path is the
+# credential.
+@router.get(
+    "/shared/{token}",
+    response_model=SharedResourceOut,
+    dependencies=[Depends(public_rate_limit("shared-resource"))],
+)
 def read_shared_resource(
     token: str,
-    request: Request,
     db: Session = Depends(get_db),
 ) -> SharedResourceOut:
-    _throttle(request)
     link = service.load_active(db, raw_token=token)
     if link is None:
         raise _shared_not_found()

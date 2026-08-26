@@ -105,6 +105,7 @@ os.environ["DEV_UNRESTRICTED_AGENT"] = "false"
 os.environ["INBOUND_EMAIL_DOMAIN"] = "mail.grain.test"
 os.environ["INBOUND_EMAIL_WEBHOOK_SECRET"] = ""
 
+from app.api.ratelimit import api_rate_limiter  # noqa: E402
 from app.auth import (  # noqa: E402
     DEV_SEED_USER_ID,
     DEV_SEED_WORKSPACE_ID,
@@ -168,11 +169,14 @@ def _isolate_query_embedding_cache():
 
 @pytest.fixture(autouse=True)
 def _reset_auth_rate_limiter():
-    """The limiter counts per process, so one test's logins would otherwise
-    spend the next test's budget."""
+    """The limiters count per process, so one test's requests would otherwise
+    spend the next test's budget. Both the auth limiter and the general API
+    limiter share this reset."""
     auth_rate_limiter.reset()
+    api_rate_limiter.reset()
     yield
     auth_rate_limiter.reset()
+    api_rate_limiter.reset()
 
 
 def issue_session(

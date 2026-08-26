@@ -242,8 +242,15 @@ class ContainerProvider(local_exec.LocalProvider):
             "-w",
             MOUNT,
         ]
-        for key, value in sorted(env.items()):
-            argv += ["-e", f"{key}={value}"]
+        # Name-only `-e KEY`, never `-e KEY=value`: docker then reads each
+        # value from *its own* environment (supplied by `_run` below), so a
+        # decrypted secret never lands on the docker CLI's argv. Argv is
+        # world-readable via `/proc/<pid>/cmdline` and `ps` for the life of the
+        # `docker run`, while `/proc/<pid>/environ` is readable only by the
+        # process owner — so this is the difference between a co-resident
+        # unprivileged user harvesting STRIPE_API_KEY out of `ps` and not.
+        for key in sorted(env):
+            argv += ["-e", key]
         argv.append(self._image)
         argv.extend(inner)
         return argv
@@ -258,10 +265,17 @@ class ContainerProvider(local_exec.LocalProvider):
     ) -> ExecResult:
         before = local_exec.snapshot(root)
         name = f"grain-{uuid.uuid4().hex[:16]}"
+        # The sandbox env values ride in the docker CLI's *own* environment,
+        # keyed to the name-only `-e KEY` flags in `_docker_argv`; docker reads
+        # each value from here and forwards it to the container. `_cli_env` is
+        # the docker-client configuration, and the sandbox keys are separate
+        # from it (`policy.validate_name` forbids PATH/DOCKER_*-style names), so
+        # the merge cannot clobber the client's own settings.
+        cli_env = {**self._cli_env(), **dict(env)}
         result = local_exec.run_process(
             self._docker_argv(root, inner, name, env),
             cwd=self._workdir,
-            env=self._cli_env(),
+            env=cli_env,
             # Give docker a moment past the inner budget to tear down, so a
             # timeout is attributed to the user's code rather than to the runtime.
             timeout=timeout + 15.0,

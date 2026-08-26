@@ -45,6 +45,7 @@ from ..services.agent_loop import WORKFLOW_SCOPE, resolve_policy
 from ..services.audit import record_audit
 from ..services.delegation import DELEGATE_TOOL
 from ..services.llm_tools import ASK_USER, ToolContext, ToolSpec, build_registry
+from .ratelimit import public_rate_limit
 
 router = APIRouter(prefix="/api", tags=["mcp-server"])
 
@@ -177,7 +178,7 @@ def _context_for(identity: token_service.ResolvedToken) -> ToolContext:
     )
 
 
-@router.post("/mcp")
+@router.post("/mcp", dependencies=[Depends(public_rate_limit("mcp"))])
 async def mcp_endpoint(
     request: Request,
     authorization: Optional[str] = Header(default=None),

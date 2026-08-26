@@ -23,7 +23,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
-from .store import MAX_FILE_BYTES, MAX_FILES_PER_PROJECT, MAX_PROJECT_BYTES
+from .store import (
+    MAX_FILE_BYTES,
+    MAX_FILES_PER_PROJECT,
+    MAX_PROJECT_BYTES,
+    ProjectError,
+    normalize_path,
+)
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +58,12 @@ class CompileError(Exception):
 
 def _validate_files(
     files: List[Dict[str, str]], entry_path: str
-) -> Dict[str, str]:
-    """Validate and normalise the file map; raise CompileError on violations."""
+) -> tuple[Dict[str, str], str]:
+    """Validate and normalise the file map; raise CompileError on violations.
+
+    Returns the normalised file map and the normalised entry path so callers
+    stage, compile, and read the PDF against the same canonical names.
+    """
     if not files:
         raise CompileError("No files provided")
     if len(files) > MAX_FILES_PER_PROJECT:
@@ -63,10 +73,20 @@ def _validate_files(
     file_map: Dict[str, str] = {}
     total = 0
     for f in files:
-        path = f.get("path", "").strip()
+        raw_path = f.get("path", "").strip()
         content = f.get("content", "")
-        if not path:
+        if not raw_path:
             raise CompileError("File entry missing 'path'")
+        # Every path is staged onto the host as `tmpdir / path` before the
+        # container ever runs, so an absolute path or a `..` segment would land
+        # attacker-controlled bytes outside the temp dir (app source, .env,
+        # ~/.ssh) — the container's isolation never gets a say. Normalize each
+        # path through the same containment gate the virtual filesystem uses;
+        # anything that could escape the root is refused, not sanitized.
+        try:
+            path = normalize_path(raw_path)
+        except ProjectError as exc:
+            raise CompileError(str(exc)) from exc
         size = len(content.encode("utf-8"))
         if size > MAX_FILE_BYTES:
             raise CompileError(
@@ -78,11 +98,15 @@ def _validate_files(
         raise CompileError(
             f"Project exceeds the {MAX_PROJECT_BYTES:,}-byte limit"
         )
+    try:
+        entry_path = normalize_path(entry_path)
+    except ProjectError as exc:
+        raise CompileError(str(exc)) from exc
     if entry_path not in file_map:
         raise CompileError(f'Entry file "{entry_path}" is not in the files')
     if not entry_path.lower().endswith(".tex"):
         raise CompileError(f'"{entry_path}" is not a .tex file')
-    return file_map
+    return file_map, entry_path
 
 
 def _cli_env() -> Dict[str, str]:
@@ -135,7 +159,7 @@ def compile_latex(
     provider: Literal["container", "subprocess"] = "container",
 ) -> CompileResult:
     """Compile a LaTeX project and return the result."""
-    file_map = _validate_files(files, entry_path)
+    file_map, entry_path = _validate_files(files, entry_path)
 
     if provider == "subprocess":
         return _compile_subprocess(file_map, entry_path, engine, timeout_seconds)
@@ -153,9 +177,18 @@ def compile_latex(
 
 
 def _write_files(tmpdir: Path, file_map: Dict[str, str]) -> None:
-    """Stage the project files into a temp directory."""
+    """Stage the project files into a temp directory.
+
+    Keys are already normalized by `_validate_files`, but this is the point
+    where bytes actually hit the host filesystem, so it re-asserts containment
+    rather than trusting its caller: a `dest` that resolves outside `tmpdir` is
+    refused, never written.
+    """
+    root = tmpdir.resolve()
     for path, content in file_map.items():
-        dest = tmpdir / path
+        dest = (root / path).resolve()
+        if dest != root and not str(dest).startswith(str(root) + os.sep):
+            raise CompileError(f"file path escapes the project root: {path}")
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
 

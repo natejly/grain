@@ -319,11 +319,19 @@ def test_the_sandbox_environment_reaches_the_container_and_the_host_env_does_not
         workdir=workdir, env={"GRAIN_SANDBOX": "1"}, image="img"
     )
     # The env is what the run actually passes: the frozen base plus this session's
-    # injected secrets. A secret rides in on the same `-e` the policy env does.
+    # injected secrets. Each rides in as a name-only `-e KEY`, and its value must
+    # never appear on the argv — argv is world-readable via `ps`/`/proc/cmdline`,
+    # so a `-e KEY=value` there would leak the secret to any co-resident user.
     env = {**provider._env, "STRIPE_API_KEY": "sk_test_123"}
     argv = provider._docker_argv(workdir / "box-1", ["python3"], "box-1-run", env)
-    assert "GRAIN_SANDBOX=1" in argv
-    assert "STRIPE_API_KEY=sk_test_123" in argv
+    assert "GRAIN_SANDBOX" in argv
+    assert "STRIPE_API_KEY" in argv
+    joined = " ".join(argv)
+    assert "sk_test_123" not in joined
+    assert "GRAIN_SANDBOX=1" not in joined
+    # Each name is introduced by its own `-e`, so docker reads the value from
+    # its own environment (which `_run` supplies) rather than from the argv.
+    assert argv[argv.index("STRIPE_API_KEY") - 1] == "-e"
 
 
 def test_an_allowlist_policy_is_refused_rather_than_quietly_widened(

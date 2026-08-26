@@ -37,6 +37,7 @@ from ..services.ingestion import (
 from ..services.web_search import WEB_CHUNK_PREFIX
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
+from .ratelimit import rate_limit
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
@@ -62,7 +63,12 @@ def list_sources(
     return list(db.scalars(stmt))
 
 
-@router.post("/sources", response_model=SourceOut, status_code=202)
+@router.post(
+    "/sources",
+    response_model=SourceOut,
+    status_code=202,
+    dependencies=[Depends(rate_limit("source-ingest", tier="heavy"))],
+)
 async def upload_source(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),

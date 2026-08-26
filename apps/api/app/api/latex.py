@@ -7,7 +7,7 @@ from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..auth import Actor, get_actor
+from ..auth import Actor
 from ..config import get_settings
 from ..schemas import ApiModel
 from ..services.projects.compile import (
@@ -16,6 +16,7 @@ from ..services.projects.compile import (
     compile_latex,
     image_available,
 )
+from .ratelimit import rate_limit
 
 router = APIRouter(prefix="/api/latex", tags=["latex"])
 
@@ -41,7 +42,7 @@ class CompileResponse(ApiModel):
 @router.post("/compile", response_model=CompileResponse)
 async def compile_endpoint(
     body: CompileRequest,
-    actor: Actor = Depends(get_actor),
+    actor: Actor = Depends(rate_limit("latex-compile", tier="heavy")),
 ):
     settings = get_settings()
 

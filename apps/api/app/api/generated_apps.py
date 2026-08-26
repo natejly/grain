@@ -29,6 +29,7 @@ from ..services.generated_apps import (
 )
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
+from .ratelimit import public_rate_limit, rate_limit
 
 router = APIRouter(tags=["generated-apps"])
 
@@ -39,13 +40,19 @@ def _frame_response(html: str) -> Response:
     The web app embeds this via <iframe sandbox="allow-scripts">, so the code
     runs in an opaque origin with no cookies and no parent access; this CSP
     removes its network access entirely.
+
+    The `sandbox` directive makes that opaque-origin confinement hold even when
+    the frame URL is opened top-level (it is a public GET), not just when the
+    web app embeds it: without it, a direct visit to `/published/apps/*/frame`
+    would execute the release's `unsafe-inline` script on *this* API origin.
+    `allow-scripts` (and no `allow-same-origin`) matches the embedding iframe.
     """
     frame_ancestors = " ".join(get_settings().allowed_web_origins) or "'none'"
     response = HTMLResponse(content=html)
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; script-src 'unsafe-inline'; "
         "style-src 'unsafe-inline'; img-src data:; connect-src 'none'; "
-        "form-action 'none'; base-uri 'none'; "
+        "form-action 'none'; base-uri 'none'; sandbox allow-scripts; "
         f"frame-ancestors {frame_ancestors}"
     )
     response.headers["Cache-Control"] = "no-store"
@@ -416,6 +423,7 @@ def rollback_release(
     "/api/apps/{app_id}/generate",
     response_model=GeneratedAppOut,
     status_code=201,
+    dependencies=[Depends(rate_limit("app-generate", tier="heavy"))],
 )
 def generate_app_release(
     app_id: str,
@@ -514,7 +522,11 @@ def app_release_frame(
     return _frame_response(manifest["html"])
 
 
-@router.get("/published/apps/{slug}/frame", response_class=HTMLResponse)
+@router.get(
+    "/published/apps/{slug}/frame",
+    response_class=HTMLResponse,
+    dependencies=[Depends(public_rate_limit("published-app-frame"))],
+)
 def published_app_frame(
     slug: str,
     db: Session = Depends(get_db),
@@ -542,7 +554,11 @@ def published_app_frame(
     return _frame_response(manifest["html"])
 
 
-@router.get("/published/apps/{slug}", response_model=PublishedAppOut)
+@router.get(
+    "/published/apps/{slug}",
+    response_model=PublishedAppOut,
+    dependencies=[Depends(public_rate_limit("published-app"))],
+)
 def published_app(
     slug: str,
     db: Session = Depends(get_db),

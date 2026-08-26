@@ -8,6 +8,38 @@ import { describeError, formatBytes, formatRelative, statusLabel } from "./share
 import { spaceNameForId } from "./space-threads";
 import { useFocusReveal } from "./use-focus-reveal";
 
+// Types safe to render inline in a new tab: none of them execute script. A
+// `blob:` URL inherits *this app's* origin, so an active document (SVG or HTML,
+// both of which run embedded <script>) opened here would run in the web-app
+// origin — reading localStorage, driving same-origin navigation. The API
+// deliberately serves those as `Content-Disposition: attachment` for exactly
+// this reason, but a blob URL carries no disposition, so the client must
+// re-apply the policy itself.
+const INLINE_VIEWABLE_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/x-icon",
+]);
+
+/**
+ * Return a blob safe to hand to `URL.createObjectURL` + `window.open`.
+ *
+ * A known-inert type (PDF, raster image) is opened as-is; anything else —
+ * SVG, HTML, or an unknown/spoofed type — is re-wrapped as an opaque
+ * `application/octet-stream` so the browser downloads it instead of executing
+ * it as a same-origin document.
+ */
+export function viewableBlob(blob: Blob): Blob {
+  if (INLINE_VIEWABLE_TYPES.has(blob.type)) {
+    return blob;
+  }
+  return new Blob([blob], { type: "application/octet-stream" });
+}
+
 /**
  * Open a stored original in a new tab.
  *
@@ -16,7 +48,8 @@ import { useFocusReveal } from "./use-focus-reveal";
  * `X-Workspace-Id` — so the browser would either be refused or handed whichever
  * workspace the user joined first. The bytes are fetched through the client and
  * opened as an object URL instead, which is same-origin and always the file the
- * row names.
+ * row names. `viewableBlob` keeps that object URL from becoming a script-
+ * executing document on this origin.
  */
 function OpenSourceButton({
   source,
@@ -37,7 +70,7 @@ function OpenSourceButton({
         void api
           .sourceContent(source.id)
           .then((blob) => {
-            const url = URL.createObjectURL(blob);
+            const url = URL.createObjectURL(viewableBlob(blob));
             window.open(url, "_blank", "noopener");
             // The tab has to have read it first; revoking immediately hands it
             // a dead URL. A minute is far longer than any load and still bounds

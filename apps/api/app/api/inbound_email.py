@@ -36,6 +36,7 @@ from ..services import inbound_email as address_service
 from ..services.audit import record_audit
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
+from .ratelimit import public_rate_limit
 
 router = APIRouter(prefix="/api", tags=["inbound-email"])
 
@@ -99,7 +100,11 @@ def _out(address: InboundAddress) -> InboundAddressOut:
     )
 
 
-@router.post("/hooks/email/inbound", response_model=InboundEmailOut)
+@router.post(
+    "/hooks/email/inbound",
+    response_model=InboundEmailOut,
+    dependencies=[Depends(public_rate_limit("inbound-email"))],
+)
 def receive_email(
     payload: InboundEmailIn,
     authorization: str = Header(default=""),
@@ -119,7 +124,12 @@ def receive_email(
             status_code=503, detail="Inbound email is not configured"
         )
     presented = authorization.removeprefix("Bearer ").strip()
-    if not secrets.compare_digest(presented, configured.get_secret_value()):
+    # Compare as bytes: `compare_digest` raises TypeError on a non-ASCII str,
+    # and Starlette decodes headers as latin-1, so a non-ASCII byte in the
+    # header would 500 instead of returning a clean 401.
+    if not secrets.compare_digest(
+        presented.encode("utf-8"), configured.get_secret_value().encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="Not authorised")
 
     address = address_service.resolve(
