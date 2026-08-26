@@ -6,8 +6,9 @@ seam (monkeypatching get_email_sender) still observes every field.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.services import mail_render
 from app.services.auth import email as email_service
 
@@ -89,6 +90,36 @@ def test_render_link_button_refuses_every_non_http_scheme():
     assert 'href="https://example.com"' in mail_render.render_link_button(
         "Open", "https://example.com"
     )
+
+
+def test_web_origin_cannot_boot_in_a_form_the_link_button_refuses():
+    """The allowlist above and `WEB_ORIGIN` are two halves of one contract.
+
+    `primary_web_origin` is what every mailer hands `render_link_button`, so a
+    scheme-less `WEB_ORIGIN=app.example.com` would boot perfectly and then
+    raise on *every* digest and *every* subscription mail, forever, invisibly.
+    The guard belongs at the boundary where an operator sees the message: boot.
+    """
+    for origin in (
+        "app.example.com",
+        "//app.example.com",
+        "ftp://app.example.com",
+        "javascript:alert(1)",
+        # A good first entry does not excuse a dead CORS entry behind it.
+        "https://app.example.com,app.example.net",
+    ):
+        with pytest.raises(ValidationError, match="WEB_ORIGIN"):
+            Settings(_env_file=None, app_env="test", web_origin=origin)
+
+    # The shapes a real deployment uses still boot, trailing slash included.
+    for origin in (
+        "http://localhost:3000",
+        "https://app.example.com/",
+        "https://app.example.com,http://localhost:3000",
+    ):
+        settings = Settings(_env_file=None, app_env="test", web_origin=origin)
+        # And what boots is exactly what the link button accepts.
+        assert mail_render.render_link_button("Open", settings.primary_web_origin)
 
 
 # --- SMTP multipart assembly --------------------------------------------------
