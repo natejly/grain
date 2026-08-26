@@ -207,14 +207,18 @@ test("a write parks under ask_writes, runs under the bypass, and a deny survives
   await modeTrigger.click();
   await page
     .getByRole("group", { name: "Approval mode" })
-    .getByRole("button", { name: /^Auto-approve writes/ })
+    // The auto_writes mode is labelled "Act on its own" — it was renamed from
+    // "Auto-approve writes" on another branch, and this spec was the last
+    // reference to the old string. The BANNER copy below is unchanged, which
+    // is why only the button matcher moves.
+    .getByRole("button", { name: /^Act on its own/ })
     .click();
 
   const banner = page.locator(".bypass-banner");
   await expect(banner).toBeVisible();
   await expect(banner).toContainText("Auto-approving writes in");
   await expect(banner).toContainText("Nothing has gone through unreviewed yet.");
-  await expect(modeTrigger).toHaveAccessibleName("Approval mode: Auto-approve writes");
+  await expect(modeTrigger).toHaveAccessibleName("Approval mode: Act on its own");
 
   await composer(page).fill("Tick off the migrations.");
   await composer(page).press("Enter");

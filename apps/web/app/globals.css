@@ -841,6 +841,22 @@ label,
 .thread-open time {
   color: var(--text-dim);
   font-size: 9px;
+  /* Structural, not cosmetic: squeezed, "just now" wrapped to two lines, which
+     changed the ROW'S HEIGHT. In a rail whose rows move under the cursor when a
+     thread is prepended, a height change on hover is a layout shift landing
+     exactly where someone is about to click. Never wrap, at any width. */
+  white-space: nowrap;
+}
+
+/* The timestamp is the one thing on this row that can be spent. While the row
+   is hovered or focused its ~35px is worth more as title: the reader is
+   targeting THIS row and read the time a moment ago at rest, so it is the
+   redundant element at precisely the moment the actions need the space. Six
+   icons plus a timestamp plus a title does not fit 227px, and this is the only
+   part of that sum that nobody misses. */
+.thread:hover .thread-open time,
+.thread:focus-within .thread-open time {
+  display: none;
 }
 
 /* EVERY trailing action lives in this one cluster, and the cluster is out of
