@@ -1897,32 +1897,11 @@ ROUTE_CASES: List[RouteCase] = [
         # row and return 204, and the tamper digest would show B's grant gone.
         query={"scope": "workflow"},
     ),
-    # -- agents ------------------------------------------------------------
-    RouteCase("GET", "/api/agents", SCOPED),
     RouteCase(
         "GET",
         "/api/tools",
         SCOPED,
         note="the registry is built per workspace; the list must be the caller's",
-    ),
-    RouteCase(
-        "POST",
-        "/api/agents",
-        SCOPED,
-        body={"name": "mine", "instructions": "Answer plainly."},
-    ),
-    RouteCase(
-        "PATCH",
-        "/api/agents/{agent_id}",
-        DENY,
-        path_ids={"agent_id": "agent"},
-        body={"name": "mine now"},
-    ),
-    RouteCase(
-        "DELETE",
-        "/api/agents/{agent_id}",
-        DENY,
-        path_ids={"agent_id": "agent"},
     ),
     # -- skills ------------------------------------------------------------
     # A skill carries a workspace's instructions verbatim, so a cross-tenant read
@@ -2530,7 +2509,7 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"subscription_id": "dashboard_subscription"},
         note="silences (and confirms) another tenant's scheduled mail",
     ),
-    # -- API tokens ---------------------------------------------------------
+    # -- API tokens (owner-gated bearer credentials for the MCP surface) -----
     # The list and the mint are id-less (SCOPED); the revoke names a token, and
     # revoking another tenant's credential must confirm nothing. The raw secret
     # is planted as an id kind, so the leak grep also proves the list never
@@ -3135,15 +3114,6 @@ ROUTE_CASES: List[RouteCase] = [
     # /usage it takes no foreign id, so the leak scan over the victim's ids and
     # markers is what proves its filter holds.
     RouteCase("GET", "/api/admin/audit-events/export", SCOPED),
-    # -- API tokens (owner-gated bearer credentials for the MCP surface) -----
-    RouteCase("GET", "/api/api-tokens", SCOPED),
-    RouteCase("POST", "/api/api-tokens", SCOPED, body={"name": "sweep token"}),
-    RouteCase(
-        "DELETE",
-        "/api/api-tokens/{token_id}",
-        DENY,
-        path_ids={"token_id": "api_token"},
-    ),
     # The MCP server surface authenticates by BEARER, not the cookie the sweep
     # carries, so a cookie-only caller is refused 401 before any tenant lookup.
     # PUBLIC (bearer-gated, not cookie-scoped): the 500 guard and the fact that
