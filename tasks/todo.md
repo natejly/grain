@@ -169,6 +169,16 @@ cases, unit tests, and its own commit.
       749 web unit tests, build clean, e2e 76 passed / 1 skipped / 0 failed —
       the first post-merge e2e run surfaced two pieces of four-branch-merge
       fallout, fixed in their own commit and recorded under "QA fix pass")
+- [x] Full gate, second round (2026-08-26, after the three commits closing QA's
+      final-verification findings): ruff + mypy clean (176 source files), full
+      pytest green with no warnings section, `pnpm -r typecheck` clean,
+      753 web unit tests (up from 749), `pnpm -r build` clean, e2e 76 passed /
+      1 skipped / 0 failed. Single alembic head `0065_delivery_hardening`; the
+      committed `packages/api-client/openapi.json` regenerates byte-identical.
+      The three fix commits introduced no regression. One pre-existing defect
+      was found and fixed in the round (the test-side router double-include
+      below), which is what finally cleared the duplicate-operation-id
+      warnings from the pytest output as well as from the openapi export.
 
 ## Later in line (explicitly deferred by user 2026-08-22)
 
@@ -1104,7 +1114,31 @@ was timing:
   self-heals on the next bootstrap, so cosmetic. (d) UTC-only scheduling is
   honestly labeled in the UI — UX choice, no action.
 
-## Merge notes (feature-sweep, 2026-08-23)
+### Second verification round (2026-08-26)
+
+Re-ran the whole gate over the three commits that closed QA's
+final-verification findings (`642c577`/`751fd00`/`76556cc`/`1799969`,
+`c577ee5`, `6bbeb32`). Everything passes — see the second-round gate entry at
+the top of this file for the figures. Findings from the round:
+
+- FIXED: the test-side router double-include (full write-up under "ROUTERS
+  RE-INCLUDED FROM TESTS" in the merge notes). It was NOT introduced by the
+  three fix commits; it long pre-dated them, and it was the last source of
+  duplicate-operation-id warnings anywhere in the gate.
+- NO REGRESSIONS from the three fix commits. Checked specifically: the
+  openapi export still regenerates byte-identical, `alembic heads` still
+  reports the single head `0065_delivery_hardening` (0066 remains unclaimed
+  for the peer's integration branch), and the e2e suite is unchanged at 76
+  passed / 1 skipped.
+- CONSCIOUSLY LEFT: `pnpm build` reports six eslint *warnings* (not errors) —
+  unused `RESOLVED_BY_RERUN` in latex-compiler.tsx, unused `actionableCount`
+  and a missing `identityId` dep in inbox.tsx, unused `_dropped` in snooze.ts,
+  and in workspace.tsx an unused `ShieldAlert` import plus an eslint-disable
+  directive that no longer suppresses anything. All six arrive from the
+  four-branch merge `e6b01f6`, none of the files is touched by the fix
+  commits, and the build is green. Clearing them is a tidy-up for a branch
+  that is not mid-review — doing it here would be pure diff noise against an
+  open PR. Worth a follow-up pass once this merges.
 
 - MIGRATION RENUMBERING (QA finding #1): SETTLED at the four-branch merge
   (e6b01f6, gates fixed in 462f03c). Our 0045_templates…0055_digests became
@@ -1138,15 +1172,23 @@ was timing:
   byte-identical, and the export now warns zero times where it warned three.
   Recorded here because an earlier agent claimed this was already tracked and
   it was not.
-- ROUTERS RE-INCLUDED FROM TESTS (noticed while closing the above, NOT fixed):
-  `tests/test_board_depth.py:17` and `tests/test_doc_pending.py:18` call
-  `app.include_router(...)` on the shared `app.main` app for routers `main.py`
-  already includes, so a full pytest run permanently doubles those routes for
-  every later test in the session and emits six duplicate-operation-id
-  warnings. Behaviour is unchanged (first match wins) and the openapi export
-  is clean because it never imports those tests, so this is left alone rather
-  than widening a branch already under review. Fix is to build a local
-  `FastAPI()` in each test instead of mutating the shared app.
+- ROUTERS RE-INCLUDED FROM TESTS: FIXED on sweep-qa-fixes in the second
+  verification round (recorded as NOT fixed in the first, then closed once the
+  root cause turned out to be smaller than the "build a local FastAPI()"
+  rewrite that entry proposed). `tests/test_board_depth.py` and
+  `tests/test_doc_pending.py` each guarded their `app.include_router(...)` with
+  `any(getattr(route, "path", "")... for route in app.routes)`. That guard can
+  never match: this FastAPI version records an include as an opaque
+  `_IncludedRouter` wrapper instead of flattening it into `app.routes`, so no
+  entry there carries a `.path` at all. Both suites therefore double-included
+  on the shared app on every run — the source of the six remaining
+  duplicate-operation-id warnings. `main.py` has wired both routers for a
+  while, so the includes were vestigial scaffolding from before that landed:
+  they and the imports serving them are gone, the suites reach the routes
+  through the `client` fixture unchanged, and a full pytest run now emits no
+  warnings section at all. Watch for this shape elsewhere — any code that
+  asks "is this router already included?" by reading `route.path` is asking a
+  question `app.routes` stopped being able to answer.
 - REDELIVER SCOPE (QA verification finding 1): FIXED on sweep-qa-fixes.
   `POST /api/webhooks/deliveries/{id}/redeliver` requeued ANY non-pending
   row, so an owner (or a script walking the list) could replay a delivery the
