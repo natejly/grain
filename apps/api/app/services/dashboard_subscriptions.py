@@ -196,9 +196,11 @@ def deliver(
 
     Every miss is a skip with a `dashboard.subscription_skipped` audit naming
     its reason — a purged dashboard, a departed member, a query that can no
-    longer answer — because unattended mail that silently stops is a support
-    ticket with no evidence. Commits its own work, like `crons.fire`: the
-    caller owns no transaction across a send.
+    longer answer, a mail host that refused the message — because unattended
+    mail that silently stops is a support ticket with no evidence, and a
+    `subscription_sent` row for a mail nobody received would be worse than
+    none. Commits its own work, like `crons.fire`: the caller owns no
+    transaction across a send.
     """
     settings = settings or get_settings()
     dashboard = db.scalar(
@@ -239,7 +241,11 @@ def deliver(
     ]
     message = email_service.OutboundEmail(
         to=recipient.email,
-        subject=f"Dashboard: {dashboard.name}",
+        # The name is collapsed to one line for the Subject header: a CR/LF in
+        # a dashboard name would make the MIME assembly raise inside the
+        # sender on every fire — a permanent, invisible failure. The body and
+        # table keep the raw name; only the header path is whitespace-hostile.
+        subject=f"Dashboard: {_one_line(dashboard.name)}",
         body=_text_body(dashboard.name, result.columns, rows, settings),
         html=(
             mail_render.render_table(dashboard.name, result.columns, rows)
@@ -248,7 +254,13 @@ def deliver(
             )
         ),
     )
-    email_service.send_quietly(email_service.get_email_sender(settings), message)
+    sent = email_service.send_quietly(
+        email_service.get_email_sender(settings), message
+    )
+    if not sent:
+        # The sender refused or the mail host was down: the honest audit is a
+        # skip, not a `subscription_sent` for a mail nobody received.
+        return _skip(db, subscription, reason="delivery failed")
     record_audit(
         db,
         workspace_id=subscription.workspace_id,
@@ -264,6 +276,12 @@ def deliver(
     )
     db.commit()
     return True
+
+
+def _one_line(text: str) -> str:
+    """Collapse all whitespace — CR and LF included — to single spaces, so a
+    dashboard name can never smuggle a second header into the Subject path."""
+    return " ".join(text.split())
 
 
 def _text_body(

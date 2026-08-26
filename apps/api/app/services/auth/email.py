@@ -116,7 +116,7 @@ def get_email_sender(settings: Settings) -> EmailSender:
     return ConsoleEmailSender(settings)
 
 
-def send_quietly(sender: EmailSender, message: OutboundEmail) -> None:
+def send_quietly(sender: EmailSender, message: OutboundEmail) -> bool:
     """Deliver, and never let a mail failure change the HTTP answer.
 
     A raised SMTP error would 500 — but only on the branch that actually sends,
@@ -124,11 +124,18 @@ def send_quietly(sender: EmailSender, message: OutboundEmail) -> None:
     and an unknown address that the auth endpoints exist to hide. It also means
     a flaky mail host cannot make a successful signup, or a successful
     invitation, look like a failed one.
+
+    Returns whether the sender accepted the message, so callers that *audit*
+    delivery (dashboard subscriptions) can record the truth. The auth flows
+    deliberately ignore it — reacting would reintroduce the observable
+    difference above.
     """
     try:
         sender.send(message)
     except Exception:  # noqa: BLE001 - delivery is best effort by design
         logger.exception("failed to deliver %s to %s", message.subject, message.to)
+        return False
+    return True
 
 
 def normalize_email(raw: str) -> str:

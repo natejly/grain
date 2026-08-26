@@ -55,6 +55,7 @@ from ..models import (
     AgentToolCall,
     AuditEvent,
     Chunk,
+    DashboardSubscription,
     GraphEdge,
     GraphEntity,
     McpServer,
@@ -266,6 +267,24 @@ def remove_member(
             .values(assigned_to="")
         ),
     ).rowcount
+    # Their standing dashboard mail goes quiet too, in the same transaction —
+    # the assignment-release precedent above. The send-time membership check
+    # already skips a departed recipient, but a subscription left *enabled*
+    # audits a skip forever and silently resumes mailing if the person is ever
+    # re-invited; disabling makes the stop durable and re-authorization
+    # explicit (a re-invited member re-subscribes, or an owner re-enables).
+    silenced = cast(
+        "CursorResult[Any]",
+        db.execute(
+            update(DashboardSubscription)
+            .where(
+                DashboardSubscription.workspace_id == actor.workspace_id,
+                DashboardSubscription.recipient_user_id == user.id,
+                DashboardSubscription.enabled.is_(True),
+            )
+            .values(enabled=False)
+        ),
+    ).rowcount
     record_audit(
         db,
         workspace_id=actor.workspace_id,
@@ -277,6 +296,7 @@ def remove_member(
             "user_id": user.id,
             "role": membership.role,
             "assignments_released": int(released),
+            "subscriptions_disabled": int(silenced),
         },
     )
     db.commit()

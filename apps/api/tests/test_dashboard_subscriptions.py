@@ -24,6 +24,7 @@ the negative of, plus the schema promises every new table makes.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,7 @@ from app.database import SessionLocal, engine
 from app.main import app
 from app.models import (
     AuditEvent,
+    Dashboard,
     DashboardSubscription,
     Membership,
     User,
@@ -330,6 +332,48 @@ def test_a_purged_dashboard_makes_the_fire_a_skip_with_an_audit(
     assert "dashboard gone" in skips[0].detail_json
 
 
+def test_a_failed_send_is_audited_as_a_skip_not_a_delivery(
+    client, db, monkeypatch
+):
+    """`send_quietly` swallows SMTP failures by design; the audit must not
+    then claim a delivery that never happened. A refused mail is a skip."""
+    dashboard = make_dashboard(client)
+    created = subscribe(client, dashboard["id"])
+
+    class Exploding:
+        def send(self, message: email_service.OutboundEmail) -> None:
+            raise RuntimeError("mail host down")
+
+    monkeypatch.setattr(
+        email_service, "get_email_sender", lambda settings: Exploding()
+    )
+    assert subscription_service.deliver(db, load(db, created["id"])) is False
+    assert audits(db, "dashboard.subscription_sent", created["id"]) == []
+    skips = audits(db, "dashboard.subscription_skipped", created["id"])
+    assert len(skips) == 1
+    assert "delivery failed" in skips[0].detail_json
+
+
+def test_a_newline_bearing_dashboard_name_cannot_break_the_subject(
+    client, db, sent_emails
+):
+    """A CR/LF in the name would make MIME header assembly raise on every
+    fire — a permanent failure — and is header-injection shaped besides. The
+    subject collapses it to one line; the body keeps the raw name."""
+    dashboard = make_dashboard(client)
+    created = subscribe(client, dashboard["id"])
+    row = db.scalar(select(Dashboard).where(Dashboard.id == dashboard["id"]))
+    assert row is not None
+    row.name = "Revenue\r\nBcc: attacker@example.com"
+    db.commit()
+
+    assert subscription_service.deliver(db, load(db, created["id"])) is True
+    assert len(sent_emails) == 1
+    subject = sent_emails[0].subject
+    assert "\r" not in subject and "\n" not in subject
+    assert subject == "Dashboard: Revenue Bcc: attacker@example.com"
+
+
 def test_a_departed_member_stops_receiving_mail(client, db, sent_emails):
     """The membership row is the standing permission to receive workspace data;
     deleting it must silence the subscription, not orphan a mail to whatever
@@ -353,6 +397,45 @@ def test_a_departed_member_stops_receiving_mail(client, db, sent_emails):
     skips = audits(db, "dashboard.subscription_skipped", created["id"])
     assert len(skips) == 1
     assert "no longer a member" in skips[0].detail_json
+
+
+def test_removing_a_member_disables_their_subscriptions(client, db):
+    """`remove_member`'s release sweep, extended: the send-time membership
+    check already skips a departed recipient, but a subscription left enabled
+    would audit a skip forever — and silently resume mailing if the person
+    were ever re-invited. Removal turns it off durably, in the same
+    transaction; getting mail again takes an explicit re-enable."""
+    dashboard = make_dashboard(client)
+    member = make_member(created_workspace_id(client))
+    created = subscribe(client, dashboard["id"], recipient_user_id=member.user_id)
+
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.workspace_id == member.workspace_id,
+            Membership.user_id == member.user_id,
+        )
+    )
+    assert membership is not None
+    membership_id = membership.id
+    removed = client.delete(f"/api/admin/members/{membership_id}")
+    assert removed.status_code == 204, removed.text
+
+    db.expire_all()
+    assert load(db, created["id"]).enabled is False
+    events = audits(db, "membership.removed", membership_id)
+    assert len(events) == 1
+    assert json.loads(events[0].detail_json)["subscriptions_disabled"] == 1
+
+    # Re-inviting the person does NOT resume the mail: the disabled row stays
+    # disabled, so the ticker never claims it.
+    db.add(
+        Membership(
+            workspace_id=member.workspace_id, user_id=member.user_id, role="member"
+        )
+    )
+    db.commit()
+    claimed = subscription_service.dispatch_due(db, moment=at("2026-08-14T09:00"))
+    assert created["id"] not in claimed
 
 
 def created_workspace_id(client) -> str:
