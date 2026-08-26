@@ -33,6 +33,8 @@ alarm_email = "ops@example.com"
 // Optional CI deploy role.
 // enable_github_oidc = true
 // github_repo        = "ricelabs/grain"
+// Must match the `environment:` name on deploy-prod.yml's deploy job.
+// github_environment = "production"
 
 // Anything else on Settings that you want to override, upper-cased field name
 // to value. These are visible to anyone who can DescribeTaskDefinition.

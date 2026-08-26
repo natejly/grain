@@ -446,11 +446,27 @@ resource "aws_iam_role" "deploy" {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
-        // Pinned to one repository's default branch. `repo:owner/name:*` would
-        // let any pull request from a fork that can trigger the workflow deploy
-        // production.
+        // Pinned to one repository, and within it to the subjects that may
+        // deploy. `repo:owner/name:*` would let any pull request from a fork
+        // that can trigger the workflow deploy production.
+        //
+        // The environment form is the one that actually matters, and its
+        // absence is why this role could never be assumed: a job that names a
+        // GitHub `environment:` gets `repo:<owner>/<name>:environment:<env>` as
+        // its OIDC subject INSTEAD of the ref form, not as well as it. Both
+        // deploy workflows name one (uat, production), so every deploy run
+        // failed on "Not authorized to perform sts:AssumeRoleWithWebIdentity" —
+        // deploy-uat has never once succeeded, and deploy-prod has never run.
+        //
+        // Naming the environment is not a loosening: GitHub gates environment
+        // access itself, and a fork's pull request cannot reach one without a
+        // reviewer letting it. The ref form stays for any future job that
+        // deploys from the default branch without naming an environment.
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub" = compact([
+            var.github_environment != "" ? "repo:${var.github_repo}:environment:${var.github_environment}" : "",
+            "repo:${var.github_repo}:ref:refs/heads/main",
+          ])
         }
       }
     }]

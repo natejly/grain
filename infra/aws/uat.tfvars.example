@@ -17,6 +17,9 @@ acm_certificate_arn = "arn:aws:acm:us-east-1:REPLACE:certificate/REPLACE"
 // permits one provider per URL per account.
 enable_github_oidc       = true
 github_repo              = "natejly/grain"
+// Must match the `environment:` name on deploy-uat.yml's deploy job. That job
+// names one, so its OIDC subject is `...:environment:uat`, not the branch ref.
+github_environment       = "uat"
 github_oidc_provider_arn = "arn:aws:iam::REPLACE:oidc-provider/token.actions.githubusercontent.com"
 
 // EMAIL_SENDER=smtp is not optional in production: config.py refuses to

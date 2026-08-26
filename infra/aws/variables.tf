@@ -292,6 +292,17 @@ variable "github_repo" {
   default     = ""
 }
 
+variable "github_environment" {
+  description = <<-EOT
+    Name of the GitHub environment the deploy job runs in ("uat", "production").
+    A job that names an environment gets `environment:<name>` in its OIDC
+    subject in place of the branch ref, so the deploy role's trust policy has
+    to name it or the role cannot be assumed. Empty allows only the ref form.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "github_oidc_provider_arn" {
   description = <<-EOT
     ARN of an existing GitHub OIDC provider in this account. Empty and
