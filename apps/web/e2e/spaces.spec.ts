@@ -52,8 +52,10 @@ test("a space carries instructions, knowledge and threads, and dies whole", asyn
   await detail(page)
     .getByRole("textbox", { name: "Space instructions" })
     .fill(INSTRUCTIONS);
-  await detail(page).getByRole("button", { name: "Save" }).click();
-  await expect(detail(page).getByRole("button", { name: "Save" })).toBeDisabled();
+  // Exact, because "Save <space> as template" also lives on the detail now and
+  // role-name matching is a substring match by default.
+  await detail(page).getByRole("button", { name: "Save", exact: true }).click();
+  await expect(detail(page).getByRole("button", { name: "Save", exact: true })).toBeDisabled();
   await page.reload();
   await openView(page, "Chat", /^Spaces/);
   await list(page).getByRole("button", { name: new RegExp(`^${SPACE}`) }).click();

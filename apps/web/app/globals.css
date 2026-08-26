@@ -696,11 +696,12 @@ select:focus-visible {
 .thread {
   width: 100%;
   height: 34px;
-  display: grid;
-  /* Three trailing action columns: share/unshare (open thread only), open in a
-     new pane, and delete. The share column is `auto`, so it collapses to zero
-     width on every row that does not render the toggle. */
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  display: flex;
+  /* Flex, not a fixed-column grid: the trailing actions vary per row (rename,
+     share and comments ride only the open thread, split and delete every row),
+     and a grid with fewer columns than children wrapped the overflow into a
+     phantom second row — Delete rendered over the next row's timestamp and
+     stopped being clickable. Flex keeps every action on the one 34px line. */
   align-items: center;
   gap: 2px;
   padding: 0 2px 0 0;
@@ -719,6 +720,7 @@ select:focus-visible {
 }
 
 .thread-open {
+  flex: 1 1 auto;
   min-width: 0;
   height: 34px;
   display: grid;
@@ -4987,7 +4989,12 @@ select:focus-visible {
 .document-actions {
   display: flex;
   align-items: center;
-  flex: none;
+  /* Shrinkable and wrapping: Comments and Share joined this row, and with the
+     chat panel open the editor column is ~390px — a rigid `flex: none` row
+     slid under the panel and its Delete button swallowed clicks. */
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
   margin-left: auto;
 }
