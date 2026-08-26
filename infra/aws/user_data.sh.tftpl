@@ -195,6 +195,11 @@ fi
 systemctl daemon-reload
 systemctl enable --now grain-sandbox-image.service
 systemctl enable --now grain-backup.timer
-systemctl restart ecs || systemctl start ecs
+# --no-block is load-bearing: this script runs under cloud-final.service, and
+# the AMI's ecs.service is ordered After=cloud-final. A synchronous restart
+# here deadlocks the boot — systemd queues the ecs job behind cloud-final,
+# which is this script, which is waiting on systemd. (Observed on the first
+# real boot, 2026-08-26.)
+systemctl restart --no-block ecs || systemctl start --no-block ecs
 
 echo "bootstrap complete"

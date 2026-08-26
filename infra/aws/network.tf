@@ -199,6 +199,31 @@ resource "aws_vpc_security_group_egress_rule" "app_to_db" {
   ip_protocol                  = "tcp"
 }
 
+// Outbound SMTP submission, only when EMAIL_SENDER=smtp is actually configured.
+//
+// This is not optional decoration: `send_quietly` swallows mail *errors*, but a
+// blocked SMTP port is not an error — the SYN is blackholed and smtplib sits on
+// its 15s timeout for connect, EHLO and login in turn. Signup sends the
+// verification mail inside the request, so with egress closed every account
+// creation took **45 seconds** and the UI sat on "Working…" until users gave
+// up. Observed in production 2026-08-26.
+locals {
+  // Derived from extra_environment so the hole opens exactly when the
+  // deployment is configured to send mail, and closes again if it is not.
+  smtp_port = lookup(var.extra_environment, "EMAIL_SENDER", "") == "smtp" ? tonumber(lookup(var.extra_environment, "SMTP_PORT", "587")) : null
+}
+
+resource "aws_vpc_security_group_egress_rule" "app_smtp" {
+  count = local.smtp_port == null ? 0 : 1
+
+  security_group_id = aws_security_group.app.id
+  description       = "SMTP submission for transactional mail (EMAIL_SENDER=smtp)"
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = local.smtp_port
+  to_port           = local.smtp_port
+  ip_protocol       = "tcp"
+}
+
 // No port 53 rule: Amazon DNS is answered by the VPC resolver at the VPC base
 // +2 address, which security groups do not filter. No port 80 rule either —
 // nothing this host talks to is plaintext.

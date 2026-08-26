@@ -273,11 +273,17 @@ resource "aws_ecs_task_definition" "migrate" {
       // DATABASE_URL is the only one migrations need. OPENAI_API_KEY is here
       // because Settings refuses to construct without it — `make migrate`
       // already failed this way once in this repo, which is why config.py
-      // anchors its env_file to the repo root.
+      // anchors its env_file to the repo root. extra_environment is merged for
+      // the same reason: Settings runs its full production validation here
+      // too, so any override needed to make it construct for the API (e.g.
+      // EMAIL_SENDER=smtp, observed 2026-08-26) is needed to migrate.
       environment = [
-        { name = "APP_ENV", value = "production" },
-        { name = "MODEL_PROVIDER", value = "openai" },
-        { name = "OBJECTS_DIR", value = local.objects_dir },
+        for name, value in merge({
+          APP_ENV        = "production"
+          MODEL_PROVIDER = "openai"
+          OBJECTS_DIR    = local.objects_dir
+        }, var.extra_environment) :
+        { name = name, value = value }
       ]
 
       secrets = [

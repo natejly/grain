@@ -48,13 +48,29 @@ resource "aws_iam_role_policy" "ecs_instance_agent" {
     Version = "2012-10-17"
     Statement = [
       {
-        // Every ECS action that accepts the ecs:cluster condition key is
-        // pinned to this deployment's cluster.
-        Sid    = "AgentScopedToThisCluster"
+        // (De)RegisterContainerInstance take the cluster itself as the
+        // resource and do NOT supply the ecs:cluster condition key — putting
+        // them in the conditioned statement below denies them against a
+        // missing key (observed on first boot: the agent crash-looped on
+        // AccessDenied). Pin them by resource instead.
+        Sid    = "AgentJoinsThisCluster"
         Effect = "Allow"
         Action = [
           "ecs:DeregisterContainerInstance",
           "ecs:RegisterContainerInstance",
+        ]
+        Resource = aws_ecs_cluster.main.arn
+      },
+      {
+        // Pinned by resource ARN rather than the ecs:cluster condition key:
+        // in practice the agent's calls arrive without that key (observed
+        // 2026-08-26 — SubmitTaskStateChange was denied against the cluster
+        // resource, leaving every task stuck PENDING from ECS's view), so a
+        // condition on it silently denies. Tasks and container instances
+        // embed the cluster name in their ARNs, which gives the same scoping.
+        Sid    = "AgentScopedToThisCluster"
+        Effect = "Allow"
+        Action = [
           "ecs:UpdateContainerInstancesState",
           "ecs:Poll",
           "ecs:StartTelemetrySession",
@@ -62,10 +78,11 @@ resource "aws_iam_role_policy" "ecs_instance_agent" {
           "ecs:SubmitContainerStateChange",
           "ecs:SubmitTaskStateChange",
         ]
-        Resource = "*"
-        Condition = {
-          ArnEquals = { "ecs:cluster" = aws_ecs_cluster.main.arn }
-        }
+        Resource = [
+          aws_ecs_cluster.main.arn,
+          "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task/${aws_ecs_cluster.main.name}/*",
+          "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:container-instance/${aws_ecs_cluster.main.name}/*",
+        ]
       },
       {
         // These two accept no resource and no condition. Called out rather than

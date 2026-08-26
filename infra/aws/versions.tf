@@ -27,7 +27,7 @@ terraform {
   # Left commented so `terraform init` works without a pre-existing bucket while
   # the configuration is being read. Uncomment before you apply anything real.
   #
-  # backend "s3" {}
+  backend "s3" {}
 }
 
 provider "aws" {

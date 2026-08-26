@@ -569,3 +569,45 @@
   against a named product, enumerate its functionality and diff that against
   ours; ask "what can it do that we can't" before "what does it show that we
   don't".
+- "Deployed" is not "reachable": verify the URL a user would type, not the one
+  the tool prints. I reported grain.natejly.com live because `vercel deploy
+  --prod` printed "Aliased https://grain.natejly.com" and a curl of
+  `grain-web-ten.vercel.app` returned 200 — but the apex zone had no DNS record
+  for `grain` at all, so the real hostname was NXDOMAIN for the whole session
+  and the user hit a dead site twice while I described it as working. A Vercel
+  domain can be attached AND verified in the project API and still not resolve;
+  in a Vercel-managed zone the subdomain needs its own `CNAME -> cname.vercel-
+  dns.com`. Curl the customer-facing hostname before saying it is up, and when
+  the user says "it isn't working", re-probe rather than re-explaining the
+  wiring — the wiring was in fact correct, and the missing record was one dig
+  away the whole time.
+- A schema constraint that only one engine enforces is a production-only bug
+  waiting for the first real deploy. Alembic hardcodes
+  `alembic_version.version_num` as VARCHAR(32); three revision ids in this tree
+  are longer (up to 42 chars). SQLite ignores VARCHAR lengths, so 63 migrations
+  passed locally and in CI forever, and the chain died at 0013 -> 0014 on RDS
+  with StringDataRightTruncation. Fix in `alembic/env.py` by widening (or
+  pre-creating) the version table before `run_migrations()` — renaming applied
+  revisions would break every database that already recorded them. General
+  rule: when dev is SQLite and prod is PostgreSQL, prove the migration chain
+  against a real postgres container before calling a deploy done; one local run
+  found it in 90 seconds after three ~10-minute ECS round-trips found it once.
+- A swallowed exception does not protect you from a blocked port. `send_quietly`
+  wraps SMTP in `except Exception` precisely so mail cannot break signup — but a
+  closed security-group egress does not raise, it blackholes the SYN, and
+  smtplib then waits out its 15s timeout for connect, EHLO and login in turn.
+  Signup took 45 seconds and the UI sat on "Working…"; every API-level check I
+  ran passed, because `/health` sends no mail and `curl --max-time 25` cut the
+  request off before it could tell me. Two habits from this: when a request
+  "hangs", measure it with a generous timeout and read the number, and when an
+  app is moved behind a restrictive egress policy, enumerate every outbound port
+  the code can use, not just the ones the happy path needs.
+- Reproduce user-facing bugs in a real browser, not with curl. curl proved
+  signup+login worked at the API; the browser showed the form stuck on
+  "Working…" with the POST sent and no response — the actual complaint. Driving
+  Chromium with Playwright while logging every response and console error found
+  it in one run, and also proved the fix by watching the UI reach the workspace.
+- `NEXT_PUBLIC_*` is inlined at build time, so changing the env var is not
+  enough — a cached Vercel build keeps the old value. Use `vercel deploy
+  --force` after changing one, and verify by reading the deployed page's CSP
+  `connect-src` rather than trusting the dashboard.

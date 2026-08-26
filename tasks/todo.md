@@ -1312,3 +1312,86 @@ presentation detail: tasks/visual-harness-plan.md.
       transcripts, usage meter (screenshot-review every visual change)
 - [ ] Full gate per phase: make lint, pytest, pnpm test, pnpm build, e2e,
       alembic up/down base on scratch DB for schema phases
+## AWS production deploy — 2026-08-25 (branch bg/deploy-aws)
+
+Domains: web https://grain.natejly.com (Vercel), API https://api.grain.natejly.com (ALB).
+Account 518060119468, us-east-1, tag 2026-08-25-462f03c. Per docs/DEPLOY-AWS.md.
+
+- [x] Fix ~/.aws credentials (secret was truncated to 39 chars) + output=json
+- [x] Install OpenTofu 1.12.6
+- [x] Author apps/api/Dockerfile per DEPLOY-AWS.md appendix
+- [x] State bucket grain-tfstate-518060119468 (versioned, SSE, public-access-blocked)
+- [x] ACM cert for api.grain.natejly.com — needed CAA `0 issue "amazon.com"` in
+      Vercel DNS (apex pinned letsencrypt/pki.goog/sectigo → CAA_ERROR twice);
+      issued: .../certificate/104b3405-5f49-4e42-aeae-2599bf16209d
+- [x] tofu init (S3 backend) + targeted apply of ECR repos
+- [x] Sandbox image pushed to grain/sandbox:2026-08-25-462f03c
+- [x] API image → grain/api:2026-08-25-462f03c (colima Fastly/MTU issue: pypi
+      TLS handshake dies behind docker0 NAT; fixed with docker build --network=host)
+- [x] Full tofu apply — everything created EXCEPT aws_instance.app, aws_db_instance.main,
+      aws_ecs_service (AWS account is on the Free plan: m7g.large refused, RDS
+      FreeTierRestrictionError). User chose to stay on Free plan; re-applied with t4g.small / db.t4g.micro / 1-day retention sizing (see tfvars comment for the paid-plan restore path).
+- [x] Secrets: OPENAI_API_KEY (from .env), Fernet integrations key; google left placeholder
+- [x] SSM /grain/sandbox-image (terraform-managed; host pulls at bootstrap)
+- [x] DNS: api.grain CNAME -> grain-api-1869332955.us-east-1.elb.amazonaws.com
+      (CAA moved to apex: CNAME cannot coexist with other records at same name)
+- [ ] Migration task (grain-migrate) exit 0
+- [x] Vercel: grain.natejly.com live on grain-web, NEXT_PUBLIC_API_URL inlined at build
+      (CLI 46 was too old for deploy endpoint; upgraded to 59.5.0)
+- [x] Health check + full-stack handshake (see "Bugs the first deploy found")
+
+### Bugs the first real deploy found (all fixed on this branch)
+
+1. `alembic_version` is VARCHAR(32) but three revision ids are longer (up to 42
+   chars). SQLite ignores VARCHAR lengths, PostgreSQL does not — 63 migrations
+   passed locally forever and died at 0013 -> 0014 on RDS. `alembic/env.py` now
+   widens/pre-creates the version table to VARCHAR(128) before running
+   migrations. Verified against a real postgres:16 container: 63 revisions, 84
+   tables, exit 0.
+2. ECS agent IAM: RegisterContainerInstance and SubmitTaskStateChange arrive
+   without the `ecs:cluster` condition key, so conditioning on it denies. The
+   agent crash-looped, then tasks hung PENDING. Pinned by resource ARN instead.
+3. Boot deadlock: user_data runs under cloud-final.service and ecs.service is
+   ordered After=cloud-final, so a synchronous `systemctl restart ecs`
+   deadlocked the first boot. Now `--no-block`.
+4. `grain.natejly.com` and `uat.grain.natejly.com` were attached and verified in
+   the Vercel project but had no DNS record in the Vercel-managed zone — the
+   hostnames were NXDOMAIN. Each needs its own CNAME -> cname.vercel-dns.com.
+6. **Signup took 45 seconds.** The app security group allowed egress on 443 and
+   5432 only, so the SMTP connection to SES was blackholed and smtplib waited
+   out its 15s timeout three times (connect, EHLO, login) inside the signup
+   request. `send_quietly` swallows mail *errors*, but a blocked port is not an
+   error. The UI sat on "Working..." and users gave up. Opening 587 took signup
+   from 45.2s to 0.68s. The rule is derived from `extra_environment` so it only
+   exists when EMAIL_SENDER=smtp is configured.
+7. Vercel deployment protection (`all_except_custom_domains`) plus a
+   branch-bound domain made uat.grain.natejly.com redirect to Vercel SSO. The
+   binding had to be cleared for the manual alias to be treated as a custom
+   domain.
+8. `NEXT_PUBLIC_API_URL` is inlined at build time, so a cached Vercel build
+   keeps the old value — a changed env var needs `vercel deploy --force`.
+
+5. `EMAIL_SENDER=console` is refused outside development, and
+   `extra_environment` was not merged into the migrate task, so the migration
+   could not construct Settings even after SMTP was configured.
+
+### Environments
+
+- prod: https://grain.natejly.com + https://api.grain.natejly.com (workspace
+  `default`, cluster grain-cluster)
+- UAT: https://uat.grain.natejly.com + https://api.uat.grain.natejly.com
+  (workspace `uat`, `-var-file=uat.tfvars`, cluster grain-uat-cluster)
+- QA: ci.yml gates on every PR + Vercel preview deployments per branch
+- CI/CD: deploy-uat.yml auto-deploys main; deploy-prod.yml is
+  workflow_dispatch gated by the `production` environment reviewer and
+  fast-forwards `release`, which is Vercel's production branch
+
+### Open follow-ups
+
+- [ ] Root AWS access keys are in use — create an IAM user and retire them
+- [ ] SES identity natejly@gmail.com is unverified and the account is in the
+      SES sandbox; mail will not deliver until both are resolved
+- [ ] SMTP_PASSWORD sits in the task definition (readable via
+      ecs:DescribeTaskDefinition) — move it into Secrets Manager
+- [ ] Keep api_image_tag in tfvars in sync with what CI last deployed, or the
+      next local `tofu apply` rolls the service back

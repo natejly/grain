@@ -1,0 +1,108 @@
+# Promote to production. Manually triggered, and gated by the `production`
+# GitHub environment (required reviewer) — approving the run in the Actions UI
+# is the UAT -> prod sign-off.
+#
+# Rebuilds images from the chosen ref (immutable tags; same ref => same
+# contents) because the prod deploy role can only touch grain/* ECR repos.
+# Auth is GitHub OIDC -> arn:aws:iam::518060119468:role/grain-deploy, which is
+# trust-limited to refs/heads/main.
+#
+# The web app promotes by fast-forwarding the `release` branch: Vercel's
+# production branch is `release`, so pushing it triggers the production build
+# for grain.natejly.com with the production NEXT_PUBLIC_API_URL.
+#
+# NOTE: keep api_image_tag in infra/aws/terraform.tfvars in sync with the tag
+# this deploys, or the next local `tofu apply` will roll prod back.
+name: deploy-prod
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: write # fast-forwards the `release` branch for the Vercel prod build
+
+env:
+  AWS_REGION: us-east-1
+  ECR: 518060119468.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04-arm
+    environment:
+      name: production
+      url: https://grain.natejly.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::518060119468:role/grain-deploy
+          aws-region: us-east-1
+
+      - name: Compute image tag
+        run: echo "TAG=$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Log in to ECR
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR"
+
+      - name: Build and push images
+        run: |
+          docker build -t "$ECR/grain/api:$TAG" -f apps/api/Dockerfile .
+          docker push "$ECR/grain/api:$TAG"
+          docker build -t "$ECR/grain/sandbox:$TAG" infra/sandbox
+          docker push "$ECR/grain/sandbox:$TAG"
+
+      - name: Register task definitions with the new image
+        run: |
+          for FAMILY in grain-api grain-migrate; do
+            aws ecs describe-task-definition --task-definition "$FAMILY" \
+              --query taskDefinition --output json \
+            | python3 -c '
+          import json, os, sys
+          td = json.load(sys.stdin)
+          for c in td["containerDefinitions"]:
+              c["image"] = os.environ["ECR"] + "/grain/api:" + os.environ["TAG"]
+          for k in ("taskDefinitionArn","revision","status","requiresAttributes",
+                    "compatibilities","registeredAt","registeredBy"):
+              td.pop(k, None)
+          json.dump(td, sys.stdout)
+          ' > "/tmp/$FAMILY.json"
+            aws ecs register-task-definition --cli-input-json "file:///tmp/$FAMILY.json" \
+              --query 'taskDefinition.taskDefinitionArn' --output text
+          done
+
+      - name: Run database migration
+        run: |
+          TASK=$(aws ecs run-task --cluster grain-cluster \
+                   --task-definition grain-migrate --launch-type EC2 \
+                   --query 'tasks[0].taskArn' --output text)
+          aws ecs wait tasks-stopped --cluster grain-cluster --tasks "$TASK"
+          CODE=$(aws ecs describe-tasks --cluster grain-cluster --tasks "$TASK" \
+                   --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "migration exit code: $CODE"
+          test "$CODE" = "0"
+
+      - name: Roll the service
+        run: |
+          aws ecs update-service --cluster grain-cluster --service grain-api \
+            --task-definition grain-api --force-new-deployment >/dev/null
+          aws ecs wait services-stable --cluster grain-cluster --services grain-api
+
+      - name: API health check
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                     https://api.grain.natejly.com/health || true)
+            [ "$code" = "200" ] && { echo healthy; exit 0; }
+            sleep 10
+          done
+          echo "prod health check failed"; exit 1
+
+      - name: Promote web (fast-forward release branch)
+        run: |
+          git push origin "HEAD:refs/heads/release"

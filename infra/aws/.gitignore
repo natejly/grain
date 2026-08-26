@@ -9,7 +9,10 @@
 .terraform.tfstate.lock.info
 
 # Real values. terraform.tfvars.example is the committed template.
+# Every per-environment tfvars carries the same risk: SMTP_PASSWORD and any
+# other extra_environment override lands in them verbatim.
 terraform.tfvars
+uat.tfvars
 *.auto.tfvars
 
 crash.log
