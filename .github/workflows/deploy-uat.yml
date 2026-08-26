@@ -55,10 +55,29 @@ jobs:
 
       - name: Build and push images
         run: |
-          docker build -t "$ECR/grain-uat/api:$TAG" -f apps/api/Dockerfile .
-          docker push "$ECR/grain-uat/api:$TAG"
-          docker build -t "$ECR/grain-uat/sandbox:$TAG" infra/sandbox
-          docker push "$ECR/grain-uat/sandbox:$TAG"
+          # TAG is date + commit sha, so it names exactly one build of exactly
+          # one commit — and these repos are immutable-tagged, so re-running
+          # this job for the same commit cannot push again: it dies on "tag
+          # invalid ... cannot be overwritten". That is the ORDINARY case, not
+          # an edge one, because every retry after a later step failed re-enters
+          # here with the images already pushed. An existing tag therefore means
+          # the image is already built and correct, so reuse it and move on to
+          # the steps that still have work to do.
+          #
+          # `docker manifest inspect` rather than `aws ecr describe-images`: the
+          # ECR login above already authorises it, so this needs no addition to
+          # the deploy role's policy.
+          for REPO in api sandbox; do
+            if docker manifest inspect "$ECR/grain-uat/$REPO:$TAG" >/dev/null 2>&1; then
+              echo "grain-uat/$REPO:$TAG is already pushed — reusing it"
+              continue
+            fi
+            case "$REPO" in
+              api) docker build -t "$ECR/grain-uat/api:$TAG" -f apps/api/Dockerfile . ;;
+              sandbox) docker build -t "$ECR/grain-uat/sandbox:$TAG" infra/sandbox ;;
+            esac
+            docker push "$ECR/grain-uat/$REPO:$TAG"
+          done
 
       - name: Register task definitions with the new image
         run: |
