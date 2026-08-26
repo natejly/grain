@@ -18,6 +18,7 @@ from .api import (
     bibliography,
     board_ops,
     chat,
+    coworking,
     crons,
     dashboards,
     dbconnect,
@@ -119,6 +120,7 @@ app.include_router(dbconnect.router)
 app.include_router(artifacts.router)
 app.include_router(board_ops.router)
 app.include_router(todos.router)
+app.include_router(coworking.router)
 app.include_router(doc_pending.router)
 app.include_router(inbox.router)
 app.include_router(folders.router)

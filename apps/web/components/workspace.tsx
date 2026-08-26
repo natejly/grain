@@ -8,6 +8,7 @@ import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
 import { useSession } from "./auth/session-provider";
 import { PaneToggle, useCollapsiblePane } from "./collapsible-pane";
 import { CommandPalette } from "./command-palette";
+import { CoworkingStrip } from "./coworking-strip";
 import { CreateMenu } from "./create-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
 import { SystemStatus } from "./system-status";
@@ -60,6 +61,7 @@ import { WorkspaceSwitcher } from "./workspace-selection";
 export function Workspace() {
   const {
     bootstrap,
+    coworking,
     conversations,
     activeConversation,
     messages,
@@ -866,6 +868,13 @@ export function Workspace() {
             {showSections && <span>{activeGroup.label}</span>}
             <strong>{view === "chat" ? activeTitle : PAGE_TITLES[view]}</strong>
           </div>
+          {/* Live coworking: agents mid-run and teammates with a surface
+              open, visible from anywhere in the shell. Renders nothing when
+              the workspace is quiet. */}
+          <CoworkingStrip
+            coworking={coworking}
+            selfId={bootstrap?.identity.user_id ?? ""}
+          />
           <div className="topbar-actions">
             <CreateMenu create={create} />
             <WorkspaceSettingsMenu activeGroup={activeGroup.id} open={openGroup} />
@@ -956,7 +965,11 @@ export function Workspace() {
                   conversationId: activeConversation,
                   conversationTitle: activeTitle,
                 }}
-                todos={{ lists: todoLists, ops: todoOps }}
+                todos={{
+                  lists: todoLists,
+                  ops: todoOps,
+                  selfId: bootstrap?.identity.user_id,
+                }}
                 pinning={pinning}
                 endRef={endRef}
                 selectedAgentId={selectedAgentId}
@@ -1137,6 +1150,7 @@ export function Workspace() {
             removeDocument={removeDocument}
             pendingEdits={pendingEdits}
             decidePendingEdit={decidePendingEdit}
+            coworking={coworking}
             chat={{
               agentId: bootstrap?.default_agent_id,
               sources,
@@ -1163,6 +1177,7 @@ export function Workspace() {
             removeBoard={removeBoard}
             columnOps={boardColumnOps}
             todoOps={todoOps}
+            selfId={bootstrap?.identity.user_id}
           />
         )}
 

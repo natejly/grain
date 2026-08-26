@@ -34,6 +34,7 @@ import type {
 } from "@workspace/api-client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { useCoworking } from "./use-coworking";
 import {
   CHAT_PANES_KEY,
   MAX_EXTRA_PANES,
@@ -374,6 +375,41 @@ export function useWorkspace() {
     setFolders(nextFolders);
     setBoards(nextBoards);
   }, [refreshDashboards]);
+
+  // The workspace's one live-coworking connection: run/presence snapshots for
+  // the strip and the surfaces, plus a refresh ping when a durable event (a
+  // claim, a tick) says the board state everyone is looking at moved.
+  const coworking = useCoworking(
+    bootstrap?.identity.user_id ?? "",
+    useCallback(
+      (eventType: string) => {
+        if (eventType.startsWith("card.") || eventType.startsWith("todo.")) {
+          void refreshArtifacts().catch(() => undefined);
+        }
+      },
+      [refreshArtifacts],
+    ),
+  );
+
+  // The composer's typing chip: while a draft is forming on the active
+  // thread, this user shows as typing there — to teammates, and to the strip.
+  // `report` is the hook's stable, throttled callback, so this costs one
+  // heartbeat per keystroke burst; the timeout reads a pause as a pause.
+  const reportPresence = coworking.report;
+  useEffect(() => {
+    if (!activeConversation || !bootstrap) return;
+    const surface = `conversation:${activeConversation}`;
+    if (!draft) {
+      reportPresence(surface, { typing: false });
+      return;
+    }
+    reportPresence(surface, { typing: true });
+    const timer = window.setTimeout(
+      () => reportPresence(surface, { typing: false }),
+      3_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [draft, activeConversation, bootstrap, reportPresence]);
 
   const refreshInfra = useCallback(async () => {
     const [nextConnections, nextProjects] = await Promise.all([
@@ -930,6 +966,7 @@ export function useWorkspace() {
 
   return {
     bootstrap,
+    coworking,
     conversations,
     activeConversation,
     messages,

@@ -871,6 +871,15 @@ DB_GET_ALLOWLIST = {
     # membership in one of this org's workspaces, so it can neither promote a
     # stranger nor be used to probe which user ids exist.
     ("app/api/org.py", "User"): "membership in one of the org's workspaces is re-checked",
+    # Live coworking. Each of these fetches by primary key and compares the
+    # row's workspace_id before anything is read off it — the same
+    # check-on-the-next-line discipline as subjects.py.
+    ("app/services/coworking.py", "Agent"): "workspace re-checked on the next line",
+    ("app/services/coworking.py", "BoardCard"): (
+        "workspace re-checked on the next line; the claim UPDATE above it "
+        "already carries the workspace filter"
+    ),
+    ("app/services/artifacts/tools.py", "Run"): "workspace re-checked on the next line",
 }
 
 

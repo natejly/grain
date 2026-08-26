@@ -135,7 +135,12 @@ def test_blank_instructions_and_a_deleted_space_degrade_to_nothing() -> None:
         db.commit()
     finally:
         db.close()
-    assert _instructions_for(run_id) == CHAT_INSTRUCTIONS
+    # Not equality: the blank space's run above is still "running", so the
+    # coworking-awareness layer rightly names it. The space's own contract is
+    # what this test owns — stock prompt first, nothing of the space in it.
+    text = _instructions_for(run_id)
+    assert text.startswith(CHAT_INSTRUCTIONS)
+    assert "Soon gone." not in text
 
 
 def test_another_workspaces_space_id_injects_nothing() -> None:

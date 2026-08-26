@@ -1637,6 +1637,36 @@ ROUTE_CASES: List[RouteCase] = [
         DENY,
         path_ids={"item_id": "todo_item"},
     ),
+    # -- live coworking ------------------------------------------------------
+    # The claim routes resolve the card with the same workspace filter the todo
+    # item routes use; the read surfaces are pure workspace-scoped state, so
+    # the sweep's job is proving A's activity never carries a row of B's.
+    RouteCase("GET", "/api/coworking/activity", SCOPED),
+    # `once` bounds the stream to a single pass — the sweep has to terminate —
+    # and one pass already carries the runs and presence snapshots the leak
+    # scan wants to look inside.
+    RouteCase("GET", "/api/coworking/stream", SCOPED, query={"once": "true"}),
+    RouteCase(
+        "POST",
+        "/api/coworking/presence",
+        SCOPED,
+        body={"surface": "board:probe", "state": {"typing": True}},
+    ),
+    RouteCase(
+        "DELETE", "/api/coworking/presence", SCOPED, query={"surface": "board:probe"}
+    ),
+    RouteCase(
+        "POST",
+        "/api/coworking/items/{item_id}/claim",
+        DENY,
+        path_ids={"item_id": "todo_item"},
+    ),
+    RouteCase(
+        "POST",
+        "/api/coworking/items/{item_id}/release",
+        DENY,
+        path_ids={"item_id": "todo_item"},
+    ),
     # -- projects ----------------------------------------------------------
     RouteCase("GET", "/api/projects", SCOPED),
     RouteCase("POST", "/api/projects", SCOPED, body={"name": "mine", "kind": "web"}),

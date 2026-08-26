@@ -548,3 +548,14 @@
   smaller (fewer agents, medium effort, no verify fan-out) AND self-verify the
   highest-risk surfaces by hand in parallel; the lighter re-run then found the
   real NaN-500 the stall had hidden.
+- `pytest ... | tail` reports TAIL's exit code — the pipeline "passed" with
+  three failures scrolled past. Capture to a file and echo pytest's own $?,
+  or read the short-test-summary line; never trust a piped gate's status.
+- Any feature that appends to a turn's instructions breaks every test that
+  asserts instruction EQUALITY in a shared-workspace fixture (space
+  directives did; skills would have). Grep for `== CHAT_INSTRUCTIONS` when
+  adding an instruction layer, and restate those asserts as prefix+absence.
+- New routes and new `db.get` call sites fail the tenant-isolation ledgers by
+  design (isolation.py ROUTE_CASES, DB_GET_ALLOWLIST) — register them in the
+  same change, and give an unbounded SSE route a bounded reading (`once=`)
+  or the sweep cannot finish.

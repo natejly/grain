@@ -820,6 +820,14 @@ class BoardCardOut(ApiModel):
     #: without changing anything about it. Defaulted, so a caller that predates
     #: the column keeps parsing.
     done: bool = False
+    #: The claim lease, same shape and same reasoning as TodoItemOut's: who is
+    #: working this card, with an expired lease already read as no claim.
+    claimed: bool = False
+    claimed_by: str = ""
+    claimed_kind: str = ""
+    claimed_label: str = ""
+    claimed_run_id: str = ""
+    claim_expires_at: Optional[datetime] = None
 
 
 class BoardColumnOut(ApiModel):
@@ -862,6 +870,15 @@ class TodoItemOut(ApiModel):
     done: bool
     #: When it was ticked, or null while it is open.
     done_at: Optional[datetime] = None
+    #: Who is working this item right now — the claim lease, with an expired
+    #: lease already read as no claim (services/coworking.claim_snapshot), so a
+    #: client never renders a ghost holder. Defaults are the unclaimed shape.
+    claimed: bool = False
+    claimed_by: str = ""
+    claimed_kind: str = ""
+    claimed_label: str = ""
+    claimed_run_id: str = ""
+    claim_expires_at: Optional[datetime] = None
 
 
 class TodoListOut(ApiModel):
@@ -891,6 +908,52 @@ class TodoItemUpdate(BaseModel):
     done: Optional[bool] = None
     title: Optional[str] = Field(default=None, min_length=1, max_length=300)
     body: Optional[str] = None
+
+
+# --------------------------------------------------------------------------
+# Coworking — presence heartbeats, the workspace activity snapshot, claims.
+# See services/coworking.py.
+
+
+class PresenceHeartbeat(BaseModel):
+    #: "kind:id" — "document:<id>", "conversation:<id>", "board:<id>".
+    surface: str = Field(min_length=1, max_length=120)
+    #: Cursor / selection / typing / live draft. Free-form on purpose: the
+    #: server relays it, only the surface's own clients interpret it. The
+    #: draft is capped server-side, not here, so an oversized one degrades to
+    #: a truncated live view rather than a 422 mid-keystroke.
+    state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PresenceOut(ApiModel):
+    actor_id: str
+    actor_kind: str
+    actor_label: str
+    surface: str
+    state: Dict[str, Any]
+    updated_at: datetime
+
+
+class ActivityRunOut(ApiModel):
+    """One run, as the coworking surfaces care about it: who is doing what
+    where — never the transcript."""
+
+    run_id: str
+    conversation_id: str
+    status: str
+    agent_id: str
+    agent_label: str
+    #: First line of the prompt, shortened — a label, not a record.
+    intent: str
+    created_by: str
+
+
+class CoworkingActivityOut(ApiModel):
+    runs: List[ActivityRunOut]
+    presences: List[PresenceOut]
+    #: The stream cursor a client should resume `/api/coworking/stream` from,
+    #: so snapshot-then-subscribe misses nothing.
+    last_event_sequence: int
 
 
 class McpToolOut(ApiModel):

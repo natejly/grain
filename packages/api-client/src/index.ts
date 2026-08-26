@@ -594,6 +594,16 @@ export type BoardCard = {
    * kanban card by growing a second column, same id, tick intact.
    */
   done: boolean;
+  /**
+   * The claim lease — same shape as TodoItem's. `claimed` truthy is the whole
+   * test; the holder fields are only sent while a live claim stands.
+   */
+  claimed?: boolean;
+  claimed_by?: string;
+  claimed_kind?: string;
+  claimed_label?: string;
+  claimed_run_id?: string;
+  claim_expires_at?: string | null;
 };
 
 export type BoardColumn = {
@@ -633,6 +643,69 @@ export type TodoItem = {
   done: boolean;
   /** When it was ticked, or null while it is open. */
   done_at: string | null;
+  /**
+   * Who is working this item right now — a lease, not an assignment. The
+   * server already reads an expired lease as no claim, so `claimed` truthy is
+   * the whole test; the holder fields are only sent while a claim stands.
+   */
+  claimed?: boolean;
+  claimed_by?: string;
+  claimed_kind?: string;
+  claimed_label?: string;
+  claimed_run_id?: string;
+  claim_expires_at?: string | null;
+};
+
+// --- Live coworking ---------------------------------------------------------
+// One SSE stream per workspace shell (`streamCoworking`) carrying three frame
+// kinds: durable workspace events (claims, ticks) with sequence ids, and
+// diffed `runs` / `presence` snapshots. Presence itself is written back with
+// `heartbeatPresence` — cursor, selection, typing, and the live draft that
+// makes a document Google-Docs-followable before anything is saved.
+
+/** One actor's live position on one surface, as the stream reports it. */
+export type CoworkingPresence = {
+  actor_id: string;
+  actor_kind: "user" | "agent" | string;
+  actor_label: string;
+  /** "document:<id>", "conversation:<id>", "board:<id>". */
+  surface: string;
+  state: {
+    cursor?: number;
+    selection_start?: number;
+    selection_end?: number;
+    typing?: boolean;
+    draft?: string;
+    draft_truncated?: boolean;
+    [key: string]: unknown;
+  };
+  updated_at: string;
+};
+
+/** A run in flight, as the coworking surfaces care about it — never text. */
+export type CoworkingRun = {
+  run_id: string;
+  conversation_id: string;
+  status: string;
+  agent_id: string;
+  agent_label: string;
+  /** First line of the prompt, shortened — a label, not a record. */
+  intent: string;
+  created_by: string;
+};
+
+export type CoworkingActivity = {
+  runs: CoworkingRun[];
+  presences: CoworkingPresence[];
+  /** Resume `streamCoworking` from here so snapshot-then-subscribe misses nothing. */
+  last_event_sequence: number;
+};
+
+/** One frame off the coworking stream. `id` is 0 for snapshot frames. */
+export type CoworkingFrame = {
+  id: number;
+  event: string;
+  data: unknown;
 };
 
 export type DbEngine = "postgres" | "mysql" | "sqlite" | "duckdb";
@@ -2717,6 +2790,61 @@ export class WorkspaceApi {
     );
   }
 
+  /**
+   * Claim a todo item to work on it — a lease the server decides atomically.
+   * 409 means someone (or some agent) already holds it, named in the error.
+   */
+  claimTodoItem(itemId: string): Promise<TodoItem> {
+    return this.request(
+      `/api/coworking/items/${itemId}/claim`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  /**
+   * Give a claim back. `force` takes it off ANYONE's card — the human
+   * override an agent does not get — so pass it only from an explicit
+   * "take over" gesture, never as a retry.
+   */
+  releaseTodoItem(itemId: string, force = false): Promise<TodoItem> {
+    return this.request(
+      `/api/coworking/items/${itemId}/release${force ? "?force=true" : ""}`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  /** The snapshot a shell paints before subscribing to `streamCoworking`. */
+  coworkingActivity(): Promise<CoworkingActivity> {
+    return this.request("/api/coworking/activity");
+  }
+
+  /**
+   * Report where this user is and what they are doing — cursor, selection,
+   * typing, live draft. Fire-and-forget from the caller's point of view;
+   * presence expires on its own if the tab dies mid-heartbeat.
+   */
+  heartbeatPresence(
+    surface: string,
+    state: CoworkingPresence["state"],
+  ): Promise<CoworkingPresence> {
+    return this.request(
+      "/api/coworking/presence",
+      { method: "POST", body: JSON.stringify({ surface, state }) },
+      true,
+    );
+  }
+
+  /** The explicit goodbye a closing surface sends, so chips clear in one tick. */
+  leavePresence(surface: string): Promise<void> {
+    return this.request(
+      `/api/coworking/presence?surface=${encodeURIComponent(surface)}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
   listDbConnections(): Promise<DbConnection[]> {
     return this.request("/api/db/connections");
   }
@@ -3735,6 +3863,67 @@ export class WorkspaceApi {
           if (line.startsWith("data:")) data = line.slice(5).trim();
         }
         yield { id, event, data: JSON.parse(data) as Record<string, unknown> };
+      }
+    }
+  }
+
+  /**
+   * The workspace's one live connection: durable workspace events (claims,
+   * ticks) carrying sequence ids, plus diffed `runs` and `presence` snapshot
+   * frames (id 0). Unlike a run stream it never ends on its own — the caller
+   * owns its lifetime and aborts the fetch to hang up.
+   */
+  async *streamCoworking(
+    after = 0,
+    signal?: AbortSignal,
+  ): AsyncGenerator<CoworkingFrame> {
+    // Same cookie-not-CSRF reasoning as streamRun: a long-lived GET.
+    const headers = new Headers(this.headers);
+    headers.set("Accept", "text/event-stream");
+    if (this.workspaceId) headers.set(WORKSPACE_HEADER, this.workspaceId);
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.baseUrl}/api/coworking/stream?after=${after}`,
+        { headers, credentials: "include", signal },
+      );
+    } catch {
+      throw new ApiError(`Cannot reach the API at ${this.baseUrl}`, 0);
+    }
+    if (response.status === 401) this.signalUnauthorized();
+    if (!response.ok || !response.body) {
+      throw new ApiError(
+        "Could not open the coworking stream",
+        response.status,
+      );
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      let value: Uint8Array | undefined;
+      let done: boolean;
+      try {
+        ({ value, done } = await reader.read());
+      } catch {
+        // An aborted stream is a hang-up, not an error.
+        return;
+      }
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() || "";
+      for (const frame of frames) {
+        if (!frame || frame.startsWith(":")) continue;
+        let id = 0;
+        let event = "message";
+        let data = "{}";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("id:")) id = Number(line.slice(3).trim());
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          if (line.startsWith("data:")) data = line.slice(5).trim();
+        }
+        yield { id, event, data: JSON.parse(data) as unknown };
       }
     }
   }

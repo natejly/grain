@@ -905,6 +905,28 @@ class BoardCard(Base):
     #: is what lets a ticked item graduate into a kanban card without a
     #: migration: a todo list *is* a one-column board (services/artifacts/todos).
     done_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    #: Who is working this card right now, or "" for nobody. A *lease*, not an
+    #: assignment: `claim_expires_at` bounds it, and an expired claim reads as
+    #: free (`services/coworking.claim_card`) — so an agent that died mid-card
+    #: releases it by clock, the same recovery philosophy `Run.lease_expires_at`
+    #: uses, with no sweep to run. Plain columns, not foreign keys: the holder
+    #: may be a user or an agent, and the card must outlive either.
+    claimed_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    #: "user" or "agent" — which kind of actor `claimed_by` names.
+    claimed_kind: Mapped[str] = mapped_column(String(8), default="", server_default="")
+    #: Display name captured at claim time, so a chip can say who without a
+    #: join, and so the record still reads after the agent is renamed.
+    claimed_label: Mapped[str] = mapped_column(
+        String(120), default="", server_default=""
+    )
+    #: The run holding an agent claim, "" otherwise — the address "take over"
+    #: needs to steer or cancel the work rather than merely un-badge the card.
+    claimed_run_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    claim_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -2062,6 +2084,63 @@ class WorkspaceBudget(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, onupdate=utcnow
     )
+
+
+class WorkspaceEvent(Base):
+    """The workspace-wide append-only log behind /api/coworking/stream.
+
+    `run_events` gives one run a live transcript; this gives the *workspace*
+    one — run lifecycle, card claims, todo ticks, document saves — so a shell
+    can hold a single SSE connection instead of one per run. Same shape and
+    the same atomic-sequence discipline as `RunEvent`, scoped to the workspace,
+    because the same two-writer race exists: the loop's worker thread and a
+    request thread both append here.
+    """
+
+    __tablename__ = "workspace_events"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "sequence"),
+        Index("ix_workspace_events_ws_sequence", "workspace_id", "sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(40))
+    payload_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Presence(Base):
+    """One actor's live position in the workspace: surface, cursor, typing.
+
+    Ephemeral by *reading*, not by deletion: `updated_at` older than the TTL
+    means gone, and a heartbeat upserts the one row per (actor, surface) —
+    unlike `workspace_events`, nothing here accumulates. Cursor, selection and
+    the live draft ride `state_json`, which is what makes the document view
+    Google-Docs-like without a second transport: the same 250ms poll that
+    tails events also diffs this table.
+    """
+
+    __tablename__ = "presences"
+    __table_args__ = (UniqueConstraint("workspace_id", "actor_id", "surface"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: User id or agent id — with `actor_kind` saying which namespace.
+    actor_id: Mapped[str] = mapped_column(String(36))
+    actor_kind: Mapped[str] = mapped_column(String(8), default="user")
+    #: Display name at heartbeat time; a presence chip must not need a join.
+    actor_label: Mapped[str] = mapped_column(String(120), default="")
+    #: Where the actor is, as "kind:id" — "document:<id>", "conversation:<id>",
+    #: "board:<id>" — the address a client uses to draw them on that surface.
+    surface: Mapped[str] = mapped_column(String(120), default="")
+    #: JSON: {"cursor": int, "selection_start": int, "selection_end": int,
+    #: "typing": bool, "draft": str} — every key optional; the draft is what a
+    #: follower renders to watch typing land before it is saved.
+    state_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 # ---------------------------------------------------------------------------
