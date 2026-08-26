@@ -1982,6 +1982,19 @@ def _advance(
             )
             answer = state.text_so_far.strip()
             if not answer:
+                # Nothing streamed at all, so there is no partial answer to
+                # stand behind. Name the ceiling rather than only the provider's
+                # reason code: the one cause that produces this is a turn whose
+                # whole output budget went to reasoning tokens before the first
+                # visible character, and the reader can only act on that if the
+                # message says which knob it is.
+                if reason == "max_output_tokens":
+                    raise RuntimeError(
+                        "Model stream ended early: the turn used its entire "
+                        f"{settings.openai_max_output_tokens}-token output budget "
+                        "on reasoning and produced no answer. Raise "
+                        "OPENAI_MAX_OUTPUT_TOKENS, or lower OPENAI_REASONING_EFFORT."
+                    )
                 raise RuntimeError(
                     "Model stream ended early: " + (reason or "response.incomplete")
                 )

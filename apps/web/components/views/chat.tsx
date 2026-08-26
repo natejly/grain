@@ -319,6 +319,12 @@ function AgentSelect({
   );
 }
 
+/** "xhigh" → "Extra high"; every other effort just gets its first letter cased. */
+function effortLabel(effort: string): string {
+  if (effort === "xhigh") return "Extra high";
+  return effort.charAt(0).toUpperCase() + effort.slice(1);
+}
+
 /**
  * The per-turn model, reasoning effort and fast shortcut, drawn from the
  * deployment's allow-lists. Each part renders only when the deployment offers
@@ -370,7 +376,7 @@ function TurnControls({
           >
             {efforts.map((name) => (
               <option key={name} value={name}>
-                {name}
+                {effortLabel(name)}
               </option>
             ))}
           </select>
