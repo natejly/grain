@@ -423,7 +423,14 @@ export function createThreadHandlers({
         }
         if (event.event === "retrieval.completed") {
           const count = Number(event.data.count || 0);
-          setRunStatus(count ? `Using ${count} source passages` : "No matching source");
+          // Only the hit is worth a status line. A miss is the common case for
+          // any question the sources do not cover, and announcing it told the
+          // reader nothing they could act on while pushing the real status
+          // ("Thinking", the tool about to run) off screen. Same shape as
+          // memory.recalled below: say something when there is something.
+          if (count > 0) {
+            setRunStatus(`Using ${count} source passages`);
+          }
         }
         if (event.event === "memory.recalled") {
           const count = Number(event.data.count || 0);
