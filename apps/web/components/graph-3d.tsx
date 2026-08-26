@@ -27,10 +27,18 @@ export type Graph3DProps = {
   className?: string;
 };
 
-type Simulated = { id: string; x: number; y: number; z: number };
+type Simulated = { id: string; radius: number; x: number; y: number; z: number };
 
 /** How many labels can exist at once. Each one costs a canvas texture. */
 const MAX_LABELS = 40;
+/**
+ * On-screen height of a label, in CSS pixels — labels are sized in screen space,
+ * not in the world, so this is a real type size and not a scale factor. The
+ * texture is drawn at 28px into a 40px box, so the glyphs land near 14px.
+ */
+const LABEL_PIXELS = 20;
+/** Breathing room around a label's box when the declutter pass tests overlap. */
+const LABEL_GUTTER = 4;
 const NODE_SEGMENTS = 12;
 
 /**
@@ -129,6 +137,99 @@ export function entityLegend(
   return rows;
 }
 
+/**
+ * Everything the scene is built out of, as one comparable string.
+ *
+ * Rebuilding means a fresh WebGL context, a fresh simulation and a camera that
+ * jumps back to its framing shot, so it has to happen when the *graph* changes
+ * — not when the page around the canvas re-renders. Callers necessarily pass
+ * array literals (`graph?.edges.filter(...)`), so prop identity is new on every
+ * render, and this view re-renders plenty while it is open: the 400ms poll
+ * behind a rebuild, the refresh after a chat turn, the click that selects a
+ * node. Keyed on identity, each of those threw the layout away and started the
+ * graph over from noise — and leaked a context doing it.
+ *
+ * NUL-joined rather than on a printable character: entity names come from
+ * extraction and a "|" or a ":" in one is ordinary, where a NUL is not.
+ */
+export function graphSignature(entities: GraphEntity[], edges: GraphEdge[]): string {
+  const parts: string[] = [];
+  for (const entity of entities) {
+    // Every field the scene reads: id and type colour it, mentions size it,
+    // name is baked into a label texture.
+    parts.push(entity.id, entity.entity_type, String(entity.mention_count), entity.name);
+  }
+  parts.push("\u0000edges");
+  for (const edge of edges) {
+    parts.push(edge.from_entity_id, edge.to_entity_id, edge.relation);
+  }
+  return parts.join("\u0000");
+}
+
+/** One label, already projected to pixels by the caller. */
+export type LabelPlacement = {
+  /** Bottom-centre of the label, in CSS pixels from the top-left of the canvas. */
+  anchorX: number;
+  anchorY: number;
+  /** Width / height of the label's texture, which sets its pixel width. */
+  aspect: number;
+  /** Behind the camera, where a billboarded sprite would otherwise reappear. */
+  behind: boolean;
+};
+
+/**
+ * Hand out the screen to labels, in the order given — highest priority first.
+ *
+ * Names are positioned by the graph, which knows nothing about how long they
+ * are, so in any cluster they overlap into an unreadable heap — and the heap is
+ * worst exactly where the graph is most interesting. So each label claims its
+ * pixel box if it can, and one whose box overlaps a box already claimed steps
+ * aside until the camera moves it clear. Callers pass the labels most-mentioned
+ * first, which is what makes the hub keep its name and the passing mention
+ * yield.
+ *
+ * Screen space, and therefore per frame: it depends on where the camera is.
+ * Cheap enough to be — MAX_LABELS is 40, so the worst case is ~800 rectangle
+ * tests.
+ */
+export function placeLabels(
+  placements: LabelPlacement[],
+  viewWidth: number,
+  viewHeight: number,
+): boolean[] {
+  const claimed: { left: number; right: number; top: number; bottom: number }[] = [];
+  return placements.map((placement) => {
+    if (placement.behind) return false;
+    const halfWidth = (LABEL_PIXELS * placement.aspect) / 2 + LABEL_GUTTER;
+    // The box grows upward from the anchor, because the anchor is the label's
+    // bottom edge rather than its middle.
+    const box = {
+      left: placement.anchorX - halfWidth,
+      right: placement.anchorX + halfWidth,
+      top: placement.anchorY - LABEL_PIXELS - LABEL_GUTTER,
+      bottom: placement.anchorY + LABEL_GUTTER,
+    };
+    // A label the viewport cuts in half reads as a truncated name, so one that
+    // does not fit inside steps aside and comes back when the camera brings it
+    // in. Unless it could never fit at this size — then clipped beats a node
+    // that can never show its name.
+    const fits = box.right - box.left <= viewWidth && box.bottom - box.top <= viewHeight;
+    if (fits && (box.left < 0 || box.right > viewWidth || box.top < 0 || box.bottom > viewHeight)) {
+      return false;
+    }
+    const collides = claimed.some(
+      (other) =>
+        box.left < other.right &&
+        box.right > other.left &&
+        box.top < other.bottom &&
+        box.bottom > other.top,
+    );
+    if (collides) return false;
+    claimed.push(box);
+    return true;
+  });
+}
+
 /** Node radius grows with mentions, but sublinearly — a hub must not eat the view. */
 function radiusFor(entity: GraphEntity): number {
   return 4.5 + Math.sqrt(Math.max(0, entity.mention_count)) * 2.2;
@@ -150,12 +251,24 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
   useEffect(() => {
     highlightRef.current?.();
   }, [selectedId]);
+  // The data the scene is built from is read through refs for the same reason:
+  // the build effect keys on `signature` (content), and the refs are what let
+  // it reach the arrays that signature describes without keying on identity.
+  const entitiesRef = useRef(entities);
+  entitiesRef.current = entities;
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
+  const signature = graphSignature(entities, edges);
   // Not a ref: a theme change has to rebuild the scene, because fog, lighting
   // and every instanced colour are baked in at build time.
   const theme = useTheme();
 
   useEffect(() => {
     const mount = mountRef.current;
+    // Pinned for the lifetime of this scene: `signature` says these are the
+    // entities and edges it was built for.
+    const entities = entitiesRef.current;
+    const edges = edgesRef.current;
     if (!mount || entities.length === 0) return;
     const palette = PALETTES[theme];
 
@@ -171,9 +284,13 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
       let forceLink: typeof import("d3-force-3d")["forceLink"];
       let forceManyBody: typeof import("d3-force-3d")["forceManyBody"];
       let forceCenter: typeof import("d3-force-3d")["forceCenter"];
+      let forceCollide: typeof import("d3-force-3d")["forceCollide"];
       try {
-        [THREE, { OrbitControls }, { forceSimulation, forceLink, forceManyBody, forceCenter }] =
-          await Promise.all([
+        [
+          THREE,
+          { OrbitControls },
+          { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide },
+        ] = await Promise.all([
             import("three"),
             import("three/examples/jsm/controls/OrbitControls.js"),
             import("d3-force-3d"),
@@ -186,6 +303,11 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
 
       const width = mount.clientWidth || 800;
       const height = mount.clientHeight || 520;
+      // The live viewport, in CSS pixels. Labels are sized and laid out against
+      // it, so it is tracked rather than captured — the ResizeObserver keeps it
+      // current.
+      let viewWidth = width;
+      let viewHeight = height;
 
       let renderer: import("three").WebGLRenderer;
       try {
@@ -224,6 +346,9 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
       // ---- simulation -------------------------------------------------
       const nodes: Simulated[] = entities.map((entity) => ({
         id: entity.id,
+        // The drawn radius, carried on the node so the collision force and the
+        // renderer cannot drift apart.
+        radius: radiusFor(entity),
         x: (Math.random() - 0.5) * 120,
         y: (Math.random() - 0.5) * 120,
         z: (Math.random() - 0.5) * 120,
@@ -248,17 +373,36 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
         .force(
           "link",
           forceLink(links)
+            // A hub is a big sphere, so a fixed link distance buries its
+            // neighbours inside it. Measure the gap between surfaces instead.
+            .distance(
+              (link: { fromIndex: number; toIndex: number }) =>
+                30 + nodes[link.fromIndex].radius + nodes[link.toIndex].radius,
+            )
             .id((_node: unknown, position: number) => position)
-            .distance(38)
             .strength(0.25),
         )
-        .force("charge", forceManyBody().strength(-90))
+        .force("charge", forceManyBody().strength(-150))
+        // Repulsion alone is a tug-of-war with the links and loses: at a few
+        // dozen entities the layout packed spheres into each other and the
+        // graph read as one blob with names on top. Collision is the part that
+        // knows how big a node is actually drawn, so nodes stop overlapping
+        // without the whole graph having to fly apart to achieve it.
+        .force(
+          "collide",
+          forceCollide((node: Simulated) => node.radius + 6).strength(0.85),
+        )
         .force("center", forceCenter(0, 0, 0))
         .stop();
 
-      // Pre-settle off-screen so the first painted frame is already a graph
-      // rather than an expanding ball of noise.
-      for (let tick = 0; tick < 120; tick += 1) simulation.tick();
+      // Settle off-screen, all the way. The camera distance below is computed
+      // from the layout, so it has to be computed from the layout the user will
+      // actually look at — framing a half-settled one and then letting it grow
+      // for another ninety frames is how the graph ended up small and adrift in
+      // its box. The cap is a guard for a graph that will not converge.
+      for (let tick = 0; tick < 400 && simulation.alpha() > simulation.alphaMin(); tick += 1) {
+        simulation.tick();
+      }
 
       // Frame whatever the simulation produced. A fixed camera distance turns a
       // five-node graph into specks and buries a large one.
@@ -268,7 +412,11 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
       }
       const nodeMargin = Math.max(...entities.map(radiusFor), 6);
       const span = Math.max(extent + nodeMargin * 2, 40);
-      const distance = (span / Math.tan((camera.fov * Math.PI) / 360)) * 1.6;
+      // 1.15, not 1.6: `span` already carries a node's worth of margin on each
+      // side, and the labels that used to need the rest of the slack are
+      // screen-space now. The old figure left the graph sitting in the middle
+      // of a large empty panel.
+      const distance = (span / Math.tan((camera.fov * Math.PI) / 360)) * 1.15;
       camera.position.set(0, 0, distance);
       camera.updateProjectionMatrix();
       controls.maxDistance = distance * 4;
@@ -346,7 +494,10 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
       // Sprites billboard for free, which is what makes text readable while the
       // camera orbits. Only the most-mentioned entities get one: each label is a
       // canvas texture, and hundreds of them cost more than the graph itself.
-      const labelScale = Math.max(span / 340, 0.16);
+      //
+      // They are sized in screen space (see `sizeAttenuation` below), so the
+      // sort order is doing a second job: it is the priority the declutter pass
+      // hands out the screen to, most-mentioned first.
       const labelled = [...entities]
         .sort((a, b) => b.mention_count - a.mention_count)
         .slice(0, MAX_LABELS);
@@ -369,13 +520,57 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
         texture.colorSpace = THREE.SRGBColorSpace;
         labelTextures.push(texture);
         const sprite = new THREE.Sprite(
-          new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
+          new THREE.SpriteMaterial({
+            map: texture,
+            transparent: true,
+            depthWrite: false,
+            // The fix for a wall of names in wildly different sizes. With
+            // attenuation on, a label was scaled by perspective like the sphere
+            // it names: the ones at the front of the cloud grew until they
+            // covered a third of the graph, the ones at the back shrank past
+            // reading. Off, three cancels the perspective divide and every
+            // label is the same height on screen wherever its node sits.
+            sizeAttenuation: false,
+            // A label is annotation, not scenery: depth-tested, a sphere that
+            // happens to sit nearer the camera sliced the name off mid-word
+            // ("Kwame Boa"), which reads as a truncation bug rather than as
+            // occlusion. Labels draw over the graph instead, and the declutter
+            // pass below is what keeps them from drawing over each other.
+            depthTest: false,
+          }),
         );
-        sprite.scale.set(canvas.width * labelScale, canvas.height * labelScale, 1);
+        sprite.renderOrder = 2;
+        // Anchor the label by its bottom edge, not its middle. The sprite's
+        // position is a point just above the sphere; with the default centre
+        // the lower half of the name hung back over the node it names, and how
+        // badly depended on depth. Anchored, it clears the sphere at any
+        // distance.
+        sprite.center.set(0.5, 0);
         sprite.userData.entityId = entity.id;
+        // The label's aspect, so a resize can rescale it from one number.
+        sprite.userData.aspect = canvas.width / canvas.height;
         sprites.push(sprite);
         scene.add(sprite);
       }
+
+      /**
+       * Size every label to LABEL_PIXELS tall, whatever the viewport is.
+       *
+       * With attenuation off a sprite's scale is in world units *per unit of
+       * depth*, and the viewport spans `2 * tan(fov / 2)` of those at any
+       * depth — so a label's share of the viewport height is just
+       * `scale.y / (2 * tan(fov / 2))`, and this inverts that. Height drives
+       * both axes because the projection divides x by the aspect ratio, which
+       * is exactly what makes equal world offsets equal pixel offsets.
+       */
+      function applyLabelScale() {
+        const unit =
+          (LABEL_PIXELS / Math.max(viewHeight, 1)) * 2 * Math.tan((camera.fov * Math.PI) / 360);
+        for (const sprite of sprites) {
+          sprite.scale.set(unit * (sprite.userData.aspect as number), unit, 1);
+        }
+      }
+      applyLabelScale();
 
       // ---- interaction ------------------------------------------------
       const raycaster = new THREE.Raycaster();
@@ -462,6 +657,9 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
       const dummy = new THREE.Object3D();
       let frame = 0;
       let settling = 90;
+      // Reused by the per-frame label pass.
+      const projected = new THREE.Vector3();
+      const placements: LabelPlacement[] = [];
 
       function syncGeometry() {
         for (let position = 0; position < entities.length; position += 1) {
@@ -473,6 +671,13 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
           mesh.setMatrixAt(position, dummy.matrix);
         }
         mesh.instanceMatrix.needsUpdate = true;
+        // The instances just moved, and InstancedMesh.raycast tests against a
+        // bounding sphere three.js computes once, lazily, and never
+        // invalidates. Left alone, a hover during the settle freezes that
+        // sphere around the half-settled layout, and afterwards every pick
+        // aimed at a node that drifted outside it silently misses — hover
+        // highlight and click-to-select both stop working on the outer ring.
+        mesh.computeBoundingSphere();
 
         for (const group of [typed, loose]) {
           group.subset.forEach((link, position) => {
@@ -493,22 +698,60 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
           const position = index.get(sprite.userData.entityId as string);
           if (position === undefined) return;
           const node = nodes[position];
-          // Sit the label just above the sphere rather than inside it.
-          sprite.position.set(node.x, node.y + radiusFor(entities[position]) + 4, node.z);
+          // The point the label's bottom edge is pinned to: the top of the
+          // sphere, plus a hair. The clearance itself comes from the sprite's
+          // anchor, which is in screen space and so holds at any depth.
+          sprite.position.set(node.x, node.y + node.radius + 1, node.z);
+        });
+      }
+
+      /**
+       * Hand out the screen to labels, most-mentioned first.
+       *
+       * Names are laid out by the graph, which knows nothing about how long
+       * they are, so in any cluster they overlap into an unreadable heap — and
+       * the heap is worst exactly where the graph is most interesting. So each
+       * frame every label is projected to its pixel box and claims it if it can:
+       * a label whose box overlaps one already claimed steps aside for this
+       * frame and comes back when the camera moves it clear. Priority is
+       * mentions, so the hub keeps its name and the passing mention yields.
+       *
+       * Per frame because it depends on the camera, and cheap enough to be:
+       * MAX_LABELS is 40, so the worst case is ~800 rectangle tests.
+       */
+      function declutterLabels() {
+        placements.length = 0;
+        for (const sprite of sprites) {
+          projected.copy(sprite.position).project(camera);
+          placements.push({
+            // NDC to pixels. The sprite is anchored by its bottom edge, so this
+            // is the bottom-centre of the label, not its middle.
+            anchorX: (projected.x * 0.5 + 0.5) * viewWidth,
+            anchorY: (-projected.y * 0.5 + 0.5) * viewHeight,
+            aspect: sprite.userData.aspect as number,
+            // Behind the camera: three would billboard it back into view.
+            behind: projected.z > 1,
+          });
+        }
+        const shown = placeLabels(placements, viewWidth, viewHeight);
+        sprites.forEach((sprite, position) => {
+          sprite.visible = shown[position];
         });
       }
 
       function animate() {
         frame = requestAnimationFrame(animate);
-        // The simulation keeps running for a short while so the graph visibly
-        // settles, then stops — a permanently hot simulation burns battery for
-        // no visual gain once it has converged.
+        // The layout is already settled — the pre-settle above runs it to
+        // convergence — so these ticks only matter for a graph that hit the tick
+        // cap. A permanently hot simulation burns battery for no visual gain.
         if (settling > 0) {
           simulation.tick();
           settling -= 1;
           syncGeometry();
         }
         controls.update();
+        // After controls.update(), which is what moved the camera.
+        declutterLabels();
         renderer.render(scene, camera);
       }
       syncGeometry();
@@ -518,9 +761,14 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
       const observer = new ResizeObserver(() => {
         const nextWidth = mount.clientWidth || width;
         const nextHeight = mount.clientHeight || height;
+        viewWidth = nextWidth;
+        viewHeight = nextHeight;
         camera.aspect = nextWidth / nextHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(nextWidth, nextHeight);
+        // Labels are a fixed number of pixels tall, so a shorter viewport is a
+        // larger share of it. Without this they grew and shrank with the panel.
+        applyLabelScale();
       });
       observer.observe(mount);
 
@@ -566,7 +814,10 @@ export function Graph3D({ entities, edges, onSelect, selectedId = null, classNam
       disposed = true;
       cleanup?.();
     };
-  }, [entities, edges, theme]);
+    // `signature` stands in for the entity and edge arrays the body reads
+    // through refs: it is their content, where the props were only their
+    // identity.
+  }, [signature, theme]);
 
   if (entities.length === 0) {
     return (

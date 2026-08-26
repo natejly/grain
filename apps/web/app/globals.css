@@ -3213,31 +3213,19 @@ label,
   background: var(--surface);
 }
 
+/* `stretch`, not `center`: the child sizes the WebGL drawing buffer from this
+   box, so centring a child of its own height left the canvas short of the panel
+   and banded the gap with the grid pattern — most visibly when the entity list
+   beside it is the taller of the two. The rules that used to follow here styled
+   svg/line/circle/text and went with the 2D renderer they belonged to. */
 .graph-canvas {
   min-width: 0;
   display: grid;
-  place-items: center;
-}
-
-.graph-canvas svg {
-  width: 100%;
-  height: auto;
-  max-height: 620px;
-}
-
-.graph-canvas line {
-  stroke: var(--graph-edge);
-}
-
-.graph-canvas circle {
-  fill: var(--graph-node);
-  stroke: var(--graph-node-stroke);
-  stroke-width: 1.5;
-}
-
-.graph-canvas text {
-  fill: var(--graph-label);
-  font-size: 10px;
+  /* The graph-paper backdrop that used to sit here is gone with the rest of
+     the decorative chrome, and its `--graph-grid` token with it — restoring the
+     gradient here would reference a token no theme defines any more. `stretch`
+     is the half that carries meaning and it stays. */
+  place-items: stretch;
 }
 
 .entity-list {
