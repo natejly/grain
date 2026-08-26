@@ -26,6 +26,7 @@ only the code cannot tell which one they are approving.
 """
 from __future__ import annotations
 
+import difflib
 import json
 import mimetypes
 from pathlib import Path
@@ -41,6 +42,7 @@ from ..llm_tools import MAX_RESULT_CHARS, ToolContext, ToolResult, ToolSpec
 from ..projects import store
 from .outputs import persist_artifacts
 from .provider import get_provider
+from .secrets import secret_names
 from .session import (
     allow_hosts_for,
     clip,
@@ -83,6 +85,17 @@ PREVIEW_CODE_CHARS = 4_000
 #: upload is bounded by count and by total size rather than per file.
 MAX_UPLOAD_FILES = 50
 MAX_UPLOAD_TOTAL_BYTES = 32 * 1024 * 1024
+
+#: A file read into the model's context is bounded by the result budget, not by
+#: what a file can be — a 40 MB log read whole is both useless to the model and a
+#: way to blow the turn's tokens. The model is told to read a slice instead.
+MAX_FILE_READ_BYTES = 128 * 1024
+#: A single model-authored file. Generous — a written module or a JSON config is
+#: kilobytes — but bounded, because `content` is unbounded model output.
+MAX_FILE_WRITE_BYTES = 4 * 1024 * 1024
+#: Diff shown on the approval card. The card is read by a human under time
+#: pressure; a 2,000-line diff is waved through rather than reviewed.
+MAX_DIFF_LINES = 200
 
 
 def _text(args: Dict[str, Any], key: str, default: str = "") -> str:
@@ -224,6 +237,17 @@ def _policy_line(db: Session, context: ToolContext, args: Dict[str, Any]) -> str
         "network: open — it can reach the whole internet, including anywhere it "
         "could send this data"
     )
+
+
+def _secrets_line(db: Session, workspace_id: str) -> str:
+    """The credentials sentence for the approval card, shown next to the egress
+    one. Code the approver is about to run reads these from its environment, so
+    what it can *do* with the network depends on what it can *read* here — both
+    belong on the same card. Names only; a value never leaves the box."""
+    names = secret_names(db, workspace_id=workspace_id)
+    if not names:
+        return "secrets: none"
+    return f"secrets: it can read {', '.join(names)} from its environment"
 
 
 # --------------------------------------------------------------------------
@@ -402,7 +426,11 @@ def _preview_execution(
     clipped = body[:PREVIEW_CODE_CHARS]
     if len(body) > PREVIEW_CODE_CHARS:
         clipped += "\n…(truncated)"
-    return f"{verb} ({_policy_line(db, context, args)}):\n\n```{fence}\n{clipped}\n```"
+    return (
+        f"{verb} ({_policy_line(db, context, args)}; "
+        f"{_secrets_line(db, context.workspace_id)}):"
+        f"\n\n```{fence}\n{clipped}\n```"
+    )
 
 
 def _preview_run_python(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
@@ -650,6 +678,262 @@ def _preview_download(db: Session, context: ToolContext, args: Dict[str, Any]) -
 
 
 # --------------------------------------------------------------------------
+# Reading, writing and editing files in the sandbox
+#
+# `sandbox_upload`/`sandbox_download` move whole files between the workspace's
+# object store and a sandbox. These four are the Claude-Code loop *inside* the
+# sandbox: read a file the code just wrote, compose a new one from text, or edit
+# one in place — none of which needs a workspace `Source` on either end. They
+# lean entirely on the provider file methods every driver already implements, so
+# there is no new provider surface and they work identically on fake, local and
+# e2b. Reads and lists are `read_only`; write and edit inherit the approval gate
+# and render a unified diff, so the approver sees exactly what changes.
+
+
+def _read_text(data: bytes) -> Tuple[str, bool]:
+    """Decode a sandbox file for the model, flagging binary.
+
+    A NUL byte is the cheap, reliable "this is not text" signal: inlining a
+    decoded PNG wastes the turn's budget on mojibake and tells the model nothing
+    it can act on. The caller turns the flag into a "use sandbox_download" nudge.
+    """
+    if b"\x00" in data:
+        return "", True
+    return data.decode("utf-8", errors="replace"), False
+
+
+def _diff(before: str, after: str, path: str) -> str:
+    """A unified diff the approval card renders as red/green.
+
+    `ProposalDiff` on the web splits the preview at the first `@@` hunk header,
+    so the prose above stays a note and everything from the `---/+++/@@` lines
+    down is coloured. Bounded in lines because a card nobody reads is not a
+    review — the tail is dropped with a marker rather than silently.
+    """
+    lines = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+            lineterm="",
+        )
+    )
+    if not lines:
+        return ""
+    clipped = lines[:MAX_DIFF_LINES]
+    if len(lines) > MAX_DIFF_LINES:
+        clipped.append(f"… ({len(lines) - MAX_DIFF_LINES} more diff lines)")
+    return "\n".join(clipped)
+
+
+def _read_current(
+    db: Session, context: ToolContext, args: Dict[str, Any], settings: Settings, remote: str
+) -> Optional[str]:
+    """The file's current text, or None if it is absent or unreadable.
+
+    Used by the write/edit previews and by the edit executor. Kept best-effort on
+    purpose: a preview that raised because the file does not exist yet would blank
+    the approval card for a perfectly valid "create this file" call.
+    """
+    try:
+        session = _session_for(db, context, args, settings)
+        provider = get_provider(settings)
+        data = provider.read_file(handle_for(session), remote)
+    except SandboxError:
+        return None
+    text, is_binary = _read_text(data)
+    return None if is_binary else text
+
+
+def _sandbox_read(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    settings = get_settings()
+    try:
+        remote = _remote_path(_text(args, "path"))
+    except store.ProjectError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    try:
+        session = _session_for(db, context, args, settings)
+        provider = get_provider(settings)
+        data = provider.read_file(handle_for(session), remote)
+    except SandboxQuotaError as exc:
+        return ToolResult(content=str(exc))
+    except SandboxError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    touch(db, session)
+
+    text, is_binary = _read_text(data)
+    if is_binary:
+        return ToolResult(
+            content=(
+                f"{remote} is {len(data):,} bytes of binary data, not text. Use "
+                "sandbox_download to save it to the workspace, or run_python to "
+                "inspect it."
+            )
+        )
+    body, truncated = clip(text, MAX_FILE_READ_BYTES)
+    note = (
+        f"\n\n…(file is {len(data):,} bytes; showing the first "
+        f"{MAX_FILE_READ_BYTES:,}. Read a slice in run_python for more.)"
+        if truncated
+        else ""
+    )
+    return ToolResult(content=f"{remote}:\n\n{body}{note}")
+
+
+def _sandbox_write(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    settings = get_settings()
+    try:
+        remote = _remote_path(_text(args, "path"))
+    except store.ProjectError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    content = _text(args, "content")
+    encoded = content.encode("utf-8")
+    if len(encoded) > MAX_FILE_WRITE_BYTES:
+        return ToolResult(
+            content=(
+                f"That is {len(encoded):,} bytes; a single write carries at most "
+                f"{MAX_FILE_WRITE_BYTES:,}. Write it in parts, or generate it with "
+                "run_python."
+            )
+        )
+    try:
+        session = _session_for(db, context, args, settings)
+        provider = get_provider(settings)
+        provider.write_files(handle_for(session), {remote: encoded})
+    except SandboxQuotaError as exc:
+        return ToolResult(content=str(exc))
+    except SandboxError as exc:
+        return ToolResult(content=f"The sandbox could not write that file: {exc}")
+    touch(db, session)
+    return ToolResult(content=f"Wrote {len(encoded):,} bytes to {remote}.")
+
+
+def _sandbox_edit(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    settings = get_settings()
+    try:
+        remote = _remote_path(_text(args, "path"))
+    except store.ProjectError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    find = _text(args, "find")
+    if not find:
+        return ToolResult(content="Error: `find` is required — the exact text to replace.")
+    replace = _text(args, "replace")
+    replace_all = bool(args.get("all"))
+
+    try:
+        session = _session_for(db, context, args, settings)
+        provider = get_provider(settings)
+        handle = handle_for(session)
+        data = provider.read_file(handle, remote)
+    except SandboxQuotaError as exc:
+        return ToolResult(content=str(exc))
+    except SandboxError as exc:
+        return ToolResult(content=f"Error: {exc}")
+
+    before, is_binary = _read_text(data)
+    if is_binary:
+        return ToolResult(content=f"Error: {remote} is binary and cannot be edited as text.")
+    occurrences = before.count(find)
+    if occurrences == 0:
+        return ToolResult(
+            content=f"Error: `find` text is not in {remote}. Read it first to copy the exact text."
+        )
+    if occurrences > 1 and not replace_all:
+        return ToolResult(
+            content=(
+                f"Error: `find` matches {occurrences} places in {remote}. Quote more "
+                "surrounding text to make it unique, or pass all=true to replace every match."
+            )
+        )
+    after = before.replace(find, replace)
+    try:
+        provider.write_files(handle, {remote: after.encode("utf-8")})
+    except SandboxError as exc:
+        return ToolResult(content=f"The sandbox could not write that file: {exc}")
+    touch(db, session)
+    changed = occurrences if replace_all else 1
+    return ToolResult(content=f"Edited {remote}: {changed} replacement(s).")
+
+
+def _preview_write(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
+    raw = _text(args, "path").strip()
+    if not raw:
+        return "Write a file in the sandbox — but no `path` was given, so this call will fail."
+    settings = get_settings()
+    try:
+        remote = _remote_path(raw)
+    except store.ProjectError:
+        remote = raw
+    after = _text(args, "content")
+    before = _read_current(db, context, args, settings, remote)
+    verb = "Overwrite" if before is not None else "Create"
+    diff = _diff(before or "", after, remote)
+    head = f"{verb} {remote} in the sandbox ({_policy_line(db, context, args)})."
+    return f"{head}\n\n{diff}" if diff else head
+
+
+def _preview_edit(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
+    raw = _text(args, "path").strip()
+    if not raw:
+        return "Edit a file in the sandbox — but no `path` was given, so this call will fail."
+    settings = get_settings()
+    try:
+        remote = _remote_path(raw)
+    except store.ProjectError:
+        remote = raw
+    find = _text(args, "find")
+    replace = _text(args, "replace")
+    head = f"Edit {remote} in the sandbox ({_policy_line(db, context, args)})."
+    before = _read_current(db, context, args, settings, remote)
+    if before is not None and find and find in before:
+        count = -1 if args.get("all") else 1
+        after = before.replace(find, replace, count)
+        diff = _diff(before, after, remote)
+        if diff:
+            return f"{head}\n\n{diff}"
+    # No before-text to diff against (new session, unreadable, or find not
+    # present yet): show the substitution itself rather than a blank card.
+    clipped_find = find[:PREVIEW_CODE_CHARS]
+    clipped_replace = replace[:PREVIEW_CODE_CHARS]
+    return f"{head}\n\nReplace:\n{clipped_find}\n\nWith:\n{clipped_replace}"
+
+
+def _sandbox_list(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    settings = get_settings()
+    raw = _text(args, "path").strip() or SANDBOX_HOME
+    try:
+        remote = _remote_path(raw)
+    except store.ProjectError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    depth = 1
+    if isinstance(args.get("recursive"), bool) and args["recursive"]:
+        depth = 3
+    try:
+        session = _session_for(db, context, args, settings)
+        provider = get_provider(settings)
+        entries = provider.list_files(handle_for(session), remote, depth=depth)
+    except SandboxQuotaError as exc:
+        return ToolResult(content=str(exc))
+    except SandboxError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    touch(db, session)
+    if not entries:
+        return ToolResult(content=f"{remote} is empty or does not exist.")
+    lines = [
+        f"{'dir ' if entry.is_dir else 'file'}  {entry.path}"
+        + ("" if entry.is_dir else f"  ({entry.size:,} bytes)")
+        for entry in entries
+    ]
+    return ToolResult(content=f"{remote}:\n" + "\n".join(lines))
+
+
+def _preview_list(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
+    raw = _text(args, "path").strip() or SANDBOX_HOME
+    return f"List files under {raw} in the sandbox."
+
+
+# --------------------------------------------------------------------------
 # Listing
 
 
@@ -794,6 +1078,104 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             executor=_sandbox_download,
             read_only=False,
             preview=_preview_download,
+        ),
+        "sandbox_read": ToolSpec(
+            name="sandbox_read",
+            description=(
+                "Read a text file inside the sandbox and return its contents. "
+                "Give a path absolute or relative to "
+                f"{SANDBOX_HOME} (e.g. main.py, out/report.md). Use this to see a "
+                "file the code wrote before editing it. Binary files are not "
+                "returned — use sandbox_download for those."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": f"Path in the sandbox, e.g. main.py or {SANDBOX_HOME}/x.",
+                    },
+                    **_SESSION_ARGUMENT,
+                },
+                "required": ["path"],
+            },
+            executor=_sandbox_read,
+        ),
+        "sandbox_write": ToolSpec(
+            name="sandbox_write",
+            description=(
+                "Create or overwrite a text file inside the sandbox with the "
+                "content you provide. Use this to author a script, a config, or a "
+                "data file the sandbox's code will then run or read. The path is "
+                f"absolute or relative to {SANDBOX_HOME}, and parent directories "
+                "are created as needed."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": f"Where to write, e.g. main.py or {SANDBOX_HOME}/a.py.",
+                    },
+                    "content": {"type": "string", "description": "Full file contents to write."},
+                    **_SESSION_ARGUMENT,
+                },
+                "required": ["path", "content"],
+            },
+            executor=_sandbox_write,
+            read_only=False,
+            preview=_preview_write,
+        ),
+        "sandbox_edit": ToolSpec(
+            name="sandbox_edit",
+            description=(
+                "Edit an existing text file in the sandbox by replacing an exact "
+                "piece of text with new text — the same find-and-replace loop you "
+                "use to change code. `find` must match the file exactly and be "
+                "unique unless you pass all=true. Read the file first to copy the "
+                "exact text."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": f"File to edit, e.g. main.py or {SANDBOX_HOME}/src/app.py.",
+                    },
+                    "find": {"type": "string", "description": "Exact text to replace."},
+                    "replace": {"type": "string", "description": "Text to put in its place."},
+                    "all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence, not just a unique match.",
+                    },
+                    **_SESSION_ARGUMENT,
+                },
+                "required": ["path", "find", "replace"],
+            },
+            executor=_sandbox_edit,
+            read_only=False,
+            preview=_preview_edit,
+        ),
+        "sandbox_list": ToolSpec(
+            name="sandbox_list",
+            description=(
+                "List files and directories inside the sandbox. Give a `path` "
+                f"(defaults to {SANDBOX_HOME}); pass recursive=true to descend a "
+                "few levels. Use this to see what the code produced or what was "
+                "uploaded."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": f"Directory to list, defaults to {SANDBOX_HOME}.",
+                    },
+                    "recursive": {"type": "boolean", "description": "Descend into subdirectories."},
+                    **_SESSION_ARGUMENT,
+                },
+            },
+            executor=_sandbox_list,
         ),
         "list_sandboxes": ToolSpec(
             name="list_sandboxes",

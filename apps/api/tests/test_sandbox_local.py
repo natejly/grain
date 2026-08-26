@@ -160,6 +160,22 @@ def test_the_environment_is_built_not_inherited(local: SubprocessProvider) -> No
     assert result.stdout.strip() == "[]"
 
 
+def test_a_sessions_own_secrets_reach_its_runs(local: SubprocessProvider) -> None:
+    """The other half of the previous test: the base env is scrubbed, but a
+    secret the session was *created with* is exactly what "connect stuff" means,
+    so it has to arrive in os.environ. The value is carried on the per-session
+    sidecar, never on the frozen base every session shares."""
+    handle = local.create(SandboxSpec(workspace_id="w1", env={"STRIPE_API_KEY": "sk_live_9"}))
+    result = local.run_code(handle, "import os; print(os.environ.get('STRIPE_API_KEY'))")
+    assert result.stdout.strip() == "sk_live_9"
+
+    # And a session created without it does not see another session's secret.
+    other = local.run_code(
+        local.create(SPEC), "import os; print(os.environ.get('STRIPE_API_KEY'))"
+    )
+    assert other.stdout.strip() == "None"
+
+
 def test_a_runaway_loop_is_killed_and_reported(local: SubprocessProvider) -> None:
     started = time.monotonic()
     result = local.run_code(local.create(SPEC), "while True: pass", timeout=2.0)
@@ -211,6 +227,47 @@ def test_kill_removes_the_session_and_is_idempotent(
     local.kill(handle)  # the reaper races an explicit delete
 
 
+def test_kill_deletes_the_plaintext_secret_sidecar(
+    local: SubprocessProvider, workdir: Path
+) -> None:
+    """The sidecar is the one place a decrypted secret touches local disk. If
+    kill() removed only the session directory, the plaintext credential would
+    survive teardown (and outlive deletion of the secret itself). Kill must take
+    the sidecar with it."""
+    handle = local.create(
+        SandboxSpec(workspace_id="w1", env={"STRIPE_API_KEY": "sk_live_9"})
+    )
+    sidecar = workdir / f".{handle.external_id}.env.json"
+    assert sidecar.exists(), "a session created with a secret writes its sidecar"
+
+    local.kill(handle)
+    assert not sidecar.exists(), "kill must delete the plaintext secret sidecar"
+    local.kill(handle)  # idempotent even with the sidecar already gone
+
+
+def test_kill_with_a_malformed_id_does_not_raise(local: SubprocessProvider) -> None:
+    """A NUL in the id makes Path operations raise ValueError, not OSError — which
+    would sail past remove_session_env's handlers and escape kill(), skipping the
+    session-root cleanup. The id guard must reject it as a SandboxError instead, so
+    kill() stays total. (Ids are driver-generated UUIDs; this defends the seam.)"""
+    handle = SandboxHandle(provider="subprocess", external_id="abc\x00def")
+    local.kill(handle)  # must not raise
+
+
+def test_the_secret_sidecar_is_written_0600(
+    local: SubprocessProvider, workdir: Path
+) -> None:
+    """Decrypted secrets must not sit world-readable on the host, and must be
+    tight from the first byte rather than after a write-then-chmod window."""
+    import stat
+
+    handle = local.create(
+        SandboxSpec(workspace_id="w1", env={"STRIPE_API_KEY": "sk_live_9"})
+    )
+    sidecar = workdir / f".{handle.external_id}.env.json"
+    assert stat.S_IMODE(sidecar.stat().st_mode) == 0o600
+
+
 # --- container driver ---------------------------------------------------
 
 
@@ -224,7 +281,9 @@ def container(workdir: Path) -> ContainerProvider:
 def test_the_container_argv_carries_every_flag_the_isolation_depends_on(
     container: ContainerProvider, workdir: Path
 ) -> None:
-    argv = container._docker_argv(workdir / "box-1", ["python3", "x.py"], "box-1-run")
+    argv = container._docker_argv(
+        workdir / "box-1", ["python3", "x.py"], "box-1-run", container._env
+    )
     joined = " ".join(argv)
 
     # Named, so a timeout can kill the container rather than only the CLI that
@@ -259,8 +318,12 @@ def test_the_sandbox_environment_reaches_the_container_and_the_host_env_does_not
     provider = ContainerProvider(
         workdir=workdir, env={"GRAIN_SANDBOX": "1"}, image="img"
     )
-    argv = provider._docker_argv(workdir / "box-1", ["python3"], "box-1-run")
+    # The env is what the run actually passes: the frozen base plus this session's
+    # injected secrets. A secret rides in on the same `-e` the policy env does.
+    env = {**provider._env, "STRIPE_API_KEY": "sk_test_123"}
+    argv = provider._docker_argv(workdir / "box-1", ["python3"], "box-1-run", env)
     assert "GRAIN_SANDBOX=1" in argv
+    assert "STRIPE_API_KEY=sk_test_123" in argv
 
 
 def test_an_allowlist_policy_is_refused_rather_than_quietly_widened(
@@ -302,7 +365,7 @@ def test_a_timed_out_run_kills_the_container_not_just_the_cli(
         return ExecResult(exit_code=-9, error="timed out after 20s")
 
     monkeypatch.setattr(local_exec, "run_process", fake_run)
-    container._run(Path("/tmp/box-1"), ["python3", "x.py"], 5.0, None)
+    container._run(Path("/tmp/box-1"), ["python3", "x.py"], 5.0, None, {})
 
     run_argv, kill_argv = calls[0], calls[-1]
     name = run_argv[run_argv.index("--name") + 1]
@@ -325,7 +388,7 @@ def test_a_run_that_finished_leaves_no_kill_behind(
         return ExecResult(exit_code=0, stdout="done")
 
     monkeypatch.setattr(local_exec, "run_process", fake_run)
-    container._run(Path("/tmp/box-1"), ["python3", "x.py"], 5.0, None)
+    container._run(Path("/tmp/box-1"), ["python3", "x.py"], 5.0, None, {})
     assert len(calls) == 1 and "kill" not in calls[0]
 
 

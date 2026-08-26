@@ -35,6 +35,7 @@ from .api import (
     org,
     projects,
     sandbox,
+    sandbox_secrets,
     sandbox_tools,
     skills,
     sources,
@@ -126,6 +127,7 @@ app.include_router(projects.router)
 app.include_router(latex.router)
 app.include_router(bibliography.router)
 app.include_router(sandbox.router)
+app.include_router(sandbox_secrets.router)
 app.include_router(sandbox_tools.router)
 app.include_router(analytics.router)
 app.include_router(dashboards.router)

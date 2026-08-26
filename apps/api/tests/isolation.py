@@ -91,6 +91,7 @@ from app.models import (
     Run,
     RunEvent,
     SandboxExecution,
+    SandboxSecret,
     SandboxSession,
     SandboxTool,
     Skill,
@@ -719,6 +720,24 @@ def build_tenant(label: str) -> Tenant:
         db.add(sandbox_tool)
         db.flush()
         ids["sandbox_tool"] = sandbox_tool.id
+
+        # A workspace secret. Keyed by name, not id, so the name itself is the
+        # cross-tenant handle the DELETE route takes — planted uppercase (the
+        # only shape `validate_name` accepts) and carrying the label so a list
+        # route that ever answered with a foreign workspace's secrets is caught
+        # by the id-less leak scan. `value_enc` is written directly rather than
+        # encrypted: no route returns it, and the fixture must not depend on an
+        # encryption key the isolation run does not configure.
+        secret_name = f"SECRET_{label.upper()}"
+        sandbox_secret = SandboxSecret(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=secret_name,
+            value_enc=f"ciphertext-for-{label.lower()}",
+        )
+        db.add(sandbox_secret)
+        db.flush()
+        ids["sandbox_secret"] = secret_name
 
         # A stored automation, one execution of it, and one node inside that
         # execution. Written directly for the same reason the sandbox rows are:
@@ -2008,6 +2027,24 @@ ROUTE_CASES: List[RouteCase] = [
         "/api/sandbox-tools/{tool_id}",
         DENY,
         path_ids={"tool_id": "sandbox_tool"},
+    ),
+    # A workspace secret is a shared credential the whole workspace's sandbox
+    # code can read. Listing is member-visible but scoped, so a foreign
+    # workspace's names never appear; setting is owner-only and lands in the
+    # caller's own workspace; deleting names a secret and, scoped to the caller,
+    # cannot reach across to another tenant's — a miss there is a plain 404.
+    RouteCase("GET", "/api/sandbox/secrets", SCOPED),
+    RouteCase(
+        "PUT",
+        "/api/sandbox/secrets",
+        SCOPED,
+        body={"name": "ISOLATION_PROBE", "value": "x"},
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/sandbox/secrets/{name}",
+        DENY,
+        path_ids={"name": "sandbox_secret"},
     ),
     # -- workflows ---------------------------------------------------------
     # A workflow id is worth more than most: naming another tenant's automation

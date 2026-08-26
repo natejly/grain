@@ -65,12 +65,28 @@ def session_root(base: Path, external_id: str) -> Path:
     filesystem path, and every such function in this codebase is one traversal
     bug away from being the interesting one in an incident report.
     """
-    if not external_id or "/" in external_id or "\\" in external_id or external_id.startswith("."):
+    if _bad_id(external_id):
         raise SandboxError("invalid sandbox id")
     path = (base / external_id).resolve()
     if not str(path).startswith(str(base.resolve()) + os.sep):
         raise SandboxError("invalid sandbox id")
     return path
+
+
+def _bad_id(external_id: str) -> bool:
+    """A driver id that must not be turned into a path. A NUL is in here beside
+    the traversal characters because it fails *differently*: `Path` operations on
+    a NUL-bearing string raise `ValueError`, not `OSError`, so an unlink or
+    resolve would throw straight past the `OSError` handlers a caller like
+    `remove_session_env` relies on — turning a bad id into an escaped exception
+    that skips the rest of teardown."""
+    return (
+        not external_id
+        or "\x00" in external_id
+        or "/" in external_id
+        or "\\" in external_id
+        or external_id.startswith(".")
+    )
 
 
 def ensure_session_root(base: Path, external_id: str, *, mode: int = 0) -> Path:
@@ -93,6 +109,96 @@ def ensure_session_root(base: Path, external_id: str, *, mode: int = 0) -> Path:
     if mode:
         os.chmod(path, mode)
     return path
+
+
+def _session_sidecar(base: Path, external_id: str, suffix: str) -> Path:
+    """A file that belongs to a session but lives *beside* its directory.
+
+    Deliberately outside `session_root(base, external_id)`, so it is invisible to
+    the sandbox: `snapshot`/`harvest`/`list_files` only ever walk inside the
+    session root, and the container mounts only that root — so a per-session env
+    file placed here is never harvested as an artifact, never listed to the
+    model, and never readable by the code running in the box. The id is
+    driver-generated, but the same containment check `session_root` applies is
+    applied here too, because this turns a string into a filesystem path.
+    """
+    if _bad_id(external_id):
+        raise SandboxError("invalid sandbox id")
+    return base / f".{external_id}{suffix}"
+
+
+def write_session_env(base: Path, external_id: str, env: Mapping[str, str]) -> None:
+    """Persist a session's environment, so a per-`docker run --rm` execution can
+    reconstruct it — the local drivers hold no live machine to carry it.
+
+    Written 0600 and beside the session directory rather than inside it: this is
+    the one place decrypted secrets touch the local disk, and it must not inherit
+    the 0777 the container driver widens the *session root* to for its bind mount.
+    """
+    import json
+
+    path = _session_sidecar(base, external_id, ".env.json")
+    payload = json.dumps(dict(env)).encode("utf-8")
+    # Create 0600 from the first byte rather than write-then-chmod: the latter
+    # leaves a window where the file exists under the umask's mode (typically
+    # world-readable) with decrypted secrets already in it. O_CREAT's mode only
+    # applies when the file is new, so an existing sidecar (a rotation overwrite)
+    # is re-tightened with fchmod to be sure.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            # A platform that refuses the chmod (rare) still gets the file; the
+            # secret is no more exposed than the SQLite database beside it.
+            pass
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+
+
+def remove_session_env(base: Path, external_id: str) -> None:
+    """Delete a session's env sidecar. Called on teardown so the one place
+    decrypted secrets touch local disk does not outlive the session that needed
+    them — without this, a killed session's plaintext credentials would survive
+    both rotation and deletion of the secret itself. Best-effort and idempotent:
+    a missing file means the job is already done."""
+    try:
+        path = _session_sidecar(base, external_id, ".env.json")
+    except SandboxError:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
+def read_session_env(base: Path, external_id: str) -> Dict[str, str]:
+    """A session's persisted environment, or empty if none was written.
+
+    Absent is the normal case for a session created before this existed, or one
+    with no secrets — so a missing or unreadable file degrades to "no extra
+    environment", never an error that would break every execution.
+    """
+    import json
+
+    try:
+        path = _session_sidecar(base, external_id, ".env.json")
+    except SandboxError:
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): str(v) for k, v in parsed.items()}
 
 
 def _is_contained_regular_file(path: Path, root: Path) -> bool:
@@ -349,6 +455,22 @@ class LocalProvider:
     def _dir(self, handle: SandboxHandle) -> Path:
         return session_root(self._workdir, handle.external_id)
 
+    def _process_env(self, handle: SandboxHandle) -> Dict[str, str]:
+        """The environment a run actually gets: the frozen base folded with the
+        secrets this session was created with.
+
+        `self._env` is the scrubbed base every session shares; the per-session
+        sidecar carries the workspace's decrypted secrets (`spec.env`), which the
+        local drivers cannot keep in a live machine because there isn't one.
+
+        The secret wins on a key collision (it is spread last), which would let a
+        secret named `PATH` or `LD_PRELOAD` redirect the interpreter — so the
+        create route refuses both policy keys and those process-steering names
+        (`secrets.validate_name`). The precedence here is safe only because that
+        validation holds; it is not a second line of defence.
+        """
+        return {**self._env, **read_session_env(self._workdir, handle.external_id)}
+
     def _resolve(self, root: Path, path: str) -> Path:
         """Map a sandbox-visible path onto the host, refusing to escape.
 
@@ -413,10 +535,17 @@ class LocalProvider:
         """No-op. A session is a directory; there is no process to snapshot."""
 
     def kill(self, handle: SandboxHandle) -> None:
-        """Delete the session directory. Idempotent — the reaper races an
-        explicit delete, and a missing directory means the job is already done."""
+        """Delete the session directory *and* its env sidecar. Idempotent — the
+        reaper races an explicit delete, and a missing target means the job is
+        already done.
+
+        The sidecar is the one place decrypted secrets touch local disk; deleting
+        it here is what keeps a killed session's plaintext credentials from
+        outliving the session. It is removed unconditionally, even when the id is
+        too malformed to name a session root, so a bad id can never strand it."""
         import shutil
 
+        remove_session_env(self._workdir, handle.external_id)
         try:
             root = session_root(self._workdir, handle.external_id)
         except SandboxError:

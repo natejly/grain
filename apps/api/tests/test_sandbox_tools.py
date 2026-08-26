@@ -27,6 +27,7 @@ from app.models import (
     Conversation,
     Run,
     SandboxExecution,
+    SandboxSecret,
     SandboxSession,
     Source,
     new_id,
@@ -429,6 +430,102 @@ def test_a_missing_file_is_reported_not_raised(tools, db, context):
     assert "could not return that file" in output
 
 
+# --- reading, writing and editing files -----------------------------------
+
+
+def test_write_then_read_round_trips_a_file(tools, db, context, provider):
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    wrote = _run(tools, db, context, "sandbox_write", path="app.py", content="print(1)\n")
+    assert "Wrote" in wrote
+    back = _run(tools, db, context, "sandbox_read", path="app.py")
+    assert "print(1)" in back
+
+
+def test_write_preview_shows_a_diff_the_card_can_colour(tools, db, context, provider):
+    """The write is approval-gated, and ProposalDiff colours everything from the
+    first @@ hunk header down — so a create must render one."""
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    rendered = tools["sandbox_write"].preview(
+        db, context, {"path": "notes.md", "content": "line one\nline two\n"}
+    )
+    assert "@@" in rendered and "+line one" in rendered
+    assert "Create" in rendered
+
+
+def test_overwrite_preview_diffs_against_the_current_file(tools, db, context, identity, provider):
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    _plant(db, provider, identity.workspace_id, f"{SANDBOX_HOME}/cfg.txt", b"debug = false\n")
+    rendered = tools["sandbox_write"].preview(
+        db, context, {"path": "cfg.txt", "content": "debug = true\n"}
+    )
+    assert "-debug = false" in rendered and "+debug = true" in rendered
+    assert "Overwrite" in rendered
+
+
+def test_edit_replaces_exact_text(tools, db, context, identity, provider):
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    _plant(db, provider, identity.workspace_id, f"{SANDBOX_HOME}/app.py", b"x = 1\ny = 2\n")
+    out = _run(tools, db, context, "sandbox_edit", path="app.py", find="x = 1", replace="x = 42")
+    assert "1 replacement" in out
+    assert "x = 42" in _run(tools, db, context, "sandbox_read", path="app.py")
+
+
+def test_edit_refuses_an_ambiguous_match(tools, db, context, identity, provider):
+    """The Edit contract: a non-unique `find` is refused rather than guessing
+    which occurrence the model meant."""
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    _plant(db, provider, identity.workspace_id, f"{SANDBOX_HOME}/dup.txt", b"a\na\n")
+    out = _run(tools, db, context, "sandbox_edit", path="dup.txt", find="a", replace="b")
+    assert "matches 2 places" in out
+    # Nothing was written — the file is untouched.
+    assert _run(tools, db, context, "sandbox_read", path="dup.txt").count("a") == 2
+
+
+def test_edit_all_replaces_every_occurrence(tools, db, context, identity, provider):
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    _plant(db, provider, identity.workspace_id, f"{SANDBOX_HOME}/dup.txt", b"a\na\n")
+    out = _run(tools, db, context, "sandbox_edit", path="dup.txt", find="a", replace="b", all=True)
+    assert "2 replacement" in out
+
+
+def test_edit_reports_missing_find_text(tools, db, context, identity, provider):
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    _plant(db, provider, identity.workspace_id, f"{SANDBOX_HOME}/app.py", b"x = 1\n")
+    out = _run(tools, db, context, "sandbox_edit", path="app.py", find="nope", replace="y")
+    assert out.startswith("Error:") and "not in" in out
+
+
+def test_read_refuses_binary_and_points_at_download(tools, db, context, identity, provider):
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    _plant(db, provider, identity.workspace_id, f"{SANDBOX_HOME}/img.png", b"\x89PNG\x00\x00")
+    out = _run(tools, db, context, "sandbox_read", path="img.png")
+    assert "binary" in out and "sandbox_download" in out
+
+
+def test_write_refuses_a_traversal_path(tools, db, context):
+    out = _run(tools, db, context, "sandbox_write", path="../../etc/cron", content="evil")
+    assert out.startswith("Error:")
+
+
+def test_list_shows_what_the_sandbox_holds(tools, db, context, identity, provider):
+    _run(tools, db, context, "run_python", code='print("make the sandbox")')
+    _plant(db, provider, identity.workspace_id, f"{SANDBOX_HOME}/a.txt", b"hi")
+    out = _run(tools, db, context, "sandbox_list")
+    assert "a.txt" in out
+
+
+def test_file_tools_do_not_spend_the_execution_cap(monkeypatch, db, context, provider):
+    """Reads and writes are not code executions — they must not count against the
+    per-turn runaway guard, or a few edits would lock the agent out of running."""
+    settings = _settings(sandbox_max_execs_per_run=1)
+    monkeypatch.setattr(tools_module, "get_settings", lambda: settings)
+    tools = registry_tools(db, context)
+    _run(tools, db, context, "sandbox_write", path="a.py", content="print(1)\n")
+    _run(tools, db, context, "sandbox_write", path="b.py", content="print(2)\n")
+    # The one code execution is still available afterwards.
+    assert "limit" not in _run(tools, db, context, "run_python", code='print("still ok")')
+
+
 # --- quotas ---------------------------------------------------------------
 
 
@@ -489,14 +586,30 @@ def test_a_named_session_from_another_workspace_is_refused(monkeypatch, db, cont
 def test_every_write_tool_is_approval_gated(tools):
     """read_only=False is what lands a tool on the "ask" policy, which is the
     entire approval UX. Getting this wrong runs generated code unattended."""
-    for name in ("run_python", "run_command", "sandbox_upload", "sandbox_download"):
+    for name in (
+        "run_python",
+        "run_command",
+        "sandbox_upload",
+        "sandbox_download",
+        "sandbox_write",
+        "sandbox_edit",
+    ):
         assert tools[name].read_only is False
         assert tools[name].preview is not None
-    assert tools["list_sandboxes"].read_only is True
+    for name in ("list_sandboxes", "sandbox_read", "sandbox_list"):
+        assert tools[name].read_only is True
 
 
 @pytest.mark.parametrize(
-    "name", ["run_python", "run_command", "sandbox_upload", "sandbox_download"]
+    "name",
+    [
+        "run_python",
+        "run_command",
+        "sandbox_upload",
+        "sandbox_download",
+        "sandbox_write",
+        "sandbox_edit",
+    ],
 )
 def test_previews_survive_missing_arguments(tools, db, context, name):
     """A preview is a courtesy that must never be fatal (`_describe_proposal` in
@@ -519,6 +632,31 @@ def test_the_preview_shows_the_code_and_what_it_can_reach(monkeypatch, db, conte
     rendered = tools["run_python"].preview(db, context, {"code": "requests.post(url, data=df)"})
     assert "requests.post(url, data=df)" in rendered
     assert f"network: {policy}" in rendered
+
+
+def test_the_preview_names_the_secrets_the_run_can_read(monkeypatch, db, context):
+    """A run's credentials are half the risk the egress line describes: code that
+    can reach the internet *and* read STRIPE_API_KEY is the exfiltration the
+    approver is weighing. The name shows on the card; the value never does."""
+    monkeypatch.setattr(tools_module, "get_settings", lambda: _settings())
+    db.add(
+        SandboxSecret(
+            id=new_id(),
+            workspace_id=context.workspace_id,
+            name="STRIPE_API_KEY",
+            value_enc="ciphertext-never-shown",
+            created_by=context.user_id,
+        )
+    )
+    db.commit()
+    tools = registry_tools(db, context)
+    rendered = tools["run_python"].preview(db, context, {"code": "1"})
+    assert "secrets: it can read STRIPE_API_KEY" in rendered
+    assert "ciphertext-never-shown" not in rendered
+    db.query(SandboxSecret).filter(
+        SandboxSecret.workspace_id == context.workspace_id
+    ).delete()
+    db.commit()
 
 
 def test_the_preview_reports_a_named_sessions_own_policy(monkeypatch, db, context, provider):

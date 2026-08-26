@@ -1183,6 +1183,41 @@ class ApiToken(Base):
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
+class SandboxSecret(Base):
+    """A named credential the workspace lets its sandbox code read as an env var.
+
+    This is the "connect stuff" half of the sandbox: an API key or token the
+    user registers once so generated code can call a service without the value
+    ever appearing in a prompt, a tool argument, or the transcript. ``name`` is
+    the environment variable the sandbox sees (``STRIPE_API_KEY``); ``value_enc``
+    is Fernet-encrypted at rest with the same key the OAuth connectors use, and
+    is decrypted only when a session is created, never returned by any read API.
+
+    Injected at session creation and frozen onto that machine, exactly like the
+    egress policy: editing a secret reaches the next session, not a live one. A
+    secret is only *reachable outward* when egress is not ``none`` — under the
+    default no-network policy it can be read by code that stays in the box but
+    cannot be exfiltrated, which is the same coupling the network policy already
+    governs (see services/sandbox/policy.py).
+    """
+
+    __tablename__ = "sandbox_secrets"
+    __table_args__ = (UniqueConstraint("workspace_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: The environment variable name the sandbox sees. Uppercase, validated at
+    #: the create route so it cannot shadow the policy-built env (GRAIN_SANDBOX…).
+    name: Mapped[str] = mapped_column(String(128))
+    #: Fernet ciphertext. Never decrypted on a read path; see services/sandbox/secrets.py.
+    value_enc: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+
 class McpServer(Base):
     """A configured MCP server: a stdio subprocess or a streamable HTTP endpoint."""
 

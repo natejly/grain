@@ -9,6 +9,7 @@ import {
   FileText,
   Inbox,
   KanbanSquare,
+  KeyRound,
   Layers,
   LayoutGrid,
   Library,
@@ -264,6 +265,8 @@ const GROUP_SPECS: NavGroupSpec[] = [
           // tools the agent may call. Databases left for Library → Data,
           // where the datasets they feed live.
           { view: "sandbox-tools", label: "Sandbox tools", icon: Terminal },
+          // The credentials that same sandbox code reads to reach a service.
+          { view: "sandbox-secrets", label: "Sandbox secrets", icon: KeyRound },
           { view: "integrations", label: "Integrations", icon: Plug },
         ],
       },

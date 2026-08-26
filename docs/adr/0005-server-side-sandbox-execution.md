@@ -164,8 +164,76 @@ instance of the residual risk this ADR already names. Egress is where sandboxes
 leak, the leak does not need a kernel escape, and "the provider says it is
 sandboxed" is not the same claim as "this network cannot carry your data out."
 
+## Secrets — connecting the sandbox to services
+
+The sandbox can now hold **workspace secrets**: a credential the workspace lets
+its generated code read as an environment variable. An owner registers one by
+name at `PUT /api/sandbox/secrets` (`STRIPE_API_KEY`, a database URL); the value
+is Fernet-encrypted at rest under the same `INTEGRATIONS_ENCRYPTION_KEY` the OAuth
+connectors use, and generated code reads it from `os.environ`. This is the "connect
+stuff" half of the feature — the ability to install packages was always there
+under an open network; reaching a named service needed a place to put the key.
+
+Three rules keep it from being a new hole rather than a new arm:
+
+- **The value is never *injected* into the model's world.** No read path returns it:
+  `list_secrets` answers with names and metadata only, and `SecretOut` has no value
+  field to blank. The one decryption is `secret_env`, called by `ensure_session` on
+  the way to `provider.create`, folding the plaintext straight into the machine's
+  environment. The model is told a run's secret *names* (the approval card), never a
+  value; nothing on any REST path, prompt, or tool argument carries one.
+  This is a containment boundary, **not** a redaction boundary. It hides the value
+  from the model — it does not stop code the model wrote from *revealing* it. A
+  script that runs `print(os.environ["STRIPE_API_KEY"])` sends the value to stdout,
+  and stdout is captured, rendered to the user, persisted with the run, and streamed
+  back into the next turn like any other output. There is no output scrubber: the
+  value can only be read back by code that already had it in its environment, so the
+  real control is the one below — that code can only *send* it outward when egress
+  allows. Treat "the sandbox can read this secret" as "this secret may appear in a
+  run's output", because a prompt-injected script will make it so.
+- **A secret cannot shadow the policy environment.** The sandbox env is *built*,
+  not filtered, and its keys (`GRAIN_SANDBOX`, `NO_NETWORK`, …) are load-bearing —
+  they are how the code is told where it is running. `validate_name` refuses those
+  keys and the whole `GRAIN_` prefix, so a secret can never overwrite one and lie
+  to the code about its own box. Policy env wins the merge; the ordering is written
+  down anyway, because a future policy key must keep winning.
+- **Reachable outward only when egress already allows it.** A secret in the
+  environment is exfiltratable by prompt-injected code exactly when that code has
+  a socket — i.e. never under the default `SANDBOX_NETWORK_POLICY=none`, and
+  otherwise under the same allowlist every other outbound byte obeys. The coupling
+  is the network policy's, not a second dial. The approval card states both facts
+  on one line — the egress sentence and the names of the secrets a run can see —
+  so the reviewer weighs "this code can reach the internet" and "this code can read
+  the Stripe key" as the single risk they actually are.
+
+Write is owner-only (`require_owner`) and read is member-visible, matching how the
+workspace treats any shared credential: every member's sandbox code can *use* the
+secret because they share the machine, but adding or removing one is an owner act.
+The tenant boundary is the `workspace_id` on the actor, applied to every query —
+no route here accepts or returns a provider-side id.
+
+The role gate is on **CRUD, not use.** An owner registers the key; any member can
+then write sandbox code that prints it (see the readback note above) and read the
+value from that run's output. This is deliberate — the secret exists so shared code
+can reach a shared service — but it means "member" is the true blast radius of a
+registered credential, not "owner". Do not register a key here that the whole
+member set should not effectively hold.
+
+Deletion stops *new* sessions from receiving the value; it does not reach into
+**live** ones. A secret is decrypted once at `ensure_session` and persisted to that
+session's env sidecar for the life of the session, so a `DELETE` while a session is
+running leaves the value in that session's environment until it is killed. Rotating
+a compromised credential therefore means deleting it *and* ending the sessions that
+saw it, not the delete alone.
+
 ## Consequences
 
+- **Secrets inherit the egress risk; they do not create a new one.** A registered
+  credential is inert under `none` and only exfiltratable under the same policy
+  that already governs every outbound byte. The feature adds reach, not a second
+  place to audit: the one question remains `SANDBOX_NETWORK_POLICY`, and the
+  approval card now names the credentials so that question is answered with the
+  network one.
 - **Turning egress on re-opens the one serious risk.** With the default `none`
   there is no exfiltration path: prompt-injected code can read the documents in
   the sandbox and has nowhere to send them. That property is worth defending,
@@ -175,6 +243,18 @@ sandboxed" is not the same claim as "this network cannot carry your data out."
   writes code that honours them, and the code then has both the data and a
   socket. No sandbox escape is required for that, and none of the container flags
   below prevent it.
+- **Decrypted secrets touch local disk in exactly one place, and the process table
+  briefly.** For the local drivers there is no live machine to hold an environment,
+  so `secret_env`'s plaintext is written to a per-session **sidecar** (`.{id}.env.json`,
+  mode `0600`, beside — not inside — the session directory, so it is never harvested,
+  listed, or bind-mounted into the box) and re-read per execution. `kill()` deletes
+  the sidecar with the session, so a killed session's plaintext does not outlive it.
+  The container driver additionally passes each secret as a `docker run -e NAME=VALUE`
+  argument, which is visible in the host process table (`ps -e`) for the run's
+  lifetime. `--env-file` would avoid that, but Docker's env-file format cannot carry
+  the multi-line values (PEM keys) this feature explicitly supports, so `-e` is the
+  deliberate trade: the exposure is host-local, to whoever can already read the API
+  host's process list, for seconds. It is documented, not eliminated.
 - **A pre-baked image means a missing import is a dead end.** With no network,
   "I need seaborn" is an image rebuild and a redeploy rather than a `pip install`
   the agent can run itself. That is the honest cost of the trade, and it argues
