@@ -99,6 +99,112 @@
         "title": "AdminActivityOut",
         "type": "object"
       },
+      "AdminAgentStatsOut": {
+        "description": "One authored agent's window: what it ran, what it spent, what it asked.\n\nThe trust columns are the point. `denied_calls` and `mode_approved_calls`\nsay how often this agent's writes met a human \"no\" or rode a bypass, and\n`flagged_runs` counts turns the injection screen flagged \u2014 the three\nnumbers an org admin reads before widening an agent's tool subset.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "completed_runs": {
+            "title": "Completed Runs",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "denied_calls": {
+            "title": "Denied Calls",
+            "type": "integer"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "failed_runs": {
+            "title": "Failed Runs",
+            "type": "integer"
+          },
+          "flagged_runs": {
+            "title": "Flagged Runs",
+            "type": "integer"
+          },
+          "mode_approved_calls": {
+            "title": "Mode Approved Calls",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "tool_calls": {
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "unpriced_calls": {
+            "title": "Unpriced Calls",
+            "type": "integer"
+          },
+          "usage_calls": {
+            "title": "Usage Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_id",
+          "name",
+          "enabled",
+          "runs",
+          "completed_runs",
+          "failed_runs",
+          "tool_calls",
+          "denied_calls",
+          "mode_approved_calls",
+          "flagged_runs",
+          "usage_calls",
+          "total_tokens",
+          "cost_usd",
+          "unpriced_calls"
+        ],
+        "title": "AdminAgentStatsOut",
+        "type": "object"
+      },
+      "AdminAgentsOut": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AdminAgentStatsOut"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "since",
+          "agents"
+        ],
+        "title": "AdminAgentsOut",
+        "type": "object"
+      },
       "AdminApprovalOut": {
         "properties": {
           "created_at": {
@@ -191,6 +297,80 @@
           "actor_email"
         ],
         "title": "AdminAuditEntryOut",
+        "type": "object"
+      },
+      "AdminAuditExportEntryOut": {
+        "description": "One raw trail row for an external ingester. No user join on purpose:\nan exporter pulling thousands of rows resolves actors once from the\nmembers list, not once per row.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "resource_type": {
+            "title": "Resource Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "resource_type",
+          "resource_id",
+          "actor_id",
+          "detail",
+          "created_at"
+        ],
+        "title": "AdminAuditExportEntryOut",
+        "type": "object"
+      },
+      "AdminAuditExportPage": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AdminAuditExportEntryOut"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "events",
+          "next_cursor"
+        ],
+        "title": "AdminAuditExportPage",
         "type": "object"
       },
       "AdminAuditPage": {
@@ -1597,6 +1777,126 @@
         "title": "AgentUpdate",
         "type": "object"
       },
+      "ApiTokenCreate": {
+        "properties": {
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ApiTokenCreate",
+        "type": "object"
+      },
+      "ApiTokenMintedOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "secret": {
+            "title": "Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "last_used_at",
+          "revoked_at",
+          "secret"
+        ],
+        "title": "ApiTokenMintedOut",
+        "type": "object"
+      },
+      "ApiTokenOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "last_used_at",
+          "revoked_at"
+        ],
+        "title": "ApiTokenOut",
+        "type": "object"
+      },
       "AppGenerateRequest": {
         "properties": {
           "dataset_ids": {
@@ -1698,7 +1998,9 @@
             "enum": [
               "ask_writes",
               "ask_all",
-              "auto_writes"
+              "auto_writes",
+              "plan",
+              "guardian"
             ],
             "title": "Mode",
             "type": "string"
@@ -2062,6 +2364,11 @@
             "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
+          },
+          "space_id": {
+            "default": "",
+            "title": "Space Id",
+            "type": "string"
           }
         },
         "required": [
@@ -2408,6 +2715,11 @@
       },
       "ConversationCreate": {
         "properties": {
+          "space_id": {
+            "default": "",
+            "title": "Space Id",
+            "type": "string"
+          },
           "title": {
             "default": "New conversation",
             "maxLength": 200,
@@ -2418,6 +2730,49 @@
         "title": "ConversationCreate",
         "type": "object"
       },
+      "ConversationDefaultsRequest": {
+        "description": "The body of `PATCH /api/conversations/{id}/defaults`.\n\nEvery field optional: a PATCH names only what it changes, and \"\" is a real\nvalue (\"back to the deployment's default\"), so None-means-untouched and\nempty-means-clear are two different statements. Values are stored, not\nvalidated against the provider's allow-lists \u2014 the composer only ever\n*seeds* its pickers from them, and a picker ignores a value the deployment\nno longer offers, so a stale default degrades to the default default.",
+        "properties": {
+          "default_agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Agent Id"
+          },
+          "default_effort": {
+            "anyOf": [
+              {
+                "maxLength": 24,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Effort"
+          },
+          "default_model": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          }
+        },
+        "title": "ConversationDefaultsRequest",
+        "type": "object"
+      },
       "ConversationOut": {
         "properties": {
           "approval_mode": {
@@ -2425,7 +2780,9 @@
             "enum": [
               "ask_writes",
               "ask_all",
-              "auto_writes"
+              "auto_writes",
+              "plan",
+              "guardian"
             ],
             "title": "Approval Mode",
             "type": "string"
@@ -2438,6 +2795,21 @@
           "created_at": {
             "format": "date-time",
             "title": "Created At",
+            "type": "string"
+          },
+          "default_agent_id": {
+            "default": "",
+            "title": "Default Agent Id",
+            "type": "string"
+          },
+          "default_effort": {
+            "default": "",
+            "title": "Default Effort",
+            "type": "string"
+          },
+          "default_model": {
+            "default": "",
+            "title": "Default Model",
             "type": "string"
           },
           "id": {
@@ -2453,6 +2825,11 @@
             "default": false,
             "title": "Shared",
             "type": "boolean"
+          },
+          "space_id": {
+            "default": "",
+            "title": "Space Id",
+            "type": "string"
           },
           "subject_id": {
             "default": "",
@@ -2483,6 +2860,41 @@
         "title": "ConversationOut",
         "type": "object"
       },
+      "ConversationSearchHitOut": {
+        "description": "One transcript passage matching a search, with where and when.",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "snippet": {
+            "title": "Snippet",
+            "type": "string"
+          },
+          "spoken_at": {
+            "format": "date-time",
+            "title": "Spoken At",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "title",
+          "kind",
+          "snippet",
+          "spoken_at"
+        ],
+        "title": "ConversationSearchHitOut",
+        "type": "object"
+      },
       "ConversationShareRequest": {
         "description": "The body of `PUT /api/conversations/{id}/share`.\n\nA single flag: sharing a thread is a one-bit within-workspace visibility\nchange (creator-private -> member-visible), owner-gated at the route.",
         "properties": {
@@ -2495,6 +2907,22 @@
           "shared"
         ],
         "title": "ConversationShareRequest",
+        "type": "object"
+      },
+      "ConversationTitleRequest": {
+        "description": "The body of `PUT /api/conversations/{id}/title`.\n\nBounded like the create path's title: a name, not a document. Whitespace\nis the caller's to trim \u2014 the route strips and refuses an empty result,\nbecause a thread whose rail row shows nothing cannot be found again.",
+        "properties": {
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "ConversationTitleRequest",
         "type": "object"
       },
       "CronCreateRequest": {
@@ -3948,6 +4376,80 @@
         "title": "DuplicateOut",
         "type": "object"
       },
+      "FavoriteOrderEntry": {
+        "properties": {
+          "kind": {
+            "maxLength": 24,
+            "title": "Kind",
+            "type": "string"
+          },
+          "ordinal": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "target_id": {
+            "maxLength": 36,
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "target_id",
+          "ordinal"
+        ],
+        "title": "FavoriteOrderEntry",
+        "type": "object"
+      },
+      "FavoriteOrderUpdate": {
+        "description": "The whole Favorites block in one write \u2014 `DashboardLayoutUpdate`'s\nreasoning: dragging one entry moves its neighbours, and a save that failed\nhalfway would leave two entries claiming one slot.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/FavoriteOrderEntry"
+            },
+            "maxItems": 200,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "FavoriteOrderUpdate",
+        "type": "object"
+      },
+      "FavoriteOut": {
+        "description": "One sidebar Favorites entry, already resolved.\n\n`label` is the target's current name, read at listing time under the\ntarget kind's own visibility rule \u2014 never stored, so a rename anywhere\nshows up here without a write.",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "target_id",
+          "label",
+          "ordinal"
+        ],
+        "title": "FavoriteOut",
+        "type": "object"
+      },
       "FileInput": {
         "properties": {
           "content": {
@@ -4424,6 +4926,188 @@
           "role"
         ],
         "title": "Identity",
+        "type": "object"
+      },
+      "InboxApprovalOut": {
+        "description": "One proposed tool call whose run is parked on the decision.",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "conversation_title": {
+            "title": "Conversation Title",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "proposal_preview": {
+            "title": "Proposal Preview",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          },
+          "workflow_name": {
+            "title": "Workflow Name",
+            "type": "string"
+          },
+          "workflow_run_id": {
+            "title": "Workflow Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "conversation_id",
+          "conversation_title",
+          "name",
+          "proposal_preview",
+          "origin",
+          "workflow_run_id",
+          "workflow_id",
+          "workflow_name",
+          "created_at"
+        ],
+        "title": "InboxApprovalOut",
+        "type": "object"
+      },
+      "InboxBudgetHoldOut": {
+        "description": "One run the spend ceiling is holding. No approve/deny exists for these:\nthere is no proposed call, and release is an owner raising the ceiling.",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          },
+          "workflow_name": {
+            "title": "Workflow Name",
+            "type": "string"
+          },
+          "workflow_run_id": {
+            "title": "Workflow Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "conversation_id",
+          "origin",
+          "workflow_run_id",
+          "workflow_id",
+          "workflow_name",
+          "created_at"
+        ],
+        "title": "InboxBudgetHoldOut",
+        "type": "object"
+      },
+      "InboxOut": {
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/InboxApprovalOut"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "budget_holds": {
+            "items": {
+              "$ref": "#/components/schemas/InboxBudgetHoldOut"
+            },
+            "title": "Budget Holds",
+            "type": "array"
+          },
+          "recent_runs": {
+            "items": {
+              "$ref": "#/components/schemas/InboxRunOut"
+            },
+            "title": "Recent Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "approvals",
+          "budget_holds",
+          "recent_runs"
+        ],
+        "title": "InboxOut",
+        "type": "object"
+      },
+      "InboxRunOut": {
+        "description": "One finished workflow run \u2014 the Inbox's history shelf, not its work.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          },
+          "workflow_name": {
+            "title": "Workflow Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workflow_id",
+          "workflow_name",
+          "status",
+          "error",
+          "created_at"
+        ],
+        "title": "InboxRunOut",
         "type": "object"
       },
       "IncompleteOut": {
@@ -4921,6 +5605,11 @@
             "title": "Shared",
             "type": "boolean"
           },
+          "space_id": {
+            "default": "",
+            "title": "Space Id",
+            "type": "string"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -5023,6 +5712,7 @@
           "provider": {
             "enum": [
               "openai",
+              "anthropic",
               "scripted"
             ],
             "title": "Provider",
@@ -6137,6 +6827,54 @@
         "title": "SandboxToolUpdate",
         "type": "object"
       },
+      "ScheduleCompileOut": {
+        "properties": {
+          "next_fires": {
+            "items": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "title": "Next Fires",
+            "type": "array"
+          },
+          "schedule_cron": {
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "title": "Schedule Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_cron",
+          "schedule_timezone",
+          "next_fires"
+        ],
+        "title": "ScheduleCompileOut",
+        "type": "object"
+      },
+      "ScheduleCompileRequest": {
+        "properties": {
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "timezone": {
+            "default": "UTC",
+            "maxLength": 64,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ScheduleCompileRequest",
+        "type": "object"
+      },
       "ScreenStatus": {
         "description": "The prompt-injection screen's posture \u2014 a minimal admin indicator.\n\nDeliberately does NOT carry `screen_proxy_url`: the proxy endpoint is a\nserver-side destination, in the same class as WORKFLOW_CRON_SECRET, and\nbootstrap is a client surface. Enabled/mode/backend is all a client needs to\nshow whether untrusted content is being screened and how hard.",
         "properties": {
@@ -6181,6 +6919,11 @@
               }
             ],
             "title": "Agent Id"
+          },
+          "aside": {
+            "default": false,
+            "title": "Aside",
+            "type": "boolean"
           },
           "content": {
             "maxLength": 20000,
@@ -6276,7 +7019,14 @@
             "type": "boolean"
           },
           "run": {
-            "$ref": "#/components/schemas/RunOut"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -6430,6 +7180,22 @@
           "body"
         ],
         "title": "SkillCreate",
+        "type": "object"
+      },
+      "SkillImportRequest": {
+        "description": "A SKILL.md file's raw text (`POST /skills/import`).\n\nThe open agent-skills format: `---` frontmatter with `name` and\n`description`, then a markdown body. Parsed by\n`services/skill_markdown.parse_skill_markdown`; its bounds (kebab name,\n20k body) are the same ones `SkillCreate` enforces, surfaced as 422s with\nthe parser's own messages.",
+        "properties": {
+          "markdown": {
+            "maxLength": 30000,
+            "minLength": 1,
+            "title": "Markdown",
+            "type": "string"
+          }
+        },
+        "required": [
+          "markdown"
+        ],
+        "title": "SkillImportRequest",
         "type": "object"
       },
       "SkillOut": {
@@ -6636,6 +7402,11 @@
             "title": "Media Type",
             "type": "string"
           },
+          "space_id": {
+            "default": "",
+            "title": "Space Id",
+            "type": "string"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -6652,6 +7423,117 @@
           "created_at"
         ],
         "title": "SourceOut",
+        "type": "object"
+      },
+      "SpaceCreate": {
+        "properties": {
+          "instructions": {
+            "default": "",
+            "title": "Instructions",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SpaceCreate",
+        "type": "object"
+      },
+      "SpaceOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "instructions": {
+            "title": "Instructions",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source_count": {
+            "default": 0,
+            "title": "Source Count",
+            "type": "integer"
+          },
+          "thread_count": {
+            "default": 0,
+            "title": "Thread Count",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "instructions",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SpaceOut",
+        "type": "object"
+      },
+      "SpaceUpdateRequest": {
+        "description": "Rename, rewrite the instructions, or both. Omitted means \"leave it\";\n`instructions: \"\"` clears them, which is why neither field has a usable\ndefault.",
+        "properties": {
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "SpaceUpdateRequest",
+        "type": "object"
+      },
+      "SteerRequest": {
+        "description": "A mid-turn message for a run already in flight (`POST /runs/{id}/steer`).\n\nNot a new turn: the text is appended to the running turn's transcript at the\nhead of its next iteration, so it shapes the very next model step. Runs that\nare parked or finished refuse it \u2014 the composer is the right channel there.",
+        "properties": {
+          "content": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "SteerRequest",
         "type": "object"
       },
       "SyncJobOut": {
@@ -7040,6 +7922,11 @@
           "created_at": {
             "format": "date-time",
             "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "default": "",
+            "title": "Created By",
             "type": "string"
           },
           "policy": {
@@ -7900,6 +8787,68 @@
         ]
       }
     },
+    "/api/admin/agents": {
+      "get": {
+        "description": "Every authored agent's activity, cost, and trust posture in one window.\n\nFive GROUP BYs over indexed windows \u2014 runs by status, tool calls by\nstatus, mode-approved calls, screen-flagged runs, and the usage ledger by\nits own `agent_id` column (0046) \u2014 so the route's cost tracks the window,\nnot the workspace. Retired (disabled) agents stay on the list: their\nhistory is exactly what retirement preserves.",
+        "operationId": "get_agent_stats_api_admin_agents_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAgentsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Stats",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/admin/audit-events": {
       "get": {
         "description": "The workspace's audit trail, newest first.\n\nRicher than `GET /api/audit-events`, which is the activity feed: this one\npages and resolves the actor to a person. The join is an outer join on\npurpose \u2014 `audit_events.actor_id` is a plain column, not a foreign key,\nbecause a worker writes rows with no user behind them.",
@@ -7969,6 +8918,119 @@
           }
         },
         "summary": "List Audit Log",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/audit-events/export": {
+      "get": {
+        "description": "The whole trail, oldest first, for SIEM ingestion and archival.\n\nThe UI page above is capped-offset and newest-first \u2014 right for reading,\nstructurally unable to drain a long trail. This one walks forward on a\nkeyset cursor over (created_at, id): no offset cap, stable under\nconcurrent writes (a row inserted behind the cursor is never skipped and\nnever repeated), and `since` makes incremental pulls cheap. `action`\nfilters by prefix, matching how the actions namespace themselves\n(\"agent_tool.\", \"skill.\", \"run.\"). The keyset predicate is spelled as the\ntwo-clause OR rather than a row-value comparison so it runs identically\non SQLite and Postgres.",
+        "operationId": "export_audit_log_api_admin_audit_events_export_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAuditExportPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Audit Log",
         "tags": [
           "admin"
         ]
@@ -9183,6 +10245,178 @@
         "summary": "Update Agent",
         "tags": [
           "agents"
+        ]
+      }
+    },
+    "/api/api-tokens": {
+      "get": {
+        "operationId": "list_api_tokens_api_api_tokens_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApiTokenOut"
+                  },
+                  "title": "Response List Api Tokens Api Api Tokens Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Api Tokens",
+        "tags": [
+          "api-tokens"
+        ]
+      },
+      "post": {
+        "operationId": "create_api_token_api_api_tokens_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiTokenCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiTokenMintedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Api Token",
+        "tags": [
+          "api-tokens"
+        ]
+      }
+    },
+    "/api/api-tokens/{token_id}": {
+      "delete": {
+        "operationId": "revoke_api_token_api_api_tokens__token_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "title": "Token Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Api Token",
+        "tags": [
+          "api-tokens"
         ]
       }
     },
@@ -11474,6 +12708,22 @@
         "operationId": "list_conversations_api_conversations_get",
         "parameters": [
           {
+            "in": "query",
+            "name": "space_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Space Id"
+            }
+          },
+          {
             "in": "header",
             "name": "x-workspace-id",
             "required": false,
@@ -11585,6 +12835,71 @@
           }
         },
         "summary": "Create Conversation",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/conversations/search": {
+      "get": {
+        "description": "Search past conversations by what was said, not only what they are named.\n\nThe same hybrid index (and, critically, the same visibility chokepoint)\nthe agent's `search_conversations` tool reads \u2014 a member searching by HTTP\nmust see exactly what the agent quoting on their behalf would see, and a\npersonal thread stays its creator's in both. Declared before FastAPI could\never confuse it with a by-id path, and returning [] rather than erroring\nwhen the index is disabled: to a palette, \"no hits\" and \"no index\" call\nfor the same quiet row.",
+        "operationId": "search_conversations_http_api_conversations_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 2,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConversationSearchHitOut"
+                  },
+                  "title": "Response Search Conversations Http Api Conversations Search Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Conversations Http",
         "tags": [
           "chat"
         ]
@@ -11716,6 +13031,75 @@
           }
         },
         "summary": "Set Approval Mode",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/conversations/{conversation_id}/defaults": {
+      "patch": {
+        "description": "Remember the composer's choices \u2014 agent, model, effort \u2014 on the thread.\n\nA PATCH of preferences, not policy: the run path never reads these (every\nturn still names its controls explicitly), so there is nothing here to\naudit and no gate beyond visibility. Any member a shared thread is visible\nto may set them \u2014 they are the thread's working setup, like its title.\n\nNo `Idempotency-Key`: a retry lands on the same state by construction.",
+        "operationId": "set_conversation_defaults_api_conversations__conversation_id__defaults_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationDefaultsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Conversation Defaults",
         "tags": [
           "chat"
         ]
@@ -11860,6 +13244,95 @@
         ]
       }
     },
+    "/api/conversations/{conversation_id}/messages/{message_id}/edit": {
+      "post": {
+        "description": "Rewrite one of your prompts and re-run the conversation from there.\n\nThe edit IS a truncation: the old turn's messages, tool cards and runs are\ndeleted \u2014 not superseded \u2014 and a fresh turn is queued with the new words.\nHistory reaches the model rebuilt from `messages` on every turn, so what\nremains after the cut is exactly the context the re-run sees; keeping the\nold answer around would leave the transcript contradicting itself.\n\nOnly the author may edit (a shared thread must not let one member rewrite\nanother's words), only a `user` message that started a turn qualifies (an\nassistant message is not yours to put words into; an aside never ran), and\na turn that is still running or parked refuses with a 409 \u2014 deciding or\ncancelling it comes first.\n\nSame idempotency shape as `message.send`, its own operation: the resource\na replay must return is the NEW run.",
+        "operationId": "edit_message_api_conversations__conversation_id__messages__message_id__edit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "title": "Message Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit Message",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/conversations/{conversation_id}/share": {
       "put": {
         "description": "Share or unshare a thread with the rest of the workspace.\n\nOwner-gated, mirroring the skills share gate: only the creator, or the\nworkspace owner, may flip a thread between personal and shared. A plain\nmember seeing a shared thread must not be able to unshare it out from under\nthe people using it, nor share a personal thread they merely happened to\nreach \u2014 which is why `resolve_visible` (a 404 for anything outside the\nworkspace or another member's personal thread) is followed by the\ncreator-or-owner gate (a 403). Sharing changes visibility ONLY within the\nworkspace; the `workspace_id` filter in `resolve_visible` is never removed,\nso this can never expose a thread cross-workspace.",
@@ -11924,6 +13397,75 @@
           }
         },
         "summary": "Set Conversation Shared",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/conversations/{conversation_id}/title": {
+      "put": {
+        "description": "Rename a thread.\n\nAny member the thread is visible to may rename it, same as the approval\nmode: a shared thread's name is the collaboration's, not the creator's,\nand a personal thread is only ever visible to its creator anyway. Subject\nthreads are refused \u2014 their titles are derived from the subject they hang\noff (\"Document: Q3 notes\"), and a hand-renamed one would stop saying what\nit is attached to.\n\nNo `Idempotency-Key`: a PUT of a value, so a retry lands on the same state\nby construction.",
+        "operationId": "rename_conversation_api_conversations__conversation_id__title_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationTitleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Conversation",
         "tags": [
           "chat"
         ]
@@ -12034,6 +13576,66 @@
           }
         },
         "summary": "Create Cron",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/compile-schedule": {
+      "post": {
+        "description": "English to a validated cron schedule, without saving anything.\n\nThe composer's preview: \"every weekday at 9am\" in; a cron, its timezone and\nthe next three fire times out. It stores nothing and grants nothing, which\nis why there is no Idempotency-Key \u2014 same reasoning as\n`POST /api/workflows/compile`. The model's answer goes through the same\n`_validate_schedule` a hand-typed cron does, so a compiled schedule is never\nheld to a lower standard than a typed one, and every 422 is one sentence a\nperson can act on.",
+        "operationId": "compile_schedule_preview_api_crons_compile_schedule_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleCompileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleCompileOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compile Schedule Preview",
         "tags": [
           "crons"
         ]
@@ -14173,6 +15775,251 @@
         ]
       }
     },
+    "/api/favorites": {
+      "get": {
+        "description": "The caller's favorites in their chosen order, labels resolved.\n\nA row whose target no longer resolves \u2014 deleted, or a thread unshared out\nfrom under the pin \u2014 is dropped from the answer, not an error and not\ndeleted (see `services/favorites.list_favorites` for why it is left).",
+        "operationId": "list_favorites_api_favorites_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FavoriteOut"
+                  },
+                  "title": "Response List Favorites Api Favorites Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Favorites",
+        "tags": [
+          "favorites"
+        ]
+      }
+    },
+    "/api/favorites/order": {
+      "put": {
+        "description": "Save the whole block's order in one write. See `FavoriteOrderUpdate`.",
+        "operationId": "save_favorites_order_api_favorites_order_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FavoriteOrderUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FavoriteOut"
+                  },
+                  "title": "Response Save Favorites Order Api Favorites Order Put",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Favorites Order",
+        "tags": [
+          "favorites"
+        ]
+      }
+    },
+    "/api/favorites/{kind}/{target_id}": {
+      "delete": {
+        "description": "Unpin. 404 on anything the caller has not pinned \u2014 foreign, missing and\nnever-favorited are the same fact from this side of the workspace wall.",
+        "operationId": "remove_favorite_api_favorites__kind___target_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Favorite",
+        "tags": [
+          "favorites"
+        ]
+      },
+      "put": {
+        "description": "Pin one named thing to the caller's sidebar; already pinned is a no-op.\n\nVisibility is proved BEFORE anything is stored: without that, a favorite\nwould be a write-side oracle for ids in other tenants' workspaces and in\nother members' personal threads. 404 and not 403 \u2014 `crons._load`'s\nreasoning \u2014 because a 403 would confirm the id names something real.",
+        "operationId": "add_favorite_api_favorites__kind___target_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FavoriteOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Favorite",
+        "tags": [
+          "favorites"
+        ]
+      }
+    },
     "/api/folders": {
       "get": {
         "operationId": "list_folders_api_folders_get",
@@ -14518,6 +16365,56 @@
         "summary": "Request Graph Rebuild",
         "tags": [
           "graph"
+        ]
+      }
+    },
+    "/api/inbox": {
+      "get": {
+        "description": "The attention feed: parked approvals and budget holds, then history.",
+        "operationId": "read_inbox_api_inbox_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Inbox",
+        "tags": [
+          "inbox"
         ]
       }
     },
@@ -15032,6 +16929,54 @@
         "summary": "Compile Endpoint",
         "tags": [
           "latex"
+        ]
+      }
+    },
+    "/api/mcp": {
+      "post": {
+        "description": "One stateless JSON-RPC exchange of the MCP streamable-HTTP transport.\n\nNotifications answer 202 with no body (the transport's contract for\nmessages that expect no reply); everything else answers a single JSON-RPC\nresponse. Sessions, resumable streams and server-initiated messages are\ndeliberately unimplemented \u2014 a tools-only server needs none of them, and\nevery mainstream client falls back to plain request/response cleanly.",
+        "operationId": "mcp_endpoint_api_mcp_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mcp Endpoint",
+        "tags": [
+          "mcp-server"
         ]
       }
     },
@@ -16759,6 +18704,86 @@
         ]
       }
     },
+    "/api/runs/{run_id}/steer": {
+      "post": {
+        "description": "Inject a mid-turn user message into a run that is still working.\n\nThe message rides `run_events` \u2014 the channel the loop already polls for\ncancellation \u2014 as a `steer.requested` event the loop folds into the\ntranscript at the head of its next iteration (`_absorb_steering`). Only a\nqueued or running turn accepts one: a parked run is waiting on a decision,\nnot on words, and a finished run has a composer for the next turn.",
+        "operationId": "steer_run_api_runs__run_id__steer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SteerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Steer Run",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/sandbox": {
       "get": {
         "description": "Every session this workspace owns. Reads rows only \u2014 a provider outage\nmust not make the panel itself unreachable.",
@@ -17481,6 +19506,77 @@
         ]
       }
     },
+    "/api/skills/import": {
+      "post": {
+        "description": "Create a skill from a SKILL.md file \u2014 the open agent-skills format.\n\nDeliberately a thin translation onto the same service call `POST /skills`\nmakes: the parser owns format errors (422, its messages are user-ready),\nthis route owns the same name-conflict 409 the create route answers, and\nwhat lands is inert by default \u2014 private, no args \u2014 exactly like any other\nnewly authored skill. Grain's declared args have no SKILL.md\nrepresentation, so an import starts with none; `{{ placeholders }}` in the\nbody stay literal until args are declared in the editor.",
+        "operationId": "import_skill_api_skills_import_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
     "/api/skills/{skill_id}": {
       "delete": {
         "operationId": "delete_skill_api_skills__skill_id__delete",
@@ -17654,6 +19750,63 @@
         ]
       }
     },
+    "/api/skills/{skill_id}/export": {
+      "get": {
+        "description": "The skill as a SKILL.md file, portable to any agent-skills consumer.\n\nDeclared args are the one thing the format cannot carry; the body's\n`{{ placeholders }}` export literally, which the round trip back into\nGrain also preserves.",
+        "operationId": "export_skill_api_skills__skill_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
     "/api/skills/{skill_id}/versions": {
       "get": {
         "operationId": "list_skill_versions_api_skills__skill_id__versions_get",
@@ -17787,6 +19940,22 @@
       "get": {
         "operationId": "list_sources_api_sources_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "space_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Space Id"
+            }
+          },
           {
             "in": "header",
             "name": "x-workspace-id",
@@ -18020,6 +20189,311 @@
         "summary": "Get Source Content",
         "tags": [
           "sources"
+        ]
+      }
+    },
+    "/api/spaces": {
+      "get": {
+        "operationId": "list_spaces_api_spaces_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SpaceOut"
+                  },
+                  "title": "Response List Spaces Api Spaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Spaces",
+        "tags": [
+          "spaces"
+        ]
+      },
+      "post": {
+        "operationId": "create_space_api_spaces_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Space",
+        "tags": [
+          "spaces"
+        ]
+      }
+    },
+    "/api/spaces/{space_id}": {
+      "delete": {
+        "operationId": "delete_space_api_spaces__space_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Space",
+        "tags": [
+          "spaces"
+        ]
+      },
+      "get": {
+        "operationId": "get_space_api_spaces__space_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Space",
+        "tags": [
+          "spaces"
+        ]
+      },
+      "patch": {
+        "operationId": "update_space_api_spaces__space_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Space",
+        "tags": [
+          "spaces"
         ]
       }
     },
