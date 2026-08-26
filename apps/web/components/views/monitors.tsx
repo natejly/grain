@@ -1,15 +1,11 @@
 "use client";
 
-import type {
-  Dataset,
-  DatasetMetric,
-  Monitor,
-  MonitorComparator,
-} from "@workspace/api-client";
+import type { Dataset, Monitor, MonitorComparator } from "@workspace/api-client";
 import {
   Check,
   Gauge,
   LoaderCircle,
+  Pencil,
   Play,
   Plus,
   Trash2,
@@ -18,11 +14,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import {
   COMPARATOR_LABELS,
+  buildMetric,
   describeMonitorSchedule,
+  formMetric,
   lastValueCopy,
+  monitorUpdatePayload,
   stateLabel,
   stateTone,
   thresholdCopy,
+  type MonitorFormOperation,
 } from "./monitor-format";
 import { describeError, formatRelative } from "./shared";
 
@@ -49,16 +49,8 @@ export type MonitorsViewProps = {
   datasets: Dataset[];
 };
 
-type Operation = "count" | "sum" | "avg" | "min" | "max";
-
-/** The one metric the form builds: what the evaluation will read. */
-function buildMetric(operation: Operation, field: string): DatasetMetric {
-  if (operation === "count") return { operation, field: null, label: "count" };
-  return { operation, field, label: `${operation}_${field}` };
-}
-
 /** Columns this operation can honestly aggregate. */
-function fieldsFor(operation: Operation, dataset: Dataset | null): string[] {
+function fieldsFor(operation: MonitorFormOperation, dataset: Dataset | null): string[] {
   if (!dataset || operation === "count") return [];
   const numericOnly = operation === "sum" || operation === "avg";
   return dataset.columns
@@ -71,20 +63,37 @@ function fieldsFor(operation: Operation, dataset: Dataset | null): string[] {
 function MonitorForm({
   datasets,
   setError,
-  onCreated,
+  monitor = null,
+  onSaved,
+  onCancel,
 }: {
   datasets: Dataset[];
   setError: (message: string) => void;
-  onCreated: (monitor: Monitor) => void;
+  /** When set, the form edits this monitor in place instead of creating. */
+  monitor?: Monitor | null;
+  onSaved: (monitor: Monitor) => void;
+  /** Rendered as a Cancel button in edit mode; creation has the sidebar. */
+  onCancel?: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [datasetId, setDatasetId] = useState("");
-  const [operation, setOperation] = useState<Operation>("count");
-  const [field, setField] = useState("");
-  const [comparator, setComparator] = useState<MonitorComparator>("gt");
-  const [threshold, setThreshold] = useState("");
-  const [scheduleCron, setScheduleCron] = useState("");
-  const [timezone, setTimezone] = useState("UTC");
+  // A stored query the form cannot express (filters, grouping, a custom
+  // label — authored through the API) is kept verbatim: the metric controls
+  // disappear rather than silently rewriting it down to what the form knows.
+  const parsed = monitor ? formMetric(monitor.query) : null;
+  const metricEditable = monitor === null || parsed !== null;
+  const [name, setName] = useState(monitor?.name ?? "");
+  const [datasetId, setDatasetId] = useState(monitor?.dataset_id ?? "");
+  const [operation, setOperation] = useState<MonitorFormOperation>(
+    parsed?.operation ?? "count",
+  );
+  const [field, setField] = useState(parsed?.field ?? "");
+  const [comparator, setComparator] = useState<MonitorComparator>(
+    monitor?.comparator ?? "gt",
+  );
+  const [threshold, setThreshold] = useState(
+    monitor ? String(monitor.threshold) : "",
+  );
+  const [scheduleCron, setScheduleCron] = useState(monitor?.schedule_cron ?? "");
+  const [timezone, setTimezone] = useState(monitor?.schedule_timezone ?? "UTC");
   const [busy, setBusy] = useState(false);
 
   const dataset = datasets.find((item) => item.id === datasetId) ?? null;
@@ -93,8 +102,8 @@ function MonitorForm({
   const thresholdNumber = Number(threshold);
   const ready = Boolean(
     name.trim() &&
-      datasetId &&
-      fieldReady &&
+      (datasetId || !metricEditable) &&
+      (fieldReady || !metricEditable) &&
       threshold.trim() &&
       Number.isFinite(thresholdNumber) &&
       scheduleCron.trim(),
@@ -104,18 +113,52 @@ function MonitorForm({
     if (!ready || busy) return;
     setBusy(true);
     try {
-      const created = await api.createMonitor({
+      if (monitor === null) {
+        onSaved(
+          await api.createMonitor({
+            name: name.trim(),
+            dataset_id: datasetId,
+            query: { metrics: [buildMetric(operation, field)], limit: 1 },
+            comparator,
+            threshold: thresholdNumber,
+            schedule_cron: scheduleCron.trim(),
+            schedule_timezone: timezone.trim() || "UTC",
+          }),
+        );
+        return;
+      }
+      const metricChanged =
+        metricEditable &&
+        (parsed === null ||
+          operation !== parsed.operation ||
+          (operation !== "count" && field !== parsed.field));
+      const payload = monitorUpdatePayload(monitor, {
         name: name.trim(),
-        dataset_id: datasetId,
-        query: { metrics: [buildMetric(operation, field)], limit: 1 },
         comparator,
         threshold: thresholdNumber,
         schedule_cron: scheduleCron.trim(),
         schedule_timezone: timezone.trim() || "UTC",
+        dataset_id: metricEditable ? datasetId : null,
+        query: metricChanged
+          ? { metrics: [buildMetric(operation, field)], limit: 1 }
+          : null,
       });
-      onCreated(created);
+      // Nothing changed: saving an untouched form is a no-op, not a PUT that
+      // would reset the monitor's edge state.
+      onSaved(
+        Object.keys(payload).length === 0
+          ? monitor
+          : await api.updateMonitor(monitor.id, payload),
+      );
     } catch (caught) {
-      setError(describeError(caught, "Could not create that monitor"));
+      setError(
+        describeError(
+          caught,
+          monitor
+            ? "Could not change that monitor"
+            : "Could not create that monitor",
+        ),
+      );
     } finally {
       setBusy(false);
     }
@@ -125,7 +168,7 @@ function MonitorForm({
     <section className="workflow-author">
       <div className="page-heading">
         <div>
-          <h1>New monitor</h1>
+          <h1>{monitor ? `Edit “${monitor.name}”` : "New monitor"}</h1>
         </div>
       </div>
 
@@ -145,57 +188,70 @@ function MonitorForm({
           />
         </label>
 
-        <label className="cron-field">
-          <span>Dataset</span>
-          <select
-            value={datasetId}
-            onChange={(event) => {
-              setDatasetId(event.target.value);
-              // A field belongs to one dataset's schema; changing the dataset
-              // must not silently keep a column it may not have.
-              setField("");
-            }}
-          >
-            <option value="">Pick a dataset…</option>
-            {datasets.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="cron-field-row">
-          <label className="cron-field">
-            <span>Metric</span>
-            <select
-              value={operation}
-              onChange={(event) => {
-                setOperation(event.target.value as Operation);
-                setField("");
-              }}
-            >
-              <option value="count">Count of rows</option>
-              <option value="sum">Sum of a column</option>
-              <option value="avg">Average of a column</option>
-              <option value="min">Minimum of a column</option>
-              <option value="max">Maximum of a column</option>
-            </select>
-          </label>
-          {operation !== "count" && (
+        {metricEditable ? (
+          <>
             <label className="cron-field">
-              <span>Column</span>
-              <select value={field} onChange={(event) => setField(event.target.value)}>
-                <option value="">Pick a column…</option>
-                {fields.map((column) => (
-                  <option key={column} value={column}>
-                    {column}
+              <span>Dataset</span>
+              <select
+                value={datasetId}
+                onChange={(event) => {
+                  setDatasetId(event.target.value);
+                  // A field belongs to one dataset's schema; changing the
+                  // dataset must not silently keep a column it may not have.
+                  setField("");
+                }}
+              >
+                <option value="">Pick a dataset…</option>
+                {datasets.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
                   </option>
                 ))}
               </select>
             </label>
-          )}
-        </div>
+
+            <div className="cron-field-row">
+              <label className="cron-field">
+                <span>Metric</span>
+                <select
+                  value={operation}
+                  onChange={(event) => {
+                    setOperation(event.target.value as MonitorFormOperation);
+                    setField("");
+                  }}
+                >
+                  <option value="count">Count of rows</option>
+                  <option value="sum">Sum of a column</option>
+                  <option value="avg">Average of a column</option>
+                  <option value="min">Minimum of a column</option>
+                  <option value="max">Maximum of a column</option>
+                </select>
+              </label>
+              {operation !== "count" && (
+                <label className="cron-field">
+                  <span>Column</span>
+                  <select
+                    value={field}
+                    onChange={(event) => setField(event.target.value)}
+                  >
+                    <option value="">Pick a column…</option>
+                    {fields.map((column) => (
+                      <option key={column} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          </>
+        ) : (
+          <p className="section-note">
+            This monitor&rsquo;s query was authored through the API (filters,
+            grouping, or a custom label the form has no controls for), so it is
+            kept verbatim — only the fields below change.
+          </p>
+        )}
 
         <div className="cron-field-row">
           <label className="cron-field">
@@ -251,10 +307,34 @@ function MonitorForm({
           </label>
         </div>
 
+        {monitor && (
+          <p className="section-note">
+            Changing what is watched — the dataset, metric, comparator, or
+            threshold — resets the monitor&rsquo;s edge state, so the first
+            crossing after the change alerts.
+          </p>
+        )}
+
         <div className="cron-form-actions">
+          {onCancel && (
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={busy}
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+          )}
           <button className="primary-button" type="submit" disabled={busy || !ready}>
             {busy ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />}
-            {busy ? "Creating…" : "Create monitor"}
+            {busy
+              ? monitor
+                ? "Saving…"
+                : "Creating…"
+              : monitor
+                ? "Save changes"
+                : "Create monitor"}
           </button>
         </div>
       </form>
@@ -266,6 +346,7 @@ export function MonitorsView({ setError, datasets }: MonitorsViewProps) {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [activeId, setActiveId] = useState("");
   const [composing, setComposing] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [schedulingEnabled, setSchedulingEnabled] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -304,13 +385,20 @@ export function MonitorsView({ setError, datasets }: MonitorsViewProps) {
 
   function select(monitor: Monitor) {
     setComposing(false);
+    setEditing(false);
     setActiveId(monitor.id);
     setChecked("");
   }
 
-  function created(monitor: Monitor) {
-    setMonitors((rows) => [monitor, ...rows.filter((row) => row.id !== monitor.id)]);
+  /** A create lands at the top; an edit replaces its row where it stands. */
+  function saved(monitor: Monitor) {
+    setMonitors((rows) =>
+      rows.some((row) => row.id === monitor.id)
+        ? rows.map((row) => (row.id === monitor.id ? monitor : row))
+        : [monitor, ...rows],
+    );
     setComposing(false);
+    setEditing(false);
     setActiveId(monitor.id);
     setChecked("");
   }
@@ -359,7 +447,10 @@ export function MonitorsView({ setError, datasets }: MonitorsViewProps) {
     try {
       await api.deleteMonitor(monitor.id);
       setMonitors((rows) => rows.filter((row) => row.id !== monitor.id));
-      if (activeId === monitor.id) setActiveId("");
+      if (activeId === monitor.id) {
+        setActiveId("");
+        setEditing(false);
+      }
     } catch (caught) {
       setError(describeError(caught, "Could not delete that monitor"));
     }
@@ -380,6 +471,7 @@ export function MonitorsView({ setError, datasets }: MonitorsViewProps) {
             aria-label="New monitor"
             onClick={() => {
               setComposing(true);
+              setEditing(false);
               setActiveId("");
               setChecked("");
             }}
@@ -425,7 +517,21 @@ export function MonitorsView({ setError, datasets }: MonitorsViewProps) {
 
       {composing && (
         <div className="workflow-main">
-          <MonitorForm datasets={datasets} setError={setError} onCreated={created} />
+          <MonitorForm datasets={datasets} setError={setError} onSaved={saved} />
+        </div>
+      )}
+
+      {!composing && editing && active && (
+        <div className="workflow-main">
+          {/* Keyed so switching monitors re-seeds the form's state. */}
+          <MonitorForm
+            key={active.id}
+            datasets={datasets}
+            setError={setError}
+            monitor={active}
+            onSaved={saved}
+            onCancel={() => setEditing(false)}
+          />
         </div>
       )}
 
@@ -442,7 +548,7 @@ export function MonitorsView({ setError, datasets }: MonitorsViewProps) {
         </div>
       )}
 
-      {!composing && active && (
+      {!composing && !editing && active && (
         <div className="workflow-main">
           <header className="workflow-head">
             <div>
@@ -466,6 +572,16 @@ export function MonitorsView({ setError, datasets }: MonitorsViewProps) {
                 onClick={() => void setEnabled(active, !active.enabled)}
               >
                 {active.enabled ? "Disable" : "Enable"}
+              </button>
+              <button
+                className="ghost-button"
+                disabled={busy}
+                onClick={() => {
+                  setEditing(true);
+                  setChecked("");
+                }}
+              >
+                <Pencil size={14} /> Edit
               </button>
               <button
                 className="icon-button"

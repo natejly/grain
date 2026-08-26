@@ -1,9 +1,12 @@
 import type { Monitor } from "@workspace/api-client";
 import { describe, expect, it } from "vitest";
 import {
+  buildMetric,
   describeMonitorSchedule,
+  formMetric,
   lastValueCopy,
   metricLabel,
+  monitorUpdatePayload,
   stateLabel,
   stateTone,
   thresholdCopy,
@@ -131,5 +134,117 @@ describe("describeMonitorSchedule", () => {
       true,
     );
     expect(fired.detail).toContain("Last checked");
+  });
+});
+
+describe("formMetric", () => {
+  it("reads a form-built query back into the form's operation and field", () => {
+    expect(
+      formMetric({ metrics: [buildMetric("sum", "amount")], limit: 1 }),
+    ).toEqual({ operation: "sum", field: "amount" });
+    expect(formMetric({ metrics: [buildMetric("count", "")], limit: 1 })).toEqual({
+      operation: "count",
+      field: "",
+    });
+  });
+
+  it("refuses anything the form has no controls for — an edit must never silently drop it", () => {
+    // Filters, grouping, ordering, a second metric: each one would be lost if
+    // the form rebuilt the query from its own three controls.
+    expect(
+      formMetric({
+        metrics: [buildMetric("sum", "amount")],
+        filters: [{ field: "region", operator: "eq", value: "EU" }],
+      }),
+    ).toBeNull();
+    expect(
+      formMetric({ metrics: [buildMetric("sum", "amount")], group_by: "region" }),
+    ).toBeNull();
+    expect(
+      formMetric({ metrics: [buildMetric("sum", "amount")], order_by: "amount" }),
+    ).toBeNull();
+    expect(
+      formMetric({
+        metrics: [buildMetric("sum", "amount"), buildMetric("count", "")],
+      }),
+    ).toBeNull();
+    expect(formMetric({ metrics: [] })).toBeNull();
+    expect(formMetric({})).toBeNull();
+    // A hand-written label is part of the stored contract too: rebuilding
+    // would rename the value every alert and dashboard sentence uses.
+    expect(
+      formMetric({
+        metrics: [{ operation: "sum", field: "amount", label: "revenue" }],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("monitorUpdatePayload", () => {
+  it("sends ONLY the changed fields — an untouched definition field must not re-arm a tripped monitor", () => {
+    // The server resets edge state whenever a definition field is among the
+    // sent fields (by design); re-sending an unchanged threshold would turn
+    // "rename this monitor" into "forget it already tripped".
+    expect(
+      monitorUpdatePayload(monitor, {
+        name: "Renamed floor",
+        comparator: monitor.comparator,
+        threshold: monitor.threshold,
+        schedule_cron: monitor.schedule_cron,
+        schedule_timezone: monitor.schedule_timezone,
+        dataset_id: monitor.dataset_id,
+        query: null,
+      }),
+    ).toEqual({ name: "Renamed floor" });
+  });
+
+  it("returns an empty payload for an untouched form", () => {
+    expect(
+      monitorUpdatePayload(monitor, {
+        name: monitor.name,
+        comparator: monitor.comparator,
+        threshold: monitor.threshold,
+        schedule_cron: monitor.schedule_cron,
+        schedule_timezone: monitor.schedule_timezone,
+        dataset_id: monitor.dataset_id,
+        query: null,
+      }),
+    ).toEqual({});
+  });
+
+  it("carries every genuinely changed field, and a rebuilt query only when given one", () => {
+    const query = { metrics: [buildMetric("avg", "latency")], limit: 1 };
+    expect(
+      monitorUpdatePayload(monitor, {
+        name: monitor.name,
+        comparator: "gte",
+        threshold: 250,
+        schedule_cron: "0 * * * *",
+        schedule_timezone: "UTC",
+        dataset_id: "d2",
+        query,
+      }),
+    ).toEqual({
+      comparator: "gte",
+      threshold: 250,
+      schedule_cron: "0 * * * *",
+      schedule_timezone: "UTC",
+      dataset_id: "d2",
+      query,
+    });
+  });
+
+  it("treats a null dataset as untouched — the verbatim-query edit never re-sends it", () => {
+    expect(
+      monitorUpdatePayload(monitor, {
+        name: monitor.name,
+        comparator: monitor.comparator,
+        threshold: 200,
+        schedule_cron: monitor.schedule_cron,
+        schedule_timezone: monitor.schedule_timezone,
+        dataset_id: null,
+        query: null,
+      }),
+    ).toEqual({ threshold: 200 });
   });
 });

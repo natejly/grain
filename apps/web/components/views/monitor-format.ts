@@ -1,4 +1,10 @@
-import type { Monitor, MonitorComparator } from "@workspace/api-client";
+import type {
+  DatasetMetric,
+  DatasetQuery,
+  Monitor,
+  MonitorComparator,
+  MonitorUpdateInput,
+} from "@workspace/api-client";
 import type { ScheduleNote } from "./workflow-format";
 
 /**
@@ -19,6 +25,88 @@ export const COMPARATOR_LABELS: Record<MonitorComparator, string> = {
   gte: "reaches",
   lte: "drops to",
 };
+
+/** The one aggregation the Monitors form can express. */
+export type MonitorFormOperation = "count" | "sum" | "avg" | "min" | "max";
+
+/** The one metric the form builds: what the evaluation will read. The label
+ * is derived, never free-typed — `formMetric` relies on recognizing it. */
+export function buildMetric(
+  operation: MonitorFormOperation,
+  field: string,
+): DatasetMetric {
+  if (operation === "count") return { operation, field: null, label: "count" };
+  return { operation, field, label: `${operation}_${field}` };
+}
+
+/**
+ * Read a stored query back into the form's `{operation, field}` shape — or
+ * null when the query carries anything the form cannot express (filters,
+ * grouping, ordering, extra metrics, a hand-written label). Null means the
+ * edit view must keep the stored query verbatim: rebuilding it from the form
+ * would silently drop the parts the form has no controls for.
+ */
+export function formMetric(
+  query: DatasetQuery,
+): { operation: MonitorFormOperation; field: string } | null {
+  const metrics = query.metrics ?? [];
+  const metric = metrics[0];
+  if (
+    (query.filters?.length ?? 0) > 0 ||
+    query.group_by ||
+    query.order_by ||
+    metrics.length !== 1 ||
+    metric === undefined
+  ) {
+    return null;
+  }
+  const field = metric.field ?? "";
+  const rebuilt = buildMetric(metric.operation, field);
+  if (metric.label !== rebuilt.label || field !== (rebuilt.field ?? "")) {
+    return null;
+  }
+  return { operation: metric.operation, field };
+}
+
+/** What the edit form holds; `query`/`dataset_id` null means "untouched". */
+export type MonitorDraft = {
+  name: string;
+  comparator: MonitorComparator;
+  threshold: number;
+  schedule_cron: string;
+  schedule_timezone: string;
+  dataset_id: string | null;
+  query: DatasetQuery | null;
+};
+
+/**
+ * The PUT body for an edit: ONLY the fields that actually changed. The server
+ * resets a monitor's edge state whenever a definition field (dataset, query,
+ * comparator, threshold) is among the sent fields — by design, so the first
+ * crossing after a redefine alerts — which is exactly why an unchanged field
+ * must be omitted rather than re-sent: saving an untouched form must not
+ * quietly re-arm a tripped monitor.
+ */
+export function monitorUpdatePayload(
+  monitor: Monitor,
+  draft: MonitorDraft,
+): MonitorUpdateInput {
+  const payload: MonitorUpdateInput = {};
+  if (draft.name !== monitor.name) payload.name = draft.name;
+  if (draft.comparator !== monitor.comparator) payload.comparator = draft.comparator;
+  if (draft.threshold !== monitor.threshold) payload.threshold = draft.threshold;
+  if (draft.schedule_cron !== monitor.schedule_cron) {
+    payload.schedule_cron = draft.schedule_cron;
+  }
+  if (draft.schedule_timezone !== monitor.schedule_timezone) {
+    payload.schedule_timezone = draft.schedule_timezone;
+  }
+  if (draft.dataset_id !== null && draft.dataset_id !== monitor.dataset_id) {
+    payload.dataset_id = draft.dataset_id;
+  }
+  if (draft.query !== null) payload.query = draft.query;
+  return payload;
+}
 
 /** What the monitor watches: its first metric's label, which is the value the
  * evaluation reads. "value" only for a malformed query the server would have

@@ -10092,6 +10092,7 @@ label,
 .cron-form-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 /* The Run-now confirmation, in green — it reads like the schedule note that
