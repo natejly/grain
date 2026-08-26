@@ -93,16 +93,13 @@ export function SubjectChatPanel({
         // The approval-mode control the subject panels used to hide — the one
         // control the Foyer trust work says every composer must carry. The
         // label names the subject, so the mode chip's menu reads as governing
-        // this panel's thread and no other. No starter cards: an empty panel
-        // beside a document is scoped to that document, and the product-verbs
-        // lesson belongs to the rail chat.
+        // this panel's thread and no other.
         approval={{
           mode: thread.approvalMode,
           setMode: thread.setApprovalMode,
           conversationId: thread.conversationId,
           conversationTitle: label,
         }}
-        showStarter={false}
         // No paperclip. Attaching a source navigates to the Knowledge view,
         // which would close the thing this panel is about — a button that throws
         // away what you were doing is worse than no button, so ChatView omits it

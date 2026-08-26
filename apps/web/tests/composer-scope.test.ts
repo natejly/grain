@@ -12,8 +12,7 @@ import { ChatView, type ChatViewProps } from "../components/views/chat";
  *   the Rules work exists to remove;
  * - the subject panels now carry the approval-mode control (they used to hide
  *   it, leaving a subject thread's mode unreadable from the one surface that
- *   uses it), but they do NOT inherit the rail chat's starter cards — an empty
- *   panel beside a document is scoped to that document.
+ *   uses it).
  */
 
 const BASE: ChatViewProps = {
@@ -67,20 +66,15 @@ describe("composer scope labels", () => {
 });
 
 describe("subject panels with the approval control", () => {
-  it("shows the mode control without the rail chat's starter cards", () => {
-    render(
-      createElement(ChatView, { ...BASE, approval: APPROVAL, showStarter: false }),
-    );
+  it("shows the mode control wherever an approval bundle is passed", () => {
+    render(createElement(ChatView, { ...BASE, approval: APPROVAL }));
     expect(
       screen.getByRole("button", { name: /^Approval mode:/ }),
     ).toBeTruthy();
-    expect(screen.queryByText("Ask, and approve what the agent does")).toBeNull();
   });
 
-  it("keeps teaching in surfaces that do not opt out", () => {
-    render(createElement(ChatView, { ...BASE, approval: APPROVAL }));
-    expect(
-      screen.getByText("Ask, and approve what the agent does"),
-    ).toBeTruthy();
+  it("renders no mode control where there is no thread to govern", () => {
+    render(createElement(ChatView, { ...BASE }));
+    expect(screen.queryByRole("button", { name: /^Approval mode:/ })).toBeNull();
   });
 });

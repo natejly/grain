@@ -622,3 +622,13 @@
   design (isolation.py ROUTE_CASES, DB_GET_ALLOWLIST) — register them in the
   same change, and give an unbounded SSE route a bounded reading (`once=`)
   or the sweep cannot finish.
+- Never resolve a conflict in BRACED text by concatenating both sides. Merging
+  six branches, I scripted "take ours, then theirs" for every conflict hunk —
+  right for markdown lists, wrong for CSS: a hunk boundary fell inside a rule
+  and the union dropped one `}`. CSS error recovery then swallowed ~300 lines
+  to EOF, so the coworking strip, claim chips and comments drawer merged in
+  *green* — every gate passed, because jsdom has no layout engine and no test
+  parses the stylesheet — while rendering nothing in a browser. A brace count
+  is the cheap check the gates do not do: `{` and `}` must match before and
+  after (1401/1401 → 1429/1428 was the whole signal). Union-merge prose;
+  hand-resolve anything with delimiters.

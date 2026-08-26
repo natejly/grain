@@ -206,11 +206,9 @@ function TokensSection({
         </div>
       </header>
       <p className="field-hint">
-        A token lets an external system trigger workflows and post notes into
-        threads as you, over <code>/api/hooks</code>. It carries your access —
-        revoke it the moment it stops being needed. These are the same tokens
-        the MCP page manages; minting or revoking in either place applies to
-        both.
+        Carries your access over <code>/api/hooks</code> and{" "}
+        <code>/api/mcp</code>: an external system can trigger workflows and post
+        notes into threads as you.
       </p>
 
       <form className="mcp-form-row" onSubmit={(event) => void mint(event)}>
@@ -230,9 +228,7 @@ function TokensSection({
 
       {minted && (
         <div className="invite-link" role="status">
-          <p className="field-hint">
-            This secret is shown once and cannot be read back — copy it now.
-          </p>
+          <p className="field-hint">Shown once. Copy it now.</p>
           <div className="invite-link-row">
             <code>{minted}</code>
             <button
@@ -343,10 +339,8 @@ function InboundAddressesSection({
         </div>
       </header>
       <p className="field-hint">
-        Mail sent to a minted address lands as a new personal thread of yours
-        — nothing runs on its account until you reply. Only the mail&apos;s
-        text lands: attachments are dropped. The address is the secret:
-        revoke it if it leaks.
+        Mail to a minted address lands as a new personal thread. Attachments are
+        dropped. The address is the secret.
       </p>
 
       <form className="mcp-form-row" onSubmit={(event) => void mint(event)}>
@@ -366,9 +360,7 @@ function InboundAddressesSection({
 
       {minted && (
         <div className="invite-link" role="status">
-          <p className="field-hint">
-            This address is shown once and cannot be read back — copy it now.
-          </p>
+          <p className="field-hint">Shown once. Copy it now.</p>
           <div className="invite-link-row">
             <code>{minted}</code>
             <button

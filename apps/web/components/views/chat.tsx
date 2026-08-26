@@ -58,7 +58,6 @@ import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
 import { ProposalDiff } from "./proposal-diff";
 import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
-import { hasSeen, markSeen } from "./first-run";
 import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel } from "./shared";
 import { steerStripVisible } from "./steer-format";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
@@ -174,14 +173,6 @@ export type ChatViewProps = {
     conversationId: string | null;
     conversationTitle: string;
   };
-  /**
-   * Whether an empty transcript teaches with starter cards. Defaults to
-   * following `approval` (the rail chat and extra panes teach); the subject
-   * panels pass false — they now carry the approval control too, but an empty
-   * panel beside a document is scoped to that document and the product-verbs
-   * lesson would be the wrong lesson there.
-   */
-  showStarter?: boolean;
   /**
    * The deployment is running with `DEV_UNRESTRICTED_AGENT`: nothing parks and
    * the per-subject tool scoping is off. Carries the thread's conversation id
@@ -666,10 +657,7 @@ function AttachMenu({
             <Paperclip size={14} />
             Choose a file
           </button>
-          <p>
-            Added to workspace knowledge, so this thread can cite it. Manage
-            files under Knowledge › Sources.
-          </p>
+          <p>Added to workspace knowledge, citable from this thread.</p>
         </>
       ) : (
         <>
@@ -681,7 +669,7 @@ function AttachMenu({
                 checked={makeDataset}
                 onChange={(event) => setMakeDataset(event.target.checked)}
               />
-              Also create a dataset, so the agent can chart it
+              Also create a dataset
             </label>
           )}
           <button
@@ -695,57 +683,6 @@ function AttachMenu({
           </button>
         </>
       )}
-    </div>
-  );
-}
-
-/**
- * What an empty conversation says the product is.
- *
- * A bare composer framed the product as retrieval-only — nothing taught the
- * verbs (attach, delegate, act-with-approval) that make it a workspace. Three
- * starter cards each prefill the composer with one of them, and the quiet line
- * underneath says the one thing a first-time user most needs to trust: nothing
- * happens to their stuff without their say-so.
- */
-const STARTERS = [
-  {
-    title: "Summarize a file",
-    detail: "Attach a document, then ask for the short version",
-    draft: "Summarize the key points of the file I just attached.",
-  },
-  {
-    title: "Build a chart from a CSV",
-    detail: "Attach a spreadsheet and describe the chart",
-    draft: "Build a chart from the CSV I attached: ",
-  },
-  {
-    title: "Track a todo list",
-    detail: "The agent keeps it, you tick it",
-    draft: "Start a todo list called ",
-  },
-];
-
-function ChatStarter({ setDraft }: { setDraft: (value: string) => void }) {
-  return (
-    <div className="chat-starter">
-      <h2>Ask, and approve what the agent does</h2>
-      <div className="chat-starter-cards">
-        {STARTERS.map((starter) => (
-          <button
-            key={starter.title}
-            type="button"
-            onClick={() => setDraft(starter.draft)}
-          >
-            <strong>{starter.title}</strong>
-            <span>{starter.detail}</span>
-          </button>
-        ))}
-      </div>
-      <p className="chat-starter-note">
-        The agent asks before changing anything. You’ll approve its first action
-        right here in the conversation.
-      </p>
     </div>
   );
 }
@@ -968,18 +905,11 @@ function ToolCallCard({
   decide,
   todos,
   pinning,
-  showApprovalCaption,
 }: {
   call: AgentToolCall;
   decide: ToolDecision;
   todos?: { lists: Board[]; ops: TodoOps; selfId?: string };
   pinning?: DashboardPinning;
-  /**
-   * The first-run teaching line above the Approve/Deny pair. ChatView decides
-   * — it alone can see both card sites and the `grain.seen` mark — so the
-   * card just wears it; true on at most one card per transcript.
-   */
-  showApprovalCaption?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -1049,11 +979,6 @@ function ToolCallCard({
           ops={todos.ops}
           selfId={todos.selfId}
           compact
-          caption={
-            call.name === "todo_check"
-              ? "The assistant ticked an item off this list."
-              : "The assistant added to this list."
-          }
         />
       )}
       {/* Above the figure, so the offer is read before the scroll past it.
@@ -1083,17 +1008,11 @@ function ToolCallCard({
       )}
       {pending && (
         <div className="tool-card-approval">
-          {showApprovalCaption && (
-            <p className="approval-first-note">
-              The agent wants to run a tool. Nothing happens until you decide —
-              this is the approval loop.
-            </p>
-          )}
           {asking && (
             <textarea
               className="ask-user-answer"
               aria-label="Answer the assistant's question"
-              placeholder="Type your answer (optional — Approve sends it)"
+              placeholder="Answer (optional)"
               value={answer}
               rows={2}
               onChange={(event) => setAnswer(event.target.value)}
@@ -1163,7 +1082,6 @@ export function ChatView({
   openCitation,
   attach,
   approval,
-  showStarter,
   unrestricted,
   todos,
   pinning,
@@ -1195,19 +1113,6 @@ export function ChatView({
   // stray click.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
-  // The approval-loop teaching caption: once, ever. "unseen" until the first
-  // proposed call actually renders it; the effect below then writes the
-  // `grain.seen` mark and holds the caption on screen ("showing") until that
-  // call is decided — re-reading the mark per render would blink the line
-  // away on the first unrelated re-render, mid-read; "done" thereafter, for
-  // this session by state and for every later one by the persisted mark.
-  const [approvalCaption, setApprovalCaption] = useState<
-    "unseen" | "showing" | "done"
-  >(() => (hasSeen("approval-loop") ? "done" : "unseen"));
-  // The one call the caption was shown on. Pinned, not re-derived: without it
-  // the caption migrated to the NEXT proposed call each time one was decided,
-  // turning "shown once, ever" into a tour of every card in the turn.
-  const [captionCallId, setCaptionCallId] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const submitEdit = async (messageId: string) => {
     // The button is aria-disabled rather than disabled while a run streams —
@@ -1285,56 +1190,10 @@ export function ChatView({
           ),
       )
     : [];
-  // The caption's anchor: the first proposed call in transcript order, found
-  // once here because the cards render from two sites — the per-message loop
-  // first, then the trailing live loop — and each site alone cannot know it
-  // holds the first. Gated EXACTLY as the starter is — approval bundle
-  // present AND the mount did not opt out of teaching — because subject
-  // panels carry the approval control now, and a first-ever proposal in a
-  // narrow document panel must not spend the one teaching this caption gets.
-  const firstProposedId = approval && showStarter !== false
-    ? (messages
-        .filter((message) => message.role === "assistant")
-        .flatMap((message) => callsForRun(message.run_id))
-        .find((call) => call.status === "proposed")?.id ??
-      liveCalls.find((call) => call.status === "proposed")?.id ??
-      "")
-    : "";
-  // Whether the pinned call is still asking; deciding it retires the caption
-  // for good rather than letting it hop to the next proposed card.
-  const captionStillProposed = agentCalls.some(
-    (call) => call.id === captionCallId && call.status === "proposed",
-  );
-  useEffect(() => {
-    if (approvalCaption === "unseen" && firstProposedId) {
-      // Re-check the persisted mark at show time, not only at mount: with a
-      // split open, two ChatViews seed "unseen" in the same session, and the
-      // second to reach a proposal must find the first's mark and stand down
-      // rather than teach the lesson twice.
-      if (hasSeen("approval-loop")) {
-        setApprovalCaption("done");
-        return;
-      }
-      // Only after the caption has actually rendered — a mark written on
-      // mount would spend the one showing on a thread where nothing ever
-      // asked for approval.
-      markSeen("approval-loop");
-      setCaptionCallId(firstProposedId);
-      setApprovalCaption("showing");
-    } else if (approvalCaption === "showing" && !captionStillProposed) {
-      setApprovalCaption("done");
-    }
-  }, [approvalCaption, firstProposedId, captionStillProposed]);
 
   return (
     <section className="chat-layout">
       <div className={`message-scroll ${messages.length === 0 ? "empty" : ""}`}>
-        {/* Only the primary chat teaches; the panels beside a document or
-            dashboard are scoped to a subject and have no `approval` prop, so
-            they keep their quiet empty state. */}
-        {messages.length === 0 && approval && showStarter !== false && (
-          <ChatStarter setDraft={setDraft} />
-        )}
         {messages.length > 0 && (
           <div className="message-column">
             {messages.map((message) => {
@@ -1373,11 +1232,6 @@ export function ChatView({
                             decide={decideAgentCall}
                             todos={call.id === showChecklist ? todos : undefined}
                             pinning={pinning}
-                            showApprovalCaption={
-                              approvalCaption === "showing"
-                                ? call.id === captionCallId
-                                : approvalCaption === "unseen" && call.id === firstProposedId
-                            }
                           />
                         ))}
                         {undoable && (
@@ -1546,11 +1400,6 @@ export function ChatView({
                 decide={decideAgentCall}
                 todos={call.id === checklistCallId(liveCalls) ? todos : undefined}
                 pinning={pinning}
-                showApprovalCaption={
-                  approvalCaption === "showing"
-                    ? call.id === captionCallId
-                    : approvalCaption === "unseen" && call.id === firstProposedId
-                }
               />
             ))}
             {/* The flagged turn's mark while it is still live: a run that parked

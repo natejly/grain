@@ -76,7 +76,6 @@
   --scrim: rgba(46, 42, 36, 0.45);
   --veil: rgba(250, 247, 240, 0.82);
 
-  --graph-grid: rgba(44, 116, 84, 0.05);
   --graph-edge: #699680;
   --graph-node: #d8ede2;
   --graph-node-stroke: #2c7454;
@@ -135,7 +134,6 @@
     --scrim: rgba(0, 0, 0, 0.62);
     --veil: rgba(11, 13, 16, 0.62);
 
-    --graph-grid: rgba(124, 156, 255, 0.035);
     --graph-edge: #3f4b5e;
     --graph-node: #1d2a47;
     --graph-node-stroke: #6688e9;
@@ -193,7 +191,6 @@
   --scrim: rgba(0, 0, 0, 0.62);
   --veil: rgba(11, 13, 16, 0.62);
 
-  --graph-grid: rgba(124, 156, 255, 0.035);
   --graph-edge: #3f4b5e;
   --graph-node: #1d2a47;
   --graph-node-stroke: #6688e9;
@@ -276,7 +273,7 @@ label,
   left: 8px;
   z-index: 100;
   padding: 8px 12px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--accent);
   color: var(--accent-contrast);
   font-size: 13px;
@@ -337,7 +334,7 @@ label,
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 9px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -448,10 +445,10 @@ label,
   height: 32px;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text);
   font-size: 12px;
@@ -462,7 +459,6 @@ label,
 }
 
 .chrome-button:hover {
-  border-color: var(--border-strong);
   background: var(--surface-hover);
 }
 
@@ -539,7 +535,7 @@ label,
   gap: 2px;
   padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-raised);
 }
 
@@ -559,7 +555,7 @@ label,
   gap: 8px;
   padding: 0 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
@@ -631,7 +627,7 @@ label,
   height: 30px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text);
   font-size: 12px;
@@ -655,7 +651,7 @@ label,
   display: grid;
   place-items: center;
   flex: none;
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent-text);
   font-size: 11px;
@@ -691,12 +687,6 @@ label,
   font-weight: 500;
 }
 
-.primary-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .nav-item {
   width: 100%;
   height: 36px;
@@ -705,7 +695,7 @@ label,
   gap: 10px;
   padding: 0 10px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
@@ -736,7 +726,7 @@ label,
   place-items: center;
   padding: 0 5px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text-dim);
   font-size: 9px;
@@ -789,7 +779,7 @@ label,
   gap: 2px;
   padding: 0 2px 0 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 11px;
@@ -812,7 +802,7 @@ label,
   gap: 8px;
   padding: 0 8px 0 10px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: inherit;
   font: inherit;
@@ -838,7 +828,7 @@ label,
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   opacity: 0;
@@ -869,7 +859,7 @@ label,
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -907,7 +897,7 @@ label,
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 10px 8px 0;
   border-top: 1px solid var(--border);
 }
@@ -952,7 +942,7 @@ label,
   margin-left: 5px;
   padding: 1px 4px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--text-muted);
   font-size: 8px;
   letter-spacing: 0.04em;
@@ -1063,7 +1053,7 @@ label,
 .system-status-term {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--text-dim);
   font-size: 10px;
   font-weight: 600;
@@ -1083,7 +1073,7 @@ label,
   margin: 0;
   padding: 6px 8px;
   border: 1px solid var(--red-border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--red-muted);
   color: var(--red);
 }
@@ -1095,7 +1085,7 @@ label,
   place-items: center;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text-muted);
   cursor: pointer;
@@ -1142,7 +1132,7 @@ label,
   gap: 8px;
   padding: 8px 10px;
   border: 1px solid var(--red-border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 11px;
@@ -1180,7 +1170,7 @@ label,
   gap: 8px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 11px;
@@ -1219,18 +1209,6 @@ label,
   place-items: center;
 }
 
-.welcome {
-  width: min(640px, 100%);
-  padding-bottom: 40px;
-  text-align: center;
-}
-
-.welcome > p {
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
 .message-column {
   width: min(760px, 100%);
   margin: 0 auto;
@@ -1256,7 +1234,7 @@ label,
   width: 23px;
   height: 23px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   font-size: 9px;
 }
 
@@ -1279,7 +1257,7 @@ label,
   margin-left: 31px;
   padding: 9px 11px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   line-height: 1.5;
 }
@@ -1325,7 +1303,7 @@ label,
   overflow-x: auto;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--code-bg);
 }
 
@@ -1346,7 +1324,7 @@ label,
   margin-left: 31px;
   padding: 8px 11px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
   font-size: 12px;
 }
@@ -1417,7 +1395,7 @@ label,
   margin-left: 31px;
   padding: 8px 11px;
   border: 1px solid var(--red-border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 12px;
@@ -1452,11 +1430,11 @@ label,
   max-width: 230px;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 0 8px;
   overflow: hidden;
   border: 1px solid var(--accent-border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent-text);
   font-size: 9px;
@@ -1477,7 +1455,7 @@ label,
 .run-status {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   margin: -10px 0 28px 31px;
   color: var(--text-dim);
   font-size: 10px;
@@ -1485,7 +1463,7 @@ label,
 
 .thinking-dots {
   display: flex;
-  gap: 3px;
+  gap: 4px;
 }
 
 .thinking-dots i {
@@ -1527,7 +1505,7 @@ label,
   margin: 0 auto;
   overflow: hidden;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface);
 }
 
@@ -1567,7 +1545,7 @@ label,
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -1583,7 +1561,7 @@ label,
   max-width: 150px;
   padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 11px;
@@ -1607,9 +1585,9 @@ label,
   padding: 0 9px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   font-size: 11px;
 }
 
@@ -1638,9 +1616,9 @@ label,
   padding: 0 9px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 11px;
@@ -1686,9 +1664,8 @@ label,
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface);
-  box-shadow: 0 8px 24px var(--tint);
 }
 
 .attach-menu p {
@@ -1696,55 +1673,6 @@ label,
   color: var(--text-dim);
   font-size: 11px;
   line-height: 1.45;
-}
-
-/* The empty conversation's first lesson: the product's verbs, then the
-   promise that nothing runs without approval. Centered by .message-scroll.empty. */
-.chat-starter {
-  width: min(640px, 100%);
-  padding-bottom: 40px;
-  text-align: center;
-}
-
-.chat-starter h2 {
-  margin: 0 0 18px;
-  font-size: 18px;
-}
-
-.chat-starter-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
-}
-
-.chat-starter-cards > button {
-  display: grid;
-  gap: 4px;
-  padding: 14px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  text-align: left;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.chat-starter-cards > button:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-hover);
-}
-
-.chat-starter-cards > button > span {
-  color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.chat-starter-note {
-  margin: 16px 0 0;
-  color: var(--text-dim);
-  font-size: 11px;
 }
 
 /* ---- Command palette ---- */
@@ -1766,16 +1694,19 @@ label,
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--surface);
-  box-shadow: 0 16px 48px var(--tint);
+  /* The one elevation left in the sheet. The palette is the only surface that
+     floats over a scrim, so the shadow is telling the eye which layer is live
+     rather than decorating a panel. */
+  box-shadow: 0 8px 24px var(--tint);
   overflow: hidden;
 }
 
 .palette-input-row {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   color: var(--text-muted);
@@ -1801,7 +1732,7 @@ label,
 .palette-input-row kbd {
   padding: 1px 6px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-dim);
   font-size: 10px;
@@ -1819,10 +1750,10 @@ label,
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 8px 10px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -1858,7 +1789,7 @@ label,
   flex: none;
   padding: 1px 6px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-dim);
   font-size: 10px;
@@ -1886,7 +1817,7 @@ label,
   margin: 2px;
   padding: 6px 8px;
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text);
   font-size: 12px;
@@ -1900,7 +1831,7 @@ label,
   width: 22px;
   height: 22px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -1920,7 +1851,7 @@ label,
   margin-bottom: 16px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -1930,7 +1861,7 @@ label,
   height: 32px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text);
   font-size: 12px;
@@ -1955,10 +1886,10 @@ label,
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 8px 10px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -1994,7 +1925,7 @@ label,
   min-width: 0;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -2031,10 +1962,10 @@ label,
 .dataset-column-chip {
   display: inline-flex;
   align-items: baseline;
-  gap: 5px;
+  gap: 6px;
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 4px;
   background: var(--surface-raised);
   font-size: 11px;
   font-weight: 600;
@@ -2058,7 +1989,7 @@ label,
 .dataset-table-scroll {
   overflow-x: auto;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
 }
 
 .dataset-table-scroll table {
@@ -2110,7 +2041,7 @@ label,
 .attach-menu-dataset {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   color: var(--text-muted);
   font-size: 11.5px;
 }
@@ -2129,7 +2060,7 @@ label,
   gap: 6px;
   padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
@@ -2187,7 +2118,7 @@ label,
 .inbox-snoozed-note {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin: 8px 0 0;
   color: var(--amber);
   font-size: 11.5px;
@@ -2208,7 +2139,7 @@ label,
   margin: 12px 0 0;
   padding: 8px;
   border: 1px solid var(--clay);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--clay-muted);
 }
 
@@ -2232,10 +2163,10 @@ label,
   flex: 1;
   min-width: 0;
   display: grid;
-  gap: 1px;
+  gap: 2px;
   padding: 4px 6px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -2277,7 +2208,7 @@ label,
   margin-top: 4px;
   padding: 3px 6px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--amber);
   font-size: 10.5px;
@@ -2299,7 +2230,7 @@ label,
   margin: 0 0 8px;
   padding: 8px 12px;
   border: 1px solid var(--clay);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--clay-muted);
   color: var(--amber);
   font-size: 12px;
@@ -2339,21 +2270,6 @@ label,
   cursor: default;
 }
 
-.composer-hint {
-  color: var(--text-dim);
-  font-size: 9px;
-}
-
-.composer-hint kbd {
-  margin-right: 5px;
-  padding: 2px 4px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
-}
-
 /* The composer's slash-skill picker and the attached-skill chip. The shell is a
    relative anchor around the composer so the picker can float above it, aligned
    to the same centred width, without pushing the textarea down as it opens. */
@@ -2379,9 +2295,8 @@ label,
   padding: 5px;
   list-style: none;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface);
-  box-shadow: 0 8px 24px var(--tint);
 }
 
 .skill-picker li {
@@ -2395,7 +2310,7 @@ label,
   gap: 2px;
   padding: 7px 9px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -2425,7 +2340,7 @@ label,
   margin: 0 10px 8px;
   padding: 8px 11px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   font-size: 13px;
   line-height: 1.6;
@@ -2444,9 +2359,9 @@ label,
 .skill-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 3px 4px 3px 8px;
-  border-radius: 12px;
+  border-radius: 4px;
   background: var(--accent);
   color: var(--accent-contrast);
   font-size: 11px;
@@ -2472,7 +2387,7 @@ label,
 .skill-arg-inline {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--text-muted);
   font-size: 11px;
 }
@@ -2482,7 +2397,7 @@ label,
   height: 27px;
   padding: 0 7px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   font-size: 11px;
@@ -2519,7 +2434,7 @@ label,
   height: 29px;
   padding: 0 7px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   font-size: 11px;
@@ -2562,7 +2477,7 @@ label,
   gap: 8px;
   padding: 5px 8px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -2600,10 +2515,10 @@ label,
   height: 34px;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 0 12px;
   border: 1px solid var(--accent-border-strong);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent-text);
   font-size: 10px;
@@ -2625,7 +2540,7 @@ label,
   gap: 14px;
   padding: 18px;
   border: 1px dashed var(--border-strong);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   cursor: pointer;
 }
@@ -2642,7 +2557,7 @@ label,
   display: grid;
   place-items: center;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-muted);
 }
@@ -2672,44 +2587,11 @@ label,
   height: 29px;
   padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-muted);
   font-size: 9px;
   font-weight: 600;
-}
-
-.library-summary {
-  width: min(1060px, 100%);
-  margin: 18px auto 14px;
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-}
-
-.library-summary > div {
-  flex: 1;
-  min-height: 60px;
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 17px 18px;
-  border-right: 1px solid var(--border);
-}
-
-.library-summary > div:last-child {
-  border-right: 0;
-}
-
-.library-summary strong {
-  font-size: 17px;
-  font-weight: 650;
-}
-
-.library-summary span {
-  color: var(--text-dim);
-  font-size: 9px;
 }
 
 .source-table {
@@ -2717,7 +2599,7 @@ label,
   margin: 0 auto;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
 }
 
@@ -2733,7 +2615,6 @@ label,
 .source-table-head {
   height: 36px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
   color: var(--text-dim);
   font-size: 8px;
   font-weight: 650;
@@ -2769,7 +2650,7 @@ label,
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .source-name strong {
@@ -2789,9 +2670,9 @@ label,
 .source-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 3px 7px;
-  border-radius: 9px;
+  border-radius: 4px;
   background: var(--green-muted);
   color: var(--green);
   font-size: 8px;
@@ -2891,20 +2772,12 @@ label,
   font-size: 10px;
 }
 
-.activity-grid {
-  width: min(1060px, 100%);
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 16px;
-}
-
 .approval-panel,
 .audit-panel {
   min-height: 410px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
 }
 
@@ -2915,7 +2788,6 @@ label,
   justify-content: space-between;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
 }
 
 .panel-title > div {
@@ -2937,7 +2809,7 @@ label,
   place-items: center;
   padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 4px;
   color: var(--text-muted);
   font-size: 8px;
 }
@@ -2986,7 +2858,7 @@ label,
   margin: 14px;
   overflow: hidden;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--bg);
 }
 
@@ -2994,7 +2866,7 @@ label,
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 12px;
 }
 
@@ -3008,7 +2880,7 @@ label,
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .approval-card-top span {
@@ -3067,7 +2939,7 @@ label,
 .approval-group-title {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin: 16px 14px 0;
   color: var(--text-muted);
   font-size: 9px;
@@ -3092,7 +2964,7 @@ label,
 .decision-buttons {
   display: grid;
   grid-template-columns: 1fr 1.35fr;
-  gap: 7px;
+  gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
   background: var(--surface);
@@ -3103,7 +2975,7 @@ label,
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface-raised);
@@ -3168,7 +3040,7 @@ label,
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   padding-bottom: 15px;
 }
 
@@ -3203,10 +3075,10 @@ label,
   height: 34px;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 0 12px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text-muted);
   font-size: 10px;
@@ -3215,7 +3087,6 @@ label,
 }
 
 .secondary-button:hover {
-  border-color: var(--border-strong);
   background: var(--surface-hover);
   color: var(--text);
 }
@@ -3236,39 +3107,6 @@ label,
   }
 }
 
-.graph-summary {
-  width: min(1060px, 100%);
-  margin: 0 auto 14px;
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-}
-
-.graph-summary > div {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  padding: 14px 16px;
-  border-right: 1px solid var(--border);
-}
-
-.graph-summary > div:last-child {
-  border-right: 0;
-}
-
-.graph-summary strong {
-  font-size: 13px;
-  text-transform: capitalize;
-}
-
-.graph-summary span {
-  color: var(--text-dim);
-  font-size: 9px;
-}
-
 .feature-empty {
   width: min(1060px, 100%);
   min-height: 180px;
@@ -3278,7 +3116,7 @@ label,
   align-content: center;
   gap: 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text-dim);
   text-align: center;
@@ -3301,7 +3139,7 @@ label,
   grid-template-columns: minmax(0, 1fr) 280px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
 }
 
@@ -3309,10 +3147,6 @@ label,
   min-width: 0;
   display: grid;
   place-items: center;
-  background-image:
-    linear-gradient(var(--graph-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--graph-grid) 1px, transparent 1px);
-  background-size: 24px 24px;
 }
 
 .graph-canvas svg {
@@ -3364,7 +3198,7 @@ label,
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .entity-row strong {
@@ -3410,7 +3244,7 @@ label,
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
   overflow: hidden;
 }
@@ -3473,7 +3307,7 @@ label,
 .dashboard-tile-foot > div:first-child span {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   margin-top: 3px;
   color: var(--text-dim);
   font-size: 8px;
@@ -3498,7 +3332,7 @@ label,
   justify-content: center;
   gap: 8px;
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   font-size: 11px;
@@ -3525,7 +3359,7 @@ label,
   margin-top: 2px;
   padding: 3px 7px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text);
   font-size: 13px;
@@ -3556,7 +3390,7 @@ label,
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -3570,17 +3404,10 @@ label,
   padding: 13px;
 }
 
-.editor-hint {
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
 .editor-turn {
   max-width: 92%;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 11px;
   line-height: 1.5;
 }
@@ -3594,7 +3421,7 @@ label,
 .editor-turn.system {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 0 2px;
   color: var(--text-dim);
   font-size: 9px;
@@ -3612,14 +3439,14 @@ label,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--text-dim);
 }
 
 .data-chip {
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   font-size: 8px;
@@ -3643,7 +3470,7 @@ label,
   flex: 1;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
@@ -3663,7 +3490,7 @@ label,
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--accent);
   color: var(--accent-contrast);
   cursor: pointer;
@@ -3716,14 +3543,14 @@ label,
 .mini-bar-row > div {
   height: 7px;
   overflow: hidden;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--surface-raised);
 }
 
 .mini-bar-row i {
   display: block;
   height: 100%;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--accent);
 }
 
@@ -3830,7 +3657,7 @@ label,
 .published-card {
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
 }
 
@@ -3873,7 +3700,7 @@ label,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 16px;
   padding: 0 18px;
   border-bottom: 1px solid var(--border);
 }
@@ -3882,7 +3709,7 @@ label,
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .drawer-header span {
@@ -3911,7 +3738,7 @@ label,
   margin: 0 18px;
   padding: 18px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text);
   font-size: 12px;
@@ -3960,7 +3787,7 @@ label,
     display: grid;
     place-items: center;
     padding: 0;
-    border-radius: 9px;
+    border-radius: 4px;
   }
 
   .mobile-tab-bar .nav-item.active {
@@ -4018,10 +3845,6 @@ label,
     margin-right: 11px;
   }
 
-  .activity-grid {
-    grid-template-columns: 1fr;
-  }
-
   .graph-layout {
     grid-template-columns: 1fr;
   }
@@ -4053,10 +3876,6 @@ label,
     padding: 9px 11px 12px;
   }
 
-  .composer-hint {
-    display: none;
-  }
-
   .content-page {
     padding: 30px 14px 50px;
   }
@@ -4077,32 +3896,13 @@ label,
     display: none;
   }
 
-  .library-summary {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .library-summary > div {
-    min-height: 54px;
-    padding: 14px;
-  }
-
-  .library-summary > div:nth-child(2) {
-    border-right: 0;
-  }
-
-  .library-summary > div:last-child {
-    grid-column: 1 / -1;
-    border-top: 1px solid var(--border);
-  }
-
   .source-table-head {
     display: none;
   }
 
   .source-row {
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 7px;
+    gap: 8px;
     padding: 11px;
   }
 
@@ -4119,24 +3919,6 @@ label,
   .source-row > div:nth-child(2) {
     grid-column: 1 / -1;
     padding-left: 42px;
-  }
-
-  .graph-summary {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .graph-summary > div {
-    border-bottom: 1px solid var(--border);
-  }
-
-  .graph-summary > div:nth-child(2) {
-    border-right: 0;
-  }
-
-  .graph-summary > div:last-child {
-    grid-column: 1 / -1;
-    border-bottom: 0;
   }
 
   .dashboard-gallery,
@@ -4186,10 +3968,10 @@ label,
 .api-down-banner button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 4px 10px;
   border: 1px solid var(--clay);
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: inherit;
   font-size: 11px;
@@ -4209,7 +3991,7 @@ label,
   gap: 8px;
   padding: 0 11px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-dim);
 }
@@ -4236,7 +4018,7 @@ label,
   width: min(1060px, 100%);
   margin: 0 auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -4292,7 +4074,7 @@ label,
   display: inline-block;
   padding: 1px 7px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-muted);
   font-size: 9px;
@@ -4319,11 +4101,11 @@ label,
 .memory-scope {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   margin-left: 5px;
   padding: 1px 7px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-dim);
   font-size: 9px;
@@ -4372,7 +4154,7 @@ label,
   display: inline-block;
   margin-left: 6px;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-active);
   color: var(--text-dim);
   font-size: 10px;
@@ -4418,7 +4200,7 @@ label,
   min-height: 0;
   padding: 2px 8px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-active);
   color: var(--text-dim);
   font-size: 8px;
@@ -4461,14 +4243,14 @@ label,
   gap: 10px;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
 .integration-card-head {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 12px;
 }
 
 .integration-card-head strong {
@@ -4487,7 +4269,7 @@ label,
   width: 36px;
   height: 36px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--accent);
 }
@@ -4511,7 +4293,7 @@ label,
 .integration-actions {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   margin-top: auto;
 }
 
@@ -4521,7 +4303,7 @@ label,
   gap: 6px;
   padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 11px;
@@ -4545,7 +4327,7 @@ label,
   margin-top: 16px;
   padding: 10px 13px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text-dim);
   font-size: 11px;
@@ -4556,7 +4338,7 @@ label,
   width: 100%;
   min-height: 420px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--sandbox-bg);
 }
 
@@ -4573,7 +4355,7 @@ label,
 .garmin-form {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 8px;
   width: 100%;
 }
 
@@ -4582,7 +4364,7 @@ label,
   min-width: 0;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 11px;
@@ -4596,7 +4378,7 @@ label,
   gap: 6px;
   padding: 6px 11px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
@@ -4604,7 +4386,6 @@ label,
 }
 
 .ghost-button:hover {
-  border-color: var(--border-strong);
   background: var(--surface-hover);
   color: var(--text);
 }
@@ -4617,10 +4398,10 @@ label,
 .copy-button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 3px 7px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   font-size: 11px;
@@ -4628,7 +4409,6 @@ label,
 }
 
 .copy-button:hover {
-  border-color: var(--border);
   background: var(--surface-raised);
   color: var(--text-muted);
 }
@@ -4662,7 +4442,6 @@ label,
 }
 
 .copy-button:disabled:hover {
-  border-color: transparent;
   background: transparent;
   color: var(--text-dim);
 }
@@ -4676,7 +4455,7 @@ label,
 .message-edit {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
 }
 
 .message-edit textarea {
@@ -4684,7 +4463,7 @@ label,
   min-height: 60px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 13px;
@@ -4712,10 +4491,10 @@ label,
 .fork-button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 3px 7px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   font-size: 11px;
@@ -4723,7 +4502,6 @@ label,
 }
 
 .fork-button:hover {
-  border-color: var(--border);
   background: var(--surface-raised);
   color: var(--text-muted);
 }
@@ -4746,7 +4524,7 @@ label,
   position: relative;
   margin: 10px 0;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface);
   overflow: hidden;
 }
@@ -4756,7 +4534,6 @@ label,
   justify-content: flex-end;
   padding: 4px 6px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
 }
 
 .code-block pre {
@@ -4771,7 +4548,7 @@ label,
 .tool-card {
   margin: 8px 0;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface);
   overflow: hidden;
 }
@@ -4838,7 +4615,7 @@ label,
 .tool-card-body pre {
   margin: 0;
   padding: 9px 11px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   overflow-x: auto;
   font-family: "SFMono-Regular", Consolas, monospace;
@@ -4861,17 +4638,6 @@ label,
   flex-wrap: wrap;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
-}
-
-/* The first-run teaching line: full width of the approval row (it is a flex
-   row, so the basis does the breaking), muted because it explains the
-   controls rather than competing with them. Shown once ever — `grain.seen`
-   holds the mark. */
-.approval-first-note {
-  flex-basis: 100%;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 11px;
 }
 
 .tool-card-approval .remember {
@@ -4925,7 +4691,7 @@ label,
   gap: 10px;
   padding: 48px 20px;
   border: 1px dashed var(--border);
-  border-radius: 11px;
+  border-radius: 6px;
   color: var(--text-dim);
   font-size: 13px;
 }
@@ -4933,7 +4699,7 @@ label,
 .status-pill {
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-muted);
   font-size: 10px;
@@ -4966,7 +4732,7 @@ label,
   margin-bottom: 20px;
   padding: 18px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -4989,7 +4755,7 @@ label,
   margin-top: 5px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
@@ -5015,7 +4781,7 @@ label,
 .mcp-card {
   padding: 16px 18px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -5059,7 +4825,7 @@ label,
   flex: none;
   padding: 2px 7px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 4px;
   color: var(--text-muted);
   font-family: inherit;
   font-size: 10px;
@@ -5068,7 +4834,7 @@ label,
 .mcp-error {
   margin-top: 10px;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 11px;
@@ -5091,9 +4857,9 @@ label,
 .mcp-tool {
   display: flex;
   align-items: baseline;
-  gap: 9px;
+  gap: 8px;
   padding: 7px 9px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   cursor: pointer;
 }
@@ -5128,7 +4894,7 @@ label,
 .proposal-note {
   margin: 0 12px 10px;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
@@ -5137,7 +4903,7 @@ label,
 .diff {
   margin: 0 12px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   overflow-x: auto;
   font-family: "SFMono-Regular", Consolas, monospace;
@@ -5228,7 +4994,7 @@ label,
 .documents-new select {
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
@@ -5241,7 +5007,7 @@ label,
   width: 100%;
   padding: 7px 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
@@ -5279,7 +5045,7 @@ label,
 .doc-kind {
   flex: none;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-dim);
   font-size: 9px;
@@ -5337,7 +5103,7 @@ label,
   min-width: 0;
   padding: 7px 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
@@ -5419,7 +5185,7 @@ label,
   flex: 1 1 auto;
   flex-wrap: wrap;
   min-width: 0;
-  gap: 9px;
+  gap: 8px;
 }
 
 .document-actions {
@@ -5637,7 +5403,7 @@ label,
 .review-hunk {
   margin: 10px 0;
   border: 1px solid var(--accent-border);
-  border-radius: 7px;
+  border-radius: 4px;
   overflow: hidden;
   background: var(--bg);
 }
@@ -5656,7 +5422,6 @@ label,
   gap: 6px 8px;
   padding: 6px 8px 6px 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
   font-size: 11px;
 }
 
@@ -6088,7 +5853,7 @@ label,
 .board-new select {
   padding: 7px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
@@ -6134,10 +5899,10 @@ label,
 .kanban-column {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 6px;
   background: var(--surface);
   min-height: 140px;
 }
@@ -6154,7 +5919,7 @@ label,
 
 .kanban-count {
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-dim);
   font-size: 10px;
@@ -6168,7 +5933,7 @@ label,
 .kanban-card {
   padding: 10px 11px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface-raised);
   cursor: grab;
 }
@@ -6197,7 +5962,7 @@ label,
 
 .kanban-label {
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent);
   font-size: 10px;
@@ -6210,7 +5975,7 @@ label,
   max-width: 45%;
   padding: 1px 4px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text-dim);
   font-size: 10px;
@@ -6219,7 +5984,7 @@ label,
 .kanban-delete {
   padding: 2px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -6241,7 +6006,7 @@ label,
   gap: 6px;
   padding: 7px 9px;
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   font-size: 11.5px;
@@ -6255,13 +6020,13 @@ label,
 
 .kanban-add-form {
   display: grid;
-  gap: 7px;
+  gap: 8px;
 }
 
 .kanban-add-form textarea {
   padding: 8px 9px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
@@ -6272,7 +6037,7 @@ label,
 .kanban-add-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 7px;
+  gap: 8px;
 }
 
 @media (max-width: 900px) {
@@ -6345,7 +6110,7 @@ label,
 .project-new-file input {
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
@@ -6367,7 +6132,7 @@ label,
   width: 100%;
   padding: 7px 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
@@ -6421,7 +6186,7 @@ label,
 .project-tree-dir {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 4px 8px;
   color: var(--text-dim);
   font-size: 10px;
@@ -6431,7 +6196,7 @@ label,
 .project-file-tag {
   flex: none;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-dim);
   font-size: 9px;
@@ -6482,7 +6247,7 @@ label,
 .project-editor-head > div:first-child {
   display: flex;
   align-items: baseline;
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -6641,7 +6406,7 @@ label,
   width: 100%;
   padding: 6px 9px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text-muted);
   font: inherit;
@@ -6724,30 +6489,22 @@ label,
   cursor: grabbing;
 }
 
-.graph-3d-hint,
 .graph-3d-legend {
   position: absolute;
+  right: 12px;
   bottom: 10px;
+  display: flex;
+  gap: 12px;
   color: var(--text-dim);
   font-size: 10.5px;
   letter-spacing: 0.03em;
   pointer-events: none;
 }
 
-.graph-3d-hint {
-  left: 12px;
-}
-
-.graph-3d-legend {
-  right: 12px;
-  display: flex;
-  gap: 12px;
-}
-
 .graph-3d-legend span {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
 }
 
 .graph-3d-legend .swatch {
@@ -6774,7 +6531,7 @@ label,
   position: absolute;
   inset: auto 12px 10px 12px;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 11px;
@@ -6782,7 +6539,7 @@ label,
 
 .entity-row.selected {
   background: var(--accent-muted);
-  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--accent-text);
 }
 
 /* --- Authentication ------------------------------------------------------ */
@@ -6831,7 +6588,7 @@ label,
   gap: 16px;
   padding: 26px 26px 22px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -6853,9 +6610,9 @@ label,
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
+  gap: 8px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 12px;
@@ -6885,7 +6642,7 @@ label,
 
 .auth-form {
   display: grid;
-  gap: 13px;
+  gap: 12px;
 }
 
 .auth-form label {
@@ -6899,7 +6656,7 @@ label,
   margin-top: 5px;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
@@ -6909,7 +6666,7 @@ label,
 .auth-submit {
   height: 36px;
   border: 1px solid var(--accent-border-strong);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent-text);
   font-size: 11px;
@@ -6930,7 +6687,7 @@ label,
   margin: 0;
   padding: 8px 10px;
   border: 1px solid var(--red);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 11px;
@@ -6948,7 +6705,7 @@ label,
 .auth-link {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 0;
   border: none;
   background: none;
@@ -6966,7 +6723,7 @@ label,
 .auth-sent {
   display: grid;
   justify-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 10px 0 4px;
   text-align: center;
   color: var(--text-muted);
@@ -7005,7 +6762,7 @@ label,
 .artifact-image {
   max-width: 100%;
   height: auto;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 
 /* The finish-the-job row under a chart-shaped tool card: pin the dashboard
@@ -7042,7 +6799,7 @@ label,
 .artifact-pin-bar .pin-bar-done {
   padding: 2px 8px;
   border: 1px solid var(--green-border);
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--green-muted);
   color: var(--green);
   font-size: 11px;
@@ -7059,7 +6816,7 @@ label,
 .artifact-pending {
   width: 100%;
   min-height: 48px;
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-hover);
 }
 
@@ -7102,7 +6859,7 @@ label,
   gap: 10px;
   padding: 14px 16px 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -7121,9 +6878,9 @@ label,
 .admin-count {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-muted);
   font-size: 10px;
@@ -7187,7 +6944,7 @@ label,
   display: inline-block;
   margin: 0 4px 2px 0;
   padding: 2px 7px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent-text);
   font-size: 9px;
@@ -7301,7 +7058,7 @@ label,
   height: 26px;
   padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 11px;
@@ -7313,7 +7070,7 @@ label,
   gap: 8px;
   padding: 9px 11px;
   border: 1px solid var(--clay);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--clay-muted);
   color: var(--amber);
 }
@@ -7345,7 +7102,7 @@ label,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
 }
 
 .usage-models span {
@@ -7406,14 +7163,14 @@ label,
   overflow: hidden;
   height: 4px;
   margin-top: 5px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-hover);
 }
 
 .usage-bar span {
   display: block;
   height: 100%;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--accent-soft);
 }
 
@@ -7431,7 +7188,7 @@ label,
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -7519,10 +7276,10 @@ label,
 .observability-throughput {
   display: flex;
   align-items: flex-end;
-  gap: 3px;
+  gap: 4px;
   height: 56px;
   padding: 6px;
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-hover);
 }
 
@@ -7538,7 +7295,7 @@ label,
   display: block;
   width: 100%;
   min-height: 2px;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--accent-soft);
 }
 
@@ -7632,14 +7389,14 @@ label,
   margin-bottom: 10px;
   padding: 8px;
   border: 1px solid var(--clay);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--clay-muted);
 }
 
 .workflow-inbox-title {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--amber);
   font-size: 10px;
   font-weight: 600;
@@ -7652,7 +7409,7 @@ label,
   gap: 2px;
   padding: 6px 7px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface-raised);
   cursor: pointer;
   text-align: left;
@@ -7688,7 +7445,7 @@ label,
   gap: 8px;
   padding: 7px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -7722,7 +7479,7 @@ label,
 
 .workflow-chip {
   padding: 2px 6px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-hover);
   color: var(--text-dim);
   font-size: 9px;
@@ -7807,10 +7564,10 @@ label,
 
 .workflow-note {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -7874,16 +7631,16 @@ label,
   gap: 10px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
 .workflow-run-banner {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   padding: 9px 11px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface-raised);
 }
 
@@ -7922,7 +7679,7 @@ label,
 
 .workflow-run-list {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -7934,7 +7691,7 @@ label,
   gap: 2px;
   padding: 7px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   cursor: pointer;
   text-align: left;
@@ -7985,7 +7742,7 @@ label,
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -7993,7 +7750,7 @@ label,
   min-height: 88px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 13px;
@@ -8020,21 +7777,21 @@ label,
   gap: 10px;
   padding: 12px 14px;
   border: 1px solid var(--red-border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--red-muted);
 }
 
 .workflow-failure > header {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
+  gap: 8px;
   color: var(--red);
 }
 
 .workflow-failure > header > div {
   display: grid;
   flex: 1;
-  gap: 3px;
+  gap: 4px;
 }
 
 .workflow-failure strong {
@@ -8053,7 +7810,7 @@ label,
   display: grid;
   gap: 6px;
   padding: 9px 10px;
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface-raised);
 }
 
@@ -8083,7 +7840,7 @@ label,
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--accent-border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -8117,10 +7874,10 @@ label,
 .workflow-approval-note {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin: 0;
   padding: 8px 10px;
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--accent-wash);
   color: var(--accent-text);
   font-size: 11.5px;
@@ -8150,7 +7907,7 @@ label,
   height: clamp(360px, 56vh, 620px);
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--bg);
 }
 
@@ -8198,7 +7955,7 @@ label,
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -8206,7 +7963,7 @@ label,
   position: relative;
   display: grid;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 6px;
   background: var(--surface-raised);
 }
 
@@ -8218,7 +7975,7 @@ label,
   width: 100%;
   padding: 10px 11px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 6px;
   background: none;
   color: inherit;
   font: inherit;
@@ -8256,7 +8013,7 @@ label,
   padding: 9px 11px;
   border: 1px solid var(--border);
   border-top: 0;
-  border-radius: 0 0 11px 11px;
+  border-radius: 0 0 6px 6px;
   background: var(--surface-raised);
 }
 
@@ -8328,7 +8085,7 @@ label,
   align-items: center;
   gap: 4px;
   padding: 2px 7px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent-text);
   font-size: 9.5px;
@@ -8369,7 +8126,7 @@ label,
 
 .workflow-node-tool {
   padding: 3px 7px;
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--code-bg);
   color: var(--accent-text);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
@@ -8401,7 +8158,7 @@ label,
   margin: 0;
   align-self: flex-start;
   padding: 3px 7px;
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--clay-muted);
   color: var(--clay);
   font-size: 11px;
@@ -8410,7 +8167,7 @@ label,
 .workflow-node-caveat {
   margin: 0;
   padding: 6px 8px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--clay-muted);
   color: var(--amber);
   font-size: 10.5px;
@@ -8419,7 +8176,7 @@ label,
 
 .workflow-node-args {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   margin: 0;
 }
 
@@ -8470,7 +8227,7 @@ label,
   margin: 0;
   overflow: auto;
   padding: 7px 9px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--code-bg);
   color: var(--text-muted);
   font-size: 11px;
@@ -8482,7 +8239,7 @@ label,
 .workflow-node-error {
   margin: 0;
   padding: 6px 8px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 11px;
@@ -8510,7 +8267,7 @@ label,
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 .workflow-timeline-head {
   display: grid;
@@ -8520,7 +8277,7 @@ label,
   width: 100%;
   padding: 6px 8px;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   background: none;
   color: var(--text);
   font: inherit;
@@ -8592,10 +8349,10 @@ label,
 /* ---- The decision, on the step that is waiting for it ---- */
 .workflow-approval {
   display: grid;
-  gap: 7px;
+  gap: 8px;
   padding: 9px 10px;
   border: 1px solid var(--clay);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface-raised);
 }
 
@@ -8643,7 +8400,7 @@ label,
   gap: 10px;
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--surface);
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
@@ -8675,7 +8432,7 @@ label,
   gap: 6px;
   margin: 0;
   padding: 7px 9px;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 11.5px;
@@ -8712,7 +8469,7 @@ label,
   width: 100%;
   padding: 6px 9px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface-raised);
   color: var(--text);
   font-family: inherit;
@@ -8737,7 +8494,7 @@ label,
 .workflow-input-check {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   color: var(--text);
   font-size: 12px;
 }
@@ -8760,7 +8517,7 @@ label,
    for a repository name is a different plan from one that hardcodes one. */
 .workflow-input-declaration {
   display: grid;
-  gap: 5px;
+  gap: 6px;
   margin: 0;
 }
 
@@ -8786,7 +8543,7 @@ label,
 .workflow-input-type {
   margin-right: 6px;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent-text);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
@@ -8820,14 +8577,14 @@ label,
   margin: 8px 0;
   padding: 12px 14px;
   border: 1px solid var(--clay);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface-raised);
 }
 
 .budget-hold-head {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
+  gap: 8px;
 }
 
 .budget-hold-head > svg {
@@ -8855,7 +8612,7 @@ label,
   gap: 10px;
   margin: 0;
   padding: 9px 11px;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface);
 }
 
@@ -8951,7 +8708,7 @@ label,
   height: 30px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 12px;
@@ -9029,7 +8786,7 @@ label,
   gap: 6px;
   padding: 10px;
   border: 1px solid var(--accent-border);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--accent-muted);
 }
 
@@ -9057,7 +8814,7 @@ label,
   min-width: 0;
   overflow-x: auto;
   padding: 5px 7px;
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--code-bg);
   color: var(--text);
   font-size: 10.5px;
@@ -9093,7 +8850,7 @@ label,
   overflow-y: auto;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--surface-raised);
   color: var(--text);
 }
@@ -9128,7 +8885,7 @@ label,
   gap: 8px;
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .share-link-list li > div {
@@ -9210,7 +8967,7 @@ label,
 .favorites-nav {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   margin: 14px 0 4px;
 }
 
@@ -9226,7 +8983,7 @@ label,
 .favorite-row {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
 }
 
 .favorite-open {
@@ -9238,7 +8995,7 @@ label,
   gap: 8px;
   padding: 0 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 11px;
@@ -9284,7 +9041,7 @@ label,
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -9304,7 +9061,7 @@ label,
 .pinned-nav {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   margin: 14px 0 4px;
 }
 
@@ -9324,7 +9081,7 @@ label,
   gap: 8px;
   padding: 0 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 11px;
@@ -9372,7 +9129,7 @@ label,
   margin: 0 auto 30px;
   padding: 28px;
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--text-muted);
   font-size: 11px;
   text-align: center;
@@ -9385,14 +9142,13 @@ label,
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
 .dashboard-pin-tile.held {
   z-index: 3;
   border-color: var(--accent);
-  box-shadow: 0 6px 18px var(--tint);
 }
 
 .dashboard-pin-tile.focused {
@@ -9470,7 +9226,9 @@ label,
   border: 0;
   border-top: 1px solid var(--border-strong);
   border-left: 1px solid var(--border-strong);
-  border-radius: 6px 0 6px 0;
+  /* Bottom-right matches the tile's own 6px so the handle sits flush in the
+     corner it grabs; the inner corner takes the 4px control radius. */
+  border-radius: 4px 0 6px 0;
   background: var(--surface-raised);
   cursor: nwse-resize;
   touch-action: none;
@@ -9604,7 +9362,7 @@ label,
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .donut-legend li {
@@ -9619,7 +9377,7 @@ label,
 .donut-legend i {
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--accent);
 }
 
@@ -9662,7 +9420,7 @@ label,
   flex-direction: column;
   gap: 2px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -9680,7 +9438,7 @@ label,
   gap: 2px;
   padding: 6px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -9705,13 +9463,6 @@ label,
   font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.disclosure-empty {
-  margin: 0;
-  padding: 10px 8px;
-  color: var(--text-dim);
-  font-size: 10px;
 }
 
 /* ---- Templates ---- */
@@ -9745,7 +9496,7 @@ label,
   gap: 10px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -9797,7 +9548,7 @@ label,
   margin: 0;
   padding: 8px 10px 8px 24px;
   border: 1px solid var(--red-border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 9px;
@@ -9808,7 +9559,7 @@ label,
   margin: 0;
   padding: 8px 10px;
   border: 1px solid var(--green-border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--green-muted);
   color: var(--green);
   font-size: 9px;
@@ -9827,7 +9578,7 @@ label,
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -9892,7 +9643,7 @@ label,
   margin-bottom: 26px;
   padding: 14px 16px 10px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -9922,12 +9673,6 @@ label,
   font-size: 11px;
 }
 
-.todo-caption {
-  margin: 8px 0 0;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
 .todo-items {
   margin: 10px 0 0;
   padding: 0;
@@ -9950,7 +9695,7 @@ label,
 .todo-item label {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
   cursor: pointer;
@@ -9994,7 +9739,7 @@ label,
   margin-top: 10px;
   padding: 5px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
@@ -10045,7 +9790,7 @@ label,
   height: 29px;
   padding: 0 9px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 11px;
@@ -10074,7 +9819,7 @@ label,
   width: 100%;
   padding: 8px 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -10119,7 +9864,7 @@ label,
   margin: 0 auto 10px;
   padding: 10px 12px;
   border: 1px solid var(--clay);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--clay-muted);
   color: var(--amber);
 }
@@ -10195,7 +9940,7 @@ label,
   margin: 0;
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
 }
 
 .agent-provisioning legend {
@@ -10225,7 +9970,7 @@ label,
   gap: 4px;
   margin-right: 7px;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--clay-muted);
   color: var(--amber);
 }
@@ -10276,7 +10021,7 @@ label,
   max-width: 160px;
   padding: 4px 6px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text-muted);
   font-size: 11px;
@@ -10287,7 +10032,7 @@ label,
   margin: 2px 0 6px;
   padding: 5px 7px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-size: 11px;
@@ -10305,13 +10050,13 @@ label,
   max-width: 640px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
 .cron-field {
   display: grid;
-  gap: 5px;
+  gap: 6px;
 }
 
 .cron-field > span {
@@ -10327,7 +10072,7 @@ label,
   height: 32px;
   padding: 0 9px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-size: 12.5px;
@@ -10370,7 +10115,7 @@ label,
 .cron-compiled-chip {
   padding: 2px 7px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text);
   font-family: "SFMono-Regular", Consolas, monospace;
@@ -10391,7 +10136,7 @@ label,
   margin: 0;
   padding: 6px 9px;
   border: 1px solid var(--red-border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--red-muted);
   color: var(--red);
   font-size: 12px;
@@ -10471,7 +10216,7 @@ label,
   width: 100%;
   padding: 8px 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -10505,7 +10250,7 @@ label,
   padding: 18px 22px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 
 .space-detail-head {
@@ -10563,7 +10308,7 @@ label,
   gap: 8px;
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .space-source-name {
@@ -10587,7 +10332,7 @@ label,
   width: 100%;
   padding: 8px 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -10608,7 +10353,7 @@ label,
    a flex row; the chip must shrink before the title does. */
 .thread-space-chip {
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface-active);
   color: var(--text-dim);
   font-size: 10px;
@@ -10633,7 +10378,7 @@ label,
   min-width: 0;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   color: inherit;
   font: inherit;
@@ -10645,7 +10390,7 @@ label,
   box-sizing: border-box;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   color: inherit;
   font: inherit;
@@ -10669,46 +10414,6 @@ label,
 }
 .mcp-expose-head h2 { font-size: 16px; margin: 0 0 4px; }
 .mcp-expose-head p { color: var(--text-muted); font-size: 13px; max-width: 60ch; }
-.mcp-secret {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 12px 0;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-raised);
-}
-.mcp-secret code {
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  font-size: 13px;
-  white-space: nowrap;
-}
-.mcp-expose-new { display: flex; gap: 8px; margin: 12px 0; }
-.mcp-expose-new input {
-  flex: 1;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-}
-.mcp-token-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
-.mcp-token-list li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.mcp-token-list li.revoked { opacity: 0.55; }
-.mcp-token-meta { display: block; font-size: 12px; color: var(--text-muted); }
 
 /* --- Comments drawer -------------------------------------------------------
    One right-hand drawer for every comment subject (thread, document,
@@ -10722,7 +10427,7 @@ label,
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -10754,7 +10459,7 @@ label,
 .comment-row {
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -10806,7 +10511,7 @@ label,
   resize: none;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text);
   font: inherit;
@@ -10824,9 +10529,8 @@ label,
   padding: 4px;
   list-style: none;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px var(--tint);
   z-index: 5;
 }
 
@@ -10834,7 +10538,7 @@ label,
   width: 100%;
   padding: 6px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   font-size: 10px;
@@ -10845,6 +10549,8 @@ label,
 .mention-option:hover,
 .mention-option.first {
   background: var(--surface-hover);
+}
+
 /* ---- Live coworking: the strip, claim chips, carets and live drafts ---- */
 
 /* The topbar's who-is-here strip. Empty renders nothing (component returns
@@ -10862,10 +10568,10 @@ label,
 .cowork-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 3px 9px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 4px;
   font-size: 12px;
   color: var(--text-muted);
   background: var(--bg);
@@ -10914,7 +10620,7 @@ label,
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  border-radius: 999px;
+  border-radius: 4px;
   padding: 2px 8px;
   white-space: nowrap;
 }
@@ -10996,7 +10702,7 @@ label,
 
 .remote-selection {
   background: var(--accent-soft);
-  border-radius: 2px;
+  border-radius: 4px;
 }
 
 .remote-caret {
@@ -11016,7 +10722,7 @@ label,
   top: -1.35em;
   left: -2px;
   padding: 0 5px;
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--accent);
   color: var(--accent-contrast);
   font-size: 10px;

@@ -3,7 +3,6 @@
 import type {
   Cron,
   CronKind,
-  DashboardSubscription,
   ScheduleCompileResult,
 } from "@workspace/api-client";
 import {
@@ -11,7 +10,6 @@ import {
   Check,
   Clock,
   LoaderCircle,
-  Mail,
   MessageSquare,
   Play,
   Plus,
@@ -22,7 +20,6 @@ import { api } from "../api";
 import { formatNextFires } from "./cron-compile-format";
 import { FavoriteStar, type FavoritesApi } from "./favorites";
 import { describeError, formatRelative } from "./shared";
-import { describeSubscriptionSchedule } from "./subscription-format";
 import type { ScheduleNote } from "./workflow-format";
 
 /**
@@ -362,65 +359,6 @@ function CronForm({
   );
 }
 
-/**
- * The dashboard mails standing in this workspace, listed read-only beside the
- * crons: they ride the same tick, so a page titled "what runs unattended, and
- * when" that omitted them would be lying by omission. Read-only on purpose —
- * a subscription is made and stopped on the dashboard it mails (the Mail
- * button in Dashboards), and this list says exactly that.
- */
-function SubscriptionsNote() {
-  const [subscriptions, setSubscriptions] = useState<DashboardSubscription[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .listDashboardSubscriptions()
-      .then((rows) => {
-        if (!cancelled) setSubscriptions(rows);
-      })
-      // Silence, not an error banner: this is a footnote to the crons page,
-      // and a workspace that cannot list subscriptions still has its crons.
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (subscriptions.length === 0) return null;
-  return (
-    <div className="workflow-sidebar-head">
-      <span>Dashboard emails</span>
-      <ul className="workflow-items">
-        {subscriptions.map((subscription) => (
-          <li key={subscription.id}>
-            <div className="workflow-item-meta">
-              <span>
-                <Mail size={13} />{" "}
-                {subscription.dashboard_name || "(deleted dashboard)"}
-              </span>
-              <span>
-                {describeSubscriptionSchedule(
-                  subscription.schedule_cron,
-                  subscription.schedule_timezone,
-                )}
-              </span>
-              <span>
-                {subscription.last_dispatched_at
-                  ? `last sent ${formatRelative(subscription.last_dispatched_at)}`
-                  : "not sent yet"}
-              </span>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <p className="section-note">
-        Subscribe or unsubscribe from the Mail button on a dashboard.
-      </p>
-    </div>
-  );
-}
-
 export function CronsView({ setError, favorites }: CronsViewProps) {
   const [crons, setCrons] = useState<Cron[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -583,8 +521,6 @@ export function CronsView({ setError, favorites }: CronsViewProps) {
             ))}
           </ul>
         )}
-
-        <SubscriptionsNote />
       </aside>
 
       {composing && (

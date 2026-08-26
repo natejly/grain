@@ -82,8 +82,8 @@ export function GalleryView({ setError }: GalleryViewProps) {
         <div>
           <h1>Gallery</h1>
           <p>
-            Skills, workflows and agents your workspace published. Installing
-            copies one into your workspace as your own inert, editable copy.
+            Published skills, workflows and agents. Installing makes an inert,
+            editable copy.
           </p>
         </div>
         <label className="memory-search">
@@ -114,8 +114,8 @@ export function GalleryView({ setError }: GalleryViewProps) {
       {loaded && listings.length === 0 ? (
         <div className="empty-state">
           <p>
-            Nothing published yet. Publish a skill, workflow or agent from its
-            own page and it will appear here for the whole workspace.
+            Nothing published yet. Publish from a skill, workflow or agent&rsquo;s
+            own page.
           </p>
         </div>
       ) : (

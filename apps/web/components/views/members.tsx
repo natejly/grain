@@ -250,8 +250,7 @@ export function InvitesPanel({ invites, onChange, setError }: InvitesPanelProps)
       {link && (
         <div className="invite-link" role="status">
           <p className="field-hint">
-            The invitation was emailed. This link is shown once and cannot be read
-            back — copy it if you would rather send it yourself.
+            Emailed already. Shown once; copy it to send it yourself.
           </p>
           <div className="invite-link-row">
             <code>{link}</code>

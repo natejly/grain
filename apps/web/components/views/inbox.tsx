@@ -572,11 +572,11 @@ export function InboxView({
                 <Check size={18} />
               </div>
               <strong>Nothing needs you</strong>
-              <p>
-                {snoozed.length > 0
-                  ? "Everything waiting is snoozed — it lives under Later until morning."
-                  : "Tool calls waiting for approval appear here, whatever started them."}
-              </p>
+              {/* Kept for the snoozed case only: it says why this list is
+                  empty while items are in fact waiting, and where they went. */}
+              {snoozed.length > 0 && (
+                <p>Everything waiting is snoozed until morning, under Later.</p>
+              )}
             </div>
           ) : (
             <>
@@ -660,7 +660,6 @@ export function InboxView({
                 <Clock size={18} />
               </div>
               <strong>Nothing put off</strong>
-              <p>Approvals you snooze wait here until their morning comes.</p>
             </div>
           ) : (
             snoozed.map((row) => (
@@ -694,7 +693,6 @@ export function InboxView({
                 <Check size={18} />
               </div>
               <strong>Nothing held by the ceiling</strong>
-              <p>Runs the spend limit parks appear here until an owner raises it.</p>
             </div>
           ) : (
             holds.map((hold) => (
@@ -740,7 +738,6 @@ export function InboxView({
                 <Check size={18} />
               </div>
               <strong>Nobody needs your eyes</strong>
-              <p>Comments that @-mention you appear here until you resolve them.</p>
             </div>
           ) : (
             mentions.map((mention) => {
@@ -800,10 +797,6 @@ export function InboxView({
                 <Check size={18} />
               </div>
               <strong>No monitor has tripped</strong>
-              <p>
-                When a metric monitor crosses its threshold, the alert appears
-                here for every member until someone resolves it.
-              </p>
             </div>
           ) : (
             alerts.map((alert) => (
@@ -854,10 +847,6 @@ export function InboxView({
                 <Check size={18} />
               </div>
               <strong>Spending looks usual</strong>
-              <p>
-                When an agent runs at several times its own typical spend, the
-                hourly watch flags it here for every member.
-              </p>
             </div>
           ) : (
             anomalies.map((anomaly) => (

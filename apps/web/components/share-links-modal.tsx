@@ -124,8 +124,7 @@ export function ShareLinksModal({
           <div>
             <strong>Share “{resourceName}”</strong>
             <p className="field-hint">
-              A link makes this {kind} readable by anyone who holds it — no
-              account needed. Revoke it here at any time.
+              Anyone holding the link can read this {kind}. No account needed.
             </p>
           </div>
           <button
@@ -172,9 +171,7 @@ export function ShareLinksModal({
 
         {minted && (
           <div className="invite-link" role="status">
-            <p className="field-hint">
-              This link is shown once and cannot be read back — copy it now.
-            </p>
+            <p className="field-hint">Shown once. Copy it now.</p>
             <div className="invite-link-row">
               <code>{minted}</code>
               <button

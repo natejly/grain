@@ -120,12 +120,6 @@ function AddItem({ onAdd, label }: { onAdd: (title: string) => Promise<void>; la
 export type TodoChecklistProps = {
   list: Board;
   ops: TodoOps;
-  /**
-   * Said above the checkboxes when the list is being shown because something
-   * happened to it — in chat, that the assistant is what happened. Omitted on
-   * the Lists page, where the list is simply where it lives.
-   */
-  caption?: string;
   /** Chat renders a denser card with no delete affordances. */
   compact?: boolean;
   /**
@@ -144,7 +138,6 @@ export type TodoChecklistProps = {
 export function TodoChecklist({
   list,
   ops,
-  caption,
   compact,
   headerExtra,
   selfId,
@@ -155,8 +148,8 @@ export function TodoChecklist({
     <section className={compact ? "todo-list compact" : "todo-list"}>
       <header className="todo-list-head">
         {/* The list's glyph in the merged listing — a board of the same name
-            wears a kanban square here. Chat's compact card skips it: inline,
-            the caption already says what this is. */}
+            wears a kanban square here. Chat's compact card skips it: the tool
+            call it sits under already says what this is. */}
         {!compact && <ListChecks size={15} aria-hidden className="board-glyph" />}
         <div>
           <h2>{list.name}</h2>
@@ -173,7 +166,6 @@ export function TodoChecklist({
           </button>
         )}
       </header>
-      {caption && <p className="todo-caption">{caption}</p>}
       <ul className="todo-items">
         {items.map((item) => (
           <li key={item.id} className={item.done ? "todo-item done" : "todo-item"}>

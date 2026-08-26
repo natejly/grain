@@ -199,7 +199,6 @@ test("a write parks under ask_writes, runs under the bypass, and a deny survives
   // list, rather than one per call showing three states of the same thing.
   const inline = page.locator(".todo-list.compact");
   await expect(inline).toHaveCount(1);
-  await expect(inline).toContainText("The assistant added to this list.");
   await expect(inline).toContainText("0 of 2 done");
   await expect(inline.getByText("Freeze the release branch")).toBeVisible();
   await page.screenshot({ path: "test-results/todo-in-chat.png", fullPage: true });
@@ -231,7 +230,6 @@ test("a write parks under ask_writes, runs under the bypass, and a deny survives
   // The agent ticking something off is the interesting case, so it is shown
   // where it happened, with the item actually ticked.
   const ticked = checkCard.locator(".todo-list.compact");
-  await expect(ticked).toContainText("The assistant ticked an item off this list.");
   await expect(ticked).toContainText("1 of 2 done");
   await expect(
     ticked.locator(".todo-item", { hasText: "Run the migrations" }).getByRole("checkbox"),

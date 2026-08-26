@@ -24,10 +24,10 @@ export const rail = (page: Page) => page.getByRole("navigation", { name: "Worksp
  * "New thread" creates the conversation over the network; a fill+Enter typed
  * before the switch lands puts the prompt in the PREVIOUS thread. That race is
  * how the agent-write specs kept failing under load with two specs' tool cards
- * in one transcript. The empty-thread starter heading renders only when the
- * active conversation has no messages — but when NO thread was active before
- * the click (a fresh page load), that heading is already up, so it cannot be
- * the switch signal on its own. The rail row is: the "New conversation" entry
+ * in one transcript. The empty-transcript marker renders only when the active
+ * conversation has no messages — but when NO thread was active before the
+ * click (a fresh page load), it is already up, so it cannot be the switch
+ * signal on its own. The rail row is: the "New conversation" entry
  * appears exactly when the created thread lands and becomes active, so waiting
  * for one more of them is what actually observes the switch.
  */
@@ -41,13 +41,11 @@ export async function newThread(page: Page) {
   // list is still fetching, so a baseline read then is wrong by however many
   // threads earlier specs left. The switch itself is what must be observed,
   // and it has a conjunction all its own: the ACTIVE rail row is the fresh
-  // untitled thread, and the transcript is empty enough to show the starter.
-  // The one thread that satisfies both is an empty "New conversation" that is
-  // currently active — which is the state this helper exists to reach.
+  // untitled thread, and the transcript is empty. The one thread that
+  // satisfies both is an empty "New conversation" that is currently active —
+  // which is the state this helper exists to reach.
   await expect(page.locator(".thread.active")).toContainText("New conversation");
-  await expect(
-    page.getByRole("heading", { name: "Ask, and approve what the agent does" }),
-  ).toBeVisible();
+  await expect(page.locator(".message-scroll.empty")).toBeVisible();
 }
 
 export const tabs = (page: Page, group: string) =>

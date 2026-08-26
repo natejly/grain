@@ -76,9 +76,7 @@ test("a space carries instructions, knowledge and threads, and dies whole", asyn
 
   // A thread started here is an ordinary rail thread wearing the space's chip.
   await detail(page).getByRole("button", { name: "New thread" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Ask, and approve what the agent does" }),
-  ).toBeVisible();
+  await expect(page.locator(".message-scroll.empty")).toBeVisible();
   const railRow = page
     .locator(".thread-list")
     .getByRole("button", { name: /^New conversation/ })
