@@ -1,0 +1,34 @@
+// UAT stack. Copy to uat.tfvars and fill in; uat.tfvars is gitignored because
+// extra_environment below carries SMTP_PASSWORD verbatim.
+//
+//   tofu workspace select uat
+//   tofu apply -var-file=uat.tfvars
+//
+// terraform.tfvars is auto-loaded first, so this file only needs the
+// per-environment overrides.
+
+project    = "grain-uat"
+api_domain = "api.uat.grain.natejly.com"
+web_origin = "https://uat.grain.natejly.com"
+
+acm_certificate_arn = "arn:aws:acm:us-east-1:REPLACE:certificate/REPLACE"
+
+// Reuse the account-wide GitHub OIDC provider created by the prod stack — IAM
+// permits one provider per URL per account.
+enable_github_oidc       = true
+github_repo              = "natejly/grain"
+github_oidc_provider_arn = "arn:aws:iam::REPLACE:oidc-provider/token.actions.githubusercontent.com"
+
+// EMAIL_SENDER=smtp is not optional in production: config.py refuses to
+// construct with EMAIL_SENDER=console outside development. Opening the SMTP
+// port matters as much as the credentials — see the app_smtp rule in
+// network.tf for what a closed port costs.
+extra_environment = {
+  EMAIL_SENDER  = "smtp"
+  EMAIL_FROM    = "no-reply@example.com"
+  SMTP_HOST     = "email-smtp.us-east-1.amazonaws.com"
+  SMTP_PORT     = "587"
+  SMTP_STARTTLS = "true"
+  SMTP_USERNAME = "REPLACE"
+  SMTP_PASSWORD = "REPLACE"
+}
