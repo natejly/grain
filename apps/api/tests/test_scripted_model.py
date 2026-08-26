@@ -4,6 +4,7 @@ import json
 import os
 
 import pytest
+from conftest import ask_before_writes
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -65,6 +66,7 @@ def _run(client, prompt: str):
         headers={"Idempotency-Key": "scripted-" + os.urandom(6).hex()},
         json={"title": "Scripted"},
     ).json()
+    ask_before_writes(client, conversation["id"])
     db = SessionLocal()
     run = Run(
         workspace_id=identity["identity"]["workspace_id"],

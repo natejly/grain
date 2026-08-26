@@ -172,6 +172,17 @@ export type ChatViewProps = {
     setMode: (mode: ApprovalMode) => Promise<void>;
     conversationId: string | null;
     conversationTitle: string;
+    /**
+     * The member has Safe mode on — their threads are seeded to ask first.
+     *
+     * Here so the auto-approve banner can tell a *departure* from a *default*.
+     * Writes going through unreviewed is the same fact either way and the trail
+     * is shown either way; what changes is whether it is news. For a member who
+     * asked to be asked, a thread running unreviewed is the thing they need
+     * shouted at them; for everyone else it is how the product works, and a
+     * standing alarm on every thread is an alarm nobody reads by Tuesday.
+     */
+    safeMode: boolean;
   };
   /**
    * Whether an empty transcript teaches with starter cards. Defaults to
@@ -1204,10 +1215,17 @@ export function ChatView({
   const pickCommand = (command: BuiltinCommand) => {
     if (command.name === "plan" && approval) {
       // A toggle, resolved immediately — nothing rides the next send. Leaving
-      // plan mode by hand restores the default, the same landing the approved
-      // exit uses: re-arming a bypass nobody re-asked for is the surprise the
-      // modes exist to avoid.
-      approval.setMode(approval.mode === "plan" ? "ask_writes" : "plan");
+      // plan mode by hand lands on THIS member's default: for someone in Safe
+      // mode that is still "ask before writes", and for everyone else it is
+      // where their threads live, which is the landing that does not feel like
+      // the product changed its mind on the way out of a mode.
+      approval.setMode(
+        approval.mode === "plan"
+          ? approval.safeMode
+            ? "ask_writes"
+            : "auto_writes"
+          : "plan",
+      );
       setDraft(stripSlashToken(draft));
       return;
     }
@@ -1218,10 +1236,19 @@ export function ChatView({
   // A turn cannot be sent with a required arg left blank; the button says so
   // rather than letting the server 422 a click the composer could have refused.
   const skillReady = argsSatisfied(skills?.attached ?? null, skills?.argValues ?? {});
-  // Either kind of "writes are going through unreviewed". The composer zone
-  // wears the warning treatment for both, because from the reader's side they
-  // are the same fact — and the development one is the wider of the two.
-  const bypassed = Boolean(approval && isBypass(approval.mode)) || Boolean(unrestricted);
+  // Writes are going through unreviewed — either kind. This is what decides
+  // whether the trail is SHOWN at all, and it is deliberately unchanged by the
+  // default flip: the record of what ran without asking is the thing that makes
+  // an agentic default honest, so it renders whenever it is true.
+  const autoApproving = Boolean(approval && isBypass(approval.mode)) || Boolean(unrestricted);
+  // Whether that fact is a DEPARTURE, which is what earns the warning
+  // treatment: the composer's alarm styling and the "Turn off" button. The
+  // development bypass always is (it is wider than any thread's mode and
+  // nobody chose it per thread); a thread's own mode is one only for a member
+  // running Safe mode, who asked to be asked and is not being.
+  const bypassed =
+    Boolean(approval && approval.safeMode && isBypass(approval.mode)) ||
+    Boolean(unrestricted);
   /**
    * Which card in a turn gets the checklist: the last one that touched a list.
    *
@@ -1547,11 +1574,14 @@ export function ChatView({
           />
         ) : (
           approval &&
-          bypassed && (
+          autoApproving && (
             <BypassIndicator
               conversationTitle={approval.conversationTitle}
               approved={autoApprovedCalls(agentCalls, approval.conversationId)}
               stop={() => approval.setMode("ask_writes")}
+              // Warning when it departs from what this member asked for;
+              // otherwise the same trail, said in an indoor voice.
+              tone={bypassed ? "warning" : "notice"}
             />
           )
         )}

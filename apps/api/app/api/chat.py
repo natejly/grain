@@ -240,6 +240,9 @@ def create_conversation(
         created_by=actor.user_id,
         title=payload.title.strip() or "New conversation",
         space_id=space_id,
+        approval_mode=conversations.default_approval_mode(
+            db, workspace_id=actor.workspace_id, user_id=actor.user_id
+        ),
     )
     db.add(conversation)
     record_key(
@@ -327,6 +330,19 @@ def fork_conversation(
         title=(payload.title.strip() or f"Fork of {source.title}")[:200],
         shared=False,
         space_id=source.space_id,
+        # A fork continues the source's work, so it continues its posture: a
+        # thread deliberately put in `plan` or `ask_all` would otherwise have
+        # that undone by branching it. The exception is a member with Safe mode
+        # on, who gets their own seed — inheriting is convenience, and it does
+        # not outrank someone having said they want to approve writes.
+        approval_mode=(
+            source.approval_mode
+            if conversations.default_approval_mode(
+                db, workspace_id=actor.workspace_id, user_id=actor.user_id
+            )
+            == conversations.AGENTIC_MODE
+            else conversations.SAFE_MODE
+        ),
     )
     db.add(fork)
     # Everything up to and including the anchor, in the transcript's own

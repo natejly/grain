@@ -25,6 +25,12 @@ export type SubjectChatPanelProps = {
   hidden?: Set<string>;
   /** `DEV_UNRESTRICTED_AGENT` is on; the panel must say so. */
   unrestricted?: boolean;
+  /**
+   * The member has Safe mode on. Only decides how loudly the panel says that
+   * writes are running unreviewed — see `ChatView`'s `approval.safeMode`.
+   * Defaults false, matching a member who has never touched the setting.
+   */
+  safeMode?: boolean;
 };
 
 /**
@@ -48,6 +54,7 @@ export function SubjectChatPanel({
   openCitation,
   hidden,
   unrestricted,
+  safeMode = false,
 }: SubjectChatPanelProps) {
   return (
     // Two classes: `subject-chat` carries every rule (the panel is the same
@@ -101,6 +108,7 @@ export function SubjectChatPanel({
           setMode: thread.setApprovalMode,
           conversationId: thread.conversationId,
           conversationTitle: label,
+          safeMode,
         }}
         showStarter={false}
         // No paperclip. Attaching a source navigates to the Knowledge view,

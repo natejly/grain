@@ -305,3 +305,23 @@ def identity_client() -> Callable[..., TestClient]:
 @pytest.fixture
 def headers():
     return {"Idempotency-Key": "test-key-" + os.urandom(8).hex()}
+
+
+def ask_before_writes(client: TestClient, conversation_id: str) -> None:
+    """Pin one thread to the mode where writes park.
+
+    Since 0064 a new thread is agentic — `auto_writes`, the product default,
+    covered by `test_safe_mode.py`. Every test ABOUT the approval machinery
+    (parking, assignment, the inbox, pending document edits, steering a parked
+    turn) needs a thread that parks, and this is how it says so.
+
+    Saying so is the point. Those tests never meant "whatever a fresh thread
+    happens to be"; they meant "a thread that asks", and a suite that reads the
+    default for something it is not testing is a suite that breaks in a heap
+    the day the default moves — which is exactly what it did.
+    """
+    response = client.put(
+        f"/api/conversations/{conversation_id}/approval-mode",
+        json={"mode": "ask_writes"},
+    )
+    assert response.status_code == 200, response.text

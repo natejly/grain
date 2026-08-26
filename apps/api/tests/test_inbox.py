@@ -12,6 +12,7 @@ import os
 from datetime import timedelta
 
 import pytest
+from conftest import ask_before_writes
 from test_agent_approvals import _park_run
 
 from app.database import SessionLocal
@@ -141,6 +142,7 @@ def test_a_budget_hold_is_a_member_visible_fact(client):
         headers={"Idempotency-Key": "inbox-hold-" + os.urandom(6).hex()},
         json={"title": "Held by budget"},
     ).json()
+    ask_before_writes(client, conversation["id"])
     client.put(
         f"/api/conversations/{conversation['id']}/share",
         headers={"Idempotency-Key": "inbox-share-" + os.urandom(6).hex()},

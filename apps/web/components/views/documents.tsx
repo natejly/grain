@@ -76,6 +76,8 @@ export type DocumentChatDeps = {
   refreshPendingEdits: () => Promise<void>;
   /** `DEV_UNRESTRICTED_AGENT` is on, so the panel wears the warning. */
   unrestricted?: boolean;
+  /** Safe mode is on for this member; only changes how loud the panel is. */
+  safeMode?: boolean;
 };
 
 /**
@@ -578,6 +580,7 @@ export function DocumentsView({
           // reviewer *and* every all-or-nothing card beside it.
           hidden={decided}
           unrestricted={chat.unrestricted}
+          safeMode={chat.safeMode}
         />
       )}
     </div>

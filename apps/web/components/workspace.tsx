@@ -77,6 +77,8 @@ export function Workspace() {
     inbox,
     digest,
     updateDigest,
+    safeMode,
+    updateSafeMode,
     createDatasetFromSource,
     createDatasetVersionFromSource,
     graph,
@@ -938,6 +940,8 @@ export function Workspace() {
               open={openGroup}
               digest={digest}
               onDigestChange={(prefs) => void updateDigest(prefs)}
+              safeMode={safeMode}
+              onSafeModeChange={(enabled) => void updateSafeMode(enabled)}
             />
             <ThemeToggle />
             {/* The screen and provider pills, folded into one popover: the
@@ -1021,10 +1025,16 @@ export function Workspace() {
                   createDataset: createDatasetFromSource,
                 }}
                 approval={{
-                  mode: activeThread?.approval_mode ?? "ask_writes",
+                  // The fallback is the mode a thread created right now WOULD
+                  // get, so the picker never shows one posture in the second
+                  // before a thread loads and another after.
+                  mode:
+                    activeThread?.approval_mode ??
+                    (safeMode ? "ask_writes" : "auto_writes"),
                   setMode: setApprovalMode,
                   conversationId: activeConversation,
                   conversationTitle: activeTitle,
+                  safeMode,
                 }}
                 todos={{ lists: todoLists, ops: todoOps }}
                 pinning={pinning}
@@ -1185,6 +1195,7 @@ export function Workspace() {
                 if (focusedDashboard) runDashboard(focusedDashboard, true);
               },
               unrestricted: bootstrap?.unrestricted_agent,
+              safeMode,
             }}
           />
         )}
@@ -1239,6 +1250,7 @@ export function Workspace() {
               reloadDocument: reloadOpenDocument,
               refreshPendingEdits,
               unrestricted: bootstrap?.unrestricted_agent,
+              safeMode,
             }}
           />
         )}
@@ -1286,6 +1298,7 @@ export function Workspace() {
               // preview. Nothing else in the shell is refreshed from here.
               reloadProject: reloadOpenProject,
               unrestricted: bootstrap?.unrestricted_agent,
+              safeMode,
             }}
           />
         )}

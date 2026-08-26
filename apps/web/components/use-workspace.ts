@@ -113,6 +113,12 @@ export function useWorkspace() {
   // the server's copy on every change. Null until the first read lands, so the
   // settings menu never shows a default it is about to contradict.
   const [digest, setDigest] = useState<DigestPrefs | null>(null);
+  // Safe mode: whether this member's NEW threads start asking before writes.
+  // A plain boolean rather than `T | null` because, unlike the digest, false is
+  // both the default and the honest answer before bootstrap lands — the toggle
+  // shows the posture new threads actually get, which with no preference read
+  // yet is the agentic one.
+  const [safeMode, setSafeMode] = useState(false);
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -491,6 +497,30 @@ export function useWorkspace() {
     }
   }, []);
 
+  /**
+   * Turn Safe mode on or off for this member's future threads.
+   *
+   * Optimistic on the same pattern as the digest, and for the same reason: the
+   * checkbox has to answer the click. It seeds new conversations only, so an
+   * optimistic value that a refused write rolls back cannot have governed a
+   * tool call in between — there is no thread it could have reached.
+   */
+  const updateSafeMode = useCallback(async (enabled: boolean) => {
+    setError("");
+    let previous = false;
+    setSafeMode((current) => {
+      previous = current;
+      return enabled;
+    });
+    try {
+      const saved = await api.updateSafeMode(enabled);
+      setSafeMode(saved.enabled);
+    } catch (caught) {
+      setSafeMode(previous);
+      setError(describeError(caught, "Could not update safe mode"));
+    }
+  }, []);
+
   /** Rename a thread and replace its rail row with the server's copy. */
   const renameConversation = useCallback(
     async (conversationId: string, title: string) => {
@@ -631,6 +661,7 @@ export function useWorkspace() {
       ]);
       setBootstrap(boot);
       setDigest(boot.digest ?? null);
+      setSafeMode(Boolean(boot.safe_mode));
       setConversations((current) => {
         const listed = new Set(chats.map((item) => item.id));
         const createdDuringLoad = current.filter(
@@ -1035,6 +1066,8 @@ export function useWorkspace() {
     inbox,
     digest,
     updateDigest,
+    safeMode,
+    updateSafeMode,
     refreshSecondary,
     createDatasetFromSource,
     createDatasetVersionFromSource,

@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import Conversation, InboundAddress, Message, Space
+from . import conversations
 
 #: Everything a delivery may put into one message. Email bodies are unbounded
 #: attacker input; threads are for reading.
@@ -120,6 +121,18 @@ def deliver(
         title=title[:200],
         shared=False,
         space_id=_live_space_id(db, address),
+        # The one creation site that does NOT read the member's preference, and
+        # deliberately so. Every other thread starts from something the member
+        # typed; this one starts from a body anyone on the internet can send to
+        # a published address, and it starts unattended. Seeding it agentic
+        # would be handing a stranger's text the writes — exactly the shape the
+        # injection screen exists to catch, and a defence that has to fire is
+        # worse than a thread that never offered the opening.
+        #
+        # It is a floor, not a ceiling: the member can pick any mode on the
+        # thread once they have read the mail, which is the point at which a
+        # person is actually looking at it.
+        approval_mode=conversations.SAFE_MODE,
     )
     db.add(conversation)
     db.flush()

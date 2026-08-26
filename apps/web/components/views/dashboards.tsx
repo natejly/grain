@@ -89,6 +89,8 @@ export type DashboardChatDeps = {
   reloadDashboards: () => Promise<void>;
   /** `DEV_UNRESTRICTED_AGENT` is on, so the panel wears the warning. */
   unrestricted?: boolean;
+  /** Safe mode is on for this member; only changes how loud the panel is. */
+  safeMode?: boolean;
 };
 
 export function DashboardsView({
@@ -240,6 +242,7 @@ export function DashboardsView({
         apps={apps}
         openCitation={chat.openCitation}
         unrestricted={chat.unrestricted}
+        safeMode={chat.safeMode}
       />
     )}
     </div>

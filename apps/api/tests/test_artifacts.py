@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from conftest import ask_before_writes
 
 from app.database import SessionLocal
 from app.models import (
@@ -378,6 +379,7 @@ def _make_run(client, identity) -> str:
         headers={"Idempotency-Key": "artifact-conv-" + identity["user_id"][:6]},
         json={"title": "Artifacts"},
     ).json()
+    ask_before_writes(client, conversation["id"])
     db = SessionLocal()
     try:
         run = Run(

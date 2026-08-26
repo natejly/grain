@@ -74,6 +74,12 @@ class BootstrapResponse(ApiModel):
     screen: ScreenStatus
     #: The daily "items waiting on you" mail opt-in for this member.
     digest: DigestStatus
+    #: Safe mode: this member's new threads start by asking before they write.
+    #: Off by default — the assistant acts and the trail says what it did. A
+    #: seed for new threads only; the per-thread picker still governs an
+    #: existing one, which is why the client shows it as a preference and not
+    #: as the state of the thread on screen.
+    safe_mode: bool = False
     #: `DEV_UNRESTRICTED_AGENT` is on: every tool available and nothing parks.
     #: A first-class field rather than a `feature_flags` entry because the client
     #: does not *branch* on it, it *warns* about it — the failure mode is not
@@ -468,9 +474,11 @@ class ConversationOut(ApiModel):
     #: the other.
     subject_kind: str = ""
     subject_id: str = ""
-    #: ask_writes | ask_all | auto_writes | plan, governing this thread and no
-    #: other.
-    approval_mode: ApprovalMode = "ask_writes"
+    #: ask_writes | ask_all | auto_writes | plan | guardian, governing this
+    #: thread and no other. The default matches the column's — every response
+    #: carries the row's real value, and a schema default that disagreed with
+    #: the column would only ever surface as a wrong answer.
+    approval_mode: ApprovalMode = "auto_writes"
     #: Personal (False) vs shared (True). A shared thread is visible to every
     #: member of the same workspace; a personal thread only to its creator.
     shared: bool = False

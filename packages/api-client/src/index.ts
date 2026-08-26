@@ -130,6 +130,14 @@ export type Bootstrap = {
   /** The caller's daily "items waiting on me" mail opt-in. */
   digest?: DigestPrefs;
   /**
+   * Safe mode: this member's NEW threads start in "Ask before writes" instead
+   * of acting on their own. A seed, not the state of the thread on screen —
+   * the per-thread approval picker still governs an existing conversation,
+   * which is why the toggle lives in settings and the picker stays in the
+   * composer. Optional so a client built against an older server still boots.
+   */
+  safe_mode?: boolean;
+  /**
    * The development agent bypass is on: every tool available, nothing parked.
    * The server refuses to boot with this outside development, so it is false
    * everywhere else — but where it IS on, the UI has to say so continuously,
@@ -2529,6 +2537,19 @@ export class WorkspaceApi {
     return this.request("/api/me/digest", {
       method: "PUT",
       body: JSON.stringify(prefs),
+    });
+  }
+
+  /**
+   * Turn the approval step on or off for the caller's future threads.
+   *
+   * Seeds new conversations only — no existing thread changes mode, so this is
+   * safe to call optimistically and safe to retry.
+   */
+  updateSafeMode(enabled: boolean): Promise<{ enabled: boolean }> {
+    return this.request("/api/me/safe-mode", {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
     });
   }
 

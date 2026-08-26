@@ -34,7 +34,7 @@ from ..schemas import (
     ToolPolicyRequest,
 )
 from ..services import conversations
-from ..services.agent_loop import ASK_WRITES, PLAN, policy_scope_for_run
+from ..services.agent_loop import PLAN, policy_scope_for_run
 from ..services.artifacts import documents, proposals
 from ..services.audit import record_audit
 from ..services.events import append_event
@@ -796,9 +796,15 @@ def decide_agent_tool_call(
         # restored mode: full registry, no plan instructions, and the rest of
         # this same turn can implement what was just approved. (The executor of
         # the parked call writes nothing; a denial changes nothing, so the model
-        # revises the plan still inside plan mode.) Restores `ask_writes`, the
-        # default, rather than whatever mode preceded plan: re-arming a bypass
-        # nobody re-asked for is exactly the surprise the modes exist to avoid.
+        # revises the plan still inside plan mode.)
+        #
+        # Restores the approver's OWN default — the same seed a new thread of
+        # theirs gets — rather than whatever mode preceded plan. Two things had
+        # to stay true and this is what keeps both: nothing re-arms a posture
+        # nobody re-asked for, and a member who never chose to be asked does not
+        # find themselves being asked because they once used plan mode. The
+        # person approving the plan is the one whose default is read, since
+        # approving is the act that chose to leave.
         conversation = db.scalar(
             select(Conversation).where(
                 Conversation.id == run.conversation_id,
@@ -806,7 +812,10 @@ def decide_agent_tool_call(
             )
         )
         if conversation is not None and conversation.approval_mode == PLAN:
-            conversation.approval_mode = ASK_WRITES
+            restored = conversations.default_approval_mode(
+                db, workspace_id=actor.workspace_id, user_id=actor.user_id
+            )
+            conversation.approval_mode = restored
             record_audit(
                 db,
                 workspace_id=actor.workspace_id,
@@ -814,7 +823,7 @@ def decide_agent_tool_call(
                 action="conversation.approval_mode_set",
                 resource_type="conversation",
                 resource_id=conversation.id,
-                detail={"from": PLAN, "to": ASK_WRITES, "via": EXIT_PLAN_MODE},
+                detail={"from": PLAN, "to": restored, "via": EXIT_PLAN_MODE},
             )
     if payload.remember and call.name not in (
         workflow_executor.MANUAL_TOOL_NAME,

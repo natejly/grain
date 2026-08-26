@@ -31,7 +31,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import pytest
-from conftest import Identity
+from conftest import Identity, ask_before_writes
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -162,7 +162,8 @@ def make_run(db: Any, identity: Identity, conversation_id: str) -> Run:
     return run
 
 
-def new_conversation(client: TestClient, title: str = "Modes") -> Dict[str, Any]:
+def fresh_conversation(client: TestClient, title: str = "Modes") -> Dict[str, Any]:
+    """A thread exactly as the product makes it — whatever mode that is."""
     response = client.post(
         "/api/conversations",
         headers={"Idempotency-Key": "mode-conv-" + os.urandom(6).hex()},
@@ -170,6 +171,20 @@ def new_conversation(client: TestClient, title: str = "Modes") -> Dict[str, Any]
     )
     assert response.status_code == 201, response.text
     payload: Dict[str, Any] = response.json()
+    return payload
+
+
+def new_conversation(client: TestClient, title: str = "Modes") -> Dict[str, Any]:
+    """A thread in `ask_writes` — the baseline the mode tests below vary FROM.
+
+    Every test in this module is "starting from a thread that asks, what does
+    mode X change?", so the baseline is stated rather than inherited. Since 0064
+    a fresh thread is `auto_writes`; `fresh_conversation` above is what asserts
+    that, and it is the only caller here that wants the default.
+    """
+    payload = fresh_conversation(client, title)
+    ask_before_writes(client, payload["id"])
+    payload["approval_mode"] = ASK_WRITES
     return payload
 
 
@@ -233,12 +248,18 @@ READ = "probe_read"
 # --------------------------------------------------------------------------
 
 
-def test_a_new_conversation_asks_before_writes_and_says_so(owner: TestClient) -> None:
-    conversation = new_conversation(owner)
-    assert conversation["approval_mode"] == ASK_WRITES
+def test_a_new_conversation_acts_on_its_own_and_says_so(owner: TestClient) -> None:
+    """The default since 0064, and the list has to agree with the row.
+
+    "Says so" is the assertion that matters: a mode the API did not report
+    would be a thread whose posture the UI has to guess, and a guessed posture
+    is how someone ends up believing they will be asked when they will not.
+    """
+    conversation = fresh_conversation(owner)
+    assert conversation["approval_mode"] == AUTO_WRITES
     listed = owner.get("/api/conversations").json()
     assert [row["approval_mode"] for row in listed if row["id"] == conversation["id"]] == [
-        ASK_WRITES
+        AUTO_WRITES
     ]
 
 
@@ -695,7 +716,9 @@ def test_setting_the_mode_is_audited(owner: TestClient, db: Any) -> None:
     """Property 4. Turning the approval park off is the most consequential
     switch in the product; "who turned it off, and when" must have an answer."""
     identity = identity_of(owner)
-    conversation = new_conversation(owner)
+    # The unpinned helper: this test counts audit rows, so it must not inherit
+    # one from a fixture setting the mode on its way in.
+    conversation = fresh_conversation(owner)
     assert set_mode(owner, conversation["id"], AUTO_WRITES).json()["approval_mode"] == (
         AUTO_WRITES
     )
@@ -707,9 +730,12 @@ def test_setting_the_mode_is_audited(owner: TestClient, db: Any) -> None:
         if row["action"] == "conversation.approval_mode_set"
         and row["resource_id"] == conversation["id"]
     ]
+    # The first is the no-op — a thread already in `auto_writes` set to
+    # `auto_writes` — and it is recorded on purpose: an audit that skipped the
+    # unchanged case would have a silence that means two different things.
     assert [(row["detail"]["from"], row["detail"]["to"]) for row in rows] == [
         (AUTO_WRITES, ASK_WRITES),
-        (ASK_WRITES, AUTO_WRITES),
+        (AUTO_WRITES, AUTO_WRITES),
     ]
     assert all(row["resource_type"] == "conversation" for row in rows)
     db.expire_all()

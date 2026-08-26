@@ -80,7 +80,11 @@ def _workspace_with_agent(
 def _run_as(workspace_id: str, user_id: str, agent_id: str, prompt: str = "hi") -> str:
     db = SessionLocal()
     try:
-        conversation = Conversation(workspace_id=workspace_id, created_by=user_id)
+        # Pinned, not defaulted: these directives are asserted through what
+        # parks, so the thread has to be one that parks.
+        conversation = Conversation(
+            workspace_id=workspace_id, created_by=user_id, approval_mode="ask_writes"
+        )
         db.add(conversation)
         db.flush()
         run = Run(

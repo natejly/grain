@@ -1697,6 +1697,11 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase(
         "PUT", "/api/me/digest", SCOPED, body={"enabled": False, "hour_utc": 9}
     ),
+    # Safe mode is the same shape as the digest above — the caller's own
+    # membership row, no resource id, nothing for a foreign id to probe.
+    # enabled=false so the sweep leaves every member it touches on the product
+    # default rather than opted into asking.
+    RouteCase("PUT", "/api/me/safe-mode", SCOPED, body={"enabled": False}),
     # Transcript search: a workspace-scoped list whose visibility chokepoint is
     # the same one the agent tool reads; the sweep proves tenant A's query
     # never quotes tenant B's words.

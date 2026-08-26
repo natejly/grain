@@ -5,6 +5,7 @@ import os
 from types import SimpleNamespace
 
 import pytest
+from conftest import ask_before_writes
 
 from app.api import doc_pending
 from app.database import SessionLocal
@@ -28,6 +29,7 @@ def parked(client):
         headers={"Idempotency-Key": "pending-conv-" + os.urandom(6).hex()},
         json={"title": "Pending edits"},
     ).json()
+    ask_before_writes(client, conversation["id"])
     run_ids: list[str] = []
     workspace_ids: list[str] = []
 
@@ -221,6 +223,7 @@ def test_a_title_only_edit_resolves_inside_the_acting_workspace(client):
         headers={"Idempotency-Key": "shared-conv-" + os.urandom(6).hex()},
         json={"title": "Shared"},
     ).json()["id"]
+    ask_before_writes(client, conversation_id)
     db = SessionLocal()
     try:
         stranger = Workspace(name="Second " + os.urandom(4).hex())
@@ -316,6 +319,7 @@ def test_approving_a_listed_edit_applies_it_and_finishes_the_run(
         headers={"Idempotency-Key": "resume-conv-" + os.urandom(6).hex()},
         json={"title": "Resume"},
     ).json()["id"]
+    ask_before_writes(client, conversation_id)
 
     db = SessionLocal()
     try:
@@ -398,6 +402,7 @@ def _park_edit(client, document, find: str, replace: str) -> tuple[str, str]:
         headers={"Idempotency-Key": "hunk-conv-" + os.urandom(6).hex()},
         json={"title": "Hunks"},
     ).json()["id"]
+    ask_before_writes(client, conversation_id)
     db = SessionLocal()
     try:
         run = Run(
@@ -645,6 +650,7 @@ def test_a_turn_in_the_panel_is_handed_the_document_and_can_edit_it_unnamed(
     conversation_id = client.post(
         f"/api/documents/{document['id']}/conversation"
     ).json()["id"]
+    ask_before_writes(client, conversation_id)
     bootstrap = client.get("/api/bootstrap").json()
     identity = bootstrap["identity"]
     seen: dict = {}
