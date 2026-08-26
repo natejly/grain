@@ -692,3 +692,28 @@ gone" signal sends immediately and cancels whatever was pending.
   is a one-command answer to "why won't this task start", and the same call
   exposes stale accounting (memory still reserved with runningTasksCount=0),
   which an ECS agent restart clears.
+- Label a number's provenance; caution does not scale. Four errors in one
+  integration had the same shape — a true-ish claim shipped without the marker
+  saying how much weight it could bear. A raw key-collision count of 13 was
+  reported as "13 duplicates" and displaced someone else's correct, adjudicated
+  7; a browser behaviour ("`:hover` is not recomputed when a row arrives under a
+  stationary cursor") was asserted, propagated to a fix agent, and only later
+  probed — Chromium does recompute it. Hedging everything equally destroys
+  signal. One clause of provenance does not: `13 raw / 7 unresolved after
+  adjudication / 6 explained by differing arguments` cannot be over-read, and
+  neither can "measured on Chromium" versus "expected". Write each line so it
+  survives being quoted alone, because one line is what gets quoted.
+- A duplicate KEY is not a duplicate ENTRY. `ROUTE_CASES` had 13 colliding
+  `f"{method} {template}"` keys; 7 were merge duplicates and 6 were deliberate
+  complementary probes — the same route against a different fixture row
+  (`listing` vs `listing_org`, the only cross-org marketplace coverage) or a
+  different subject kind that dispatches down another code path. "Are these the
+  same probe at all" has to precede "which copy is better": a dedupe that skips
+  the first question deletes coverage and reports success. Where a collision is
+  legitimate, the fix is a discriminating field in the key, never fewer probes.
+- Report the mechanism you established, refuse the consequence you cannot see.
+  The same collision looked like "the better-documented copy is silently
+  discarded" until someone read the consumer: `CASES_BY_KEY` is used only as
+  `set(...)` for a coverage assertion while the sweep parametrizes over the
+  source list, so the collapse discarded nothing that executes. "287 entries
+  collapse to 281 in this mapping" is the whole honest finding.
