@@ -41,6 +41,24 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   // context was created with preserveDrawingBuffer, so the screenshot — which
   // captures what was actually presented — is the honest check.
   await page.locator(".graph-3d").screenshot({ path: "test-results/graph3d.png" });
+
+  // ...and that it survives the page re-rendering around it. Selecting a row
+  // hands Graph3D a freshly built `edges` array — the page has no way not to —
+  // and a build effect keyed on that identity tore the whole scene down for it:
+  // new WebGL context, new simulation, camera back to its framing shot, the
+  // layout you were reading replaced by an expanding ball of noise. The canvas
+  // element is the tell, because a rebuild removes and re-appends it.
+  await canvas.evaluate((element) => element.setAttribute("data-kept", "yes"));
+  // The name, not the row: in a 280px panel the row's own centre lands on the
+  // Passage button beside it, which deliberately does not select.
+  await page
+    .locator(".entity-row", { hasText: "Atlas Labs" })
+    .first()
+    .locator("button.entity-select")
+    .click();
+  await expect(page.locator(".entity-row.selected")).toHaveCount(1);
+  await expect(page.locator(".graph-3d-canvas canvas")).toHaveCount(1);
+  await expect(canvas).toHaveAttribute("data-kept", "yes");
   console.log("page errors:", JSON.stringify(failures));
 
   // Leave the shared workspace as we found it. Without this the source lingers

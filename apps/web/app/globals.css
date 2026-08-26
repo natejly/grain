@@ -3286,35 +3286,19 @@ label,
   background: var(--surface);
 }
 
+/* `stretch`, not `center`: the child sizes the WebGL drawing buffer from this
+   box, so centring a child of its own height left the canvas short of the panel
+   and banded the gap with the grid pattern — most visibly when the entity list
+   beside it is the taller of the two. The rules that used to follow here styled
+   svg/line/circle/text and went with the 2D renderer they belonged to. */
 .graph-canvas {
   min-width: 0;
   display: grid;
-  place-items: center;
+  place-items: stretch;
   background-image:
     linear-gradient(var(--graph-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--graph-grid) 1px, transparent 1px);
   background-size: 24px 24px;
-}
-
-.graph-canvas svg {
-  width: 100%;
-  height: auto;
-  max-height: 620px;
-}
-
-.graph-canvas line {
-  stroke: var(--graph-edge);
-}
-
-.graph-canvas circle {
-  fill: var(--graph-node);
-  stroke: var(--graph-node-stroke);
-  stroke-width: 1.5;
-}
-
-.graph-canvas text {
-  fill: var(--graph-label);
-  font-size: 10px;
 }
 
 .entity-list {
@@ -4324,6 +4308,28 @@ label,
 .memory-space {
   margin-left: 5px;
   font-size: 9px;
+}
+
+/* The entity name, a real button so selecting a row works from the keyboard —
+   the row div's own onClick is only the generous pointer target. Unstyled to
+   keep looking like the title it was; the ellipsis chain needs the overflow. */
+.entity-row button.entity-select {
+  min-height: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+/* Inline inside a button, the strong would lose its ellipsis; blockify it. */
+.entity-row button.entity-select strong {
+  display: block;
 }
 
 /* Where the graph read an entity: the first source file, as a chip that lands
@@ -6642,6 +6648,16 @@ label,
 
 .graph-3d-legend .swatch.loose {
   border-top: 2px dashed var(--border-strong);
+}
+
+/* Entity-type swatches are filled dots, not line samples. Their colour is
+   inline from the three.js palette — the one place hues live outside the
+   token blocks — so this rule only shapes them. */
+.graph-3d-legend .swatch.node {
+  width: 8px;
+  height: 8px;
+  border-top: 0;
+  border-radius: 50%;
 }
 
 .graph-3d-failure {
