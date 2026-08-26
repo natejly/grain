@@ -3,11 +3,13 @@
 Three columns, no new table. `webhook_deliveries.next_attempt_at` is the
 retry schedule: a failed send attempt stamps when the next claim may happen
 (exponential spread in services/webhooks), so a receiver that is down for a
-deploy gets hours of horizon instead of ~3 minutes, and NULL keeps meaning
-"due now" for fresh rows. `inbound_addresses.daily_count` /
-`daily_count_day` are the per-address per-UTC-day delivery counter the
-inbound-email door checks — mail beyond the cap is a quiet 200 that lands
-nothing (services/inbound_email.DAILY_CAP).
+deploy gets 5h21m of horizon instead of ~3 minutes, and NULL keeps meaning
+"due now" for fresh rows. `inbound_addresses.rate_level` / `rate_level_at`
+are the per-address flood cap's leaky bucket — the level still on the clock
+and the moment it was last drained — which the inbound-email door checks;
+mail beyond the cap is a quiet 200 that lands nothing
+(services/inbound_email.DAILY_CAP). NULL `rate_level_at` means an address
+that has never taken a delivery.
 
 Revision ID: 0065_delivery_hardening
 Revises: 0064_open_alert_unique
@@ -26,8 +28,8 @@ depends_on = None
 #: (table, column name, type, server_default or None-for-nullable)
 _COLUMNS = (
     ("webhook_deliveries", "next_attempt_at", sa.DateTime(), None),
-    ("inbound_addresses", "daily_count", sa.Integer(), "0"),
-    ("inbound_addresses", "daily_count_day", sa.String(length=10), ""),
+    ("inbound_addresses", "rate_level", sa.Integer(), "0"),
+    ("inbound_addresses", "rate_level_at", sa.DateTime(), None),
 )
 
 

@@ -13,8 +13,9 @@ What has to stay true for a public mail door to be safe to have:
 - the provider's message id is the idempotency key, scoped per address —
   redelivery answers the original thread and posts nothing twice, while the
   same mail to a sibling address still lands as its own thread;
-- each address caps its landings per UTC day — mail beyond the cap is the
-  same quiet 200, landing nothing, audited once at the trip;
+- each address caps its landings with a rolling leaky bucket, NOT a fixed
+  UTC day (which could be spent twice across midnight) — mail beyond the cap
+  is the same quiet 200, landing nothing, audited once at the trip;
 - the raw address appears exactly once, at mint time; the table holds only a
   sha256, and no later response echoes a token.
 
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -401,6 +403,43 @@ def test_mail_beyond_the_daily_cap_is_a_quiet_200_that_lands_nothing(
         )
     ).all()
     assert len(capped) == 1
+
+
+def test_the_cap_cannot_be_spent_twice_across_midnight(tenant, db, monkeypatch):
+    """The finding the cap was reshaped for.
+
+    A fixed UTC-day counter let a flood spend the whole cap at 23:59 and the
+    whole cap again at 00:01 — 2x the cap from one address inside two
+    minutes. The bucket rolls, so crossing midnight buys nothing; only time
+    does, and it pays out one landing per drain interval.
+    """
+    client, _ = tenant
+    monkeypatch.setattr(address_service, "DAILY_CAP", 3)
+    minted = mint(client, label="Boundary")
+    address = db.scalar(
+        select(InboundAddress).where(InboundAddress.id == minted["id"])
+    )
+    drain = timedelta(seconds=address_service.WINDOW_SECONDS / 3)
+
+    eve = datetime(2026, 8, 25, 23, 59, 0)
+    for _ in range(3):
+        assert address_service.count_delivery(address, now=eve).allowed
+    tripped = address_service.count_delivery(address, now=eve)
+    assert tripped == address_service.CapVerdict(allowed=False, tripped=True)
+
+    past_midnight = datetime(2026, 8, 26, 0, 1, 0)
+    verdict = address_service.count_delivery(address, now=past_midnight)
+    assert verdict.allowed is False, "a fresh UTC day must not refill the bucket"
+    assert verdict.tripped is False, "one audit per episode, not one per day"
+
+    # Time, and only time, reopens it — and because every refused attempt
+    # restarts the drain clock, a sender who keeps probing never drains.
+    assert not address_service.count_delivery(address, now=past_midnight + drain).allowed
+    last_probe = past_midnight + drain * 2
+    assert not address_service.count_delivery(address, now=last_probe).allowed
+    # Quiet for two drain intervals after that last probe, and it reopens.
+    landed = address_service.count_delivery(address, now=last_probe + drain * 2)
+    assert landed.allowed, "the bucket drains back one credit at a time"
 
 
 # --------------------------------------------------------------------------

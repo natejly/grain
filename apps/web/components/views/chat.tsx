@@ -1412,7 +1412,13 @@ export function ChatView({
                        remote images (tracking pixels) or dress a phishing
                        URL in friendly link text. services/inbound_email.py's
                        strip_html contract leans on exactly this — change the
-                       two together or not at all. */
+                       two together or not at all.
+
+                       The clause this comment used to be missing: plain text
+                       is not the whole story, because ChatDashboardEmbeds
+                       below reads the same string for every role. See its
+                       comment for what a hostile mail can and cannot reach
+                       through it. */
                     <p>{message.content}</p>
                   )}
                 </div>
@@ -1421,7 +1427,23 @@ export function ChatView({
                     subtree never changes. A conditional here would take the
                     iframe out of the tree and put it back — which reloads the
                     frame — the first time a streamed message crossed the line
-                    between naming an app and not. */}
+                    between naming an app and not.
+
+                    Unconditional across *roles* too, which is worth stating
+                    plainly next to the plain-text boundary above: a user-role
+                    message can mount an embed, and inbound email lands as
+                    user-role. What that reaches is bounded by the component,
+                    not by the sender — only a slug this workspace already
+                    lists, already published public, already holding a release
+                    embeds at all; the frame is ADR 0004's (opaque origin,
+                    sandbox="allow-scripts", no network); and no `api`/
+                    `bindings` are passed, so it renders the release's frozen
+                    snapshot and cannot query. A hostile mail can therefore
+                    put a dashboard the workspace already publishes into the
+                    transcript — noise, next to a message the reader can see
+                    is an email — and nothing else. Widening any of those
+                    three (private apps, live bindings, a relaxed frame) turns
+                    that noise into a real finding. */}
                 <ChatDashboardEmbeds content={message.content} apps={apps} />
                 {message.role === "assistant" &&
                   flaggedRuns?.includes(message.run_id) && <ScreenFlagNote />}

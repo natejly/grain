@@ -1039,18 +1039,21 @@ was timing:
   verify origin AND refuse replays (verification recipe in the
   services/webhooks docstring and the view copy); retry got a real horizon:
   MAX_ATTEMPTS 6 over an exponential `next_attempt_at` spread (1/5/15/60/240
-  min ≈ 5.6h, migration 0065_delivery_hardening) plus an owner-gated
-  Redeliver affordance on failed rows in the deliveries panel. LOWs
+  min = 321 min = 5h21m between first and sixth attempt, migration
+  0065_delivery_hardening) plus an owner-gated Redeliver affordance on
+  failed rows in the deliveries panel. LOWs
   RECORDED, not built: (QA 5) the caller-supplied signing secret has no min
   length and no rotation path (PUT lacks a secret field; delete+recreate
   loses the trail) — consider server-minted show-once secrets to match the
   ApiToken posture; (QA 6) no endpoint auto-disable after sustained failure
   and no webhook_deliveries retention — retention-sweep candidate; (QA 7)
   the tick's claim is global FIFO 25/tick with no per-workspace fairness.
-- F12 inbound email (QA 8-12): per-address daily cap
-  (services/inbound_email.DAILY_CAP = 200/UTC day; beyond it the same quiet
-  200 as an unknown token, landing nothing, audited exactly once at the
-  trip); message-id dedup now scoped per address (the address id salts the
+- F12 inbound email (QA 8-12): per-address flood cap
+  (services/inbound_email.DAILY_CAP = 200, spent from a rolling leaky bucket
+  — see the verification entry below, which replaced the original fixed
+  UTC-day counter; beyond it the same quiet 200 as an unknown token, landing
+  nothing, audited once per refusing episode); message-id dedup now scoped
+  per address (the address id salts the
   idempotency hash — pre-burning an id cannot suppress a sibling address's
   mail; keys recorded before this change are simply orphaned, worst case one
   historical mail could land again once). QA 9 (remote images / phishing
@@ -1144,6 +1147,77 @@ was timing:
   is clean because it never imports those tests, so this is left alone rather
   than widening a branch already under review. Fix is to build a local
   `FastAPI()` in each test instead of mutating the shared app.
+- REDELIVER SCOPE (QA verification finding 1): FIXED on sweep-qa-fixes.
+  `POST /api/webhooks/deliveries/{id}/redeliver` requeued ANY non-pending
+  row, so an owner (or a script walking the list) could replay a delivery the
+  receiver had already processed. It now requeues `failed` rows only; a
+  `pending` row stays the quiet no-op that makes the route idempotent without
+  an Idempotency-Key, and a `sent` row is a 409. DECIDED, not an oversight: a
+  replay is safe for a receiver that keys on `delivery_id`, but it is not a
+  repair, and against an imperfectly idempotent receiver it is a duplicate
+  side effect nobody asked for — a real "send it again" would have to be its
+  own labelled action. The panel already offered Redeliver on failed rows
+  only, so the web surface is unchanged. Grounds in the route docstring.
+- BACKOFF HORIZON FIGURE (QA verification finding 2): FIXED on
+  sweep-qa-fixes. The schedule is unchanged; the prose was wrong. 1+5+15+60
+  +240 = 321 minutes = 5h21m between the first and sixth attempt, not the
+  "~5.6 hours" claimed in services/webhooks.py and in this file.
+  `RETRY_HORIZON_MINUTES = sum(RETRY_BACKOFF_MINUTES)` now sits beside the
+  schedule and `test_the_stated_retry_horizon_matches_the_schedule` pins the
+  figure, so the next edit to the spread cannot leave the prose behind.
+- INBOUND CAP WINDOW (QA verification finding 3): FIXED on sweep-qa-fixes,
+  inside the unreleased 0065 columns — no new migration (0066 is a peer's).
+  The per-address cap used a fixed UTC-day counter, so a flood could spend
+  the whole cap at 23:59 and the whole cap again at 00:01 — 2x inside two
+  minutes. `inbound_addresses.daily_count`/`daily_count_day` are now
+  `rate_level`/`rate_level_at`, a leaky bucket draining one credit every
+  `WINDOW_SECONDS / DAILY_CAP` (432s at the shipped numbers).
+  `count_delivery` returns a `CapVerdict(allowed, tripped)` instead of a bool
+  plus the route's old `== DAILY_CAP + 1` magic-number check.
+  `test_the_cap_cannot_be_spent_twice_across_midnight` is the boundary case.
+  TWO TRADEOFFS ACCEPTED, both documented in the `count_delivery` docstring:
+  (a) a 24h span starting with an empty bucket can still admit up to 2x the
+  cap — the excess arrives evenly spaced, never as a burst, and a hard
+  rolling-day bound would need a timestamp per delivery (a table), not two
+  columns; (b) a refused attempt restarts the drain clock, so a sender who
+  keeps hammering never drains and the address stays shut until the flood
+  stops (the same posture the fixed window had — over the cap meant shut
+  until midnight — reached without the midnight). Consequence of (b): the
+  `email.capped` audit fires once per refusing *episode*, so a fast flood
+  audits once, while a sender pacing exactly at the drain rate can produce at
+  most one audit per drained credit (≤ DAILY_CAP/day, the same bound as the
+  mail itself).
+- TRANSCRIPT EMBEDS FROM USER-ROLE MESSAGES (QA verification finding 4):
+  VERIFIED CONTAINED, comment corrected, no behaviour change.
+  `chat.tsx` renders `ChatDashboardEmbeds` for every message role, so a
+  hostile inbound mail naming an existing `/apps/<slug>` does mount that
+  dashboard in the transcript. Re-verified against the code, all three legs
+  hold: `referencedSlugs` only matches apps the workspace list already
+  carries with `visibility === "public"` AND a `current_release_id` (the
+  sender cannot name an app into existence or reach a private one); the frame
+  is ADR 0004's `sandbox="allow-scripts"` opaque-origin iframe; and no `api`
+  or `bindings` prop is passed, so `SandboxFrame`'s dataset branch is dead
+  and only the release's frozen snapshots render. So: contained noise beside
+  a message the reader can see is an email. What was wrong was the *comment*
+  — "user content renders as plain text" was load-bearing for a security
+  argument and omitted the embed path. Both call-site comments now state the
+  clause and name the three legs, so widening any of them (private apps, live
+  bindings, a relaxed frame) reads as the finding it would be. The
+  services/inbound_email.py module docstring carries the same clause.
+- LOWs FROM THE VERIFICATION PASS (QA finding 5), RECORDED not built:
+  (a) the deliveries panel offers Redeliver on failed rows only, so the new
+  409 on a sent row is reachable only by API or script — if a "send it again"
+  affordance is ever wanted it needs its own button, its own confirm and its
+  own audit action, not a loosened retry; (b) the `email.capped` audit still
+  has no per-workspace ceiling of its own — the cap's episode rule bounds it
+  to ≤ DAILY_CAP/day per address, but a workspace with many minted addresses
+  under simultaneous flood multiplies that; fold into the cross-cutting
+  door-throttle entry above if abuse appears; (c) an address that is flooded
+  stays shut with no operator-visible signal beyond the audit row — the
+  Email-in panel shows no "capped, reopening in N minutes" state, so a member
+  wondering why mail stopped has to read the audit trail; (d) inbound cap
+  state is per address with no workspace-wide aggregate, so N addresses can
+  land N x DAILY_CAP a day between them.
 - SHARE-LINK AUTHZ (QA F9 LOW 2): decided and documented on sweep-qa-fixes —
   the flat model stands (any member mints/revokes any link; see the
   api/share_links.py router docstring for the grounds), intentionally beside
