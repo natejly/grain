@@ -12,7 +12,14 @@ member, `shared=False` — plus one user-role message with `run_id=""` (the
 door that made the model act on arbitrary external text would be an
 injection funnel; a member replies in-thread when they want the agent
 engaged. The body is untrusted but is ordinary user message content — the
-same trust level as typed text.
+same trust level as typed text — and the web renderer keeps it inert:
+chat.tsx prints user-role messages as plain text, never markdown, so a
+hostile mail cannot auto-load remote images (tracking pixels) or dress a
+phishing URL in friendly link text.
+
+Knowing an address means being able to land mail, so each address carries a
+`DAILY_CAP` — mail beyond it is a quiet 200 that writes nothing but the
+counter (and one audit row at the trip).
 
 Nothing here commits; the route owns the transaction.
 """
@@ -28,11 +35,16 @@ from typing import Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..clock import utcnow
 from ..models import Conversation, InboundAddress, Message, Space
 
 #: Everything a delivery may put into one message. Email bodies are unbounded
 #: attacker input; threads are for reading.
 MAX_BODY_CHARS = 10000
+
+#: Deliveries one address may land per UTC day. Anyone who knows an address
+#: can fill threads through it; the cap bounds a flood to a day's reading.
+DAILY_CAP = 200
 
 _TOKEN_PATTERN = re.compile(r"inbox\+([A-Za-z0-9_-]{8,128})@", re.IGNORECASE)
 _TAG_PATTERN = re.compile(r"<[^>]*>")
@@ -97,10 +109,35 @@ def strip_html(markup: str) -> str:
     """A plain-text rendering of an HTML body, for providers that send only HTML.
 
     A tag-stripper, not a browser: tags become spaces, entities are unescaped
-    afterwards (so `&lt;b&gt;` cannot re-become a tag), whitespace collapses.
+    afterwards, whitespace collapses. NOTE the ordering's limit: unescaping
+    after stripping means `&lt;b&gt;` comes out as the literal text `<b>` —
+    that text stays harmless only because chat.tsx renders user-role messages
+    (which inbound mail lands as) as plain text, never as markdown or HTML.
+    This function reduces noise; the renderer is the safety boundary. If user
+    messages ever gain rich rendering, revisit both together.
     """
     without_tags = _TAG_PATTERN.sub(" ", markup or "")
     return re.sub(r"[ \t\r\f\v]+", " ", html_lib.unescape(without_tags)).strip()
+
+
+def count_delivery(address: InboundAddress) -> bool:
+    """Count one landing attempt against the address's daily cap.
+
+    Rolls the counter to today's UTC date if needed, increments, and answers
+    whether this attempt is still under `DAILY_CAP`. Refused attempts count
+    too, so the day's first over-cap mail leaves the counter at exactly
+    `DAILY_CAP + 1` — the route audits that one trip and stays quiet (but
+    still counting) for the rest of the day. Two racing deliveries can both
+    read the same count; the cap is a bound, not an exact meter. Flushes
+    nothing; the route's commit persists the bump even when the mail is
+    refused.
+    """
+    today = utcnow().date().isoformat()
+    if address.daily_count_day != today:
+        address.daily_count_day = today
+        address.daily_count = 0
+    address.daily_count += 1
+    return address.daily_count <= DAILY_CAP
 
 
 def deliver(

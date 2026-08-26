@@ -3866,6 +3866,15 @@ export class WorkspaceApi {
     return this.request("/api/webhooks/deliveries");
   }
 
+  /** Requeue a failed delivery for a fresh round of send attempts. */
+  redeliverWebhookDelivery(deliveryId: string): Promise<WebhookDelivery> {
+    return this.request(
+      `/api/webhooks/deliveries/${deliveryId}/redeliver`,
+      { method: "POST" },
+      true,
+    );
+  }
+
   // --- Inbound email --------------------------------------------------------
   // Mintable inbox+<token>@<domain> addresses; mail sent to one lands as a
   // new personal thread. Owner-gated like the tokens beside it.

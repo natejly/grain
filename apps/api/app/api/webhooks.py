@@ -100,6 +100,19 @@ def _out(endpoint: WebhookEndpoint) -> WebhookEndpointOut:
     )
 
 
+def _delivery_out(row: WebhookDelivery) -> WebhookDeliveryOut:
+    return WebhookDeliveryOut(
+        id=row.id,
+        endpoint_id=row.endpoint_id,
+        event=row.event,
+        status=row.status,
+        attempts=row.attempts,
+        last_error=row.last_error,
+        created_at=row.created_at,
+        sent_at=row.sent_at,
+    )
+
+
 def _checked_events(events: List[str]) -> str:
     unknown = [event for event in events if event not in webhook_service.EVENTS]
     if unknown:
@@ -225,19 +238,48 @@ def list_deliveries(
         .order_by(WebhookDelivery.created_at.desc(), WebhookDelivery.id)
         .limit(MAX_DELIVERIES)
     )
-    return [
-        WebhookDeliveryOut(
-            id=row.id,
-            endpoint_id=row.endpoint_id,
-            event=row.event,
-            status=row.status,
-            attempts=row.attempts,
-            last_error=row.last_error,
-            created_at=row.created_at,
-            sent_at=row.sent_at,
+    return [_delivery_out(row) for row in rows]
+
+
+@router.post(
+    "/deliveries/{delivery_id}/redeliver", response_model=WebhookDeliveryOut
+)
+def redeliver_delivery(
+    delivery_id: str,
+    actor: Actor = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> WebhookDeliveryOut:
+    """Requeue one delivery for a fresh round of send attempts.
+
+    The escape hatch for a receiver that was down past the whole backoff
+    horizon: attempts reset, the row goes back to `pending`, and the next
+    tick claims it. Naturally idempotent (a pending row is already queued —
+    returned as-is, no key), and an endpoint that has since been deleted or
+    disabled still fails the requeued row closed at send time.
+    """
+    delivery = db.scalar(
+        select(WebhookDelivery).where(
+            WebhookDelivery.id == delivery_id,
+            WebhookDelivery.workspace_id == actor.workspace_id,
         )
-        for row in rows
-    ]
+    )
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.status != "pending":
+        delivery.status = "pending"
+        delivery.attempts = 0
+        delivery.next_attempt_at = None
+        record_audit(
+            db,
+            workspace_id=actor.workspace_id,
+            actor_id=actor.user_id,
+            action="webhook.redelivered",
+            resource_type="webhook_delivery",
+            resource_id=delivery.id,
+            detail={"endpoint_id": delivery.endpoint_id, "event": delivery.event},
+        )
+        db.commit()
+    return _delivery_out(delivery)
 
 
 @router.put("/{endpoint_id}", response_model=WebhookEndpointOut)

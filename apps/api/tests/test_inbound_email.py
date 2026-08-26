@@ -10,8 +10,11 @@ What has to stay true for a public mail door to be safe to have:
   — because a live probe must learn nothing about which addresses exist;
 - a delivery is a personal thread plus one user message with ``run_id=""``
   and NO agent turn: external text never makes the model act;
-- the provider's message id is the idempotency key — redelivery answers the
-  original thread and posts nothing twice;
+- the provider's message id is the idempotency key, scoped per address —
+  redelivery answers the original thread and posts nothing twice, while the
+  same mail to a sibling address still lands as its own thread;
+- each address caps its landings per UTC day — mail beyond the cap is the
+  same quiet 200, landing nothing, audited once at the trip;
 - the raw address appears exactly once, at mint time; the table holds only a
   sha256, and no later response echoes a token.
 
@@ -320,6 +323,84 @@ def test_a_redelivered_message_id_answers_the_original_and_posts_nothing_twice(
         )
     )
     assert count == 1
+
+
+def test_the_same_message_id_lands_once_per_address_not_once_per_workspace(
+    door, tenant, db
+):
+    """Dedup is scoped to the address: one mail sent to two of the
+    workspace's addresses is two threads, and a sender cannot pre-burn a
+    message id through one address to suppress later mail through another."""
+    client, _ = tenant
+    first_address = mint(client, label="First")
+    second_address = mint(client, label="Second")
+    shared_id = f"<{uuid.uuid4().hex}@mail.example.com>"
+
+    first = door.post(
+        "/api/hooks/email/inbound",
+        headers=bearer(),
+        json=delivery(first_address["address"], message_id=shared_id),
+    )
+    second = door.post(
+        "/api/hooks/email/inbound",
+        headers=bearer(),
+        json=delivery(second_address["address"], message_id=shared_id),
+    )
+    assert first.json()["accepted"] and second.json()["accepted"]
+    assert (
+        first.json()["conversation_id"] != second.json()["conversation_id"]
+    ), "the second address's mail must land as its own thread"
+
+
+def test_mail_beyond_the_daily_cap_is_a_quiet_200_that_lands_nothing(
+    door, tenant, db, monkeypatch
+):
+    client, identity = tenant
+    monkeypatch.setattr(address_service, "DAILY_CAP", 2)
+    minted = mint(client, label="Flooded")
+    for _ in range(2):
+        landed = door.post(
+            "/api/hooks/email/inbound",
+            headers=bearer(),
+            json=delivery(minted["address"]),
+        )
+        assert landed.status_code == 200 and landed.json()["accepted"] is True
+
+    over = door.post(
+        "/api/hooks/email/inbound",
+        headers=bearer(),
+        json=delivery(minted["address"]),
+    )
+    assert over.status_code == 200, over.text
+    assert over.json() == {
+        "accepted": False,
+        "conversation_id": "",
+        "message_id": "",
+    }
+    again = door.post(
+        "/api/hooks/email/inbound",
+        headers=bearer(),
+        json=delivery(minted["address"]),
+    )
+    assert again.json()["accepted"] is False
+
+    threads = db.scalar(
+        select(func.count(Conversation.id)).where(
+            Conversation.workspace_id == identity.workspace_id,
+            Conversation.title == "Email: Broken export",
+        )
+    )
+    assert threads == 2, "nothing beyond the cap may land"
+    # Audited exactly once, at the trip — a day-long flood cannot flood the
+    # audit trail too.
+    capped = db.scalars(
+        select(AuditEvent).where(
+            AuditEvent.workspace_id == identity.workspace_id,
+            AuditEvent.action == "email.capped",
+            AuditEvent.resource_id == minted["id"],
+        )
+    ).all()
+    assert len(capped) == 1
 
 
 # --------------------------------------------------------------------------

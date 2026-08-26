@@ -13,10 +13,13 @@ receiver gets "something happened to X", not the workspace's words.
 **delivery** rides the shared `POST /api/workflows/tick`. `claim_due` bumps
 `attempts` by conditional UPDATE (the house at-most-once-per-attempt claim)
 and the tick enqueues `send_delivery` per claimed row on a background task,
-so the HTTP conversations never delay the tick itself (the F5 QA note). Three
-claims without a 2xx and the row is `failed`, permanently. Retried sends make
-delivery at-least-once, as webhooks are everywhere; receivers key on the
-`delivery_id` in the body.
+so the HTTP conversations never delay the tick itself (the F5 QA note). A
+failed attempt stamps `next_attempt_at` from `RETRY_BACKOFF_MINUTES` — an
+exponential spread giving a receiver that is down for a deploy hours of
+horizon, not minutes — and `MAX_ATTEMPTS` claims without a 2xx mark the row
+`failed` (an owner can requeue it from the deliveries panel). Retried sends
+make delivery at-least-once, as webhooks are everywhere; receivers key on
+the `delivery_id` in the body.
 
 **SSRF policy, decided on purpose:** endpoint URLs go through
 `tools.validate_public_https_url` with `require_allowlist=False` — the
@@ -29,9 +32,14 @@ create AND at every send, plus `peer_is_blocked` on the socket actually used
 network. Requests are sent through the module-level `HTTP_TRANSPORT` seam so
 tests run offline with `httpx.MockTransport`.
 
-Every delivery is signed: `X-Grain-Signature` is the HMAC-SHA256 hexdigest of
-the exact body bytes under the endpoint's decrypted secret, so a receiver can
-prove the POST came from the workspace that holds that secret.
+Every delivery is signed Stripe-style. `X-Grain-Signature` is
+`t=<unix>,v1=<hex>` where `<hex>` is the HMAC-SHA256 hexdigest, under the
+endpoint's decrypted secret, of the timestamp, a literal `.`, and the exact
+body bytes. A receiver verifies by splitting the header on `,`, recomputing
+`HMAC-SHA256(secret, f"{t}.{raw_body}")`, comparing constant-time
+(`hmac.compare_digest`), and rejecting a `t` older than its tolerance
+(minutes, not hours) — the signed timestamp is what lets it refuse a
+replayed capture of a genuine POST.
 """
 from __future__ import annotations
 
@@ -39,10 +47,11 @@ import hashlib
 import hmac
 import json
 import logging
+from datetime import timedelta, timezone
 from typing import Any, Dict, List, Optional, cast
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -65,7 +74,12 @@ EVENTS = (
 )
 
 #: Claims (== send attempts) before a delivery is marked `failed` for good.
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 6
+
+#: Minutes a failed attempt N waits before attempt N+1 may be claimed — an
+#: exponential spread totalling ~5.6 hours of horizon, so a receiver that is
+#: down for a deploy window loses nothing.
+RETRY_BACKOFF_MINUTES = (1, 5, 15, 60, 240)
 
 #: How many pending rows one tick may claim — the sweep stays bounded however
 #: deep the backlog is; the rest waits a minute.
@@ -78,9 +92,18 @@ SIGNATURE_HEADER = "X-Grain-Signature"
 HTTP_TRANSPORT: Optional[httpx.BaseTransport] = None
 
 
-def sign(secret: str, body: bytes) -> str:
-    """The signature a receiver recomputes: HMAC-SHA256 hex over the body."""
-    return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+def sign(secret: str, body: bytes, *, timestamp: int) -> str:
+    """The header value a receiver verifies: `t=<unix>,v1=<hex>`.
+
+    `v1` is HMAC-SHA256 hex over the timestamp, a literal ``.``, and the
+    exact body bytes — signing the moment along with the payload is what
+    lets a receiver reject stale replays (the module docstring spells out
+    the verification recipe).
+    """
+    digest = hmac.new(
+        secret.encode(), f"{timestamp}.".encode() + body, hashlib.sha256
+    ).hexdigest()
+    return f"t={timestamp},v1={digest}"
 
 
 def emit(
@@ -128,12 +151,20 @@ def claim_due(db: Session, *, limit: int = CLAIM_BATCH) -> List[str]:
     value we read — of two racing ticks, one gets `rowcount == 1` and the
     attempt, the other moves on. Rows already claimed `MAX_ATTEMPTS` times
     whose send never concluded (a process died between claim and send) are
-    closed out as `failed` here so they cannot sit pending forever. Commits,
-    like every sweep claim.
+    closed out as `failed` here so they cannot sit pending forever. Rows
+    whose `next_attempt_at` is still in the future are invisible until their
+    backoff elapses; NULL means due now. Commits, like every sweep claim.
     """
+    moment = utcnow()
     rows = db.execute(
         select(WebhookDelivery.id, WebhookDelivery.attempts)
-        .where(WebhookDelivery.status == "pending")
+        .where(
+            WebhookDelivery.status == "pending",
+            or_(
+                WebhookDelivery.next_attempt_at.is_(None),
+                WebhookDelivery.next_attempt_at <= moment,
+            ),
+        )
         .order_by(WebhookDelivery.created_at, WebhookDelivery.id)
         .limit(limit)
     ).all()
@@ -217,8 +248,14 @@ def deliver(
     headers = {"Content-Type": "application/json"}
     if endpoint.secret_encrypted:
         try:
+            # utcnow is house naive-UTC; pin the zone before asking for the
+            # epoch, or the host's local zone would skew every `t=`.
             headers[SIGNATURE_HEADER] = sign(
-                decrypt_secret(endpoint.secret_encrypted, settings), body
+                decrypt_secret(endpoint.secret_encrypted, settings),
+                body,
+                timestamp=int(
+                    utcnow().replace(tzinfo=timezone.utc).timestamp()
+                ),
             )
         except Exception:  # noqa: BLE001 — an unreadable secret is a config fault
             return _fail(db, delivery, error="signing secret unreadable")
@@ -253,6 +290,13 @@ def _fail(
     delivery.last_error = error[:1000]
     if final or delivery.attempts >= MAX_ATTEMPTS:
         delivery.status = "failed"
+    else:
+        # Still retryable: schedule the next claim down the backoff spread.
+        # `attempts` was bumped at claim time, so attempt 1 indexes slot 0.
+        slot = min(max(delivery.attempts, 1), len(RETRY_BACKOFF_MINUTES)) - 1
+        delivery.next_attempt_at = utcnow() + timedelta(
+            minutes=RETRY_BACKOFF_MINUTES[slot]
+        )
     logger.warning(
         "webhook delivery %s attempt %s failed: %s",
         delivery.id,

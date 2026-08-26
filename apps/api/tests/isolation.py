@@ -2574,6 +2574,13 @@ ROUTE_CASES: List[RouteCase] = [
     ),
     RouteCase("GET", "/api/webhooks/deliveries", SCOPED),
     RouteCase(
+        "POST",
+        "/api/webhooks/deliveries/{delivery_id}/redeliver",
+        DENY,
+        path_ids={"delivery_id": "webhook_delivery"},
+        note="requeues (and confirms) another tenant's delivery row",
+    ),
+    RouteCase(
         "PUT",
         "/api/webhooks/{endpoint_id}",
         DENY,

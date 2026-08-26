@@ -8,14 +8,16 @@ What has to stay true for org egress to be safe to have:
   (the owner configured the URL; the policy is documented in
   services/webhooks) but a URL that resolves into this deployment's network
   is refused in both places;
-- every delivery is signed: X-Grain-Signature is HMAC-SHA256 of the exact
-  body bytes under the endpoint's decrypted secret, verifiable by the
-  receiver, and the secret itself is never echoed (`has_secret` only);
+- every delivery is signed Stripe-style: X-Grain-Signature is
+  `t=<unix>,v1=<HMAC-SHA256 of "t.body">` under the endpoint's decrypted
+  secret, verifiable (and replay-refusable) by the receiver, and the secret
+  itself is never echoed (`has_secret` only);
 - emit fans out only to enabled endpoints subscribed to that event in that
   workspace — an event in A writes nothing for B;
 - the tick's claim is a conditional UPDATE bumping `attempts`; a failure
-  stays pending for a later tick until MAX_ATTEMPTS closes it as `failed`,
-  and a sent row is never claimed again;
+  schedules `next_attempt_at` down the backoff spread and stays pending for
+  a later tick until MAX_ATTEMPTS closes it as `failed`, a sent row is never
+  claimed again, and an owner can requeue a failed row;
 - payload bodies carry ids and titles only — pinned here at the emit
   chokepoint (a workflow completing), not re-derived.
 
@@ -30,6 +32,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any, List
@@ -42,6 +45,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import create_engine, inspect, select
 
+from app.clock import utcnow
 from app.config import get_settings
 from app.database import SessionLocal, engine
 from app.main import app
@@ -271,6 +275,12 @@ def test_webhook_management_is_an_owners_surface(tenant):
         ).status_code
         == 403
     )
+    assert (
+        member_client.post(
+            "/api/webhooks/deliveries/not-a-real-id/redeliver"
+        ).status_code
+        == 403
+    )
 
 
 def test_update_toggles_and_revalidates(tenant, public_dns, db):
@@ -380,8 +390,17 @@ def test_a_delivery_is_signed_and_the_signature_verifies(
     assert len(ours) == 1
     request = ours[0]
     body = request.read()
-    expected = hmac.new(b"verify-me", body, hashlib.sha256).hexdigest()
-    assert request.headers["X-Grain-Signature"] == expected
+    # Stripe-style: t=<unix>,v1=<HMAC-SHA256 hex over "t.body"> — the signed
+    # timestamp is what lets a receiver refuse a replayed capture.
+    header = request.headers["X-Grain-Signature"]
+    t_part, v1_part = header.split(",")
+    assert t_part.startswith("t=") and v1_part.startswith("v1=")
+    timestamp = int(t_part[2:])
+    assert abs(timestamp - time.time()) < 300, "t must be the send moment"
+    expected = hmac.new(
+        b"verify-me", f"{timestamp}.".encode() + body, hashlib.sha256
+    ).hexdigest()
+    assert hmac.compare_digest(v1_part[3:], expected)
     parsed = json.loads(body)
     assert parsed["event"] == "run.completed"
     assert parsed["delivery_id"] == delivery_id
@@ -400,7 +419,7 @@ def test_a_delivery_is_signed_and_the_signature_verifies(
     assert delivery_id not in webhook_service.claim_due(db, limit=500)
 
 
-def test_a_failing_endpoint_retries_then_fails_for_good(
+def test_a_failing_endpoint_backs_off_retries_then_fails_for_good(
     tenant, public_dns, db, monkeypatch
 ):
     client, identity = tenant
@@ -409,16 +428,28 @@ def test_a_failing_endpoint_retries_then_fails_for_good(
     transport, seen = capture_transport(500)
     monkeypatch.setattr(webhook_service, "HTTP_TRANSPORT", transport)
 
-    for attempt in (1, 2, 3):
+    for attempt in range(1, webhook_service.MAX_ATTEMPTS + 1):
         assert delivery_id in webhook_service.claim_due(db, limit=500)
         webhook_service.send_delivery(delivery_id)
         row = load(db, delivery_id)
         assert row.attempts == attempt
         assert "500" in row.last_error
+        if attempt < webhook_service.MAX_ATTEMPTS:
+            # Each failure schedules the next attempt down the backoff
+            # spread, and the not-yet-due row is invisible to the sweep —
+            # the retry horizon is hours, not one tick per minute.
+            assert row.status == "pending"
+            assert row.next_attempt_at is not None
+            assert row.next_attempt_at > utcnow()
+            assert delivery_id not in webhook_service.claim_due(db, limit=500)
+            row.next_attempt_at = None  # the backoff elapses
+            db.commit()
     assert row.status == "failed"
     assert delivery_id not in webhook_service.claim_due(db, limit=500)
-    # Exactly three requests ever left for it.
-    assert len([r for r in seen if str(r.url).endswith("/sink")]) == 3
+    # Exactly MAX_ATTEMPTS requests ever left for it.
+    assert len(
+        [r for r in seen if str(r.url).endswith("/sink")]
+    ) == webhook_service.MAX_ATTEMPTS
 
 
 def test_an_internal_destination_is_refused_again_at_send(
@@ -468,11 +499,44 @@ def test_exhausted_claims_are_closed_out_by_the_sweep(tenant, public_dns, db):
     client, identity = tenant
     created = make_endpoint(client, secret="")
     delivery_id = emit_one(db, identity, created["id"])
-    for _ in range(3):
+    for _ in range(webhook_service.MAX_ATTEMPTS):
         assert delivery_id in webhook_service.claim_due(db, limit=500)
-        # ...and the send never happens.
+        # ...and the send never happens (no failure, so no backoff stamp —
+        # the row stays immediately claimable).
     assert delivery_id not in webhook_service.claim_due(db, limit=500)
     assert load(db, delivery_id).status == "failed"
+
+
+def test_a_failed_delivery_can_be_requeued_and_then_succeeds(
+    tenant, public_dns, db, monkeypatch
+):
+    """Redeliver is the escape hatch past the whole backoff horizon: attempts
+    reset, the row is pending again, and the next claim sends it afresh."""
+    client, identity = tenant
+    created = make_endpoint(client, secret="")
+    delivery_id = emit_one(db, identity, created["id"])
+    row = load(db, delivery_id)
+    row.status = "failed"
+    row.attempts = webhook_service.MAX_ATTEMPTS
+    row.last_error = "endpoint answered 500"
+    db.commit()
+
+    requeued = client.post(f"/api/webhooks/deliveries/{delivery_id}/redeliver")
+    assert requeued.status_code == 200, requeued.text
+    assert requeued.json()["status"] == "pending"
+    assert requeued.json()["attempts"] == 0
+
+    # Requeueing an already-pending row is a quiet no-op, not a reset race.
+    again = client.post(f"/api/webhooks/deliveries/{delivery_id}/redeliver")
+    assert again.status_code == 200, again.text
+    assert again.json() == requeued.json()
+
+    transport, seen = capture_transport(200)
+    monkeypatch.setattr(webhook_service, "HTTP_TRANSPORT", transport)
+    assert delivery_id in webhook_service.claim_due(db, limit=500)
+    webhook_service.send_delivery(delivery_id)
+    assert load(db, delivery_id).status == "sent"
+    assert len([r for r in seen if str(r.url).endswith("/sink")]) == 1
 
 
 # --------------------------------------------------------------------------

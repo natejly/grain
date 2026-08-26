@@ -7,7 +7,16 @@ import type {
   WebhookEndpoint,
   WebhookEvent,
 } from "@workspace/api-client";
-import { Check, Copy, KeyRound, Mail, Plus, Trash2, X } from "lucide-react";
+import {
+  Check,
+  Copy,
+  KeyRound,
+  Mail,
+  Plus,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
 import {
@@ -81,6 +90,15 @@ export function WebhooksView({ setError }: { setError: (message: string) => void
     }
   }
 
+  async function redeliver(deliveryId: string) {
+    try {
+      await api.redeliverWebhookDelivery(deliveryId);
+      await refreshDeliveries();
+    } catch (caught) {
+      setError(describeError(caught, "Could not requeue the delivery"));
+    }
+  }
+
   if (loaded && forbidden) {
     return (
       <div className="content-page">
@@ -115,7 +133,11 @@ export function WebhooksView({ setError }: { setError: (message: string) => void
         onChanged={() => void refreshDeliveries()}
       />
 
-      <DeliveriesSection deliveries={deliveries} endpoints={endpoints} />
+      <DeliveriesSection
+        deliveries={deliveries}
+        endpoints={endpoints}
+        onRedeliver={(id) => void redeliver(id)}
+      />
     </div>
   );
 }
@@ -186,7 +208,9 @@ function TokensSection({
       <p className="field-hint">
         A token lets an external system trigger workflows and post notes into
         threads as you, over <code>/api/hooks</code>. It carries your access —
-        revoke it the moment it stops being needed.
+        revoke it the moment it stops being needed. These are the same tokens
+        the MCP page manages; minting or revoking in either place applies to
+        both.
       </p>
 
       <form className="mcp-form-row" onSubmit={(event) => void mint(event)}>
@@ -320,8 +344,9 @@ function InboundAddressesSection({
       </header>
       <p className="field-hint">
         Mail sent to a minted address lands as a new personal thread of yours
-        — nothing runs on its account until you reply. The address is the
-        secret: revoke it if it leaks.
+        — nothing runs on its account until you reply. Only the mail&apos;s
+        text lands: attachments are dropped. The address is the secret:
+        revoke it if it leaks.
       </p>
 
       <form className="mcp-form-row" onSubmit={(event) => void mint(event)}>
@@ -458,8 +483,12 @@ function EndpointsSection({
       </header>
       <p className="field-hint">
         Workspace events — runs finishing, approvals parking, monitors
-        tripping — are POSTed to each enabled URL, signed with its secret.
-        Payloads carry ids and titles only, never message content.
+        tripping — are POSTed to each enabled URL. Payloads carry ids and
+        titles only, never message content. Each delivery is signed:{" "}
+        <code>X-Grain-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</code> where{" "}
+        <code>v1</code> is HMAC-SHA256 of{" "}
+        <code>{"<t>.<raw body>"}</code> under your secret — verify it
+        constant-time and reject a stale <code>t</code> to stop replays.
       </p>
 
       {adding && (
@@ -630,9 +659,11 @@ function AddEndpointForm({
 function DeliveriesSection({
   deliveries,
   endpoints,
+  onRedeliver,
 }: {
   deliveries: WebhookDelivery[];
   endpoints: WebhookEndpoint[];
+  onRedeliver: (deliveryId: string) => void;
 }) {
   const names = new Map(
     endpoints.map((endpoint) => [endpoint.id, endpoint.name || endpoint.url]),
@@ -661,6 +692,15 @@ function DeliveriesSection({
                   {deliveryLabel(delivery)}
                 </span>
               </div>
+              {delivery.status === "failed" && (
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => onRedeliver(delivery.id)}
+                >
+                  <RotateCcw size={12} /> Redeliver
+                </button>
+              )}
             </li>
           ))}
         </ul>

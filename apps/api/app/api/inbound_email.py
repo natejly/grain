@@ -131,7 +131,7 @@ def receive_email(
         # are real. Nothing was written, nothing is to see.
         return InboundEmailOut(accepted=False)
 
-    replay_key = _delivery_key(payload.message_id)
+    replay_key = _delivery_key(address.id, payload.message_id)
     if replay_key:
         replay = find_replay(
             db,
@@ -151,6 +151,29 @@ def receive_email(
                 conversation_id=message.conversation_id,
                 message_id=message.id,
             )
+
+    if not address_service.count_delivery(address):
+        # Over the address's daily cap: the same quiet 200 as an unknown
+        # token — a flood learns nothing and the provider stops retrying.
+        # Audited exactly once, at the trip (the counter's first step past
+        # the cap), so a day-long flood cannot flood the audit trail too.
+        if address.daily_count == address_service.DAILY_CAP + 1:
+            record_audit(
+                db,
+                workspace_id=address.workspace_id,
+                actor_id=address.created_by,
+                action="email.capped",
+                resource_type="inbound_address",
+                resource_id=address.id,
+                detail={
+                    "label": address.label,
+                    "cap": address_service.DAILY_CAP,
+                },
+            )
+        # The commit persists the counter bump (and the one audit row) even
+        # though no mail lands.
+        db.commit()
+        return InboundEmailOut(accepted=False)
 
     body = payload.text or address_service.strip_html(payload.html)
     conversation, message = address_service.deliver(
@@ -187,17 +210,23 @@ def receive_email(
     )
 
 
-def _delivery_key(message_id: str) -> str:
+def _delivery_key(address_id: str, message_id: str) -> str:
     """The idempotency key for a provider message id; "" when there is none.
 
     Hashed rather than truncated: the column holds 200 characters, provider
     ids have no length contract, and two long ids sharing a prefix must not
-    collapse into one delivery.
+    collapse into one delivery. Scoped per address (the address id salts the
+    hash): one mail sent to two of the workspace's addresses is two
+    deliveries, and a sender who has seen a message id from one address
+    cannot pre-burn it to suppress later mail through another.
     """
     trimmed = message_id.strip()
     if not trimmed:
         return ""
-    return "sha256:" + hashlib.sha256(trimmed.encode()).hexdigest()
+    return (
+        "sha256:"
+        + hashlib.sha256(f"{address_id}:{trimmed}".encode()).hexdigest()
+    )
 
 
 @router.get("/inbound-addresses", response_model=List[InboundAddressOut])

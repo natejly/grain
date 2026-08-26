@@ -461,7 +461,8 @@ function ExposeWorkspacePanel() {
           Mint a token and point any MCP client (Claude Code, Codex, your own)
           at <code>/api/mcp</code> with it. The agent gets this workspace&apos;s
           read-only research tools — search, datasets, graph — and can change
-          nothing.
+          nothing. These are the same tokens the API &amp; Webhooks page
+          manages; minting or revoking in either place applies to both.
         </p>
       </header>
 

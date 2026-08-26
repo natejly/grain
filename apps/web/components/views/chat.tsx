@@ -1405,6 +1405,14 @@ export function ChatView({
                       </div>
                     </div>
                   ) : (
+                    /* User-authored content is plain text on purpose, and
+                       this branch is a security boundary: inbound email
+                       lands as user-role messages (run_id ""), so rendering
+                       markdown here would let a hostile mail auto-load
+                       remote images (tracking pixels) or dress a phishing
+                       URL in friendly link text. services/inbound_email.py's
+                       strip_html contract leans on exactly this — change the
+                       two together or not at all. */
                     <p>{message.content}</p>
                   )}
                 </div>

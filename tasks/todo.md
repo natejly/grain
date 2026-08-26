@@ -1030,6 +1030,40 @@ was timing:
   `settings.primary_web_origin`, so a raise is a programming error surfacing;
   text/HTML parity stays a caller obligation, now stated in the module
   docstring.
+- F11 webhooks (QA MEDIUMs 3-4): deliveries are now signed Stripe-style —
+  `X-Grain-Signature: t=<unix>,v1=HMAC-SHA256("t.body")` — so receivers can
+  verify origin AND refuse replays (verification recipe in the
+  services/webhooks docstring and the view copy); retry got a real horizon:
+  MAX_ATTEMPTS 6 over an exponential `next_attempt_at` spread (1/5/15/60/240
+  min ≈ 5.6h, migration 0065_delivery_hardening) plus an owner-gated
+  Redeliver affordance on failed rows in the deliveries panel. LOWs
+  RECORDED, not built: (QA 5) the caller-supplied signing secret has no min
+  length and no rotation path (PUT lacks a secret field; delete+recreate
+  loses the trail) — consider server-minted show-once secrets to match the
+  ApiToken posture; (QA 6) no endpoint auto-disable after sustained failure
+  and no webhook_deliveries retention — retention-sweep candidate; (QA 7)
+  the tick's claim is global FIFO 25/tick with no per-workspace fairness.
+- F12 inbound email (QA 8-12): per-address daily cap
+  (services/inbound_email.DAILY_CAP = 200/UTC day; beyond it the same quiet
+  200 as an unknown token, landing nothing, audited exactly once at the
+  trip); message-id dedup now scoped per address (the address id salts the
+  idempotency hash — pre-burning an id cannot suppress a sibling address's
+  mail; keys recorded before this change are simply orphaned, worst case one
+  historical mail could land again once). QA 9 (remote images / phishing
+  links) VERIFIED CLOSED at the renderer: inbound mail lands as user-role
+  messages and chat.tsx renders those as plain text, never markdown — no
+  image loads, no clickable links; now annotated as a security boundary in
+  chat.tsx and in strip_html's docstring (QA 12 — the "cannot re-become a
+  tag" claim is honestly the renderer's guarantee, stated as such).
+  Attachments-dropped note added to the Email-in panel copy (QA 10). NOT
+  built: SPF/DKIM verdict surfacing (QA 8 half) — the generic provider
+  payload carries no verdict field yet; add one when a concrete provider is
+  wired.
+- Cross-cutting (QA 13, RECORDED): neither machine door (hooks trigger,
+  inbound mail beyond the new per-address cap) is rate limited per
+  credential — a leaked API token can queue workflow runs bounded only by
+  spend ceilings. Fold into a shared door-throttle (the auth_rate_limiter
+  pattern F9 reused) if abuse appears.
 
 ## Merge notes (feature-sweep, 2026-08-23)
 
@@ -1040,6 +1074,11 @@ was timing:
   0050_marketplace/0051_listing_installs; single head confirmed. The QA fix
   pass added 0064_open_alert_unique on that head. Fixes now land via branch
   sweep-qa-fixes + PR onto main — no further renumbering expected.
+- TWO TOKEN UIs (QA F11 LOW 2): SETTLED on sweep-qa-fixes — post-merge both
+  mcp.tsx's token panel and webhooks.tsx's TokensSection manage the same
+  api_tokens table; kept both on purpose (each page is where its audience
+  already is) and cross-linked the copy in each. Fold into one shared
+  component only if a third surface appears.
 - SHARE-LINK AUTHZ (QA F9 LOW 2): decided and documented on sweep-qa-fixes —
   the flat model stands (any member mints/revokes any link; see the
   api/share_links.py router docstring for the grounds), intentionally beside

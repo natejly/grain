@@ -26190,6 +26190,65 @@
         ]
       }
     },
+    "/api/webhooks/deliveries/{delivery_id}/redeliver": {
+      "post": {
+        "description": "Requeue one delivery for a fresh round of send attempts.\n\nThe escape hatch for a receiver that was down past the whole backoff\nhorizon: attempts reset, the row goes back to `pending`, and the next\ntick claims it. Naturally idempotent (a pending row is already queued \u2014\nreturned as-is, no key), and an endpoint that has since been deleted or\ndisabled still fails the requeued row closed at send time.",
+        "operationId": "redeliver_delivery_api_webhooks_deliveries__delivery_id__redeliver_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "title": "Delivery Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDeliveryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Redeliver Delivery",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
     "/api/webhooks/{endpoint_id}": {
       "delete": {
         "description": "Remove the endpoint. Its delivery history stays \u2014 the trail outlives\nthe destination, and any still-pending rows become skips at send time.",

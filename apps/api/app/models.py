@@ -2667,6 +2667,12 @@ class WebhookDelivery(Base):
     last_error: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # When the next send attempt may be claimed; NULL means "due now". A
+    # failed attempt stamps this from the backoff schedule in
+    # services/webhooks, giving a down receiver hours of retry horizon.
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
 
 
 class InboundAddress(Base):
@@ -2695,6 +2701,13 @@ class InboundAddress(Base):
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # The per-UTC-day delivery counter (refused attempts included) and the
+    # day it counts — the flood cap the inbound-email door checks
+    # (services/inbound_email.DAILY_CAP).
+    daily_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    daily_count_day: Mapped[str] = mapped_column(
+        String(10), default="", server_default=""
+    )
 
 
 # ---------------------------------------------------------------------------
