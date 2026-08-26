@@ -875,19 +875,24 @@ label,
    `pointer-events` tracks `opacity` in every rule below, and that pairing is
    deliberate: `opacity: 0` alone leaves an element fully hit-testable, so at
    rest an invisible cluster still swallowed every click aimed at the row
-   underneath it. Unhittable at rest, a click with no hover in play reaches
-   `.thread-open` instead and opens the thread, which is what clicking a
-   conversation row should do.
-   This is belt to the braces of the in-flow rule below, which is what actually
-   fixes the clicks: a real pointer must cross the row to click it, and that
-   hover puts the cluster back in flow before the click lands. What `none` at
-   rest covers is a click with no pointer movement before it — the rail PREPENDS
-   threads, so a row can arrive under an already-stationary cursor. Chromium was
-   measured to re-run `:hover` on that layout change, so there the icons do
-   appear first; engines that do not would otherwise fire an unseen Delete.
-   Hover targets the parent `.thread`, never the cluster, so the parent raises
-   opacity and pointer-events together and the first click after a hover is
-   live — verified, not assumed. */
+   underneath it. Hover targets the parent `.thread`, never the cluster, so the
+   parent raises opacity and pointer-events together and the first click after
+   a hover is live — verified, not assumed.
+
+   WHAT IT DOES NOT DO, corrected after measurement: this does NOT make a
+   no-hover click safe. An earlier version of this comment claimed it did, on
+   the strength of a probe that hit-tested a STATIONARY point — and a pointer is
+   never stationary at the moment of a press. Dispatching real events at a row's
+   right edge with no prior hover shows pointerdown, mousedown and click all
+   landing on `.thread-delete`, raising its confirm: the mouse's ARRIVAL fires
+   `:hover`, which restores `pointer-events: auto` before the button-down lands.
+   `elementFromPoint` agrees the resting pixel belongs to `.thread-open`; it is
+   measuring an instant that never occurs during a click.
+   So the row's right end is a live icon strip from the first pointer contact,
+   and at six actions that is ~162px of a 227px row. A confirm dialog is the
+   only thing standing in front of Delete. The real fix is fewer actions in the
+   row — an overflow menu keeping Delete inline and demoting the rare ones —
+   not another positioning scheme. Recorded rather than done. */
 .thread-actions {
   position: absolute;
   top: 0;
