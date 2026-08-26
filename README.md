@@ -103,7 +103,7 @@ open the root `.env` file in an editor and add:
 ```dotenv
 MODEL_PROVIDER=openai
 OPENAI_API_KEY=your-key
-OPENAI_MODEL=gpt-5.5
+OPENAI_MODEL=gpt-5.6-sol
 OPENAI_REASONING_EFFORT=low
 ```
 
