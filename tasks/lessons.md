@@ -676,3 +676,19 @@ or not, and an overlay caret at position 0 looks identical aligned or drifting.
 A throttled heartbeat queued behind a `leave` lands AFTER the DELETE and
 recreates the row, leaving a ghost on the surface until the TTL. Any "I'm
 gone" signal sends immediately and cancels whatever was pending.
+- When a manual workaround is needed to make a deploy work, that workaround IS
+  part of the procedure — put it in the automation immediately, in the same
+  sitting. I discovered by hand that the API task (1024 MiB) and the migrate
+  task (512 MiB) cannot coexist on a t4g.small (ECS registers 1334 MiB), and
+  scaled the service to 0 to get the migration through. Then I wrote
+  deploy-uat.yml and deploy-prod.yml with a bare `run-task` and no window, so
+  both would have failed on their first run — `run-task` returns empty tasks[]
+  with a RESOURCE:MEMORY failure, `--query 'tasks[0].taskArn'` yields the string
+  "None", and `aws ecs wait` dies on "taskId length should be one of [32,36]".
+  A peer QA session caught it before the merge. The tell I should have heeded:
+  I had already written the scale-to-0 dance twice in throwaway scripts.
+- Query a placement failure, don't infer it from a hang. `describe-container-
+  instances` reporting remainingResources MEMORY=310 against a 512 MiB request
+  is a one-command answer to "why won't this task start", and the same call
+  exposes stale accounting (memory still reserved with runningTasksCount=0),
+  which an ECS agent restart clears.

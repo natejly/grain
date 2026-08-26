@@ -423,6 +423,20 @@ aws ecs update-service --cluster "$CLUSTER" --service grain-api --desired-count 
 aws ecs update-service --cluster "$CLUSTER" --service grain-api --desired-count 1
 ```
 
+**On the current instance size that window is mandatory, not a choice.** The API
+task reserves 1024 MiB and the migration task 512, while a `t4g.small` registers
+1334 MiB with ECS — they cannot coexist. With the service up, `run-task` does not
+block and wait: it returns *successfully* with an empty `tasks[]` and a
+`failures[]` entry reading `RESOURCE:MEMORY … (512 requested, 310 available)`.
+The `--query 'tasks[0].taskArn'` above then yields the literal string `None`, and
+`aws ecs wait` fails with `taskId length should be one of [32,36]` — a confusing
+error a long way from its cause. Scale to zero first, and retry placement for a
+few rounds afterwards, because the draining API task holds its reservation for a
+moment after the service reports stable. `.github/workflows/deploy-uat.yml` and
+`deploy-prod.yml` do exactly this, with a trap that restores `desired-count 1`
+if the migration fails. Raise `instance_type` and the two memory variables
+together if you want the overlap back.
+
 ---
 
 ## 8. The sandbox image
@@ -584,6 +598,24 @@ Re-apply with the previous `api_image_tag`. ECR tags are immutable, so the
 earlier image is exactly what shipped. If the rollback crosses a migration, roll
 the schema back explicitly first (`alembic downgrade <rev>` through the migrate
 task's command override) — nothing does that automatically.
+
+**Not every older tag is a safe rollback target, and the boundary is not a
+migration.** `alembic_version.version_num` is `VARCHAR(32)` wherever Alembic
+created it, but three revision ids in this tree are longer — the longest,
+`0014_memory_supersession_and_chunk_vectors`, is 42 characters. PostgreSQL
+enforces the width and raises `StringDataRightTruncation`; SQLite ignores it,
+which is why development and CI never saw this and the first production
+migration died at `0013 -> 0014`.
+
+The repair lives in `alembic/env.py`'s `run_migrations_online()`, which widens
+(or pre-creates) the column before `context.run_migrations()`. It is therefore a
+property of **the image**, not of the schema: rolling back to any image built
+before that fix — anything at or below tag `2026-08-25-462f03c` — reintroduces
+the bug. An already-migrated database will not notice, because its column is
+already wide. A *fresh* one will fail at `0014`, so a rolled-back image plus a
+restored-from-snapshot database is the combination that bites. Check that the tag
+you are rolling back to contains the `_widen_version_table` helper before you
+trust it with a new database.
 
 ### Get a shell
 
