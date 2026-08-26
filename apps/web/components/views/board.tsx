@@ -31,6 +31,8 @@ export type BoardViewProps = {
   todoOps: TodoOps;
   /** The shell's one favorites list; without it the headers offer no star. */
   favorites?: FavoritesApi;
+  /** Who is looking, for the claim chips — see TodoChecklistProps.selfId. */
+  selfId?: string;
 };
 
 /** The glyph an entry wears — the whole visible difference between the shapes. */
@@ -481,6 +483,7 @@ export function BoardView({
   columnOps,
   todoOps,
   favorites,
+  selfId,
 }: BoardViewProps) {
   const [name, setName] = useState("");
   const [shape, setShape] = useState<"board" | "list">("board");
@@ -544,6 +547,7 @@ export function BoardView({
               <TodoChecklist
                 list={board}
                 ops={gatedTodoOps}
+                selfId={selfId}
                 // The list IS a board, so its header carries the same star —
                 // threaded in because the checklist's chat mount has none.
                 headerExtra={
@@ -557,6 +561,7 @@ export function BoardView({
                   )
                 }
               />
+
               {/* The graduation affordance: the same Add column a board offers.
                   Grow a second column and this entry redraws as a board — same
                   place, same items, ticks intact. */}

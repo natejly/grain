@@ -8,6 +8,7 @@ from sqlalchemy import case, select, update
 from sqlalchemy.orm import Session
 
 from ...models import Board, BoardCard, BoardColumn
+from .. import coworking
 
 DEFAULT_COLUMNS = ("Todo", "In progress", "Done")
 MAX_CARDS_PER_BOARD = 500
@@ -343,6 +344,9 @@ def snapshot(db: Session, board: Board) -> Dict[str, Any]:
                 # that an item ticked off as a todo is still visibly done after
                 # its board grows a second column and becomes a kanban.
                 "done": card.done_at is not None,
+                # The claim rides the same snapshot (expired leases read as
+                # none), so "who is on this" needs no second request either.
+                **coworking.claim_snapshot(card),
             }
         )
     return {

@@ -14,6 +14,7 @@ import {
   useCollapsiblePane,
 } from "./collapsible-pane";
 import { CommandPalette } from "./command-palette";
+import { CoworkingStrip } from "./coworking-strip";
 import { CreateMenu } from "./create-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
 import { SystemStatus } from "./system-status";
@@ -136,6 +137,7 @@ function writeStored(key: string, value: string) {
 export function Workspace() {
   const {
     bootstrap,
+    coworking,
     conversations,
     activeConversation,
     messages,
@@ -1247,6 +1249,13 @@ export function Workspace() {
             {showSections && <span>{activeGroup.label}</span>}
             <strong>{view === "chat" ? activeTitle : PAGE_TITLES[view]}</strong>
           </div>
+          {/* Live coworking: agents mid-run and teammates with a surface
+              open, visible from anywhere in the shell. Renders nothing when
+              the workspace is quiet. */}
+          <CoworkingStrip
+            coworking={coworking}
+            selfId={bootstrap?.identity.user_id ?? ""}
+          />
           <div className="topbar-actions">
             <CreateMenu create={create} />
             <WorkspaceSettingsMenu
@@ -1348,7 +1357,11 @@ export function Workspace() {
                   conversationId: activeConversation,
                   conversationTitle: activeTitle,
                 }}
-                todos={{ lists: todoLists, ops: todoOps }}
+                todos={{
+                  lists: todoLists,
+                  ops: todoOps,
+                  selfId: bootstrap?.identity.user_id,
+                }}
                 pinning={pinning}
                 endRef={endRef}
                 selectedAgentId={selectedAgentId}
@@ -1551,6 +1564,7 @@ export function Workspace() {
             pendingEdits={pendingEdits}
             decidePendingEdit={decidePendingEdit}
             favorites={favorites}
+            coworking={coworking}
             chat={{
               agentId: bootstrap?.default_agent_id,
               sources,
@@ -1578,6 +1592,7 @@ export function Workspace() {
             columnOps={boardColumnOps}
             todoOps={todoOps}
             favorites={favorites}
+            selfId={bootstrap?.identity.user_id}
           />
         )}
 

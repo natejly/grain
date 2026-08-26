@@ -198,7 +198,7 @@ export type ChatViewProps = {
    * The workspace's todo lists, so a turn that touched one can show it as
    * checkboxes here instead of sending the reader to another page.
    */
-  todos?: { lists: Board[]; ops: TodoOps };
+  todos?: { lists: Board[]; ops: TodoOps; selfId?: string };
   /**
    * The finish-the-job bar on a chart-shaped tool card: pin the dashboard the
    * turn authored without leaving the thread, or — for a chart that is only a
@@ -972,7 +972,7 @@ function ToolCallCard({
 }: {
   call: AgentToolCall;
   decide: ToolDecision;
-  todos?: { lists: Board[]; ops: TodoOps };
+  todos?: { lists: Board[]; ops: TodoOps; selfId?: string };
   pinning?: DashboardPinning;
   /**
    * The first-run teaching line above the Approve/Deny pair. ChatView decides
@@ -1047,6 +1047,7 @@ function ToolCallCard({
         <TodoChecklist
           list={touchedList}
           ops={todos.ops}
+          selfId={todos.selfId}
           compact
           caption={
             call.name === "todo_check"

@@ -385,11 +385,17 @@ def test_an_expiry_in_the_past_is_refused_at_the_form(client):
 def test_the_public_window_is_rate_limited_per_address(client, anonymous_client):
     """Every hit — hit or miss — spends the address's budget: a shared
     dashboard is live compute, and the token path is the credential, so misses
-    must be priced too. The limiter resets per test (conftest autouse)."""
+    must be priced too. The limiter resets per test (conftest autouse).
+
+    The budget is the shared PUBLIC tier (`api/ratelimit.public_rate_limit`),
+    not the credential-endpoint knobs this route borrowed before the security
+    audit landed a general limiter: an anonymous content surface a whole office
+    reads from behind one NAT address needs more headroom than a login form.
+    """
     document = make_document(client)
     created = share(client, "document", document["id"])
     settings = get_settings()
-    for _ in range(settings.auth_rate_limit_attempts):
+    for _ in range(settings.rate_limit_public_attempts):
         assert anonymous_client.get("/shared/not-a-token").status_code == 404
     # Budget spent: even the working link is refused, with a 429 not a 404.
     blocked = anonymous_client.get(f"/shared/{created['token']}")

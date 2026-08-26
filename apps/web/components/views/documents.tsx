@@ -22,14 +22,21 @@ import type {
   Source,
   WorkspaceDocument,
 } from "@workspace/api-client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
 import { ShareLinksModal } from "../share-links-modal";
+import type { CoworkingState } from "../use-coworking";
 import { FavoriteStar, type FavoritesApi } from "./favorites";
 import { useDocumentThread } from "../use-document-thread";
+import {
+  isEditing,
+  LiveEditBanner,
+  liveDraftOf,
+  RemoteCaretLayer,
+} from "./document-live";
 import {
   PendingEditList,
   type PendingDecision,
@@ -62,6 +69,12 @@ export type DocumentsViewProps = {
   favorites?: FavoritesApi;
   /** What the side chat needs to be the same chat as the rail's. */
   chat?: DocumentChatDeps;
+  /**
+   * The shell's live-coworking channel. Optional like `chat`: without it the
+   * editor is exactly the editor it always was — no carets, no live drafts,
+   * no heartbeats sent.
+   */
+  coworking?: CoworkingState;
 };
 
 /**
@@ -134,6 +147,7 @@ export function DocumentsView({
   decidePendingEdit,
   favorites,
   chat,
+  coworking,
 }: DocumentsViewProps) {
   const [draft, setDraft] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -147,6 +161,9 @@ export function DocumentsView({
   const [listCollapsed, toggleList] = useCollapsiblePane("documents-list");
   const [newTitle, setNewTitle] = useState("");
   const [newKind, setNewKind] = useState<DocumentKind>("markdown");
+  // The caret overlay mirrors the textarea's scroll; the ref is how the
+  // textarea's onScroll reaches it without a re-render per scrolled pixel.
+  const caretScrollRef = useRef<HTMLDivElement>(null);
   // Which folder a new file lands in. Set by "New file here" in the tree, so
   // the answer is whatever the user was pointing at rather than always the top.
   const [newFolder, setNewFolder] = useState("");
@@ -238,6 +255,72 @@ export function DocumentsView({
       the proposal and stale its hunks, which is exactly the concurrent-write
       race the pause exists to prevent. */
   const editingPaused = Boolean(reviewable && decidePendingEdit);
+
+  // --- Live coworking over this document -----------------------------------
+  // `report`/`leave` are the hook's stable callbacks, deliberately extracted:
+  // the `coworking` object changes identity on every presence frame, and
+  // depending on it would tear presence down per frame.
+  const surface = active && coworking ? `document:${active.id}` : "";
+  const report = coworking?.report;
+  const leaveSurface = coworking?.leave;
+  const typingTimer = useRef<number | null>(null);
+
+  // Arrive when a document opens, and say goodbye when it closes — the chips
+  // and carets elsewhere clear in one tick instead of a TTL.
+  useEffect(() => {
+    if (!surface || !report || !leaveSurface) return;
+    report(surface, { typing: false });
+    return () => leaveSurface(surface);
+  }, [surface, report, leaveSurface]);
+
+  // A save (dirty going false) retires the live draft: what was streaming as
+  // "unsaved reality" is now simply the document.
+  useEffect(() => {
+    if (!surface || !report || dirty) return;
+    report(surface, { typing: false });
+  }, [dirty, surface, report]);
+
+  /**
+   * The heartbeat a keystroke or a caret move sends: position, selection,
+   * whether keys are landing, and — while typing — the draft itself, which is
+   * what a follower renders to watch the text arrive. The idle timer drops
+   * `typing` (keeping the draft) so a pause reads as a pause.
+   */
+  function reportEditing(
+    element: HTMLTextAreaElement,
+    typing: boolean,
+    text: string,
+  ) {
+    if (!surface || !report) return;
+    const state = {
+      cursor: element.selectionStart,
+      selection_start: element.selectionStart,
+      selection_end: element.selectionEnd,
+      typing,
+      ...(typing || dirty ? { draft: text } : {}),
+    };
+    report(surface, state);
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    if (typing) {
+      typingTimer.current = window.setTimeout(() => {
+        report(surface, { ...state, typing: false });
+      }, 2_500);
+    }
+  }
+
+  const others = surface && coworking ? coworking.othersOn(surface) : [];
+  const liveEditor = liveDraftOf(others);
+  const editingOther = others.find(isEditing) ?? null;
+  /**
+   * Following: they type, you watch — their draft fills the panes live, and
+   * your first keystroke takes a private copy of it to edit. Only while this
+   * pane has no unsaved work of its own; two dirty drafts is the clash
+   * banner's business, not a silent swap's.
+   */
+  const following = Boolean(liveEditor) && !dirty && !editingPaused;
+  const clash = Boolean(editingOther) && dirty;
+  const shownText =
+    following && liveEditor ? String(liveEditor.state.draft) : draft;
 
   // Cmd/Ctrl+S saves the open document — the shortcut every editor teaches,
   // caught at the document level so it works from the textarea and from the
@@ -542,22 +625,55 @@ export function DocumentsView({
               />
             </>
           ) : (
-            <div className="document-panes">
-              <textarea
-                className="document-source"
-                value={draft}
-                spellCheck
-                readOnly={reviewParked}
-                aria-label="Document source"
-                onChange={(event) => {
-                  setDraft(event.target.value);
-                  setDirty(true);
-                }}
-              />
-              <div className="document-preview">
-                <DocumentBody kind={active.kind} content={draft} />
+            <>
+              {(following || clash) && editingOther && (
+                <LiveEditBanner
+                  editor={liveEditor ?? editingOther}
+                  following={following}
+                />
+              )}
+              <div className="document-panes">
+                <div className="document-source-wrap">
+                  <textarea
+                    className={
+                      following ? "document-source following" : "document-source"
+                    }
+                    value={shownText}
+                    spellCheck
+                    readOnly={reviewParked}
+                    aria-label="Document source"
+                    onChange={(event) => {
+                      // While following, this first keystroke is the takeover:
+                      // the followed draft becomes a private copy, edited from
+                      // the change the keystroke just made to it.
+                      setDraft(event.target.value);
+                      setDirty(true);
+                      reportEditing(event.target, true, event.target.value);
+                    }}
+                    onSelect={(event) => {
+                      if (!dirty) return;
+                      reportEditing(event.currentTarget, false, shownText);
+                    }}
+                    onScroll={(event) => {
+                      if (caretScrollRef.current) {
+                        caretScrollRef.current.scrollTop =
+                          event.currentTarget.scrollTop;
+                        caretScrollRef.current.scrollLeft =
+                          event.currentTarget.scrollLeft;
+                      }
+                    }}
+                  />
+                  <RemoteCaretLayer
+                    text={shownText}
+                    others={others}
+                    scrollRef={caretScrollRef}
+                  />
+                </div>
+                <div className="document-preview">
+                  <DocumentBody kind={active.kind} content={shownText} />
+                </div>
               </div>
-            </div>
+            </>
           )}
         </section>
       ) : (

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Board } from "@workspace/api-client";
+import type { Board, BoardCard, TodoItem } from "@workspace/api-client";
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "../api";
 import { describeError } from "../views/shared";
@@ -61,7 +61,7 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
    * a long list feel slower the longer it got, which is the one thing a
    * checklist must not do.
    */
-  function markCard(listId: string, itemId: string, done: boolean) {
+  function patchCard(listId: string, itemId: string, patch: Partial<BoardCard>) {
     setBoards((items) =>
       items.map((board) =>
         board.id !== listId
@@ -71,12 +71,28 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
               columns: board.columns.map((column) => ({
                 ...column,
                 cards: column.cards.map((card) =>
-                  card.id === itemId ? { ...card, done } : card,
+                  card.id === itemId ? { ...card, ...patch } : card,
                 ),
               })),
             },
       ),
     );
+  }
+
+  function markCard(listId: string, itemId: string, done: boolean) {
+    patchCard(listId, itemId, { done });
+  }
+
+  /** The claim fields of an item response, as a card patch. */
+  function claimOf(item: TodoItem): Partial<BoardCard> {
+    return {
+      claimed: item.claimed ?? false,
+      claimed_by: item.claimed_by ?? "",
+      claimed_kind: item.claimed_kind ?? "",
+      claimed_label: item.claimed_label ?? "",
+      claimed_run_id: item.claimed_run_id ?? "",
+      claim_expires_at: item.claim_expires_at ?? null,
+    };
   }
 
   /**
@@ -93,10 +109,36 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
     markCard(list.id, itemId, done);
     try {
       const item = await api.setTodoItemDone(itemId, done);
-      markCard(list.id, item.id, item.done);
+      // The confirm also carries the claim: ticking releases it server-side,
+      // so the "who is on this" chip clears with the same response.
+      patchCard(list.id, item.id, { done: item.done, ...claimOf(item) });
     } catch (caught) {
       markCard(list.id, itemId, !done);
       setError(describeError(caught, "Could not update that item"));
+    }
+  }
+
+  /**
+   * Not optimistic, unlike the tick: a claim is a race the server referees,
+   * and showing "yours" before the referee answers is how two workers both
+   * believe they won the same card.
+   */
+  async function claimTodoItem(list: Board, itemId: string) {
+    setError("");
+    try {
+      patchCard(list.id, itemId, claimOf(await api.claimTodoItem(itemId)));
+    } catch (caught) {
+      setError(describeError(caught, "Could not claim that item"));
+    }
+  }
+
+  /** `force` is the human "take over" — it frees an agent's card too. */
+  async function releaseTodoItem(list: Board, itemId: string, force = false) {
+    setError("");
+    try {
+      patchCard(list.id, itemId, claimOf(await api.releaseTodoItem(itemId, force)));
+    } catch (caught) {
+      setError(describeError(caught, "Could not release that item"));
     }
   }
 
@@ -122,6 +164,8 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
       createTodoList,
       addTodoItem,
       setTodoItemDone,
+      claimTodoItem,
+      releaseTodoItem,
       removeTodoItem,
       removeTodoList,
     },
