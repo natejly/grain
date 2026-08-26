@@ -282,6 +282,16 @@ resource "aws_ecs_task_definition" "migrate" {
           APP_ENV        = "production"
           MODEL_PROVIDER = "openai"
           OBJECTS_DIR    = local.objects_dir
+          // The comment above predicted this and it still bit: WEB_ORIGIN is
+          // needed to CONSTRUCT Settings, not to migrate. A boot guard refuses
+          // a production Settings whose origin still resolves to localhost —
+          // it would serve credentialed CORS to the visitor's own machine —
+          // and that guard runs here too, because `alembic upgrade` imports
+          // app.models -> app.database -> get_settings(). Observed 2026-08-26:
+          // the migration container exited 1 on that validator before opening
+          // a connection, on the first deploy that ever authenticated far
+          // enough to run it.
+          WEB_ORIGIN = var.web_origin
         }, var.extra_environment) :
         { name = name, value = value }
       ]
