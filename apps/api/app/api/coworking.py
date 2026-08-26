@@ -153,6 +153,9 @@ def heartbeat(
     if isinstance(draft, str) and len(draft) > MAX_DRAFT_CHARS:
         state["draft"] = draft[:MAX_DRAFT_CHARS]
         state["draft_truncated"] = True
+    # The one key another member's browser turns into geometry rather than
+    # text, so it is the one key with a shape enforced before it is stored.
+    state = coworking.sanitize_pointer(state)
     row = coworking.heartbeat_presence(
         db,
         workspace_id=actor.workspace_id,

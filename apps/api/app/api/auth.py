@@ -26,7 +26,15 @@ from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import get_db
-from ..models import Agent, Membership, User, UserIdentity, UserSession, Workspace
+from ..models import (
+    Agent,
+    Membership,
+    OrgMembership,
+    User,
+    UserIdentity,
+    UserSession,
+    Workspace,
+)
 from ..schemas import (
     AuthAcknowledgement,
     AuthSessionOut,
@@ -40,6 +48,7 @@ from ..schemas import (
     PlaygroundOut,
     SignupIn,
     VerifyEmailIn,
+    WorkspaceCreate,
     WorkspaceMembershipOut,
 )
 from ..services import orgs
@@ -584,6 +593,85 @@ def list_workspaces(
         )
         for workspace, membership in rows
     ]
+
+
+@router.post(
+    "/workspaces", response_model=WorkspaceMembershipOut, status_code=201
+)
+def create_workspace(
+    payload: WorkspaceCreate,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> WorkspaceMembershipOut:
+    """Make a new workspace and put the caller in it as owner.
+
+    Until this existed a workspace could only be born as a side effect of
+    signing up (`_create_account`), so "start a shared space for this project"
+    meant making a second account. The row this writes is the same shape that
+    path writes — workspace, owner `Membership`, one starter agent — because a
+    workspace that came in through the other door and is missing an agent is a
+    workspace where the first chat has nothing to answer it.
+
+    The organization is derived, never accepted: the caller's own org if they
+    founded one, otherwise a fresh org with them as admin. Reading it off the
+    request would let anyone graft a workspace into an org they merely belong
+    to and inherit — or escape — a policy posture they do not hold.
+
+    Owner, not member: the person who made it must be able to invite into it
+    (`POST /api/admin/invites` is `require_owner`), and an unshareable
+    workspace is the thing this endpoint exists to stop.
+    """
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Name the workspace")
+
+    # The org the caller administers, oldest first so the answer is stable for
+    # a user who founded more than one. `role` is checked rather than mere
+    # membership: an org you were invited into is not one you may add
+    # workspaces to.
+    org_id = db.scalar(
+        select(OrgMembership.organization_id)
+        .where(
+            OrgMembership.user_id == actor.user_id,
+            OrgMembership.role == orgs.ORG_ADMIN,
+        )
+        .order_by(OrgMembership.created_at, OrgMembership.id)
+    )
+    if org_id is None:
+        org_id = orgs.provision_org(
+            db, name=f"{actor.user_name}'s organization", founder_id=actor.user_id
+        ).id
+
+    workspace = Workspace(organization_id=org_id, name=name[:120])
+    db.add(workspace)
+    db.flush()
+    membership = Membership(
+        workspace_id=workspace.id, user_id=actor.user_id, role="owner"
+    )
+    db.add(membership)
+    db.add(
+        Agent(
+            workspace_id=workspace.id,
+            name="Research partner",
+            instructions=DEFAULT_AGENT_INSTRUCTIONS,
+        )
+    )
+    record_audit(
+        db,
+        workspace_id=workspace.id,
+        actor_id=actor.user_id,
+        action="workspace.created",
+        resource_type="workspace",
+        resource_id=workspace.id,
+        detail={"name": workspace.name},
+    )
+    db.commit()
+    # Never `is_current`: the header on THIS request named the old workspace,
+    # and the client switches by re-requesting with the new id. Saying
+    # otherwise here would have the switcher tick a row the session is not on.
+    return WorkspaceMembershipOut(
+        id=workspace.id, name=workspace.name, role=membership.role, is_current=False
+    )
 
 
 # --------------------------------------------------------------------------

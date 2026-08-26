@@ -10985,3 +10985,106 @@ label,
     padding: 11px 12px 4px;
   }
 }
+
+/* ---- Live pointer cursors -------------------------------------------------
+   Everyone else's mouse on a shared surface. The layer is a plain positioning
+   context that must not change how its children lay out — no padding, no
+   background, no size of its own — so wrapping an existing surface in it is
+   invisible until somebody else is actually there. */
+.live-cursor-layer {
+  position: relative;
+}
+
+.live-cursor {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  gap: 3px;
+  /* The reported point is the arrow's TIP, so the element hangs down-right
+     from it and is never nudged by its own label's width. */
+  transform: translate(-1px, -1px);
+  /* Only the offsets animate: `transform` is left alone so the tip stays
+     pinned, and colour/opacity changes (idle) get their own short fade. */
+  transition-property: left, top;
+  transition-timing-function: linear;
+  /* Duration is set inline from the sender's throttle — see GLIDE_MS. */
+  pointer-events: none;
+  will-change: left, top;
+}
+
+.live-cursor-arrow {
+  flex: none;
+  fill: hsl(var(--cursor-hue) 70% 45%);
+  /* A rim, so a cursor stays findable over a dark code block or an image. */
+  stroke: var(--surface);
+  stroke-width: 1;
+  filter: drop-shadow(0 1px 2px var(--tint));
+}
+
+.live-cursor-label {
+  margin-top: 9px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  /* Both derived from the actor's own hue rather than from a theme token: the
+     chip is a saturated mid-tone in every theme, so its text has to contrast
+     with THAT, not with the page behind it. A near-white tint of the same hue
+     reads as part of the cursor instead of as borrowed page ink. */
+  color: hsl(var(--cursor-hue) 70% 97%);
+  background: hsl(var(--cursor-hue) 70% 45%);
+  box-shadow: 0 1px 3px var(--tint);
+}
+
+/* Stopped moving, but still here: a fade rather than a disappearance, because
+   the person has not left — the server's TTL is what says that. */
+.live-cursor.idle {
+  opacity: 0.45;
+  transition-property: left, top, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-cursor {
+    transition-property: none;
+  }
+}
+
+/* ---- New-workspace row in the switcher ---------------------------------- */
+.workspace-option.create {
+  gap: 6px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+.workspace-option.create:hover {
+  color: var(--text);
+}
+
+.workspace-create-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.workspace-create-input {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.workspace-create-error {
+  flex: 1 0 100%;
+  font-size: 12px;
+  color: var(--red);
+}

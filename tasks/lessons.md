@@ -632,3 +632,26 @@
   is the cheap check the gates do not do: `{` and `}` must match before and
   after (1401/1401 → 1429/1428 was the whole signal). Union-merge prose;
   hand-resolve anything with delimiters.
+
+## Resolving a merge conflict by rebuilding a file from `git show :2`
+
+`:2` is the pure "ours" stage — NOT the partially auto-merged working file.
+Rebuilding a conflicted file from it silently discards every hunk git already
+merged cleanly elsewhere in that file. Merging `worktree-coworking` this way
+dropped `BoardCard`'s five claim columns; twelve tests caught it, but nothing
+in the diff looked wrong. Prefer editing the conflict markers in place, or
+diff the result against BOTH parents before trusting it.
+
+## A conflict hunk can split a CSS rule mid-block
+
+Unioning both sides of a conflict is right for append-only files, but the
+"ours" side ended between `{` and `}`, so the union lost a closing brace and
+broke the whole stylesheet. `vitest` and `tsc --noEmit` both passed; only
+`next build` failed. When a union touches CSS, build it — a structural break
+in a stylesheet is invisible to every other gate.
+
+## An ephemeral-presence clear must not be throttled
+
+A throttled heartbeat queued behind a `leave` lands AFTER the DELETE and
+recreates the row, leaving a ghost on the surface until the TTL. Any "I'm
+gone" signal sends immediately and cancels whatever was pending.

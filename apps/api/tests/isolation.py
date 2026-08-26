@@ -1553,6 +1553,19 @@ ROUTE_CASES: List[RouteCase] = [
     # -- auth --------------------------------------------------------------
     RouteCase("GET", "/api/auth/me", SCOPED),
     RouteCase("GET", "/api/auth/workspaces", SCOPED),
+    RouteCase(
+        "POST",
+        "/api/auth/workspaces",
+        SCOPED,
+        body={"name": "mine"},
+        note=(
+            "Names no resource, foreign or otherwise: it makes a new workspace "
+            "for the caller and enrolls only them. The org it lands in is "
+            "derived from the caller's own admin membership and never read off "
+            "the body, so there is no id here to point at another tenant — see "
+            "test_workspace_creation.test_the_org_is_never_taken_from_the_caller."
+        ),
+    ),
     RouteCase("POST", "/api/auth/logout", SCOPED),
     RouteCase("POST", "/api/auth/login", PUBLIC),
     RouteCase("POST", "/api/auth/signup", PUBLIC),
