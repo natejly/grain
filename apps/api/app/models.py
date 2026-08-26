@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 # utcnow is re-exported so existing `from .models import utcnow` imports keep working.
 from .clock import utcnow
+from .config import get_settings
 from .database import Base
 
 
@@ -326,8 +327,23 @@ class Conversation(Base):
     #: refactor would otherwise still be on next week, governing chats nobody
     #: turned it on for — and the whole value of the ask is that it is still
     #: there when the work changes.
+    #: New threads start at `auto_writes`: tool calls run without stopping for a
+    #: per-call approval. The ask is a mode you turn ON here, not one you turn
+    #: off - an agent that parks on every write is unusable for the work it
+    #: exists to do, and an approval prompt answered reflexively is not review.
+    #: What keeps this honest is that `auto_writes` is a *declared* bypass:
+    #: `approved_by_mode` records every call it let through, and the composer
+    #: wears a banner naming the thread once one has. Denied tools stay denied
+    #: either way - this relaxes the ask, never the policy.
+    #:
+    #: Read per insert from `Settings.default_approval_mode` so a deployment's
+    #: answer governs the threads it creates; `server_default` is the literal the
+    #: schema carries for rows written outside the ORM. Existing threads keep
+    #: whatever mode they were stored with.
     approval_mode: Mapped[str] = mapped_column(
-        String(24), default="ask_writes", server_default="ask_writes"
+        String(24),
+        default=lambda: get_settings().default_approval_mode,
+        server_default="auto_writes",
     )
     #: Personal (False) vs shared (True). A personal thread is visible only to
     #: its creator within the workspace; a shared thread is visible to every

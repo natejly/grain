@@ -57,7 +57,6 @@ import { ProposalDiff } from "./proposal-diff";
 import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
 import { hasSeen, markSeen } from "./first-run";
 import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel } from "./shared";
-import { steerStripVisible } from "./steer-format";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
 
@@ -111,16 +110,6 @@ export type ChatViewProps = {
   sharedThread?: boolean;
   submitPrompt: (event?: FormEvent) => Promise<void>;
   cancelActiveRun: () => Promise<void>;
-  /**
-   * Add a mid-turn note to the run that is streaming right now. Resolves true
-   * when the note was delivered — the strip keeps the draft on failure, since
-   * an error banner far from the input is not a place to lose a sentence to.
-   * Optional: panels that mount ChatView without it show no steer strip, and
-   * the strip hides while the run is parked in ANY way — on an approval, on
-   * the spend ceiling, or with its card decided elsewhere — because a parked
-   * run wants a decision, not more words, and the server refuses with a 409.
-   */
-  steer?: (content: string) => Promise<boolean>;
   regenerate: () => Promise<void>;
   /**
    * Rewrite one of the viewer's own prompts and re-run the thread from there.
@@ -873,58 +862,6 @@ function ToolStatus({ call }: { call: AgentToolCall }) {
   );
 }
 
-/**
- * The mid-turn steering strip: a one-line note into the run as it works.
- *
- * Its own component so the draft's state mounts and unmounts with the strip —
- * the same rule the attach popover follows: state that only makes sense while
- * the surface is visible lives inside it, and the unmount is the reset.
- */
-function SteerStrip({ steer }: { steer: (content: string) => Promise<boolean> }) {
-  const [note, setNote] = useState("");
-  const [sending, setSending] = useState(false);
-
-  async function send() {
-    const content = note.trim();
-    if (!content || sending) return;
-    setSending(true);
-    try {
-      // Only a delivered note clears the box: a 409 (the run parked or
-      // finished in the race) or a network failure keeps the user's sentence
-      // where they can resend or copy it into the composer.
-      if (await steer(content)) setNote("");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <div className="steer-strip">
-      <input
-        type="text"
-        aria-label="Add a note to the running turn"
-        placeholder="Add a note mid-task — it reaches the assistant before its next step"
-        value={note}
-        onChange={(event) => setNote(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            void send();
-          }
-        }}
-      />
-      <button
-        type="button"
-        className="ghost-button"
-        disabled={sending || !note.trim()}
-        onClick={() => void send()}
-      >
-        Steer
-      </button>
-    </div>
-  );
-}
-
 function ToolCallCard({
   call,
   decide,
@@ -1116,7 +1053,6 @@ export function ChatView({
   sharedThread,
   submitPrompt,
   cancelActiveRun,
-  steer,
   regenerate,
   editMessage,
   viewerId,
@@ -1489,14 +1425,6 @@ export function ChatView({
                 {runStatus}
               </div>
             )}
-            {steer &&
-              steerStripVisible({
-                activeRun,
-                hasSteer: true,
-                budgetPark,
-                runStatus,
-                agentCalls,
-              }) && <SteerStrip steer={steer} />}
             {!activeRun && lastAssistant && (
               <div className="turn-actions">
                 <button type="button" className="ghost-button" onClick={() => void regenerate()}>
@@ -1553,13 +1481,26 @@ export function ChatView({
           />
         ) : (
           approval &&
-          bypassed && (
-            <BypassIndicator
-              conversationTitle={approval.conversationTitle}
-              approved={autoApprovedCalls(agentCalls, approval.conversationId)}
-              stop={() => approval.setMode("ask_writes")}
-            />
-          )
+          bypassed &&
+          (() => {
+            /* `auto_writes` is the DEFAULT now, so a standing banner on it would
+               sit on every thread in the product — and a warning that is always
+               there is one nobody reads, which is the exact failure this banner
+               was built to avoid. On the default it waits until it has something
+               to report and renders as a trail of what actually ran unreviewed.
+               The modes a person had to opt INTO (guardian, and the dev bypass
+               above) keep the unconditional treatment: those are still the
+               surprising states, and there the standing reminder is the point. */
+            const approved = autoApprovedCalls(agentCalls, approval.conversationId);
+            if (approval.mode === "auto_writes" && approved.length === 0) return null;
+            return (
+              <BypassIndicator
+                conversationTitle={approval.conversationTitle}
+                approved={approved}
+                stop={() => approval.setMode("ask_writes")}
+              />
+            );
+          })()
         )}
         <div className="composer-shell">
           {pickerOpen && (

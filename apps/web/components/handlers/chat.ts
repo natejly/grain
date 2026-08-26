@@ -272,7 +272,6 @@ export function createChatHandlers({
     removeConversation,
     setApprovalMode,
     decideAgentCall: thread.decideAgentCall,
-    steerActiveRun: thread.steerActiveRun,
     cancelActiveRun: thread.cancelActiveRun,
     regenerate: thread.regenerate,
     editMessage: thread.editMessage,

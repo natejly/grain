@@ -57,6 +57,12 @@ os.environ["DEV_AUTO_LOGIN"] = "false"
 # specs then fail on their machine and pass in CI, every one of them reporting a
 # missing approval card rather than the setting that removed it.
 os.environ["DEV_UNRESTRICTED_AGENT"] = "false"
+# And the approval baseline, pinned for the same reason and against the same
+# symptom. The PRODUCT default is `auto_writes` - a new thread runs tool calls
+# without stopping to ask - but the specs below are largely *about* the approval
+# flow: approving a create_document, denying an edit, plan mode. None of them
+# have a card to click if nothing parks. A spec that wants the bypass sets it.
+os.environ["DEFAULT_APPROVAL_MODE"] = "ask_writes"
 
 sys.path.insert(0, str(API_DIR))
 

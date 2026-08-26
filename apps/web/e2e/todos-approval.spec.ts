@@ -208,14 +208,17 @@ test("a write parks under ask_writes, runs under the bypass, and a deny survives
   await modeTrigger.click();
   await page
     .getByRole("group", { name: "Approval mode" })
-    .getByRole("button", { name: /^Auto-approve writes/ })
+    .getByRole("button", { name: /^Allow all tool calls/ })
     .click();
 
   const banner = page.locator(".bypass-banner");
-  await expect(banner).toBeVisible();
-  await expect(banner).toContainText("Auto-approving writes in");
-  await expect(banner).toContainText("Nothing has gone through unreviewed yet.");
-  await expect(modeTrigger).toHaveAccessibleName("Approval mode: Auto-approve writes");
+  // Nothing yet. `auto_writes` is the product's DEFAULT mode, so its banner is a
+  // trail rather than a standing warning: one rendered on every thread in the
+  // product would be furniture, and furniture is not read on the day it finally
+  // has something to say. It appears below, once a call has actually gone
+  // through unreviewed.
+  await expect(banner).toHaveCount(0);
+  await expect(modeTrigger).toHaveAccessibleName("Approval mode: Allow all tool calls");
 
   await composer(page).fill("Tick off the migrations.");
   await composer(page).press("Enter");
@@ -237,7 +240,9 @@ test("a write parks under ask_writes, runs under the bypass, and a deny survives
     ticked.locator(".todo-item", { hasText: "Run the migrations" }).getByRole("checkbox"),
   ).toBeChecked();
 
-  // The indicator is a trail, not only a warning.
+  // And now it says so — the trail arrives with the thing it has to report.
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("Auto-approving writes in");
   await expect(banner).toContainText("1 call went through unreviewed");
   await expect(banner).toContainText("todo_check");
   await banner.getByRole("button", { name: /Show what ran/ }).click();

@@ -233,6 +233,13 @@ export type Citation = {
   ordinal: number;
   excerpt: string;
   score: number;
+  /**
+   * Set only for a web source, whose provenance is a page rather than an
+   * indexed passage - mirrors `schemas.Citation.url`. `chunk_id` is then a
+   * synthetic "web:<digest>" naming no Chunk row, so this URL is the only
+   * address a reader can follow to check the claim.
+   */
+  url?: string | null;
 };
 
 /**
@@ -2402,22 +2409,6 @@ export class WorkspaceApi {
         method: "POST",
         body: JSON.stringify({ decision, remember, ...amendment }),
       },
-      true,
-    );
-  }
-
-  /**
-   * Add a mid-turn message to a run that is still working.
-   *
-   * Not a new turn: the text lands in the running turn's transcript before its
-   * next model step, and as a plain user message in the thread. Only a queued
-   * or running run accepts one — a parked or settled run answers 409, and the
-   * composer's ordinary send is the right channel there.
-   */
-  steerRun(runId: string, content: string): Promise<Run> {
-    return this.request(
-      `/api/runs/${runId}/steer`,
-      { method: "POST", body: JSON.stringify({ content }) },
       true,
     );
   }

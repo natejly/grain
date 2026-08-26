@@ -104,8 +104,45 @@ describe("the development bypass says so", () => {
   });
 
   it("is absent when the flag is off, whatever the thread's own mode is", () => {
-    view({ approval: THREAD_BYPASS });
+    // A call in the trail, because `auto_writes` is the default mode now and
+    // its banner waits for something to report (see the block below). Without
+    // one there would be no thread banner to contrast the dev banner against,
+    // and the test would pass for the wrong reason.
+    view({ approval: THREAD_BYPASS, agentCalls: [call()] });
     expect(screen.queryByText(/Development mode/)).toBeNull();
+    expect(screen.getByText(/Auto-approving writes in/)).toBeTruthy();
+  });
+});
+
+/**
+ * `auto_writes` is the DEFAULT approval mode, so its banner is a trail, not a
+ * standing warning.
+ *
+ * The banner exists so nobody forgets a bypass is on. That argument only holds
+ * while the bypass is exceptional: rendered on every thread in the product it
+ * becomes furniture, and furniture is not read — which would cost the trail its
+ * only job at the moment it finally matters. So on the default it waits until a
+ * call has actually gone through unreviewed, and then says which ones.
+ *
+ * The modes a person had to opt INTO keep the unconditional banner. `guardian`
+ * is asserted here precisely because it is the near neighbour: also a bypass,
+ * also per-thread, but chosen — and the distinction this whole change rests on
+ * is chosen-vs-default, not bypass-vs-not.
+ */
+describe("the default mode's banner is a trail, not a standing warning", () => {
+  it("stays silent on a default-mode thread where nothing has run unreviewed", () => {
+    view({ approval: THREAD_BYPASS });
+    expect(screen.queryByText(/Auto-approving writes in/)).toBeNull();
+  });
+
+  it("appears, naming the thread, as soon as a call goes through unreviewed", () => {
+    view({ approval: THREAD_BYPASS, agentCalls: [call()] });
+    expect(screen.getByText(/Auto-approving writes in/)).toBeTruthy();
+    expect(screen.getByText(/1 call went through unreviewed/)).toBeTruthy();
+  });
+
+  it("still shows immediately for a bypass the person opted into", () => {
+    view({ approval: { ...THREAD_BYPASS, mode: "guardian" as const } });
     expect(screen.getByText(/Auto-approving writes in/)).toBeTruthy();
   });
 });
