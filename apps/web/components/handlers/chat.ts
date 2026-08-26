@@ -48,6 +48,11 @@ export type ChatHandlerDeps = {
   activeConversation: string | null;
   activeRun: string | null;
   setError: Dispatch<SetStateAction<string>>;
+  /** The neutral toast — an outcome to read, not a failure. `sticky` keeps it
+   * open: an undo's skipped half must not vanish on a four-second timer. */
+  setNotice: (
+    notice: { text: string; at: number; sticky?: boolean } | null,
+  ) => void;
   setView: Dispatch<SetStateAction<View>>;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
   setConversations: Dispatch<SetStateAction<Conversation[]>>;
@@ -91,6 +96,7 @@ export function createChatHandlers({
   activeConversation,
   activeRun,
   setError,
+  setNotice,
   setView,
   setSidebarOpen,
   setConversations,
@@ -244,18 +250,27 @@ export function createChatHandlers({
    * Revert a finished run's writes from its recorded checkpoints.
    *
    * Confirmed first — this rewrites documents and boards — and honest after:
-   * the error banner carries the summary only when something could NOT be
-   * reverted, because "it worked" needs no banner and "it half-worked" is
-   * exactly what must not pass silently. The same off-screen-work refreshes a
-   * settled run triggers run afterwards, since an undo changes the same
-   * surfaces a run does.
+   * something is said only when something could NOT be reverted, because "it
+   * worked" needs no banner and "it half-worked" is exactly what must not pass
+   * silently. Which banner is the point. A restore the clobber guard refused
+   * protected the user's own later edits and can be retried; dropping it in
+   * the red toast beside a crashed restore would make a working safeguard read
+   * as a failure, so only `failed` outcomes go there. The neutral toast is
+   * pinned open for this one: unlike a presentation flip, an undo's skipped
+   * half is a thing to act on, not to glimpse. The same off-screen-work
+   * refreshes a settled run triggers run afterwards, since an undo changes the
+   * same surfaces a run does.
    */
   async function undoRun(runId: string) {
     if (!window.confirm(UNDO_CONFIRM)) return;
     setError("");
     try {
       const result = await api.revertRun(runId);
-      setError(summarizeUndo(result));
+      const outcome = summarizeUndo(result);
+      if (outcome.text) {
+        if (outcome.failed) setError(outcome.text);
+        else setNotice({ text: outcome.text, at: Date.now(), sticky: true });
+      }
       await refreshSecondary();
       await refreshArtifacts().catch(() => undefined);
       await refreshPendingEdits().catch(() => undefined);

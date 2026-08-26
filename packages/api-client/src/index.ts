@@ -336,8 +336,22 @@ export type RunUndoReverted = {
 
 export type RunUndoSkipped = {
   tool_name: string;
-  /** Why it could not be restored — external effects, or no recorded state. */
+  /** Why it could not be restored, as a sentence to show the user. */
   reason: string;
+  /**
+   * The category behind that sentence, so the UI never has to read prose to
+   * tell a safeguard from a failure:
+   *
+   * - `protected` — the clobber guard refused, because the resource carries
+   *   edits made after the run. Nothing was written and the checkpoint is
+   *   *not* consumed: undo the run again once those edits settle.
+   * - `external` — the write left the workspace and never was undoable.
+   * - `unrecorded` — no before-state was captured (too large to restore
+   *   without corrupting it).
+   * - `concurrent` — another undo of this run already consumed the row.
+   * - `failed` — the restore itself raised. The only one that is bad news.
+   */
+  outcome: string;
 };
 
 /**

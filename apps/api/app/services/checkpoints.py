@@ -34,6 +34,8 @@ executor is about to fail the same resolution and mutate nothing).
 
 `revert_run` applies a run's checkpoints newest-first so a create undone after
 the writes into it works (files restored, then the created project deleted).
+A row the clobber guard refuses is *released* rather than consumed — see
+`revert_run` for why a protective skip must stay retryable.
 Documents are restored through `documents.replace_content`, which snapshots
 the pre-undo content as a new `DocumentVersion` — an undo adds history, never
 rewrites it. Some of the artifact services this delegates to commit
@@ -42,6 +44,7 @@ covers everything else.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -86,8 +89,30 @@ logger = logging.getLogger(__name__)
 
 #: Generous ceiling for one checkpoint's serialized before-state. A capture
 #: bigger than this is marked irreversible rather than clipped — a truncated
-#: snapshot restored whole would be corruption wearing an undo button.
+#: snapshot restored whole would be corruption wearing an undo button. It is
+#: the *before*-state's budget alone: the guard snapshot beside it is a
+#: fingerprint, so adding the guard cannot cost a resource the reversibility
+#: it had before the guard existed.
 MAX_BEFORE_CHARS = 200_000
+
+#: Why a checkpoint did not restore, as a category beside the sentence. The UI
+#: shows a protective skip as an outcome and a failure as a failure, and must
+#: not have to read English prose to tell the two apart.
+OUTCOME_PROTECTED = "protected"
+OUTCOME_EXTERNAL = "external"
+OUTCOME_UNRECORDED = "unrecorded"
+OUTCOME_CONCURRENT = "concurrent"
+OUTCOME_FAILED = "failed"
+
+
+class ClobberGuard(Exception):
+    """A restore refused because the resource changed after the run.
+
+    Its own type, not a bare ValueError, because the two are opposite news:
+    a failed restore is something going wrong, while this is the undo working
+    exactly as designed and declining to destroy work it never made. The
+    caller reports it as an outcome and leaves the checkpoint retryable.
+    """
 
 
 @dataclass
@@ -102,11 +127,11 @@ class PendingCapture:
     #: `before` dict, or None to record nothing (the create visibly did not
     #: happen — or did not say what it made, which must not become a guess).
     finalize: Optional[Callable[[Session, ToolResult], Optional[Dict[str, Any]]]] = None
-    #: Runs after the executor to snapshot the state the tool left behind.
+    #: Runs after the executor to fingerprint the state the tool left behind.
     #: Stored under `before["after"]`, it is the undo's clobber guard: at
-    #: revert time the resource must still look exactly like this, or the
+    #: revert time the resource must still fingerprint to exactly this, or the
     #: restore is skipped rather than destroying work that landed since.
-    after: Optional[Callable[[Session], Optional[Dict[str, Any]]]] = None
+    after: Optional[Callable[[Session], Optional[Any]]] = None
 
 
 def _created_id(result: Optional[ToolResult]) -> str:
@@ -114,6 +139,22 @@ def _created_id(result: Optional[ToolResult]) -> str:
     if result is None or not result.created_ids:
         return ""
     return str(result.created_ids[0])
+
+
+def _fingerprint(state: Any) -> str:
+    """A stable digest of one guard snapshot.
+
+    The after-state exists only to be compared for equality at revert time, so
+    the checkpoint stores its fingerprint rather than a second copy of the
+    resource. Both consequences are the point: the guard costs a constant ~64
+    characters instead of a duplicate of the before-state — so it can never
+    eat into `MAX_BEFORE_CHARS`, which belongs to the before-state — and
+    `sort_keys` makes the comparison about the value, not about the order a
+    dict happened to be built in.
+    """
+    return hashlib.sha256(
+        json.dumps(state, sort_keys=True, default=str).encode()
+    ).hexdigest()
 
 
 # --------------------------------------------------------------------------
@@ -145,7 +186,9 @@ def _capture_create_document(
             "document_id": document.id,
             # Undoing this create is a hard delete (versions included), so the
             # guard snapshot must prove nobody touched it since.
-            "after": {"title": document.title, "content": document.content},
+            "after": _fingerprint(
+                {"title": document.title, "content": document.content}
+            ),
         }
 
     return PendingCapture(kind="document", finalize=finalize)
@@ -202,15 +245,13 @@ def _board_state(db: Session, board: Board) -> Dict[str, Any]:
     }
 
 
-def _board_after(
-    db: Session, workspace_id: str, board_id: str
-) -> Optional[Dict[str, Any]]:
+def _board_after(db: Session, workspace_id: str, board_id: str) -> Optional[str]:
     board = db.scalar(
         select(Board).where(Board.id == board_id, Board.workspace_id == workspace_id)
     )
     if board is None:
         return None
-    return {"board": _board_state(db, board)}
+    return _fingerprint({"board": _board_state(db, board)})
 
 
 def _capture_create_board(
@@ -323,7 +364,7 @@ def _capture_create_project(
             "project_id": project_id,
             # Undoing this create deletes the whole project; the guard snapshot
             # is every seeded file, so a file added or edited since refuses it.
-            "after": {"files": _project_files(db, project_id)},
+            "after": _fingerprint({"files": _project_files(db, project_id)}),
         }
 
     return PendingCapture(kind="project_file", finalize=finalize)
@@ -358,8 +399,14 @@ def _capture_project_file(
 
 
 def _file_after(db: Session, project_id: str, path: str) -> Dict[str, Any]:
+    """Per-path, so a refusal can name the file that moved on."""
+    return {"files": {path: _file_mark(db, project_id, path)}}
+
+
+def _file_mark(db: Session, project_id: str, path: str) -> Optional[str]:
+    """One file's guard mark: its fingerprint, or None when it is absent."""
     file = project_store.find_file(db, project_id=project_id, path=path)
-    return {"files": {path: file.content if file is not None else None}}
+    return None if file is None else _fingerprint(file.content)
 
 
 def _capture_bib_add(
@@ -402,9 +449,45 @@ def _dashboard_fields(dashboard: Dashboard) -> Dict[str, Any]:
     }
 
 
+def _json_value(raw: Any) -> Any:
+    """A JSON text column as structure, for comparison rather than storage.
+
+    The clobber guard asks "is this still what the run left?" — a question
+    about the spec, not about its punctuation. Comparing the stored text would
+    call a benign re-serialization (a different key order, a dropped space) a
+    later edit and refuse a restore that is perfectly safe. Text that is not
+    JSON compares as itself.
+    """
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+def _dashboard_guard(dashboard: Dashboard) -> Dict[str, Any]:
+    """What the guard compares — the same fields, with their JSON parsed."""
+    fields = _dashboard_fields(dashboard)
+    return {
+        **fields,
+        "spec_json": _json_value(fields["spec_json"]),
+        "bindings_json": _json_value(fields["bindings_json"]),
+    }
+
+
+def _template_guard(template: DashboardTemplate) -> Dict[str, Any]:
+    return {
+        "name": template.name,
+        "description": template.description,
+        "required_columns_json": _json_value(template.required_columns_json),
+        "spec_json": _json_value(template.spec_json),
+    }
+
+
 def _dashboard_after(
     db: Session, workspace_id: str, dashboard_id: str
-) -> Optional[Dict[str, Any]]:
+) -> Optional[str]:
     dashboard = db.scalar(
         select(Dashboard).where(
             Dashboard.id == dashboard_id, Dashboard.workspace_id == workspace_id
@@ -412,7 +495,7 @@ def _dashboard_after(
     )
     if dashboard is None:
         return None
-    return _dashboard_fields(dashboard)
+    return _fingerprint(_dashboard_guard(dashboard))
 
 
 def _capture_create_dashboard(
@@ -479,12 +562,7 @@ def _capture_create_dashboard_template(
             "existed": False,
             "template": True,
             "template_id": template_id,
-            "after": {
-                "name": template.name,
-                "description": template.description,
-                "required_columns_json": template.required_columns_json,
-                "spec_json": template.spec_json,
-            },
+            "after": _fingerprint(_template_guard(template)),
         }
 
     return PendingCapture(kind="dashboard", finalize=finalize)
@@ -668,24 +746,37 @@ def record_checkpoint(
             # executor answered with an error sentence, or did not report what
             # it made): nothing this undo could honestly claim.
             return
-    if before is not None and pending.after is not None:
-        try:
-            after = pending.after(db)
-        except Exception:
-            # A guard snapshot is a convenience on top of a convenience; a
-            # failure records the checkpoint unguarded rather than losing it.
-            logger.info("checkpoint after-state skipped for %s", name, exc_info=True)
-            after = None
-        if after is not None:
-            before = {**before, "after": after}
+    after: Optional[Any] = None
+    if before is not None:
+        # A creation's finalize reports its guard mark inline; every other
+        # family takes it now. Held apart from `before` either way, because
+        # the two are measured against the ceiling separately below.
+        before = dict(before)
+        after = before.pop("after", None)
+        if pending.after is not None:
+            try:
+                after = pending.after(db)
+            except Exception:
+                # A guard snapshot is a convenience on top of a convenience; a
+                # failure records the checkpoint unguarded rather than losing it.
+                logger.info(
+                    "checkpoint after-state skipped for %s", name, exc_info=True
+                )
+                after = None
     reversible = pending.reversible
     before_json = ""
     if reversible and before is not None:
+        # The ceiling is the before-state's own budget: it is what a restore
+        # writes back, and what a clipped copy would corrupt. The guard mark
+        # is a fingerprint, added after the measurement, so a resource that
+        # was reversible before this guard existed still is.
         before_json = json.dumps(before)
         if len(before_json) > MAX_BEFORE_CHARS:
             # A clipped snapshot restored whole is corruption; refuse honestly.
             before_json = ""
             reversible = False
+        elif after is not None:
+            before_json = json.dumps({**before, "after": after})
     elif reversible:
         reversible = False
     db.add(
@@ -706,28 +797,20 @@ def record_checkpoint(
 # Restore
 
 
-def _changed_since(current: Any, recorded: Any) -> bool:
-    """Does the live state no longer match the checkpoint's after-snapshot?
-
-    Both sides are JSON-safe dicts; the round-trip normalizes the live side the
-    same way the snapshot was normalized when it was stored.
-    """
-    return bool(json.loads(json.dumps(current)) != recorded)
-
-
 def _refuse_if_changed(current: Any, recorded: Any, what: str) -> None:
     """The clobber guard: a restore only applies to the state the run left.
 
-    `recorded` is the checkpoint's after-snapshot, or None for a row written
-    before the guard existed (restore proceeds unguarded, as it always did).
-    A mismatch means later runs or humans wrote to the same resource; restoring
-    over them would destroy work this run never touched, so the row is skipped
-    with an honest reason instead.
+    `recorded` is the checkpoint's after-state fingerprint, or None for a row
+    written before the guard existed (restore proceeds unguarded, as it always
+    did). A mismatch means later runs or humans wrote to the same resource;
+    restoring over them would destroy work this run never touched, so the row
+    is skipped with an honest reason instead — and, because nothing has been
+    written when this raises, left retryable.
     """
     if recorded is None:
         return
-    if _changed_since(current, recorded):
-        raise ValueError(
+    if _fingerprint(current) != recorded:
+        raise ClobberGuard(
             f"the {what} changed after this run; skipped to protect the later edits"
         )
 
@@ -911,10 +994,9 @@ def _revert_project_file(
     after_files = (before.get("after") or {}).get("files")
     if isinstance(after_files, dict):
         for path in files:
-            file = project_store.find_file(db, project_id=project_id, path=path)
-            current = file.content if file is not None else None
-            if path in after_files and current != after_files[path]:
-                raise ValueError(
+            mark = _file_mark(db, project_id, path)
+            if path in after_files and mark != after_files[path]:
+                raise ClobberGuard(
                     f"the file {path} changed after this run; "
                     "skipped to protect the later edits"
                 )
@@ -950,12 +1032,7 @@ def _revert_dashboard(
             )
             if template is not None:
                 _refuse_if_changed(
-                    {
-                        "name": template.name,
-                        "description": template.description,
-                        "required_columns_json": template.required_columns_json,
-                        "spec_json": template.spec_json,
-                    },
+                    _template_guard(template),
                     before.get("after"),
                     "dashboard template",
                 )
@@ -970,7 +1047,7 @@ def _revert_dashboard(
         )
         if dashboard is not None:
             _refuse_if_changed(
-                _dashboard_fields(dashboard), before.get("after"), "dashboard"
+                _dashboard_guard(dashboard), before.get("after"), "dashboard"
             )
             _dashboard_store().delete_dashboard(db, dashboard)
             db.flush()
@@ -983,7 +1060,7 @@ def _revert_dashboard(
     )
     if dashboard is None:
         raise ValueError("the dashboard no longer exists")
-    _refuse_if_changed(_dashboard_fields(dashboard), before.get("after"), "dashboard")
+    _refuse_if_changed(_dashboard_guard(dashboard), before.get("after"), "dashboard")
     dashboard.name = str(before.get("name") or dashboard.name)[:160]
     dashboard.description = str(before.get("description") or "")
     dashboard.dataset_id = str(before.get("dataset_id") or dashboard.dataset_id)
@@ -1058,10 +1135,11 @@ def _revert_source(db: Session, *, workspace_id: str, before: Dict[str, Any]) ->
     db.flush()
 
 
-def _skip_reason(row: RunCheckpoint) -> str:
+def _unrestorable(row: RunCheckpoint) -> Tuple[str, str]:
+    """The sentence and the category for a row that never could be restored."""
     if row.kind == "external":
-        return "external effects cannot be undone"
-    return "no recorded before-state to restore"
+        return "external effects cannot be undone", OUTCOME_EXTERNAL
+    return "no recorded before-state to restore", OUTCOME_UNRECORDED
 
 
 def revert_run(
@@ -1069,17 +1147,33 @@ def revert_run(
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     """Apply `rows` (this run's checkpoints, newest first) and consume them.
 
-    Returns (reverted, skipped). Each row is consumed by a conditional UPDATE
-    on `reverted_at IS NULL` — the `consume_email_token` shape — *immediately
-    before its restore*: two concurrent undos of the same run cannot both
-    apply a row (the loser sees rowcount 0 and skips), and a crash mid-undo
-    leaves at most the row in flight stamped, with every later row untouched
-    for a retry to pick up. Irreversible rows and rows whose restore fails
-    land in `skipped` with a reason but are still consumed — consumption is
-    about the undo, which happens once, not about each row's fortunes. A
-    failure never aborts the rest of the undo. Flushes only; the route commits
-    (though the document and project services this calls commit internally,
-    per their own house style).
+    Returns (reverted, skipped); every skipped entry carries both a sentence
+    and an `outcome` category, so a caller can tell a protective skip from a
+    restore that actually failed without parsing prose.
+
+    Each row is consumed by a conditional UPDATE on `reverted_at IS NULL` —
+    the `consume_email_token` shape — *immediately before its restore*: two
+    concurrent undos of the same run cannot both apply a row (the loser sees
+    rowcount 0 and skips), and a crash mid-undo leaves at most the row in
+    flight stamped, with every later row untouched for a retry to pick up.
+    Irreversible rows and rows whose restore fails land in `skipped` with a
+    reason but are still consumed — consumption is about the undo, which
+    happens once, not about each row's fortunes. A failure never aborts the
+    rest of the undo.
+
+    The clobber guard is the one deliberate exception: a row it refuses is
+    *released* (its claim reset to NULL) rather than consumed. That skip is
+    not a verdict on the checkpoint but on the moment — the resource carries
+    edits made after the run — and it raises before its family writes
+    anything, so the row is exactly as applicable as it was a second earlier.
+    Consuming it would tell the user "this could not be reverted" and then
+    take away every way to try again once they had settled those edits; the
+    same undo run again after they do restores it. The cost is that undoing
+    such a run is not one-shot — the endpoint answers 200 with a skip rather
+    than 409 — which is the honest reading of an undo that has not finished.
+
+    Flushes only; the route commits (though the document and project services
+    this calls commit internally, per their own house style).
     """
     reverted: List[Dict[str, str]] = []
     skipped: List[Dict[str, str]] = []
@@ -1101,11 +1195,15 @@ def revert_run(
                 {
                     "tool_name": row.tool_name,
                     "reason": "already consumed by a concurrent undo",
+                    "outcome": OUTCOME_CONCURRENT,
                 }
             )
             continue
         if not row.reversible or not row.before_json:
-            skipped.append({"tool_name": row.tool_name, "reason": _skip_reason(row)})
+            reason, outcome = _unrestorable(row)
+            skipped.append(
+                {"tool_name": row.tool_name, "reason": reason, "outcome": outcome}
+            )
             continue
         try:
             before = json.loads(row.before_json)
@@ -1132,6 +1230,25 @@ def revert_run(
                 _revert_source(db, workspace_id=run.workspace_id, before=before)
             else:
                 raise ValueError(f"unknown checkpoint kind {row.kind!r}")
+        except ClobberGuard as exc:
+            # Protective, not failed — and nothing was written, because every
+            # family checks the guard before its first mutation. Hand the
+            # claim back so the user can settle those later edits and undo
+            # again; see this function's docstring for why that beats a
+            # one-shot skip the user can never retry.
+            db.execute(
+                update(RunCheckpoint)
+                .where(RunCheckpoint.id == row.id)
+                .values(reverted_at=None)
+            )
+            skipped.append(
+                {
+                    "tool_name": row.tool_name,
+                    "reason": str(exc)[:200],
+                    "outcome": OUTCOME_PROTECTED,
+                }
+            )
+            continue
         except Exception as exc:
             logger.warning(
                 "checkpoint restore failed for %s", row.tool_name, exc_info=True
@@ -1140,6 +1257,7 @@ def revert_run(
                 {
                     "tool_name": row.tool_name,
                     "reason": f"restore failed: {str(exc)[:200]}",
+                    "outcome": OUTCOME_FAILED,
                 }
             )
             continue

@@ -8028,6 +8028,10 @@
       },
       "RunUndoSkippedOut": {
         "properties": {
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
           "reason": {
             "title": "Reason",
             "type": "string"
@@ -8039,7 +8043,8 @@
         },
         "required": [
           "tool_name",
-          "reason"
+          "reason",
+          "outcome"
         ],
         "title": "RunUndoSkippedOut",
         "type": "object"
@@ -22978,7 +22983,7 @@
     },
     "/api/runs/{run_id}/undo": {
       "post": {
-        "description": "Revert the writes a finished run recorded checkpoints for.\n\nGated exactly as the stream and cancel are: resolve under the workspace,\nthen `run_activity_visible`, so a foreign or invisible run is uniformly a\n404 before any state question is answered. Only terminal runs can be\nundone (409 otherwise \u2014 a live run is still writing), and only once: each\ncheckpoint is consumed by a conditional UPDATE on `reverted_at IS NULL`\ninside `revert_run` (never a check-then-act here), so two concurrent\nundos cannot double-apply a row, and a run whose rows are all consumed\nanswers 409. Rows an interrupted earlier undo left unconsumed are picked\nup rather than stranded. No Idempotency-Key: the consumed marker *is* the\nnatural guard, the same shape as the assign endpoint's upsert.\n\nCheckpoints apply newest-first, so a resource created and then written to\nis unwound in the only order that works. Irreversible rows \u2014 external\neffects, clipped captures, resources someone else changed after the run \u2014\ncome back in `skipped` with a reason rather than pretending.",
+        "description": "Revert the writes a finished run recorded checkpoints for.\n\nGated exactly as the stream and cancel are: resolve under the workspace,\nthen `run_activity_visible`, so a foreign or invisible run is uniformly a\n404 before any state question is answered. Only terminal runs can be\nundone (409 otherwise \u2014 a live run is still writing), and only once: each\ncheckpoint is consumed by a conditional UPDATE on `reverted_at IS NULL`\ninside `revert_run` (never a check-then-act here), so two concurrent\nundos cannot double-apply a row, and a run whose rows are all consumed\nanswers 409. Rows an interrupted earlier undo left unconsumed are picked\nup rather than stranded. No Idempotency-Key: the consumed marker *is* the\nnatural guard, the same shape as the assign endpoint's upsert.\n\nCheckpoints apply newest-first, so a resource created and then written to\nis unwound in the only order that works. Rows that do not restore \u2014 external\neffects, clipped captures, resources someone else changed after the run \u2014\ncome back in `skipped` with a reason and an `outcome` category rather than\npretending. A row the clobber guard protected is deliberately *not*\nconsumed (`revert_run` releases it), so this endpoint keeps answering 200\nfor that run: the same undo, run again once the later edits are settled,\nfinishes the job.",
         "operationId": "undo_run_api_runs__run_id__undo_post",
         "parameters": [
           {
