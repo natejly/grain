@@ -208,7 +208,7 @@ export function OrganizationPanel({ setError }: OrganizationPanelProps) {
               id="org-models"
               type="text"
               value={modelBound}
-              placeholder="gpt-5.5, gpt-5-nano"
+              placeholder="gpt-5.6-sol, gpt-5-nano"
               disabled={!admin || !boundModels || busy === "bounds"}
               onChange={(event) => setModelBound(event.target.value)}
             />

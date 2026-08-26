@@ -243,11 +243,12 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
         {mode === "signup" && (
           <label>
             Name
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              autoComplete="name"
-            />
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            name="name"
+            autoComplete="name"
+          />
           </label>
         )}
 
@@ -257,6 +258,7 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
             type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            name="email"
             autoComplete="email"
             required
           />
@@ -269,6 +271,7 @@ export function AuthPanel({ onSignedIn, notice = "" }: AuthPanelProps) {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
+              name="password"
               autoComplete={mode === "signup" ? "new-password" : "current-password"}
             required
           />

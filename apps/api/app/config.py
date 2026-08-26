@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     # The cheap-model counterpart to `openai_context_model`: small auxiliary
     # calls (today the guardian reviewer) on an Anthropic deployment.
     anthropic_context_model: str = "claude-haiku-4-5-20251001"
-    openai_model: str = "gpt-5.5"
+    openai_model: str = "gpt-5.6-sol"
     openai_reasoning_effort: ReasoningEffort = "low"
     # Optional deployment override for the per-turn model allow-list, comma
     # separated. Unset derives the list from the priced models (see
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     # --- Model pricing -----------------------------------------------------
     # {model name: {"input": …, "output": …, "cached_input": …}} in USD per
     # million tokens, e.g.
-    #   MODEL_PRICES='{"gpt-5.5":{"input":1.25,"output":10,"cached_input":0.125}}'
+    #   MODEL_PRICES='{"gpt-5.6-sol":{"input":1.25,"output":10,"cached_input":0.125}}'
     #
     # Empty by default, and that emptiness is the honest answer rather than a
     # gap. Token counts are facts this app measures; prices are facts only the

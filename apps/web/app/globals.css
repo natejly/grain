@@ -10294,26 +10294,7 @@ label,
   flex-shrink: 1;
 }
 
-/* --- Mid-turn steering strip + ask_user answer box ----------------------- */
-
-.steer-strip {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin: 4px 0 8px;
-}
-
-.steer-strip input {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-}
+/* --- ask_user answer box ------------------------------------------------ */
 
 .ask-user-answer {
   width: 100%;
