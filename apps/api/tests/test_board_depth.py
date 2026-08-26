@@ -3,18 +3,16 @@ from __future__ import annotations
 
 import pytest
 
-from app.api import board_ops
 from app.database import SessionLocal
-from app.main import app
 from app.models import Board, BoardCard, BoardColumn
 from app.services.artifacts import board_columns, boards
 from app.services.artifacts.tools import registry_tools
 from app.services.llm_tools import ToolContext
 
-# The orchestrator wires this router into main.py; including it here (once) keeps
-# the REST tests honest before and after that lands.
-if not any(getattr(route, "path", "").startswith("/api/board-ops") for route in app.routes):
-    app.include_router(board_ops.router)
+# main.py wires board_ops.router into the app; the `client` fixture reaches it from
+# there. Do not re-include it here: FastAPI records an include as an opaque wrapper
+# rather than as flattened routes, so a "have we already got it?" guard that reads
+# route.path can never see it and would double-include on every run.
 
 
 @pytest.fixture
