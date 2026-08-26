@@ -5,6 +5,9 @@ import { Check, Copy, Link2, Link2Off, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import {
+  SHARE_EXPIRY_CHOICES,
+  expiresAtFrom,
+  expiryLabel,
   linksFor,
   shareLinkState,
   shareLinkStateLabel,
@@ -43,6 +46,8 @@ export function ShareLinksModal({
   const [copied, setCopied] = useState(false);
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState("");
+  /** Days until the next minted link expires; "" is "never" (revocable only). */
+  const [expiryDays, setExpiryDays] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -67,7 +72,11 @@ export function ShareLinksModal({
     setProblem("");
     setBusy("mint");
     try {
-      const created = await api.createShareLink(kind, resourceId);
+      const created = await api.createShareLink(
+        kind,
+        resourceId,
+        expiresAtFrom(expiryDays),
+      );
       setLinks((rows) => [created.link, ...rows]);
       setMinted(shareUrl(window.location.origin, created.url_path));
       setCopied(false);
@@ -136,6 +145,21 @@ export function ShareLinksModal({
           </p>
         )}
 
+        <label className="cron-field">
+          <span>Expiry</span>
+          <select
+            aria-label="Link expiry"
+            value={expiryDays}
+            onChange={(event) => setExpiryDays(event.target.value)}
+          >
+            {SHARE_EXPIRY_CHOICES.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <button
           type="button"
           className="primary-button"
@@ -172,6 +196,7 @@ export function ShareLinksModal({
           <ul className="share-link-list">
             {links.map((link) => {
               const state = shareLinkState(link);
+              const expiry = expiryLabel(link);
               return (
                 <li key={link.id}>
                   <div>
@@ -179,6 +204,7 @@ export function ShareLinksModal({
                     <span className="share-link-meta">
                       {shareLinkStateLabel(state)} · created{" "}
                       {formatRelative(link.created_at)}
+                      {expiry ? ` · ${expiry}` : ""}
                     </span>
                   </div>
                   {state === "active" && (

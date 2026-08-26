@@ -8726,6 +8726,18 @@
       },
       "ShareLinkCreateRequest": {
         "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "resource_id": {
             "maxLength": 36,
             "minLength": 1,

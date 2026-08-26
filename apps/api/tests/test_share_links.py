@@ -31,6 +31,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, inspect, select
 
 from app.clock import utcnow
+from app.config import get_settings
 from app.database import SessionLocal, engine
 from app.models import AuditEvent, ShareLink
 
@@ -324,6 +325,75 @@ def test_every_dead_link_answers_the_same_404(client, anonymous_client):
     after_delete = anonymous_client.get(f"/shared/{dangling['token']}")
     assert after_delete.status_code == 404
     assert after_delete.json() == unknown.json()
+
+
+def test_an_expiry_minted_through_the_api_takes_effect(
+    client, anonymous_client, monkeypatch
+):
+    """The create request's optional `expires_at` reaches the row and the
+    public gate — API-minted end to end, nothing planted in the database."""
+    document = make_document(client)
+    expiry = (utcnow() + timedelta(hours=1)).replace(microsecond=0)
+    created = client.post(
+        "/api/share-links",
+        headers=key(),
+        json={
+            "resource_kind": "document",
+            "resource_id": document["id"],
+            # Sent timezone-aware, as a browser would; stored naive UTC.
+            "expires_at": expiry.isoformat() + "+00:00",
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["link"]["expires_at"] is not None
+
+    # The row holds the normalized expiry, and the young link still serves.
+    db = SessionLocal()
+    try:
+        row = db.get(ShareLink, body["link"]["id"])
+        assert row is not None
+        assert row.expires_at == expiry
+    finally:
+        db.close()
+    assert anonymous_client.get(f"/shared/{body['token']}").status_code == 200
+
+    # Past the expiry, the same URL is the uniform dead-link 404.
+    monkeypatch.setattr(
+        "app.services.share_links.utcnow", lambda: expiry + timedelta(minutes=1)
+    )
+    after = anonymous_client.get(f"/shared/{body['token']}")
+    assert after.status_code == 404
+    unknown = anonymous_client.get("/shared/not-a-token-anyone-issued")
+    assert after.json() == unknown.json()
+
+
+def test_an_expiry_in_the_past_is_refused_at_the_form(client):
+    document = make_document(client)
+    response = client.post(
+        "/api/share-links",
+        headers=key(),
+        json={
+            "resource_kind": "document",
+            "resource_id": document["id"],
+            "expires_at": (utcnow() - timedelta(minutes=1)).isoformat(),
+        },
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_the_public_window_is_rate_limited_per_address(client, anonymous_client):
+    """Every hit — hit or miss — spends the address's budget: a shared
+    dashboard is live compute, and the token path is the credential, so misses
+    must be priced too. The limiter resets per test (conftest autouse)."""
+    document = make_document(client)
+    created = share(client, "document", document["id"])
+    settings = get_settings()
+    for _ in range(settings.auth_rate_limit_attempts):
+        assert anonymous_client.get("/shared/not-a-token").status_code == 404
+    # Budget spent: even the working link is refused, with a 429 not a 404.
+    blocked = anonymous_client.get(f"/shared/{created['token']}")
+    assert blocked.status_code == 429, blocked.text
 
 
 def test_revoking_twice_keeps_the_first_timestamp_and_audits_once(client):

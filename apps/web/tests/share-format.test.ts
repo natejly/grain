@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ShareLink } from "@workspace/api-client";
 import {
+  expiresAtFrom,
+  expiryLabel,
   linksFor,
   shareLinkState,
   shareLinkStateLabel,
@@ -70,6 +72,47 @@ describe("shareUrl", () => {
     expect(shareUrl("https://grain.example/", "/share/tok")).toBe(
       "https://grain.example/share/tok",
     );
+  });
+});
+
+describe("expiresAtFrom", () => {
+  it('answers undefined for "" — a link that lives until revoked', () => {
+    expect(expiresAtFrom("")).toBeUndefined();
+  });
+
+  it("answers an ISO instant the chosen number of days out", () => {
+    const now = new Date("2026-08-25T12:00:00Z");
+    expect(expiresAtFrom("7", now)).toBe("2026-09-01T12:00:00.000Z");
+    expect(expiresAtFrom("1", now)).toBe("2026-08-26T12:00:00.000Z");
+  });
+});
+
+describe("expiryLabel", () => {
+  const now = new Date("2026-08-25T12:00:00");
+
+  it("says nothing for a link with no expiry", () => {
+    expect(expiryLabel(link(), now)).toBe("");
+  });
+
+  it("names the expiry date while the link is alive", () => {
+    expect(
+      expiryLabel(link({ expires_at: "2026-09-01T12:00:00" }), now),
+    ).toMatch(/^expires /);
+  });
+
+  it("says nothing once the state tag already tells the story", () => {
+    expect(
+      expiryLabel(link({ expires_at: "2026-08-25T11:00:00" }), now),
+    ).toBe("");
+    expect(
+      expiryLabel(
+        link({
+          expires_at: "2026-09-01T12:00:00",
+          revoked_at: "2026-08-25T11:00:00",
+        }),
+        now,
+      ),
+    ).toBe("");
   });
 });
 

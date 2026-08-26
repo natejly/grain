@@ -19,26 +19,42 @@ link row, never from the request, and a dashboard's answer is re-run LIVE
 against its dataset at request time: a share link is a window, not a snapshot,
 and must never leak a stale copy of data the workspace has since corrected
 (nor reuse a frozen release manifest, which answers a different question).
+It is also rate limited per source address (`_throttle`): every hit on a
+shared dashboard runs a live DuckDB query, so an anonymous surface with no
+budget would be a compute amplifier for whoever holds — or guesses at — URLs.
+
+AUTHZ, decided (QA F9): share-link authority is FLAT — any member may publish
+any dashboard or document their workspace holds, and any member may revoke any
+of its links, including a colleague's. Deliberate, on two grounds: minting
+mirrors edit rights (every member can already modify these resources, so
+gating who may *show* one adds a role check the write surface does not have),
+and revocation open to all members is the safety valve — the person who spots
+a leaked link must be able to stop it without hunting down its owner. This
+sits intentionally beside F10's owner-gate for third-party subscriptions:
+routing a *colleague's* attention is the move that needs the owner role;
+widening a resource the member can already edit is not.
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..clock import utcnow
+from ..config import get_settings
 from ..database import get_db
 from ..models import Dashboard, Document, ShareLink
 from ..schemas import ApiModel, DashboardSpec
 from ..services import share_links as service
 from ..services.analytics import AnalyticsValidationError, execute_dataset_query
 from ..services.audit import record_audit
+from ..services.auth.ratelimit import auth_rate_limiter
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
 
@@ -81,6 +97,10 @@ class ShareLinkCreatedOut(ApiModel):
 class ShareLinkCreateRequest(BaseModel):
     resource_kind: Literal["dashboard", "document"]
     resource_id: str = Field(min_length=1, max_length=36)
+    #: Optional self-destruct: when set, `load_active` refuses the link from
+    #: this moment on — the mitigation for a link that leaks and is forgotten.
+    #: Must be in the future; omitted means the link lives until revoked.
+    expires_at: Optional[datetime] = None
 
 
 class SharedResourceOut(ApiModel):
@@ -180,6 +200,7 @@ def create_share_link(
         # The raw token went out with the first response and only its hash
         # remains; see ShareLinkCreatedOut.
         return ShareLinkCreatedOut(link=_out(link), token="", url_path="")
+    expires_at = _validated_expiry(payload.expires_at)
     _resolve_resource(
         db,
         workspace_id=actor.workspace_id,
@@ -192,6 +213,7 @@ def create_share_link(
         resource_kind=payload.resource_kind,
         resource_id=payload.resource_id,
         created_by=actor.user_id,
+        expires_at=expires_at,
     )
     record_key(
         db,
@@ -212,6 +234,7 @@ def create_share_link(
         detail={
             "resource_kind": link.resource_kind,
             "resource_id": link.resource_id,
+            "expires_at": link.expires_at.isoformat() if link.expires_at else "",
         },
     )
     db.commit()
@@ -220,6 +243,21 @@ def create_share_link(
         token=raw_token,
         url_path=f"/share/{raw_token}",
     )
+
+
+def _validated_expiry(value: Optional[datetime]) -> Optional[datetime]:
+    """Normalize a requested expiry to the house naive-UTC and insist it is in
+    the future — a link born dead is a caller mistake worth naming, and an
+    aware datetime compared against `utcnow()` would be a 500."""
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    if value <= utcnow():
+        raise HTTPException(
+            status_code=422, detail="expires_at must be in the future"
+        )
+    return value
 
 
 @router.get("/api/share-links", response_model=List[ShareLinkOut])
@@ -277,11 +315,35 @@ def _shared_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail="Share link not found")
 
 
+def _throttle(request: Request) -> None:
+    """Budget the anonymous surface per source address, before any lookup.
+
+    Reuses `auth_rate_limiter` under its own `shared:` bucket (same knobs, same
+    per-process caveat as `api/auth.py` — the durable half there is the account
+    lockout; here it is revocation). Two things are being blunted at once: a
+    shared dashboard runs a live DuckDB query per hit, and the token path is
+    the credential, so the same budget also prices token guessing. Counted
+    before resolution on purpose — a miss must spend budget too.
+    """
+    settings = get_settings()
+    client = request.client.host if request.client else "unknown"
+    if not auth_rate_limiter.allow(
+        f"shared:{client}",
+        limit=settings.auth_rate_limit_attempts,
+        window_seconds=settings.auth_rate_limit_window_seconds,
+    ):
+        raise HTTPException(
+            status_code=429, detail="Too many attempts. Try again later."
+        )
+
+
 @router.get("/shared/{token}", response_model=SharedResourceOut)
 def read_shared_resource(
     token: str,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> SharedResourceOut:
+    _throttle(request)
     link = service.load_active(db, raw_token=token)
     if link is None:
         raise _shared_not_found()

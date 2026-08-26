@@ -3762,10 +3762,13 @@ export class WorkspaceApi {
   /**
    * Mint a revocable public URL onto a dashboard or document. The response is
    * the only place the raw token ever appears — see `ShareLinkCreated`.
+   * `expiresAt` (ISO datetime, optional) makes the link self-destruct: after
+   * that moment the public URL answers the uniform dead-link 404.
    */
   createShareLink(
     resourceKind: ShareLinkKind,
     resourceId: string,
+    expiresAt?: string,
   ): Promise<ShareLinkCreated> {
     return this.request(
       "/api/share-links",
@@ -3774,6 +3777,7 @@ export class WorkspaceApi {
         body: JSON.stringify({
           resource_kind: resourceKind,
           resource_id: resourceId,
+          expires_at: expiresAt ?? null,
         }),
       },
       true,

@@ -1001,6 +1001,35 @@ was timing:
   F10 subscription and F13 digest mails.
 - packages/api-client/openapi.json on main was stale (predated the four-branch
   merge; missing 19 paths / 23 schemas) — regenerated on this branch.
+- F9 share links (QA MEDIUM + LOWs): the create request and share modal now
+  take an optional expiry (`expires_at`; modal offers never/1/7/30 days), so
+  the leaked-link mitigation the schema advertised is actually mintable;
+  `GET /shared/{token}` is rate limited per source address through the
+  existing `auth_rate_limiter` (own `shared:` bucket, same knobs, same
+  per-process caveat — a shared dashboard is a live DuckDB query per hit, and
+  the budget also prices token guessing). AUTHZ DECISION, recorded in the
+  router docstring: share-link authority stays FLAT — any member mints or
+  revokes any of the workspace's links; minting mirrors edit rights, and
+  revoke-open-to-all is the safety valve for a leaked link. Deliberately
+  beside F10's owner-gate for third-party subscriptions (routing a
+  colleague's attention needs the owner role; widening a resource the member
+  already edits does not).
+- F10 subscriptions (QA LOWs): `remove_member` now disables the departed
+  member's subscriptions in the same transaction (audited as
+  `subscriptions_disabled`) — no eternal skip-audit noise, no silent resume
+  on re-invite; `deliver` audits honestly (`send_quietly` reports its
+  outcome, a refused mail is a `subscription_skipped: delivery failed`, never
+  a `subscription_sent`); dashboard names are collapsed to one line in the
+  Subject header (CR/LF would make MIME assembly raise on every fire). SCALE
+  NOTE (QA F10 #6, note only): `_firing_minute` walks up to 1441
+  `cron_matches` per stale subscription per tick — fine at current fleet
+  sizes; add a precomputed next-fire-at column if subscription counts grow.
+- F8 mail helpers (QA LOW d/e): `render_link_button` now allowlists http/https
+  and raises on any other scheme (javascript:, data:, relative) — both
+  callers (subscriptions, digests) pass the server-built
+  `settings.primary_web_origin`, so a raise is a programming error surfacing;
+  text/HTML parity stays a caller obligation, now stated in the module
+  docstring.
 
 ## Merge notes (feature-sweep, 2026-08-23)
 
@@ -1011,6 +1040,11 @@ was timing:
   0050_marketplace/0051_listing_installs; single head confirmed. The QA fix
   pass added 0064_open_alert_unique on that head. Fixes now land via branch
   sweep-qa-fixes + PR onto main — no further renumbering expected.
+- SHARE-LINK AUTHZ (QA F9 LOW 2): decided and documented on sweep-qa-fixes —
+  the flat model stands (any member mints/revokes any link; see the
+  api/share_links.py router docstring for the grounds), intentionally beside
+  F10's owner-gate for third-party subscriptions. Not a merge conflict, a
+  recorded asymmetry.
 
 Known follow-ups deferred from the F3 QA review:
 
