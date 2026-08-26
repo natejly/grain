@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from ...models import Run
+from .. import coworking
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
 from . import board_columns, boards, documents, todos
 
@@ -603,6 +605,14 @@ def _preview_add_todo(db: Session, context: ToolContext, args: Dict[str, Any]) -
     return f"Add “{_text(args, 'title')}” to the todo list"
 
 
+def _agent_actor(db: Session, context: ToolContext) -> tuple[str, str]:
+    """(actor_id, label) this turn claims and ticks as — the run's agent."""
+    run = db.get(Run, context.run_id) if context.run_id else None
+    if run is not None and run.workspace_id == context.workspace_id:
+        return coworking.agent_actor(db, run)
+    return "assistant", "Assistant"
+
+
 def _todo_check(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
     done = bool(args.get("done", True))
     try:
@@ -612,7 +622,25 @@ def _todo_check(db: Session, context: ToolContext, args: Dict[str, Any]) -> Tool
             item=_text(args, "item"),
             list_name=_text(args, "list"),
         )
+        actor_id, _ = _agent_actor(db, context)
+        if coworking.is_claimed(card) and card.claimed_by != actor_id:
+            # Ticking someone else's claimed card is exactly the double-work
+            # this feature exists to stop: refuse, and say whose it is.
+            return ToolResult(
+                content=(
+                    f"Error: “{card.title}” is claimed by "
+                    f"{card.claimed_label or card.claimed_by}; pick another item "
+                    "or ask them."
+                )
+            )
         todos.set_done(db, card=card, done=done)
+        coworking.append_workspace_event(
+            db,
+            workspace_id=context.workspace_id,
+            event_type="todo.checked" if done else "todo.reopened",
+            payload={"item_id": card.id, "list_id": card.board_id, "title": card.title},
+        )
+        db.commit()
     except boards.BoardError as exc:
         return ToolResult(content=f"Error: {exc}")
     verb = "Checked off" if done else "Reopened"
@@ -631,6 +659,97 @@ def _preview_todo_check(db: Session, context: ToolContext, args: Dict[str, Any])
     except boards.BoardError as exc:
         return f"This will fail: {exc}"
     return f"{verb} “{card.title}”"
+
+
+def _todo_claim(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    try:
+        card = todos.find_item(
+            db,
+            workspace_id=context.workspace_id,
+            item=_text(args, "item"),
+            list_name=_text(args, "list"),
+        )
+    except boards.BoardError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    actor_id, label = _agent_actor(db, context)
+    try:
+        card = coworking.claim_card(
+            db,
+            workspace_id=context.workspace_id,
+            card_id=card.id,
+            actor_id=actor_id,
+            actor_kind="agent",
+            actor_label=label,
+            run_id=context.run_id,
+        )
+    except coworking.ClaimConflict as exc:
+        return ToolResult(content=f"Error: {exc} Pick another item or ask them.")
+    coworking.append_workspace_event(
+        db,
+        workspace_id=context.workspace_id,
+        event_type="card.claimed",
+        payload={
+            "item_id": card.id,
+            "list_id": card.board_id,
+            "title": card.title,
+            "actor_id": actor_id,
+            "actor_kind": "agent",
+            "actor_label": label,
+        },
+    )
+    db.commit()
+    return ToolResult(
+        content=(
+            f"Claimed “{card.title}”. It shows as yours until you check it off, "
+            "release it, or the claim expires."
+        )
+    )
+
+
+def _preview_todo_claim(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
+    return f"Claim “{_text(args, 'item')}” to work on it"
+
+
+def _todo_release(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    try:
+        card = todos.find_item(
+            db,
+            workspace_id=context.workspace_id,
+            item=_text(args, "item"),
+            list_name=_text(args, "list"),
+        )
+    except boards.BoardError as exc:
+        return ToolResult(content=f"Error: {exc}")
+    actor_id, label = _agent_actor(db, context)
+    try:
+        coworking.release_card(
+            db,
+            workspace_id=context.workspace_id,
+            card=card,
+            actor_id=actor_id,
+        )
+    except coworking.ClaimConflict as exc:
+        # An agent releases only its own claim; taking a card out of someone
+        # else's hands is a human move, made in the UI.
+        return ToolResult(content=f"Error: {exc}")
+    coworking.append_workspace_event(
+        db,
+        workspace_id=context.workspace_id,
+        event_type="card.released",
+        payload={
+            "item_id": card.id,
+            "list_id": card.board_id,
+            "title": card.title,
+            "actor_id": actor_id,
+            "actor_label": label,
+        },
+    )
+    db.commit()
+    return ToolResult(content=f"Released “{card.title}”.")
+
+
+def _preview_todo_release(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
+    return f"Release the claim on “{_text(args, 'item')}”"
 
 
 _DOC_TARGET = {
@@ -961,5 +1080,50 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             executor=_todo_check,
             read_only=False,
             preview=_preview_todo_check,
+        ),
+        "todo_claim": ToolSpec(
+            name="todo_claim",
+            description=(
+                "Claim a todo item before working on it, so nobody else — the "
+                "user or another agent — does it too. A claim on an item "
+                "someone else holds is refused, naming the holder. Claims "
+                "expire on their own if you never finish."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "item": {"type": "string", "description": "Item id or title."},
+                    "list": {
+                        "type": "string",
+                        "description": "List name, to disambiguate a title.",
+                    },
+                },
+                "required": ["item"],
+            },
+            executor=_todo_claim,
+            read_only=False,
+            preview=_preview_todo_claim,
+        ),
+        "todo_release": ToolSpec(
+            name="todo_release",
+            description=(
+                "Give back a todo item you claimed but will not finish, so "
+                "someone else can pick it up. Checking an item off releases it "
+                "by itself."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "item": {"type": "string", "description": "Item id or title."},
+                    "list": {
+                        "type": "string",
+                        "description": "List name, to disambiguate a title.",
+                    },
+                },
+                "required": ["item"],
+            },
+            executor=_todo_release,
+            read_only=False,
+            preview=_preview_todo_release,
         ),
     }

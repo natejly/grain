@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
@@ -27,6 +28,7 @@ from ..schemas import (
     TodoListCreate,
     TodoListOut,
 )
+from ..services import coworking
 from ..services.artifacts import boards, todos
 from ..services.audit import record_audit
 
@@ -140,6 +142,28 @@ def update_item(
             detail={"title": card.title, "list_id": card.board_id},
         )
         db.commit()
+        # Best-effort: the tick is committed; the coworking stream's frame must
+        # not turn a finished PATCH into a 409 if the sequence race is lost
+        # twice. A missed frame costs one refresh, not a fact.
+        for _ in (1, 2):
+            try:
+                coworking.append_workspace_event(
+                    db,
+                    workspace_id=actor.workspace_id,
+                    event_type="todo.checked" if payload.done else "todo.reopened",
+                    payload={
+                        "item_id": card.id,
+                        "list_id": card.board_id,
+                        "title": card.title,
+                        "actor_id": actor.user_id,
+                        "actor_kind": "user",
+                        "actor_label": actor.user_name,
+                    },
+                )
+                db.commit()
+                break
+            except IntegrityError:
+                db.rollback()
     return _item_out(card)
 
 

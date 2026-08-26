@@ -28,6 +28,8 @@ export type BoardViewProps = {
   removeBoard: (board: Board) => Promise<void>;
   columnOps?: BoardColumnOps;
   todoOps: TodoOps;
+  /** Who is looking, for the claim chips — see TodoChecklistProps.selfId. */
+  selfId?: string;
 };
 
 /** The glyph an entry wears — the whole visible difference between the shapes. */
@@ -477,6 +479,7 @@ export function BoardView({
   removeBoard,
   columnOps,
   todoOps,
+  selfId,
 }: BoardViewProps) {
   const [name, setName] = useState("");
   const [shape, setShape] = useState<"board" | "list">("board");
@@ -537,7 +540,7 @@ export function BoardView({
         boards.map((board) =>
           isTodoList(board) ? (
             <section key={board.id} className="board" data-shape={glyphFor(board)}>
-              <TodoChecklist list={board} ops={gatedTodoOps} />
+              <TodoChecklist list={board} ops={gatedTodoOps} selfId={selfId} />
               {/* The graduation affordance: the same Add column a board offers.
                   Grow a second column and this entry redraws as a board — same
                   place, same items, ticks intact. */}

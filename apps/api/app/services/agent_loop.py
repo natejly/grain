@@ -23,7 +23,18 @@ from ..models import (
     ToolPolicy,
     WorkflowRun,
 )
-from . import budget, checkpoints, orgs, screen, skills, spaces, subjects, usage, webhooks
+from . import (
+    budget,
+    checkpoints,
+    coworking,
+    orgs,
+    screen,
+    skills,
+    spaces,
+    subjects,
+    usage,
+    webhooks,
+)
 from .audit import record_audit
 from .events import DeltaBuffer, append_event
 from .harness import ModelStep, resolve_harness
@@ -1783,6 +1794,14 @@ def resolve_directives(db: Session, run: Run) -> AgentDirectives:
         injected = skills.render_for_run(db, run)
         if injected:
             instructions = f"{instructions}\n\n{injected}"
+    # Last: what everyone ELSE is doing right now — runs in flight and cards
+    # under claim — so this turn routes around work already in hand instead of
+    # duplicating it. "" in a quiet workspace, which is the common case.
+    # Re-resolved on every loop entry like the layers above, so a turn that
+    # parks an hour resumes seeing the workspace as it is, not as it was.
+    awareness = coworking.digest_block(db, run=run)
+    if awareness:
+        instructions = f"{instructions}\n\n{awareness}"
     return AgentDirectives(instructions=instructions, allowed=allowed)
 
 

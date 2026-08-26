@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from ...clock import utcnow
 from ...models import Board, BoardCard, BoardColumn
+from .. import coworking
 from . import boards
 from .boards import BoardError
 
@@ -177,6 +178,10 @@ def set_done(db: Session, *, card: BoardCard, done: bool) -> BoardCard:
         card.done_at = utcnow()
     elif not done:
         card.done_at = None
+    if done:
+        # Finished work needs no claim; clearing it here (not in each caller)
+        # is what keeps a ticked card from wearing a "being worked" badge.
+        coworking.clear_claim(card)
     db.commit()
     return card
 
@@ -211,6 +216,9 @@ def item_snapshot(card: BoardCard) -> Dict[str, Any]:
         "body": card.body,
         "done": card.done_at is not None,
         "done_at": card.done_at,
+        # The claim rides every item snapshot (expired leases read as none) so
+        # a list can badge "who is on this" without a second request.
+        **coworking.claim_snapshot(card),
     }
 
 

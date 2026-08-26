@@ -1,7 +1,7 @@
 "use client";
 
-import { ListChecks, Plus, Trash2 } from "lucide-react";
-import type { Board } from "@workspace/api-client";
+import { Hand, ListChecks, Plus, Trash2 } from "lucide-react";
+import type { Board, BoardCard } from "@workspace/api-client";
 import { useState } from "react";
 import { describeProgress, itemsOf } from "./todo-format";
 
@@ -21,9 +21,60 @@ export type TodoOps = {
   createTodoList: (name: string) => Promise<void>;
   addTodoItem: (list: Board, title: string) => Promise<void>;
   setTodoItemDone: (list: Board, itemId: string, done: boolean) => Promise<void>;
+  claimTodoItem: (list: Board, itemId: string) => Promise<void>;
+  releaseTodoItem: (list: Board, itemId: string, force?: boolean) => Promise<void>;
   removeTodoItem: (list: Board, itemId: string) => Promise<void>;
   removeTodoList: (list: Board) => Promise<void>;
 };
+
+/**
+ * The claim affordance one open item wears: nothing until hovered when free,
+ * a named chip when held. Who holds it decides the verb — the holder gets
+ * "Release", everyone else gets "Take over", which is `force` and is the
+ * human override an agent tool does not have.
+ */
+function ClaimBadge({
+  item,
+  selfId,
+  onClaim,
+  onRelease,
+}: {
+  item: BoardCard;
+  selfId: string;
+  onClaim: () => void;
+  onRelease: (force: boolean) => void;
+}) {
+  if (item.done) return null;
+  if (!item.claimed) {
+    return (
+      <button
+        type="button"
+        className="todo-claim free"
+        onClick={onClaim}
+        aria-label={`Claim ${item.title}`}
+        title="Claim this, so nobody else does it too"
+      >
+        <Hand size={12} aria-hidden /> Claim
+      </button>
+    );
+  }
+  const mine = item.claimed_by === selfId;
+  const holder = item.claimed_label || "Someone";
+  return (
+    <span className={item.claimed_kind === "agent" ? "todo-claim held agent" : "todo-claim held"}>
+      <Hand size={12} aria-hidden />
+      {mine ? "Yours" : `${holder} is on this`}
+      <button
+        type="button"
+        className="todo-claim-action"
+        onClick={() => onRelease(!mine)}
+        aria-label={mine ? `Release ${item.title}` : `Take over ${item.title}`}
+      >
+        {mine ? "Release" : "Take over"}
+      </button>
+    </span>
+  );
+}
 
 function AddItem({ onAdd, label }: { onAdd: (title: string) => Promise<void>; label: string }) {
   const [open, setOpen] = useState(false);
@@ -77,9 +128,15 @@ export type TodoChecklistProps = {
   caption?: string;
   /** Chat renders a denser card with no delete affordances. */
   compact?: boolean;
+  /**
+   * Who is looking, so a claim chip can say "Yours" instead of this user's
+   * own name back at them. "" (an SSR frame, a signed-out preview) simply
+   * renders every claim as someone else's.
+   */
+  selfId?: string;
 };
 
-export function TodoChecklist({ list, ops, caption, compact }: TodoChecklistProps) {
+export function TodoChecklist({ list, ops, caption, compact, selfId }: TodoChecklistProps) {
   const items = itemsOf(list);
 
   return (
@@ -121,6 +178,12 @@ export function TodoChecklist({ list, ops, caption, compact }: TodoChecklistProp
               />
               <span className="todo-item-title">{item.title}</span>
             </label>
+            <ClaimBadge
+              item={item}
+              selfId={selfId ?? ""}
+              onClaim={() => void ops.claimTodoItem(list, item.id)}
+              onRelease={(force) => void ops.releaseTodoItem(list, item.id, force)}
+            />
             {!compact && (
               <button
                 className="todo-item-delete"

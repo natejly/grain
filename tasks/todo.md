@@ -991,3 +991,87 @@ Design consideration from the F5 QA review, for the F13 digests agent:
   digests should render/send via the background-enqueue path (or keep per-tick
   work strictly bounded), and a future fix could move monitor evaluation there
   too.
+## Live coworking (worktree-coworking, 2026-08-25)
+
+Goal: user and agents work the same workspace live — Google-Docs-like presence
+(cursors, typing, live drafts) plus claim semantics so no card is done twice.
+
+### Plan
+- [x] 1. Migration 0049_coworking: claim columns on board_cards
+      (claimed_by/claimed_kind/claimed_label/claimed_run_id/claim_expires_at),
+      new `presences` table (upserted heartbeats, TTL-read), new
+      `workspace_events` table (workspace-scoped append-only log, atomic
+      per-workspace sequence like run_events).
+- [x] 2. models.py: the three shapes above.
+- [x] 3. services/coworking.py: append_workspace_event (atomic seq + one-shot
+      retry), claim_card/release_card (single conditional UPDATE; expired
+      claims read as free — no sweep), heartbeat_presence (upsert),
+      active_presences (TTL filter), digest_block (other active runs +
+      claimed cards, injected into agent instructions).
+- [x] 4. Emit workspace events at run lifecycle transitions (runs.py,
+      cancel path) and on todo check (todos API + tool).
+- [x] 5. Agent loop: presence heartbeat at iteration head (beside
+      _absorb_steering); digest spliced in resolve_directives.
+- [x] 6. Agent tools: todo_claim / todo_release; todo_check refuses a card
+      claimed by someone else and releases one's own claim on completion.
+- [x] 7. API app/api/coworking.py: GET /api/coworking/stream (SSE: workspace
+      events after cursor + presence snapshot frames on change), POST
+      /api/coworking/presence, GET /api/coworking/activity, POST
+      /api/coworking/cards/{id}/claim and /release. Users may release any
+      claim (humans outrank agents); agents only their own.
+- [x] 8. Schemas + todos API: claim fields on TodoItemOut; claim cleared on
+      done.
+- [x] 9. api-client: types + streamWorkspace/heartbeatPresence/claimTodoItem/
+      releaseTodoItem/coworkingActivity; claim fields on TodoItem.
+- [x] 10. Web hook use-coworking.ts: one stream per workspace shell;
+      presences, activity, claim actions, debounced heartbeat reporter.
+- [x] 11. Web UI: presence strip in the shell; claim chips + claim/release on
+      todos.tsx and board.tsx; documents.tsx live layer — own
+      cursor/selection/typing heartbeat, remote cursor overlay (textarea
+      mirror), "X is editing" banner with live remote draft view; chat
+      composer typing indicator.
+- [x] 12. Tests: api tests/test_coworking.py (claim atomicity/conflict/expiry,
+      presence TTL, event sequencing, digest, tool guard); web pure-function
+      tests for the coworking format helpers (cursor offset→line/col, presence
+      labels).
+- [x] 13. Gates: pytest, lint, typecheck, vitest, build. Commit + push.
+
+
+### Review (coworking build)
+
+What shipped, end to end:
+- Migration 0049 (guarded like 0043-0048, including the minimal-fixture case
+  where board_cards does not exist): claim-lease columns on board_cards,
+  `presences`, `workspace_events`.
+- services/coworking.py: atomic workspace-event append (run_events
+  discipline), claim/release as one conditional UPDATE with lazy lease
+  expiry, presence upsert + TTL read, awareness digest (visibility-gated by
+  run_activity_visible so personal-thread prompts never travel through an
+  agent's instructions).
+- Agent surface: todo_claim / todo_release tools; todo_check refuses a card
+  claimed by someone else; ticking clears the claim everywhere; the digest is
+  spliced last in resolve_directives.
+- API: /api/coworking/{activity,presence,stream,items/*/claim,items/*/release}.
+  The stream multiplexes durable events after a cursor with DIFFED runs and
+  presence snapshot frames (no lifecycle mirroring — snapshots cannot miss a
+  park site); `once=true` bounds it to one pass (poll fallback + testability).
+  Users may force-release any claim; agents only their own.
+- Web: use-coworking hook (one SSE per shell, throttled heartbeats, re-beat
+  under TTL, redial), topbar CoworkingStrip, claim chips on checklists
+  (chat + boards mounts), composer typing signal, and the document editor's
+  Google-Docs layer — remote carets/selections via a transparent mirror
+  overlay, live-draft following with an honest takeover (first keystroke
+  forks a private copy), and a both-editing clash banner.
+
+Gate: ruff ✓ mypy ✓ alembic 0049 up/down/up ✓ vitest 677/677 ✓ web lint 0
+errors ✓ next build ✓ api-client tsc ✓ full pytest ✓ (after: fixing the
+0049 guard for table-less fixtures, registering the six new routes in the
+isolation table, recording three reviewed db.get sites, and re-stating one
+space-directives equality assert that predated the awareness layer).
+
+Lessons applied: piped `tail` eats pytest's exit code — read the summary
+line, not $?; the theme forbids color literals below the token blocks;
+`board_cards` may not exist when migrations run against minimal fixtures.
+
+Decisions: no CRDT — one agent + one user per surface in practice; soft claim
++ live mirror + versioned saves. SSE poll tick reused (250ms); no websockets.
