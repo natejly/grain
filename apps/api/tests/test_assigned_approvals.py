@@ -263,6 +263,11 @@ def test_an_assign_racing_the_removal_cannot_restrand_the_call(
     row = next(row for row in inbox["approvals"] if row["id"] == call_id)
     assert row["assigned_to"] == ""
 
+    # Consume the parked call: `client` is the session-scoped dev-seed
+    # workspace, and a call left waiting in a shared thread here would leak
+    # into every later test's waiting set (the digest suite reads it).
+    assert _decide(client, call_id, "denied").status_code == 200
+
 
 def test_a_decided_call_refuses_routing(client, _no_resume):
     _run_id, call_id = _park_run(client)
