@@ -175,10 +175,11 @@ def _project(db: Session, run: Run, subject_id: str) -> Optional[Subject]:
     something for "this" to mean, and a model that has to call `fs_list` and then
     guess which of forty files is on screen will guess wrong.
 
-    So: the tree (every path and its size, which is cheap and makes the project
-    navigable in one glance) plus the contents of the file the editor actually
-    has open, carried on `run.subject_focus`. Everything else is one `fs_read`
-    away, and the tree is what tells the model what to read.
+    So: the contents of the file the editor actually has open, carried on
+    `run.subject_focus`, followed by the tree (every path and its size, which is
+    cheap and makes the project navigable in one glance). Everything else is one
+    `fs_read` away, and the tree is what tells the model what to read. The order
+    is the screen's, not the reader's — see the note on `context=` below.
     """
     project = db.get(Project, subject_id)
     if project is None or project.workspace_id != run.workspace_id:
@@ -193,7 +194,7 @@ def _project(db: Session, run: Run, subject_id: str) -> Optional[Subject]:
     wanted = run.subject_focus or project.entry_path
     open_file = next((file for file in files if file.path == wanted), None)
     if open_file is None:
-        body = "\n\nNo file is open. Call fs_read for any path above."
+        body = "\n\nNo file is open. Call fs_read for any path below."
     else:
         content = open_file.content[:MAX_FILE_CONTEXT_CHARS]
         clipped = len(open_file.content) > MAX_FILE_CONTEXT_CHARS
@@ -208,13 +209,24 @@ def _project(db: Session, run: Run, subject_id: str) -> Optional[Subject]:
         kind=PROJECT,
         id=project.id,
         title=project.name,
+        # Order is load-bearing for the screen, not cosmetic. The injection
+        # classifier reads only the first MAX_SCREEN_CHARS of this context, and
+        # the open file is the one part that carries arbitrary user text — the
+        # thing worth screening. The tree is bounded only by the project's own
+        # limits (200 files, 400-char paths ≈ 80 KB), so with the tree first a
+        # large project pushed the open file past the screen window, where it
+        # reached the model unscreened. So the file — capped at
+        # MAX_FILE_CONTEXT_CHARS, comfortably under MAX_SCREEN_CHARS — comes
+        # first; the tree is only paths and sizes, cannot carry a newline, and
+        # may spill past the window without opening that hole.
         context=(
             f"The user is working in this project and their message is about it. "
             f"Name: “{project.name}” (kind: {project.kind}, id {project.id}, entry "
-            f"{project.entry_path}). Its files are listed below; only the open one "
-            "is quoted, so call fs_read for any other. To change a file, call "
-            "fs_write or fs_edit — the user reviews every change before it "
-            f"applies.\n\nFiles:\n{tree or '  (none)'}" + body
+            f"{project.entry_path}). Only the open file is quoted below; call "
+            "fs_read for any other. To change a file, call fs_write or fs_edit — "
+            "the user reviews every change before it applies."
+            + body
+            + f"\n\nFiles:\n{tree or '  (none)'}"
         ),
     )
 
