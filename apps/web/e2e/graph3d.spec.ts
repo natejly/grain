@@ -52,7 +52,12 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
         "Maya Chen works with Devi Rao on the Juniper rollout at Atlas Labs.",
     ),
   });
-  await expect(page.getByText("Indexed").last()).toBeVisible();
+  // Scoped to THIS spec's row: sources come back newest-first, so `.last()` is
+  // the oldest and is already indexed whenever an earlier spec left one — which
+  // would let the graph be opened before this source had produced any entities.
+  await expect(
+    page.locator(".source-row", { hasText: SOURCE }).getByText("Indexed"),
+  ).toBeVisible({ timeout: 30_000 });
 
   await openView(page, "Library", /Graph/);
   await expect(
