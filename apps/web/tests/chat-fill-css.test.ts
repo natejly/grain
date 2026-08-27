@@ -22,11 +22,34 @@ import { describe, expect, it } from "vitest";
  */
 const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
 
-function rule(selector: string): string {
+/** globals.css with comments removed, so prose cannot be read as a selector. */
+const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+/**
+ * Every block written for exactly this selector, in file order.
+ *
+ * All of them, because a selector is routinely written more than once here —
+ * `.sidebar` has three blocks, `.icon-rail` and `.main-panel` two — and the
+ * later ones are the `@media` overrides, which is precisely where bug 2 above
+ * comes back. A helper that returned only the first block could not see a
+ * phone override at all: appending
+ *
+ *   @media (max-width: 720px) { .sidebar { height: 100vh; } }
+ *
+ * to globals.css left all eleven tests in this file passing. Note the `{` in
+ * the leading character class — without it a rule nested inside a `@media`
+ * block, which is every override that matters, goes unmatched.
+ */
+function rules(selector: string): string[] {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = css.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`, "m"));
-  expect(match, `${selector} has no rule in globals.css`).not.toBeNull();
-  return match![1];
+  const pattern = new RegExp(`(?:^|[{};])\\s*${escaped}\\s*\\{([^}]*)\\}`, "g");
+  return [...bare.matchAll(pattern)].map((match) => match[1]);
+}
+
+function rule(selector: string): string {
+  const blocks = rules(selector);
+  expect(blocks.length, `${selector} has no rule in globals.css`).toBeGreaterThan(0);
+  return blocks.join("");
 }
 
 describe("the chat measure", () => {
@@ -65,14 +88,23 @@ describe("full-height surfaces", () => {
   ];
 
   for (const [selector, property] of surfaces) {
-    it(`${selector} sizes to the *visible* viewport`, () => {
-      const body = rule(selector);
-      const declarations = [...body.matchAll(new RegExp(`${property}:\\s*100(dvh|vh)`, "g"))].map(
-        (match) => match[1],
+    it(`${selector} sizes to the *visible* viewport in every rule that sizes it`, () => {
+      // EVERY block that sets it, not the joined text of all of them: a phone
+      // override restating the height is a second chance to forget `dvh`, and
+      // concatenating would hide it behind the base rule's correct pair. Same
+      // shape as the `.composer-zone` inset check below, which had this right.
+      const sizing = rules(selector).filter((body) =>
+        new RegExp(`${property}:\\s*100(dvh|vh)`).test(body),
       );
-      // Both, and in this order: `vh` is the fallback for a browser that does
-      // not know `dvh`, so a `dvh` line placed first would be overwritten.
-      expect(declarations, `${selector} ${property}`).toEqual(["vh", "dvh"]);
+      expect(sizing.length, `${selector} sets no viewport ${property}`).toBeGreaterThan(0);
+      for (const body of sizing) {
+        const declarations = [
+          ...body.matchAll(new RegExp(`${property}:\\s*100(dvh|vh)`, "g")),
+        ].map((match) => match[1]);
+        // Both, and in this order: `vh` is the fallback for a browser that does
+        // not know `dvh`, so a `dvh` line placed first would be overwritten.
+        expect(declarations, `${selector} ${property}`).toEqual(["vh", "dvh"]);
+      }
     });
   }
 });
