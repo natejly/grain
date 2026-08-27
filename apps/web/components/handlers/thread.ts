@@ -57,6 +57,22 @@ export type ThreadHandlerDeps = {
   setBudgetPark: Dispatch<SetStateAction<BudgetPark | null>>;
   setDraft: Dispatch<SetStateAction<string>>;
   /**
+   * Put a failed send's words back into a NAMED thread's composer.
+   *
+   * `setDraft` writes to whichever thread the caller currently considers
+   * active, which is the right target every other time it is used. It is the
+   * wrong one here: a send that fails may have created the thread it was
+   * sending into, so "active" is a value that changed mid-flight, and restoring
+   * against it relies on a re-render having happened between the state update
+   * and the rejection landing. Losing that race silently drops the user's
+   * paragraph — the exact failure the restore exists to prevent.
+   *
+   * Optional: the surfaces with a single per-pane draft (the extra chat panes,
+   * the panel beside a document) have only one composer, so `setDraft` is
+   * already unambiguous there and they leave this unset.
+   */
+  restoreDraft?: (conversationId: string, content: string) => void;
+  /**
    * The conversation to send into, made if it does not exist yet. The rail
    * creates a new empty thread; the document panel returns the one thread that
    * document has. Async and idempotent, because both are.
@@ -138,6 +154,7 @@ export function createThreadHandlers({
   setRunThinking,
   setBudgetPark,
   setDraft,
+  restoreDraft,
   ensureConversation,
   onRunSettled,
   onAgentUnavailable,
@@ -572,8 +589,15 @@ export function createThreadHandlers({
     }
     setDraft("");
     setError("");
+    // The thread these words belong to, named before the first await and
+    // updated the moment it is known. The catch below restores the draft, and
+    // by then `ensureConversation` may have created a brand new thread — so the
+    // restore must target a conversation id it was TOLD, never one it infers
+    // from whatever happens to be active by the time the failure lands.
+    let sentTo = activeConversation ?? "";
     try {
       const conversationId = await ensureConversation();
+      sentTo = conversationId;
       if (aside !== null) {
         const noted = await api.sendAside(conversationId, aside);
         setMessages((items) =>
@@ -593,7 +617,8 @@ export function createThreadHandlers({
       onSent?.();
       if (response.run) void followRun(response.run.id, conversationId);
     } catch (caught) {
-      setDraft(content);
+      if (restoreDraft) restoreDraft(sentTo, content);
+      else setDraft(content);
       // An agent deleted out from under a thread leaves the picker on a
       // dead id, and every later send fails identically. Clear it so the
       // next attempt falls back to the default instead of repeating.

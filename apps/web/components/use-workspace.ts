@@ -214,6 +214,14 @@ export function useWorkspace() {
       return { ...current, [key]: next };
     });
   }, []);
+  /**
+   * Put a failed send's words back into the thread they were meant for, named
+   * outright instead of inferred from whatever is active when the failure lands.
+   * See `restoreDraft` in ThreadHandlerDeps for why the difference matters.
+   */
+  const restoreDraft = useCallback((conversationId: string, content: string) => {
+    setDrafts((current) => ({ ...current, [conversationId]: content }));
+  }, []);
   // Which authored agent answers the next message; "" is the workspace
   // default. No longer bare session state: the thread remembers it
   // (Conversation.default_agent_id) — see the seeding effect and the pick*
@@ -1127,6 +1135,7 @@ export function useWorkspace() {
     setBudgetPark,
     onScreenFlag: recordScreenFlag,
     setDraft,
+    restoreDraft,
     setActiveProject,
     setActiveDocument,
     setDocumentVersions,

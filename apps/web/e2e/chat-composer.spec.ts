@@ -28,6 +28,19 @@ const ALPHA = "draft owner alpha";
 const BETA = "draft owner beta";
 const row = (page: Page, title: string) => page.locator(".thread", { hasText: title }).first();
 
+/**
+ * Wait for the turn to be over, not merely answered.
+ *
+ * A spec that returns as soon as the words appear leaves a run still streaming
+ * when the browser closes: the backend keeps working on a thread nobody will
+ * read, and — under one worker against one shared API — the next spec inherits
+ * the churn. Ending on the composer being idle again keeps this file's mess
+ * inside this file.
+ */
+async function settled(page: Page) {
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0);
+}
+
 /** Open a fresh thread and ask something, so the rail row has a name to click. */
 async function namedThread(page: Page, prompt: string) {
   await newThread(page);
@@ -36,6 +49,7 @@ async function namedThread(page: Page, prompt: string) {
   // The prompt and its answer: the turn is over, so the next click is a
   // thread switch rather than a race with a run that is still starting.
   await expect(page.locator(".message")).toHaveCount(2);
+  await settled(page);
   await expect(row(page, prompt)).toBeVisible();
 }
 
@@ -71,6 +85,7 @@ test("a draft belongs to its thread, and is still there when you come back", asy
   await composer(page).press("Enter");
   await expect(composer(page)).toHaveValue("");
   await expect(page.locator(".message")).toHaveCount(4);
+  await settled(page);
 
   await row(page, BETA).click();
   await expect(composer(page)).toHaveValue(forBeta);
@@ -102,4 +117,5 @@ test("a send that never reaches the API says so, and keeps the words", async ({ 
   await page.unroute("**/api/conversations/*/messages");
   await composer(page).press("Enter");
   await expect(page.locator(".message").first()).toContainText(words);
+  await settled(page);
 });

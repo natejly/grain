@@ -67,6 +67,8 @@ export type ChatHandlerDeps = {
   /** Records a run the prompt-injection screen flagged, so the transcript can mark it. */
   onScreenFlag: (runId: string) => void;
   setDraft: Dispatch<SetStateAction<string>>;
+  /** Restore a failed send's words into a named thread — see ThreadHandlerDeps. */
+  restoreDraft: (conversationId: string, content: string) => void;
   setActiveProject: Dispatch<SetStateAction<WorkspaceProject | null>>;
   setActiveDocument: Dispatch<SetStateAction<WorkspaceDocument | null>>;
   setDocumentVersions: Dispatch<SetStateAction<DocumentVersion[]>>;
@@ -109,6 +111,7 @@ export function createChatHandlers({
   setBudgetPark,
   onScreenFlag,
   setDraft,
+  restoreDraft,
   setActiveProject,
   setActiveDocument,
   setDocumentVersions,
@@ -190,6 +193,7 @@ export function createChatHandlers({
     setRunThinking,
     setBudgetPark,
     setDraft,
+    restoreDraft,
     activeConversationRef,
     // The skill attachment is per-turn; drop it once the send is accepted.
     onSent: clearAttachedSkill,
