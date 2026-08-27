@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { blocksMentioning, css, ruleBody, rulesInside } from "./css-rules";
 
 /**
  * The dashboard tile's chrome is hover-revealed, and the revelation has three
@@ -11,24 +10,18 @@ import { describe, expect, it } from "vitest";
  * controls), and the grip must never join the fade — it is the keyboard path
  * to arranging the grid at all.
  */
-const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
-
-function ruleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`(^|[},])([^{}]*${escaped}(?![\\w-])[^{}]*)\\{([^}]*)\\}`, "g");
-  let body = "";
-  for (const match of css.matchAll(pattern)) body += match[3];
-  return body;
-}
-
 describe("tile chrome reveals without leaving the tree", () => {
   it("hides the head buttons and resize handle by opacity, not display", () => {
-    const pattern =
-      /\.dashboard-pin-head \.icon-button,\s*\.tile-resize\s*\{([^}]*)\}/;
-    const body = css.match(pattern)?.[1] ?? "";
-    expect(body).toMatch(/opacity:\s*0/);
-    expect(body).toMatch(/transition:[^;]*opacity/);
-    expect(body).not.toMatch(/display:/);
+    // The pair share one rule, so read it through the handle and require the
+    // buttons to be listed alongside — that survives the two being reordered
+    // or respaced, which a literal match of the selector text did not.
+    const blocks = blocksMentioning(".tile-resize").filter((body) =>
+      /opacity:\s*0/.test(body),
+    );
+    expect(blocks.length, "nothing fades .tile-resize out").toBe(1);
+    expect(css).toMatch(/\.dashboard-pin-head \.icon-button,\s*\.tile-resize\s*\{/);
+    expect(blocks[0]).toMatch(/transition:[^;]*opacity/);
+    expect(blocks[0]).not.toMatch(/display:/);
   });
 
   it("reveals on hover and on focus-within alike", () => {
@@ -48,11 +41,14 @@ describe("tile chrome reveals without leaving the tree", () => {
   });
 
   it("keeps the head buttons lit inside the phone breakpoint", () => {
-    // Touch has no hover to approach with; the 900px block turns the buttons
+    // Touch has no hover to approach with; the narrow block turns the buttons
     // back on (the grip and resize handle are display:none there already).
-    const mobile = css.slice(css.indexOf("Twelve columns in 380px"));
-    expect(mobile).toMatch(
-      /\.dashboard-pin-head \.icon-button\s*\{\s*opacity:\s*1;\s*\}/,
+    // Asked of the breakpoint itself rather than of a slice starting at a
+    // section comment — a comment is not structure, and one rename would have
+    // pointed that slice at a different part of the sheet with no test failing.
+    const lit = rulesInside(".dashboard-pin-head .icon-button", /max-width/).filter(
+      (rule) => /opacity:\s*1/.test(rule.body),
     );
+    expect(lit.length, "no narrow-screen rule lights the head buttons").toBeGreaterThan(0);
   });
 });

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { declaration, ruleBody } from "./css-rules";
 
 /**
  * The thread row's title must survive however many actions the row can offer.
@@ -26,55 +27,27 @@ import { describe, expect, it } from "vitest";
  * jsdom has no layout engine, so the CSS half is asserted as rule shape, the
  * way the other *-css tests do.
  */
-const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
 const workspace = readFileSync(
   join(__dirname, "..", "components", "workspace.tsx"),
   "utf8",
 );
 
-/** globals.css with its comments removed, so prose cannot be read as CSS. */
-const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
-
 /**
- * Every rule whose selector list mentions this class, concatenated.
- *
- * All of them, not the first. A selector may be written more than once and the
- * browser applies the union — `.proposal-note` is already split across two
- * blocks 5,500 lines apart in this file, so that is its normal shape rather
- * than a hypothesis. A first-match helper reads the earlier block and reports
- * the later block's declarations as absent, which turns the three negative
- * assertions below into decoration: appending
+ * Read through the shared parser in `./css-rules`, and the three negative
+ * assertions below are why it exists. They ask that a property be set NOWHERE,
+ * which a helper reading one block per selector cannot answer: appending
  *
  *   .thread-actions { position: absolute; opacity: 0; pointer-events: none; }
  *
- * to the end of globals.css left the first-match version reporting all three
- * as null and passing — the exact defect this file exists to catch, waved
- * through. Checked by doing it, not by reading the regex.
+ * to globals.css left the first-match version this file used reporting all
+ * three as absent, and passing — the exact defect this file exists to catch,
+ * waved through. `ruleBody` concatenates every block instead, so a second
+ * declaration anywhere in the sheet, `@media` blocks included, is visible here.
  */
 function rule(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // `(?![\w-])` so `.thread-actions` does not also collect `.thread-actions-x`.
-  const pattern = new RegExp(
-    `(?:^|[};])[^{}]*${escaped}(?![\\w-])[^{}]*\\{([^}]*)\\}`,
-    "g",
-  );
-  let body = "";
-  let found = false;
-  for (const match of bare.matchAll(pattern)) {
-    found = true;
-    body += match[1];
-  }
-  expect(found, `${selector} has no rule in globals.css`).toBe(true);
+  const body = ruleBody(selector);
+  expect(body, `${selector} has no rule in globals.css`).not.toBe("");
   return body;
-}
-
-function declaration(body: string, property: string): string | null {
-  // The trailing `;` is optional: the last declaration in a block may omit it,
-  // and concatenating blocks puts such a declaration mid-string.
-  const match = body.match(
-    new RegExp(`(?:^|[;\\s])${property}:\\s*([^;}]+)(?:;|$)`),
-  );
-  return match ? match[1].trim() : null;
 }
 
 /** Every action the row can offer, by the class each one carries. */
