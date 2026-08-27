@@ -39,7 +39,8 @@ class ToolContext:
     #: The space the turn's conversation is in, "" for none. Not a subject —
     #: it narrows nothing in the registry — but the scope `search_sources` and
     #: the memory tools carry into retrieval and recall, resolved once per turn
-    #: from the conversation (never from a tool's arguments).
+    #: from the conversation (never from a tool's arguments). `conversation_id`
+    #: above is the second retrieval scope, for files attached to this chat.
     space_id: str = ""
     #: Which turn this is. Not a scope — nothing narrows on it — but the handle
     #: a long-running tool needs to observe its own run: the delegate tool reads
@@ -96,6 +97,9 @@ def _search_sources(db: Session, context: ToolContext, args: Dict[str, Any]) -> 
     evidence = search_evidence(
         db, workspace_id=context.workspace_id, query=query,
         space_id=context.space_id,
+        # The thread's own files as well as the library. A file attached to this
+        # conversation is searchable from it and from nowhere else.
+        conversation_id=context.conversation_id,
     )
     if not evidence:
         return ToolResult(content="No matching passages in the indexed sources.")

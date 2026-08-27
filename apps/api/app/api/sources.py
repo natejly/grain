@@ -45,6 +45,7 @@ router = APIRouter(prefix="/api", tags=["sources"])
 @router.get("/sources", response_model=List[SourceOut])
 def list_sources(
     space_id: Optional[str] = Query(default=None),
+    conversation_id: Optional[str] = Query(default=None),
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[Source]:
@@ -60,6 +61,14 @@ def list_sources(
         # Exact, "" included, so the library page and a space page are both one
         # request. Only ever narrows; absent means everything, as before.
         stmt = stmt.where(Source.space_id == space_id)
+    # The conversation axis defaults the other way round from the space one, and
+    # the asymmetry is deliberate. A space's files are still the workspace's
+    # files, so an unfiltered call showing them is right. A file attached to one
+    # chat is not: listing it in the library is the "it just went into the
+    # general knowledge base" outcome the scope exists to prevent, and the
+    # Sources page calls this with no arguments. So absent means the library
+    # alone, and a caller wanting a thread's files must name the thread.
+    stmt = stmt.where(Source.conversation_id == (conversation_id or ""))
     return list(db.scalars(stmt))
 
 

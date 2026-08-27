@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { ChatPane } from "../chat-pane";
+import { AttachmentPane } from "./attachment-pane";
 import type { DashboardPinning } from "./dashboard-pin-bar";
 import {
   SPLIT_SIZES_KEY,
@@ -23,6 +24,24 @@ import {
 
 export type ChatPaneRef = { id: string; conversationId: string };
 
+/**
+ * An attached file open for editing beside the chat.
+ *
+ * A separate list from `panes` rather than a widened union, and deliberately
+ * not persisted. The chat panes are a layout the user curates and expects back
+ * after a reload; a file pane is a working surface tied to the thread in front
+ * of them — reviving it on load would reopen files they had closed. Keeping it
+ * out of `chat-panes` also means the pane store, its pruning and the saved
+ * layouts keep the one shape they already have.
+ */
+export type FilePaneRef = { id: string; documentId: string; filename: string };
+
+/** How many attached files may be open at once, beside whatever chats are.
+ *  Two, not the chat panes' three: a file column and a chat column are
+ *  competing for the same width, and past this nothing is wide enough to
+ *  read. */
+export const MAX_FILE_PANES = 2;
+
 export type ChatSplitProps = {
   /**
    * The shell's own chat, rendered byte-for-byte as today. It is passed in
@@ -32,6 +51,9 @@ export type ChatSplitProps = {
   primary: ReactNode;
   /** The EXTRA panes beside the primary; empty === today's single-pane shell. */
   panes: ChatPaneRef[];
+  /** Attached files open for editing, as further columns in the same split. */
+  filePanes?: FilePaneRef[];
+  closeFilePane?: (paneId: string) => void;
   conversations: Conversation[];
   bootstrap: Bootstrap | null;
   sources: Source[];
@@ -100,6 +122,8 @@ export function readStoredSizes(count: number): number[] {
 export function ChatSplit({
   primary,
   panes,
+  filePanes = [],
+  closeFilePane,
   conversations,
   bootstrap,
   sources,
@@ -126,7 +150,7 @@ export function ChatSplit({
       Boolean(entry.conversation),
     );
 
-  const columnCount = 1 + resolved.length;
+  const columnCount = 1 + resolved.length + filePanes.length;
   const containerRef = useRef<HTMLDivElement>(null);
   const [sizes, setSizes] = useState<number[]>(() => readStoredSizes(columnCount));
   // The ratios to render for the CURRENT column count. A pane opened or closed
@@ -257,7 +281,44 @@ export function ChatSplit({
   }, [columnCount]);
 
   // No extra panes — the primary alone, no wrapper that could alter its layout.
-  if (resolved.length === 0) return <>{primary}</>;
+  if (resolved.length === 0 && filePanes.length === 0) return <>{primary}</>;
+
+  /**
+   * One separator, between column `index` and the next. Shared by both column
+   * loops: the chat panes and the file panes resize by the same rules, and two
+   * copies of this markup would be two places for the keyboard affordance and
+   * the bounds to drift apart.
+   */
+  function renderDivider(index: number) {
+    return (
+      <div
+        className="pane-divider"
+        role="separator"
+        aria-orientation="vertical"
+        // Per-index, so a three-pane split's separators are distinct to a
+        // screen reader rather than three controls answering to one name.
+        aria-label={`Resize panes ${index + 1} and ${index + 2}`}
+        // Window-splitter pattern: the value is the left pane's width percent,
+        // bounded by the same MIN_PERCENT the drag refuses to cross.
+        aria-valuemin={MIN_PERCENT}
+        aria-valuemax={100 - MIN_PERCENT}
+        aria-valuenow={Math.round(effectiveSizes[index])}
+        tabIndex={0}
+        onPointerDown={(event) => startDrag(index, event)}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            nudge(index, -3);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            nudge(index, 3);
+          }
+        }}
+      />
+    );
+  }
 
   /** The wrapper class for one column: hidden while another pane is maximized. */
   function paneClass(id: string): string {
@@ -292,32 +353,7 @@ export function ChatSplit({
       </div>
       {resolved.map(({ pane, conversation }, index) => (
         <Fragment key={pane.id}>
-          <div
-            className="pane-divider"
-            role="separator"
-            aria-orientation="vertical"
-            // Per-index, so a three-pane split's separators are distinct to a
-            // screen reader rather than three controls answering to one name.
-            aria-label={`Resize panes ${index + 1} and ${index + 2}`}
-            // Window-splitter pattern: the value is the left pane's width percent,
-            // bounded by the same MIN_PERCENT the drag refuses to cross.
-            aria-valuemin={MIN_PERCENT}
-            aria-valuemax={100 - MIN_PERCENT}
-            aria-valuenow={Math.round(effectiveSizes[index])}
-            tabIndex={0}
-            onPointerDown={(event) => startDrag(index, event)}
-            onPointerMove={moveDrag}
-            onPointerUp={endDrag}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowLeft") {
-                event.preventDefault();
-                nudge(index, -3);
-              } else if (event.key === "ArrowRight") {
-                event.preventDefault();
-                nudge(index, 3);
-              }
-            }}
-          />
+          {renderDivider(index)}
           <div
             className={paneClass(pane.id)}
             style={{ flexGrow: effectiveSizes[index + 1], flexBasis: 0 }}
@@ -342,6 +378,26 @@ export function ChatSplit({
           </div>
         </Fragment>
       ))}
+      {filePanes.map((pane, offset) => {
+        // The file columns sit to the right of every chat column, so their
+        // divider index continues the same sequence the chat loop left off at.
+        const index = resolved.length + offset;
+        return (
+          <Fragment key={pane.id}>
+            {renderDivider(index)}
+            <div
+              className={paneClass(pane.id)}
+              style={{ flexGrow: effectiveSizes[index + 1], flexBasis: 0 }}
+            >
+              <AttachmentPane
+                documentId={pane.documentId}
+                filename={pane.filename}
+                onClose={() => closeFilePane?.(pane.id)}
+              />
+            </div>
+          </Fragment>
+        );
+      })}
     </div>
   );
 }

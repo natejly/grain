@@ -717,3 +717,47 @@ gone" signal sends immediately and cancels whatever was pending.
   `set(...)` for a coverage assertion while the sweep parametrizes over the
   source list, so the collapse discarded nothing that executes. "287 entries
   collapse to 281 in this mapping" is the whole honest finding.
+
+- **In a worktree, `pytest` tests the MAIN checkout unless you force the path.**
+  `pip install -e apps/api` writes a `__editable___grain_api_0_1_0_finder.py`
+  whose `MAPPING` is a hardcoded absolute path — `{'app': '/Users/.../Dashbored/apps/api/app'}`,
+  the main checkout. A worktree has no `.venv` of its own, so every run borrows
+  that one and `import app` resolves *there*, not to the code being edited.
+  The symptom is maddening: the suite passes against code you did not write, and
+  a source file you can read on disk provably does not match the behaviour under
+  test (here, `subjects._project` had the open file before the tree in the
+  worktree and after it in main, and a screening-order test failed for a
+  "reason" that was not in the file). Path-globbing tests (`test_tenant_isolation`
+  walks `Path(__file__).parent.parent / "app"`) DO see the worktree, so the run
+  is a chimera of two trees, which is worse than a clean failure. Rule: from a
+  worktree, always `PYTHONPATH=<worktree>/apps/api pytest ...`. It works because
+  `install()` does `sys.meta_path.append(...)` — the finder sits *after* the
+  standard path finder, so `sys.path` wins. Verify with
+  `importlib.util.find_spec('app').origin` before trusting a green suite.
+
+- Piping a long test run into `tail` throws away its exit code — the harness
+  reports `tail`'s 0 and calls a red suite green (the same trap as the
+  `echo EXIT=$?` note). Redirect to a file, capture `$?` on its own line, then
+  read the file.
+
+- This repo's tripwire tests are load-bearing and they caught three real defects
+  in one feature, so treat a tripwire failure as a finding and not as paperwork:
+  `test_every_db_get_call_site_is_reviewed` (every `db.get(Model)` needs a
+  recorded justification), `test_route_table_matches_the_app` (every route needs
+  an isolation verdict + a seeded victim row), and `theme-tokens` (no hardcoded
+  colour, not even as a `var(--x, #hex)` fallback). Budget for registering new
+  code with all three.
+
+- A "remove it from X" gesture must not have "publish it to everything" as its
+  implementation. Detaching a chat file cleared `Source.conversation_id`, and
+  `""` is not "unscoped" in this schema — it is *the workspace library*, which
+  `_live_sources` matches from every thread. So the tidy-up gesture would have
+  broadcast the file to every conversation, the exact leak the feature exists to
+  prevent. Whenever a sentinel value doubles as a scope, clearing a scope is a
+  promotion; use the real teardown (`purge_source`) instead.
+
+- An editor that renders an empty textarea when its load FAILED is a data-loss
+  bug, not a cosmetic one: the blank looks like the file, and the user's instinct
+  is to fix it and save. Gate the editor on having the content, and let the
+  error stand alone with nothing to type into.
+

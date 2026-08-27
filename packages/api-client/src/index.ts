@@ -396,6 +396,32 @@ export type Source = {
   chunk_count: number;
   /** The space whose threads this file informs; "" is the workspace library. */
   space_id: string;
+  /**
+   * The conversation this file was attached to; "" is the workspace library.
+   * A non-empty value means the file is retrievable from that thread and from
+   * nowhere else, and that the Sources page does not list it.
+   */
+  conversation_id: string;
+  created_at: string;
+};
+
+/**
+ * One file a person brought into a chat.
+ *
+ * `kind` is what the file became on the way in, and therefore what can be done
+ * with it: a `document` is editable and opens in the editor, a `source` is
+ * indexed and quotable and does not. Branch on this rather than on the
+ * filename's extension - the routing decision was made once, on the server.
+ */
+export type ChatAttachment = {
+  id: string;
+  conversation_id: string;
+  /** The message that introduced it; "" while still staged in the composer. */
+  message_id: string;
+  kind: "document" | "source";
+  /** The Document or Source id, per `kind`. */
+  target_id: string;
+  filename: string;
   created_at: string;
 };
 
@@ -2940,6 +2966,39 @@ export class WorkspaceApi {
 
   deleteSource(sourceId: string): Promise<void> {
     return this.request(`/api/sources/${sourceId}`, { method: "DELETE" }, true);
+  }
+
+  listAttachments(conversationId: string): Promise<ChatAttachment[]> {
+    return this.request(`/api/conversations/${conversationId}/attachments`);
+  }
+
+  /**
+   * Attach a file to a thread.
+   *
+   * Deliberately not `uploadSource` with a flag. An attachment is a different
+   * fact from a library upload - it is scoped to the thread, it does not join
+   * workspace retrieval or the graph, and text arrives back as an editable
+   * document - and the server decides which of those two a file becomes. The
+   * response says what it became; read `kind`, never the extension.
+   */
+  attachFile(conversationId: string, file: File): Promise<ChatAttachment> {
+    const body = new FormData();
+    body.set("file", file);
+    return this.request(
+      `/api/conversations/${conversationId}/attachments`,
+      { method: "POST", body },
+      true,
+    );
+  }
+
+  /**
+   * Unlink a file from a thread. The file itself survives - a document that has
+   * been edited for an hour is not collateral for tidying a chip away. What it
+   * does revoke is a source's retrieval scope, which is what "this conversation
+   * is no longer about this file" has to mean.
+   */
+  detachFile(attachmentId: string): Promise<void> {
+    return this.request(`/api/attachments/${attachmentId}`, { method: "DELETE" }, true);
   }
 
   /**

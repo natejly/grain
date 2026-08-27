@@ -398,6 +398,13 @@ def rebuild_graph(workspace_id: str, actor_id: str) -> None:
                 Source.workspace_id == workspace_id,
                 Source.deleted_at.is_(None),
                 Source.status == "ready",
+                # The graph is what the *workspace* knows, so it is built from
+                # the library alone. A file attached to one chat is that chat's
+                # material and not a workspace claim: projecting it would put
+                # its entities and relations in front of every other thread,
+                # which is the same leak `retrieval._live_sources` closes one
+                # layer down. Its passages stay retrievable from its own thread.
+                Source.conversation_id == "",
             )
             .order_by(Source.id, Chunk.ordinal)
         ).all()

@@ -511,6 +511,63 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ChatAttachment(Base):
+    """One file a person brought into a conversation.
+
+    A file attached in chat is not the same thing as a file added to the
+    workspace library, and the difference is the whole point of this row. The
+    library is what the workspace knows; an attachment is what *this* thread is
+    about. Uploading a contract to ask "what does clause 4 say" should not
+    change what every other thread retrieves for "clause".
+
+    Polymorphic (`kind`/`target_id`) rather than two nullable foreign keys, for
+    the reason `Conversation.subject_kind` gives: the rail chip, the turn's
+    context, the delete cascade and the permission check are the *same* code for
+    both kinds, and two columns would be two places for each to forget one.
+
+    The two kinds are not arbitrary — they are what the file can support:
+
+    * ``document`` — text arrived, so it became a `Document`. Editable by the
+      person (the editor pane) and by the agent (`edit_document`, with the
+      existing diff review), and injected into the turn whole. Everything the
+      user asked for by "editing files inside of chats" is already built for
+      documents; attaching one is how a rail thread gets to say which.
+    * ``source`` — bytes that are not text (a PDF, a spreadsheet) went through
+      ingestion and are quotable passages. Not editable, because there is no
+      text to edit and re-chunking a file under live citations would strand
+      them. Scoped by `Source.conversation_id` so the passages reach this thread
+      and no other.
+
+    `message_id` records which turn introduced the file, so the transcript can
+    show the chip where it happened. It is "" for a file attached to the
+    composer but not yet sent: the attachment is real (it uploaded, it is
+    editable) before any message exists to hang it on.
+    """
+
+    __tablename__ = "chat_attachments"
+    __table_args__ = (
+        Index("ix_chat_attachments_conversation", "conversation_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id"), index=True
+    )
+    #: The message that introduced this file, or "" while it is still staged in
+    #: the composer. Not a FK: a staged attachment names no message yet, and ""
+    #: is the string-for-unset convention used across this file.
+    message_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    #: document | source. See the class docstring for why only these two.
+    kind: Mapped[str] = mapped_column(String(16))
+    target_id: Mapped[str] = mapped_column(String(36), index=True)
+    #: Denormalised so a chip can render, and a deleted target can still say
+    #: what it was, without a join per attachment.
+    filename: Mapped[str] = mapped_column(String(255))
+    created_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Run(Base):
     __tablename__ = "runs"
 
@@ -629,6 +686,16 @@ class Source(Base):
     #: chat. Retrieval filters on the Source row (every ranking arm already
     #: joins it for liveness), so `Chunk` needs no copy of this.
     space_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
+    )
+    #: The conversation this file was attached to, or "" for the workspace
+    #: library. Same shape and same reasoning as `space_id` above, one axis over:
+    #: a thread retrieves from `IN ("", C)` and every other thread from `== ""`,
+    #: so a file uploaded to ask one question about it does not become something
+    #: the whole workspace believes. Filtered in `retrieval._live_sources`
+    #: alongside space and liveness, because a scope applied by some arms and
+    #: not others is a bypass with extra steps.
+    conversation_id: Mapped[str] = mapped_column(
         String(36), default="", server_default="", index=True
     )
     deleted_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)

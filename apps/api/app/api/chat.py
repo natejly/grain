@@ -43,6 +43,7 @@ from ..schemas import (
     SendMessageResponse,
     SteerRequest,
 )
+from ..services import attachments as attachments_service
 from ..services import checkpoints, conversation_index, conversations, orgs, subjects
 from ..services import skills as skills_service
 from ..services import spaces as spaces_service
@@ -893,6 +894,15 @@ def _stage_turn(
         content=payload.content,
     )
     db.add_all([run, message])
+    # Files staged in the composer belong to the turn that sent them, so the
+    # transcript can show each chip on its own message instead of floating all
+    # of them above the thread. Stamped here, where the message id first exists.
+    attachments_service.bind_to_message(
+        db,
+        workspace_id=actor.workspace_id,
+        conversation_id=conversation.id,
+        message_id=message.id,
+    )
     append_event(
         db,
         workspace_id=actor.workspace_id,

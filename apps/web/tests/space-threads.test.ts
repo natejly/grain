@@ -36,6 +36,7 @@ function source(overrides: Partial<Source> = {}): Source {
     status: "ready",
     error: "",
     chunk_count: 1,
+    conversation_id: "",
     space_id: "",
     created_at: "2026-08-01T00:00:00Z",
     ...overrides,

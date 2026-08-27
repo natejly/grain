@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  ChatAttachment,
   AgentToolCall,
   AuditEvent,
   Board,
@@ -54,7 +55,9 @@ import {
 export type { ChatPane } from "./chat-panes";
 import { viewFromUrl, pushViewToUrl } from "./view-url";
 import { createBoardHandlers } from "./handlers/boards";
+import { createAttachmentHandlers } from "./handlers/attachments";
 import { createChatHandlers } from "./handlers/chat";
+import { MAX_FILE_PANES, type FilePaneRef } from "./views/chat-split";
 import { createApprovalHandlers } from "./handlers/approvals";
 import { createCommentHandlers } from "./handlers/comments";
 import { createDashboardHandlers } from "./handlers/dashboards";
@@ -100,6 +103,15 @@ export function useWorkspace() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversation, setActiveConversation] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  // The files this thread is about. Per conversation, so switching threads
+  // reloads them rather than carrying one thread's chips into another.
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
+  // Attached files open for editing beside the chat. Not persisted, and not
+  // part of the chat-pane store: see `FilePaneRef` for why a working surface is
+  // not a layout. Capped for the same reason the chat panes are — past a few
+  // columns nothing on screen is wide enough to be worth reading.
+  const [filePanes, setFilePanes] = useState<FilePaneRef[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
   // Saved starting points for spaces. Lives here beside `spaces` (and
@@ -1097,6 +1109,47 @@ export function useWorkspace() {
     activeDocumentRef,
   });
 
+  const attachmentHandlers = createAttachmentHandlers({
+    setError,
+    setAttaching,
+    setAttachments,
+    ensureConversation: chatHandlers.ensureConversation,
+  });
+
+  /**
+   * Open an attached file for editing beside the chat.
+   *
+   * Idempotent on the document: clicking the same chip twice focuses the pane
+   * that is already open rather than stacking a second editor on one file,
+   * which would give the same text two drafts and one of them would lose.
+   */
+  function openFilePane(documentId: string, filename: string) {
+    setFilePanes((current) => {
+      if (current.some((pane) => pane.documentId === documentId)) return current;
+      if (current.length >= MAX_FILE_PANES) return current;
+      return [...current, { id: newPaneId(), documentId, filename }];
+    });
+  }
+
+  function closeFilePane(paneId: string) {
+    setFilePanes((current) => current.filter((pane) => pane.id !== paneId));
+  }
+
+  // A thread's open files belong to that thread. Switching threads closes them
+  // rather than leaving one conversation's file open beside another's, which
+  // would quietly invite an edit made in the wrong context.
+  useEffect(() => {
+    setFilePanes([]);
+  }, [activeConversation]);
+
+  // Reload the chips whenever the open thread changes. Keyed on the id alone:
+  // a thread with no attachments clears them, which is what stops the previous
+  // thread's files being offered as though they were this one's.
+  useEffect(() => {
+    void attachmentHandlers.refreshAttachments(activeConversation);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConversation]);
+
   /**
    * Land a SAVED layout in one commit: the extra panes wholesale (capped, like
    * any other write to the list), focus back on the primary — the saved focus
@@ -1178,6 +1231,13 @@ export function useWorkspace() {
     conversations,
     activeConversation,
     messages,
+    attachments,
+    attaching,
+    attachFile: attachmentHandlers.attachFile,
+    detachFile: attachmentHandlers.detachFile,
+    filePanes,
+    openFilePane,
+    closeFilePane,
     sources,
     spaces,
     spaceTemplates,

@@ -14,6 +14,7 @@ from .api import (
     analytics,
     api_tokens,
     artifacts,
+    attachments,
     audit,
     bibliography,
     board_ops,
@@ -121,6 +122,7 @@ app.include_router(agents.router)
 app.include_router(skills.router)
 app.include_router(marketplace.router)
 app.include_router(sources.router)
+app.include_router(attachments.router)
 app.include_router(spaces.router)
 app.include_router(tools.router)
 app.include_router(audit.router)

@@ -726,6 +726,29 @@ class SourceOut(ApiModel):
     chunk_count: int
     #: The space whose threads this source informs; "" is the workspace library.
     space_id: str = ""
+    #: The conversation this file was attached to; "" is the workspace library.
+    conversation_id: str = ""
+    created_at: datetime
+
+
+class ChatAttachmentOut(ApiModel):
+    """One file attached to a conversation.
+
+    `kind` is what the file became and therefore what can be done with it:
+    `document` is editable and opens in the editor, `source` is quotable and
+    does not. The client branches on it rather than on the filename, because the
+    routing decision was made once on the server and re-deriving it from an
+    extension is how the two ends drift apart.
+    """
+
+    id: str
+    conversation_id: str
+    #: The message that introduced the file, "" while still staged in the
+    #: composer and not yet sent.
+    message_id: str = ""
+    kind: str
+    target_id: str
+    filename: str
     created_at: datetime
 
 

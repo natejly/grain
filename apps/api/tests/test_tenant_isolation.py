@@ -839,6 +839,26 @@ DB_GET_ALLOWLIST = {
     ("app/api/integrations.py", "IntegrationAccount"): "id from a scoped replay row",
     ("app/api/integrations.py", "SyncJob"): "id from a scoped replay row",
     ("app/services/ingestion.py", "Source"): "worker; id from an authorized route",
+    # Every fetch in the attachments service compares the row's workspace_id to
+    # the caller's on the very next line and raises AttachmentError (a 404 at
+    # the route) when it differs. The service is the chokepoint: the routes only
+    # ever reach these tables through it, so the check cannot be skipped by
+    # adding an endpoint.
+    ("app/services/attachments.py", "Conversation"): (
+        "workspace re-checked on the next line; a foreign conversation 404s"
+    ),
+    ("app/services/attachments.py", "ChatAttachment"): (
+        "workspace re-checked on the next line; a foreign attachment 404s"
+    ),
+    ("app/services/attachments.py", "Document"): (
+        "id comes from an attachment row already proved to be in the caller's "
+        "workspace, and the workspace is re-checked anyway before the body is "
+        "quoted into a turn"
+    ),
+    ("app/services/attachments.py", "Source"): (
+        "id comes from an attachment row already proved to be in the caller's "
+        "workspace; re-checked before the scope is cleared on detach"
+    ),
     ("app/services/memory.py", "Run"): "worker; id from an authorized route",
     ("app/services/conversation_index.py", "Run"): "worker; id from an authorized route",
     ("app/services/conversation_index.py", "Conversation"): (

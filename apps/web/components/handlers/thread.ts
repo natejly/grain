@@ -405,17 +405,11 @@ export function createThreadHandlers({
         if (event.event === "screen.flagged") {
           onScreenFlag?.(runId);
         }
-        if (event.event === "retrieval.completed") {
-          const count = Number(event.data.count || 0);
-          // Only the hit is worth a status line. A miss is the common case for
-          // any question the sources do not cover, and announcing it told the
-          // reader nothing they could act on while pushing the real status
-          // ("Thinking", the tool about to run) off screen. Same shape as
-          // memory.recalled below: say something when there is something.
-          if (count > 0) {
-            setRunStatus(`Using ${count} source passages`);
-          }
-        }
+        // `retrieval.completed` is deliberately not surfaced in the status
+        // line. Retrieval is plumbing the reader cannot act on, and the passage
+        // count competed with the status that does matter ("Thinking", the tool
+        // about to run). The evidence still reaches the reader where it means
+        // something: the `[n]` citations on the finished answer.
         if (event.event === "memory.recalled") {
           const count = Number(event.data.count || 0);
           if (count > 0) {

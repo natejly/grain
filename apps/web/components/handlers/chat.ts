@@ -345,6 +345,10 @@ export function createChatHandlers({
   return {
     selectConversation,
     newConversation,
+    // Exposed because attaching a file needs a thread the same way sending a
+    // message does: you can drop a file into an empty composer, and the row
+    // has to exist before anything can be attached to it.
+    ensureConversation,
     forkThread,
     undoRun,
     removeConversation,

@@ -24,6 +24,7 @@ import {
   Zap,
 } from "lucide-react";
 import type {
+  ChatAttachment,
   AgentInfo,
   AgentToolCall,
   ApprovalMode,
@@ -148,6 +149,24 @@ export type ChatViewProps = {
      * lands as prose chunks answers retrieval and not the chart.
      */
     createDataset?: (name: string, sourceId: string) => Promise<void>;
+    /**
+     * Attach the file to THIS THREAD instead of to the workspace.
+     *
+     * The two destinations are a real choice and not a preference. A library
+     * upload is a claim about what the workspace knows and is retrievable from
+     * every thread forever; an attachment is a claim about what this
+     * conversation is about, is retrievable only here, and — when the file is
+     * text — comes back as a document this pane can open and edit. Most files
+     * dropped into a chat are meant for the chat, so this is the default the
+     * popover leads with.
+     */
+    attachToChat?: (files: FileList | File[]) => Promise<ChatAttachment | null>;
+    attaching?: boolean;
+    /** What is already attached to this thread. */
+    attachments?: ChatAttachment[];
+    detach?: (attachment: ChatAttachment) => Promise<void>;
+    /** Open an attached document for editing, as a column beside the chat. */
+    openFile?: (documentId: string, filename: string) => void;
   };
   /**
    * This thread's approval mode, and the way to change it.
@@ -608,11 +627,19 @@ function SkillBar({
 }
 
 /**
- * The composer's attach popover: pick a file, it uploads where you stand.
+ * The composer's attach popover: pick a file, then say where it belongs.
  *
  * Floats above the composer like the skill picker so the textarea does not
  * jump, closes itself once the upload settles, and says where the file went —
  * the one thing the old teleport communicated that staying put must not lose.
+ *
+ * Two destinations, because they are genuinely different promises and the
+ * difference is invisible after the fact. "This chat" scopes the file to the
+ * thread and, for text, makes it editable; "workspace knowledge" publishes it
+ * to every thread there will ever be. Leading with the chat is not a guess
+ * about which is more common so much as which is more recoverable: a file
+ * attached to one thread can be promoted later, while a file already indexed
+ * into the library has already been read by every other conversation.
  */
 function AttachMenu({
   attach,
@@ -630,12 +657,20 @@ function AttachMenu({
   const [makeDataset, setMakeDataset] = useState(false);
   const datasetOffered = Boolean(attach.createDataset) && file !== null && isTabular(file.name);
 
+  const busy = attach.uploading || Boolean(attach.attaching);
+
   async function add() {
     if (!file) return;
     const uploaded = await attach.upload([file]);
     if (uploaded && datasetOffered && makeDataset) {
       await attach.createDataset?.(baseName(uploaded.filename), uploaded.id);
     }
+    close();
+  }
+
+  async function addToChat() {
+    if (!file) return;
+    await attach.attachToChat?.([file]);
     close();
   }
 
@@ -664,7 +699,11 @@ function AttachMenu({
             <Paperclip size={14} />
             Choose a file
           </button>
-          <p>Added to workspace knowledge, citable from this thread.</p>
+          <p>
+            {attach.attachToChat
+              ? "Attach it to this chat, or add it to workspace knowledge."
+              : "Added to workspace knowledge, citable from this thread."}
+          </p>
         </>
       ) : (
         <>
@@ -679,17 +718,103 @@ function AttachMenu({
               Also create a dataset
             </label>
           )}
+          {attach.attachToChat && (
+            <>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={busy}
+                onClick={() => void addToChat()}
+              >
+                <Paperclip size={14} />
+                {attach.attaching ? "Attaching…" : "Attach to this chat"}
+              </button>
+              <p className="attach-menu-note">
+                Only this thread sees it. Text files open here for editing.
+              </p>
+            </>
+          )}
           <button
             type="button"
-            className="primary-button"
-            disabled={attach.uploading}
+            className={attach.attachToChat ? "ghost-button" : "primary-button"}
+            disabled={busy}
             onClick={() => void add()}
           >
             <Paperclip size={14} />
             {attach.uploading ? "Uploading…" : "Add to workspace"}
           </button>
+          {attach.attachToChat && (
+            <p className="attach-menu-note">
+              Every thread can cite it, now and later.
+            </p>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * The files this thread is about, as chips above the composer.
+ *
+ * Every attachment the thread has, not only the unsent ones. A file attached
+ * three turns ago is still in play — it is still quoted into every turn and
+ * still retrievable — so a strip that showed only what was staged would say
+ * the thread had forgotten a file it is actively using.
+ *
+ * A document chip is a button because there is somewhere to go: it opens the
+ * file in a column beside the chat. A source chip is not, because a PDF has no
+ * editor to open and a control that looked identical but did nothing would be
+ * worse than no control.
+ */
+function AttachmentStrip({
+  attachments,
+  detach,
+  openFile,
+}: {
+  attachments: ChatAttachment[];
+  detach?: (attachment: ChatAttachment) => Promise<void>;
+  openFile?: (documentId: string, filename: string) => void;
+}) {
+  if (attachments.length === 0) return null;
+  return (
+    <div className="attachment-strip" aria-label="Files attached to this chat">
+      {attachments.map((attachment) => {
+        const editable = attachment.kind === "document" && Boolean(openFile);
+        return (
+          <span
+            className={editable ? "attachment-chip editable" : "attachment-chip"}
+            key={attachment.id}
+          >
+            {editable ? (
+              <button
+                type="button"
+                className="attachment-chip-open"
+                onClick={() => openFile?.(attachment.target_id, attachment.filename)}
+                title={`Open ${attachment.filename}`}
+              >
+                <Paperclip size={12} />
+                {attachment.filename}
+              </button>
+            ) : (
+              <span className="attachment-chip-open" title={attachment.filename}>
+                <Paperclip size={12} />
+                {attachment.filename}
+              </span>
+            )}
+            {detach && (
+              <button
+                type="button"
+                className="attachment-chip-remove"
+                onClick={() => void detach(attachment)}
+                aria-label={`Remove ${attachment.filename} from this chat`}
+              >
+                <X size={12} />
+              </button>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -1553,6 +1678,13 @@ export function ChatView({
           )}
           {attach && attachOpen && (
             <AttachMenu attach={attach} close={() => setAttachOpen(false)} />
+          )}
+          {attach?.attachments && (
+            <AttachmentStrip
+              attachments={attach.attachments}
+              detach={attach.detach}
+              openFile={attach.openFile}
+            />
           )}
           <form className="composer" onSubmit={(event) => void submitPrompt(event)}>
           <textarea

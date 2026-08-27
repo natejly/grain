@@ -195,6 +195,13 @@ export function Workspace() {
     thinking,
     setThinking,
     runThinking,
+    attachments,
+    attaching,
+    attachFile,
+    detachFile,
+    filePanes,
+    openFilePane,
+    closeFilePane,
     attachedSkill,
     skillArgs,
     attachSkill,
@@ -1346,6 +1353,8 @@ export function Workspace() {
           // renders the primary alone with no wrapper — the no-regression path.
           <ChatSplit
             panes={extraPanes}
+            filePanes={filePanes}
+            closeFilePane={closeFilePane}
             // Bumped when a recalled layout writes ratios for an UNCHANGED
             // column count — the one case the count-keyed re-read cannot see.
             // The sizes ride as a prop so a private-mode storage failure
@@ -1389,6 +1398,15 @@ export function Workspace() {
                   upload: uploadFiles,
                   uploading,
                   createDataset: createDatasetFromSource,
+                  // The thread-scoped destination, and the chips it produces.
+                  // Only the rail chat passes these: a panel beside a document
+                  // already has a subject, and a second way to say what the
+                  // conversation is about would be one too many.
+                  attachToChat: attachFile,
+                  attaching,
+                  attachments,
+                  detach: detachFile,
+                  openFile: openFilePane,
                 }}
                 approval={{
                   // The fallback is the mode a thread created right now WOULD

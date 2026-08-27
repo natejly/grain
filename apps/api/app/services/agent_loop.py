@@ -24,6 +24,7 @@ from ..models import (
     WorkflowRun,
 )
 from . import (
+    attachments,
     budget,
     checkpoints,
     coworking,
@@ -2117,6 +2118,24 @@ def run_agent_turn(
         directives.instructions,
         approval_mode_for_run(db, run, scope=scope, settings=settings),
     )
+    # The files this thread is about, and the thing it is opened beside. One
+    # local for both because it is injected below *and* screened further down,
+    # and two expressions that must stay equal are one edit away from not being
+    # — which would splice an unscreened upload straight into the prompt.
+    #
+    # Attachments lead. The screen classifies only the first `MAX_SCREEN_CHARS`
+    # of this string (see the note in `subjects._project` on why the order is
+    # load-bearing), and an uploaded file is the most attacker-controlled thing
+    # in it: the subject is something the user already had open, while an
+    # attachment is bytes that arrived this turn.
+    spliced_context = (
+        attachments.turn_context(
+            db,
+            workspace_id=run.workspace_id,
+            conversation_id=run.conversation_id,
+        )
+        + subject_context(subject)
+    )
     state = LoopState(
         input_items=[
             {
@@ -2126,7 +2145,7 @@ def run_agent_turn(
                     evidence,
                     transcript,
                     memory_context,
-                    subject_context(subject),
+                    spliced_context,
                 ),
             }
         ],
@@ -2169,7 +2188,7 @@ def run_agent_turn(
                 db,
                 run,
                 kind="document",
-                text=subject.context if subject else "",
+                text=spliced_context,
                 settings=settings,
             )
             _screen(db, run, kind="memory", text=memory_context, settings=settings)

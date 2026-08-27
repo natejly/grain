@@ -488,11 +488,15 @@ def process_run(run_id: str) -> None:
         space_id = spaces.space_id_for_conversation(
             db, workspace_id=run.workspace_id, conversation_id=run.conversation_id
         )
+        # The thread's own scope, alongside the space's. Files attached to this
+        # conversation are retrievable here and nowhere else; the workspace
+        # library is retrievable everywhere. See `retrieval._live_sources`.
         evidence = search_evidence(
             db,
             workspace_id=run.workspace_id,
             query=run.prompt,
             space_id=space_id,
+            conversation_id=run.conversation_id,
         )
         citations = _citations(evidence)
         append_event(

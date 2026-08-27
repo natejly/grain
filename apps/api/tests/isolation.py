@@ -61,6 +61,7 @@ from app.models import (
     Board,
     BoardCard,
     BoardColumn,
+    ChatAttachment,
     Chunk,
     Comment,
     Conversation,
@@ -316,6 +317,22 @@ def build_tenant(label: str) -> Tenant:
         db.add(chunk)
         db.flush()
         ids["chunk"] = chunk.id
+
+        # A file this tenant attached to its own thread. Its source carries the
+        # conversation scope, so this is also the fixture that proves an
+        # attachment's passages stay out of the other tenant's retrieval.
+        attachment = ChatAttachment(
+            workspace_id=workspace_id,
+            conversation_id=conversation.id,
+            message_id="",
+            kind="source",
+            target_id=source.id,
+            filename=source.filename,
+            created_by=user_id,
+        )
+        db.add(attachment)
+        db.flush()
+        ids["chat_attachment"] = attachment.id
 
         space = Space(
             workspace_id=workspace_id,
@@ -1806,6 +1823,29 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"template_id": "space_template"},
         body={"name": "probe"},
         note="builds a space from another tenant's template",
+    ),
+    # -- chat attachments ---------------------------------------------------
+    RouteCase(
+        "GET",
+        "/api/conversations/{conversation_id}/attachments",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        note="what the other tenant brought into their thread",
+    ),
+    RouteCase(
+        "POST",
+        "/api/conversations/{conversation_id}/attachments",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        files=True,
+        note="planting a file in another tenant's thread",
+    ),
+    RouteCase(
+        "DELETE",
+        "/api/attachments/{attachment_id}",
+        DENY,
+        path_ids={"attachment_id": "chat_attachment"},
+        note="detaching also clears a source's scope, so this is a write",
     ),
     # -- sources -----------------------------------------------------------
     RouteCase("GET", "/api/sources", SCOPED),
