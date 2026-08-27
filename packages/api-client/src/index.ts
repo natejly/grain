@@ -1890,6 +1890,52 @@ export type OrgPolicy = {
   updated_at: string;
 };
 
+/** How many rows of one table this generation holds a vector for. */
+export type EmbeddingCoverage = {
+  table: string;
+  covered: number;
+  /** Rows embedded under a *different* contract: outstanding migration work. */
+  pending: number;
+  /** Rows nothing has ever embedded — visible, but not a migration blocker. */
+  unembedded: number;
+};
+
+/**
+ * One embedding contract: what a stored vector means, and how to compare it.
+ *
+ * A vector is not self-describing — two blobs of the same width can come from
+ * different models and will score against each other perfectly happily, giving a
+ * plausible and wrong ranking. A generation pins everything that changes what a
+ * vector is, and retrieval compares only within one of them.
+ *
+ * Exactly one is `active` at a time. A `building` row with a non-zero `pending`
+ * count is a migration in progress: it is being written while the active one
+ * keeps serving, and it becomes readable only once someone activates it.
+ */
+export type EmbeddingGeneration = {
+  id: string;
+  model: string;
+  /** What the provider answered with; empty where nothing recorded it. */
+  revision: string;
+  dimensions: number;
+  storage_dtype: string;
+  normalization: string;
+  input_format: string;
+  /**
+   * The cosine below which this generation's vectors stay out of fusion. Per
+   * generation rather than global because it does not survive a change of width:
+   * similarity between unrelated vectors rises as dimensionality falls.
+   */
+  dense_floor: number;
+  /** "building" | "active" | "retired". */
+  status: string;
+  note: string;
+  created_at: string;
+  activated_at: string | null;
+  /** Populated for the active generation only. */
+  coverage: EmbeddingCoverage[];
+};
+
 export type OrgMember = {
   membership_id: string;
   user_id: string;
@@ -4302,6 +4348,18 @@ export class WorkspaceApi {
   /** Every ceiling the org has set. Readable by anyone it governs. */
   listOrgPolicies(): Promise<OrgPolicy[]> {
     return this.request("/api/org/policies");
+  }
+
+  /**
+   * Every embedding contract this deployment has used, newest first.
+   *
+   * Read-only on purpose. Building and activating a generation rewrites what the
+   * whole corpus is searchable by, so it stays in
+   * `scripts/rebuild_embeddings.py` where it is logged and reviewable; what a
+   * console is for is seeing whether a migration is in flight and how far along.
+   */
+  listRetrievalContract(): Promise<EmbeddingGeneration[]> {
+    return this.request("/api/org/retrieval-contract");
   }
 
   /**

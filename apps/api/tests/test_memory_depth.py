@@ -20,12 +20,14 @@ from app.auth import DEV_SEED_USER_ID
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import Conversation, MemoryItem, Workspace
+from app.services import embedding_generations as generations
 from app.services import memory as memory_service
 from app.services.embeddings import cosine_similarity, pack_vector, unpack_vector
 from app.services.llm_tools import ToolContext
 from app.services.memory import recall
 from app.services.memory_tools import registry_tools
 from app.services.retrieval import tokenize
+from tests.embedding_doubles import as_batch, seed_vector
 
 EMBED_DIM = 8
 
@@ -93,6 +95,16 @@ def _seed(
     )
     db.add(item)
     db.flush()
+    if embedding is not None:
+        # Retrieval reads `embedding_vectors`, not the column. See `seed_vector`.
+        seed_vector(
+            db,
+            owner_kind=generations.MEMORY_ITEM,
+            owner_id=item.id,
+            workspace_id=workspace_id,
+            blob=embedding,
+        )
+        db.flush()
     return item
 
 
@@ -181,11 +193,11 @@ def test_recall_ranking_matches_the_full_scan_it_replaced(
             query_blob = _fake_vector(QUERY)
             query_vector = unpack_vector(query_blob)
             monkeypatch.setattr(
-                memory_service, "embed_texts", lambda texts, settings=None: [query_blob]
+                memory_service, "embed_batch", as_batch(lambda texts, settings=None: [query_blob])
             )
         else:
             monkeypatch.setattr(
-                memory_service, "embed_texts", lambda texts, settings=None: None
+                memory_service, "embed_batch", as_batch(lambda texts, settings=None: None)
             )
 
         settings = get_settings()
@@ -212,7 +224,7 @@ def test_recall_ranking_matches_the_full_scan_it_replaced(
 
 
 def test_recall_pins_the_current_conversation_summary(workspace, monkeypatch):
-    monkeypatch.setattr(memory_service, "embed_texts", lambda texts, settings=None: None)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(lambda texts, settings=None: None))
     db = SessionLocal()
     try:
         mine = _conversation(db, workspace)
@@ -279,7 +291,7 @@ def test_recall_never_crosses_a_workspace_boundary(client, monkeypatch):
 
         query_blob = _fake_vector("obsidian vault rotation")
         monkeypatch.setattr(
-            memory_service, "embed_texts", lambda texts, settings=None: [query_blob]
+            memory_service, "embed_batch", as_batch(lambda texts, settings=None: [query_blob])
         )
         found = recall(
             db,
@@ -297,7 +309,7 @@ def test_lexical_prefilter_is_case_folded_and_escapes_wildcards(workspace, monke
     """SQLite's LIKE is ASCII-case-insensitive and Postgres's is not, so the
     prefilter must fold explicitly; TOKEN_RE admits `_`, which LIKE treats as a
     wildcard, so tokens must be escaped."""
-    monkeypatch.setattr(memory_service, "embed_texts", lambda texts, settings=None: None)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(lambda texts, settings=None: None))
     db = SessionLocal()
     try:
         _seed(db, workspace, "The READ_ONLY flag gates every mutation.")
@@ -323,7 +335,7 @@ def test_vector_candidate_cap_bounds_the_scan_without_hiding_lexical_matches(
     of them. The row pushed outside the recency window still arrives, because the
     lexical prefilter is not subject to the cap — that is what makes the cap
     survivable."""
-    monkeypatch.setattr(memory_service, "embed_texts", lambda texts, settings=None: None)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(lambda texts, settings=None: None))
     db = SessionLocal()
     try:
         for index in range(12):
@@ -348,7 +360,7 @@ def test_vector_candidate_cap_bounds_the_scan_without_hiding_lexical_matches(
 
         query_blob = _fake_vector("cabbages")
         monkeypatch.setattr(
-            memory_service, "embed_texts", lambda texts, settings=None: [query_blob]
+            memory_service, "embed_batch", as_batch(lambda texts, settings=None: [query_blob])
         )
         settings = get_settings().model_copy(
             update={"memory_recall_candidate_cap": 1, "memory_recall_limit": 6}
@@ -381,7 +393,7 @@ def test_uncapped_recall_scores_every_vector(workspace, monkeypatch):
         db.commit()
         query_blob = _fake_vector("cabbages")
         monkeypatch.setattr(
-            memory_service, "embed_texts", lambda texts, settings=None: [query_blob]
+            memory_service, "embed_batch", as_batch(lambda texts, settings=None: [query_blob])
         )
         settings = get_settings().model_copy(
             update={"memory_recall_candidate_cap": 0, "memory_recall_limit": 12}
@@ -465,7 +477,7 @@ def test_lexical_hit_outside_the_vector_shortlist_keeps_its_semantic_score(
         query = "zephyr program march"
         query_blob = _fake_vector("cabbages cabbages")
         monkeypatch.setattr(
-            memory_service, "embed_texts", lambda texts, settings=None: [query_blob]
+            memory_service, "embed_batch", as_batch(lambda texts, settings=None: [query_blob])
         )
         settings = get_settings()
 
@@ -475,6 +487,7 @@ def test_lexical_hit_outside_the_vector_shortlist_keeps_its_semantic_score(
             query_blob=query_blob,
             exclude_id=None,
             settings=settings,
+            generation=generations.active_generation(db),
         )
         assert target.id not in shortlist, "fixture must push the row off the shortlist"
         assert scores[target.id] > 0.0, "but its similarity is still known"
@@ -516,7 +529,7 @@ def test_lexical_prefilter_truncates_by_relevance_not_by_popularity(
     matches every query term in favour of a popular one that matches a single
     stop-word-adjacent term.
     """
-    monkeypatch.setattr(memory_service, "embed_texts", lambda texts, settings=None: None)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(lambda texts, settings=None: None))
     db = SessionLocal()
     try:
         for index in range(30):
@@ -606,8 +619,8 @@ def test_recall_matches_the_full_scan_beyond_the_shortlist_and_prefilter_limits(
             query_blob = _fake_vector(query)
             monkeypatch.setattr(
                 memory_service,
-                "embed_texts",
-                lambda texts, settings=None, blob=query_blob: [blob],
+                "embed_batch",
+                as_batch(lambda texts, settings=None, blob=query_blob: [blob]),
             )
             expected = _legacy_recall(
                 db,
@@ -855,7 +868,7 @@ def test_forget_cannot_reach_another_workspace(client):
 
 
 def test_search_memory_digs_deeper_than_the_injected_context(workspace, monkeypatch):
-    monkeypatch.setattr(memory_service, "embed_texts", lambda texts, settings=None: None)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(lambda texts, settings=None: None))
     db = SessionLocal()
     try:
         conversation_id = _conversation(db, workspace)
@@ -912,7 +925,7 @@ def test_a_semantic_only_memory_outside_the_cap_disappears(workspace, monkeypatc
     which is exactly why this went unnoticed: five memories at cosine 0.97 went
     from 5/5 recalled to 0/5 when the window was 5000 rows, and no test failed.
     """
-    monkeypatch.setattr(memory_service, "embed_texts", lambda texts, settings=None: None)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(lambda texts, settings=None: None))
     db = SessionLocal()
     try:
         for index in range(12):
@@ -937,7 +950,7 @@ def test_a_semantic_only_memory_outside_the_cap_disappears(workspace, monkeypatc
 
         query_blob = _fake_vector("quarterly rollout schedule")
         monkeypatch.setattr(
-            memory_service, "embed_texts", lambda texts, settings=None: [query_blob]
+            memory_service, "embed_batch", as_batch(lambda texts, settings=None: [query_blob])
         )
 
         def recalled(cap: int) -> list[str]:
@@ -1137,7 +1150,7 @@ def _write(
 
 def _lexical_only(monkeypatch) -> None:
     """No embedding provider; recall still ranks lexically."""
-    monkeypatch.setattr(memory_service, "embed_texts", lambda texts, settings=None: None)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(lambda texts, settings=None: None))
 
 
 def _active_rows(db: Session, workspace_id: str) -> List[MemoryItem]:

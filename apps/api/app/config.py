@@ -99,6 +99,24 @@ class Settings(BaseSettings):
     # visible character - a hard error on a turn with nothing wrong with it.
     openai_max_output_tokens: int = 32000
     openai_embedding_model: str = "text-embedding-3-small"
+    # Vector width new embeddings are written at. A knob rather than a property of
+    # the model, because Matryoshka-trained models return a usable prefix at any
+    # width and 3-small's native 1536 is not obviously the right one.
+    #
+    # Measured on evals/corpus.json, 256 dimensions retrieves identically to 1536
+    # — GT@1 .964, GT@3 1.000, GT@5 1.000, unchanged across all three question
+    # strata — for a sixth of the bytes, or a twelfth stored as float16.
+    #
+    # It nevertheless defaults to 1536, which is what every existing vector was
+    # written at. Lowering this does not rewrite a corpus; it opens a *new*
+    # generation that nothing reads until it is backfilled and activated
+    # (scripts/rebuild_embeddings.py), which is deliberate — a live index should
+    # change on an operator's word, not as a side effect of a deploy picking up a
+    # new default.
+    openai_embedding_dimensions: int = 1536
+    # "float32" or "float16". float16 halves storage and changed no ranking at any
+    # k on the eval corpus; like the width, it applies to new generations only.
+    embedding_storage_dtype: str = "float32"
     openai_codegen_max_output_tokens: int = 16000
 
     # --- Model pricing -----------------------------------------------------

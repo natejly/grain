@@ -838,6 +838,16 @@ DB_GET_ALLOWLIST = {
     ("app/api/generated_apps.py", "AppRelease"): "workspace re-checked on the next line",
     ("app/api/integrations.py", "IntegrationAccount"): "id from a scoped replay row",
     ("app/api/integrations.py", "SyncJob"): "id from a scoped replay row",
+    # An embedding contract is deployment-wide, not tenant-owned: it records
+    # which model and width a vector was produced under, and every workspace
+    # reads the same active one. There is no workspace column to filter by, and
+    # adding one would mean two tenants disagreeing about what a vector means.
+    # Callers reach this only with an id they already hold from the generation
+    # table itself, and no row content is tenant data.
+    ("app/services/embedding_generations.py", "EmbeddingGeneration"): (
+        "generations are deployment-wide, not workspace-scoped; the row holds "
+        "model/width metadata and no tenant data"
+    ),
     ("app/services/ingestion.py", "Source"): "worker; id from an authorized route",
     ("app/services/memory.py", "Run"): "worker; id from an authorized route",
     ("app/services/conversation_index.py", "Run"): "worker; id from an authorized route",

@@ -35,6 +35,7 @@ from app.services import conversation_index as ci
 from app.services.embeddings import pack_vector
 from app.services.llm_tools import ToolContext, registry_families
 from app.services.subjects import DOCUMENT, allowed_tools_for
+from tests.embedding_doubles import as_batch
 
 
 @pytest.fixture
@@ -350,8 +351,8 @@ def test_reconcile_makes_unhooked_threads_searchable(workspace):
 def test_dense_arm_finds_what_shares_no_term_with_the_query(workspace, monkeypatch):
     monkeypatch.setattr(
         ci,
-        "embed_texts",
-        lambda texts, settings=None: [pack_vector([1.0, 0.0]) for _ in texts],
+        "embed_batch",
+        as_batch(lambda texts, settings=None: [pack_vector([1.0, 0.0]) for _ in texts]),
     )
     db = SessionLocal()
     try:

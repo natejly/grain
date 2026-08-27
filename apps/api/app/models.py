@@ -636,6 +636,170 @@ class Source(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class EmbeddingGeneration(Base):
+    """One immutable embedding contract: what a vector *means*, and how to compare it.
+
+    A vector is not self-describing. Two blobs of the same width can come from
+    different models, different input formatting, or different truncation, and
+    nothing about the bytes says so — they simply score against each other and
+    return a plausible, wrong ranking. Before this table the only pin was
+    `embedding_model`, a bare model name, and the dense arm's own comment admitted
+    the hole it left: "same-width vectors from different models are the case the
+    length guard cannot catch".
+
+    So a generation records everything that changes what a vector is: the model,
+    the revision the provider actually answered with, the dimensionality, the
+    stored dtype, the normalization, and a version tag for the text we feed it.
+    A reader compares vectors *only* within one generation, which makes mixing
+    unrepresentable rather than merely unlikely.
+
+    `dense_floor` lives here rather than in Settings because it is not a global
+    preference — it is a property of the geometry this contract produces, and it
+    does not survive a change of dimension. Measured on `evals/corpus.json`: a
+    floor of 0.30 admits 11.5% of query-document pairs at 1536 dimensions but
+    24.4% at 256, nearly tripling the noise reaching fusion (1.54 -> 4.36 junk
+    passages per query) while rescuing not one additional true answer. The
+    equal-selectivity floor at 256 is 0.3535, which reproduces the 1536 behaviour
+    exactly. Shipping a smaller vector without carrying its own floor is a silent
+    quality regression, so the floor travels with the contract that needs it.
+
+    Deliberately not workspace-scoped. The contract describes how *this
+    deployment* embeds text, which is what `settings.openai_embedding_model`
+    already was; per-workspace contracts would mean two workspaces disagreeing
+    about what a vector means, for a rollout requirement no one has.
+
+    Lifecycle is build-beside-then-flip: a generation is `building` while its
+    vectors are written, becomes `active` only once coverage is verified, and the
+    one it replaces becomes `retired` with its vectors left intact. Rollback is
+    then an UPDATE of two status columns rather than a re-embed under pressure.
+    """
+
+    __tablename__ = "embedding_generations"
+    __table_args__ = (
+        # At most one active generation, enforced by the database rather than by
+        # the service that flips them. Activation reads the current active row and
+        # then writes two — a check-then-write that two concurrent flips (a deploy
+        # racing an admin click) would both pass. The loser's commit raises here
+        # instead of leaving two contracts both claiming to be the one readers use,
+        # which would split the corpus in half with no error anywhere.
+        Index(
+            "uq_embedding_generations_active",
+            "status",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    #: The model as configured, e.g. "text-embedding-3-small".
+    model: Mapped[str] = mapped_column(String(64))
+    #: The model id the provider *answered* with, captured from the embeddings
+    #: response rather than assumed from the request. For OpenAI this is currently
+    #: the same alias — it publishes nothing finer, unlike a Hub repo where a
+    #: commit sha is pinnable — so it is recorded as evidence rather than trusted
+    #: as a guarantee, and it will start differing the day the provider says so.
+    revision: Mapped[str] = mapped_column(String(128), default="", server_default="")
+    #: Vector width. Part of the contract because Matryoshka truncation makes it a
+    #: choice rather than a property of the model.
+    dimensions: Mapped[int] = mapped_column(Integer)
+    #: "float32" or "float16". float16 halves storage and, measured on the eval
+    #: corpus, changed no ranking at any k — but a reader that guesses wrong
+    #: reinterprets every byte, so the width is recorded, never inferred.
+    storage_dtype: Mapped[str] = mapped_column(String(16), default="float32")
+    #: "l2" or "none". Truncating a Matryoshka vector denormalizes it, so whether
+    #: renormalization happened afterwards is a real difference between two
+    #: otherwise identical-looking 256-dim blobs.
+    normalization: Mapped[str] = mapped_column(String(16), default="l2")
+    #: Version tag for the *text* that gets embedded, not the model that embeds
+    #: it. Retrieval embeds `context_prefix + content`; changing that composition
+    #: changes every vector while leaving model and dimensions untouched.
+    input_format: Mapped[str] = mapped_column(
+        String(32), default="v1", server_default="v1"
+    )
+    #: Minimum cosine for this generation's vectors to enter fusion. See the class
+    #: docstring: this is geometry, not preference.
+    dense_floor: Mapped[float] = mapped_column(Float, default=0.3)
+    #: building | active | retired.
+    status: Mapped[str] = mapped_column(
+        String(16), default="building", server_default="building"
+    )
+    #: How this generation's vectors were produced — provider call, or local
+    #: truncation of an earlier generation. Free text for humans reading an audit,
+    #: never parsed.
+    note: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class EmbeddingVector(Base):
+    """One vector, for one row, under one contract.
+
+    Vectors used to live in an `embedding` column on the row they described,
+    which allowed exactly one per row and therefore exactly one generation at a
+    time. That is the detail that decides whether generations are real: building
+    a new contract in place would overwrite the vectors the live index is serving
+    from, so "build beside the active one" would in fact be "destroy the active
+    one and hope", and the rollback it promises would have nothing left to roll
+    back to. Moving vectors into their own table, keyed by generation, is what
+    makes the safe transition actually safe — the old and new corpora coexist,
+    and the flip between them is a status column.
+
+    Polymorphic over the three tables that hold vectors rather than one side table
+    each. They are read by identical code — the same `ranked_cosine_scores`
+    against the same query vector — so three tables would be three copies of one
+    schema, one migration and one index strategy, kept in sync by hand.
+
+    `workspace_id` is denormalised onto the row so the candidate caps and the
+    workspace filter can be applied before joining back to whatever owns the
+    vector. Scoping is not something to reach through a join for.
+    """
+
+    __tablename__ = "embedding_vectors"
+    __table_args__ = (
+        # One vector per row per generation. A UNIQUE constraint rather than a
+        # convention because the writers are idempotent-by-intent — a reconcile,
+        # a retried ingest and the backfill can all decide the same chunk needs
+        # embedding under the same generation — and a duplicate here would not
+        # error, it would enter the ranking twice and let one passage outvote
+        # itself in fusion.
+        UniqueConstraint(
+            "generation_id",
+            "owner_kind",
+            "owner_id",
+            name="uq_embedding_vectors_owner",
+        ),
+        # The dense arm's access path: one generation, one workspace, newest
+        # first for the candidate cap.
+        Index(
+            "ix_embedding_vectors_generation_workspace",
+            "generation_id",
+            "workspace_id",
+            "owner_kind",
+        ),
+        # Deleting a chunk has to delete its vectors, across every generation.
+        Index("ix_embedding_vectors_owner", "owner_kind", "owner_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    generation_id: Mapped[str] = mapped_column(
+        ForeignKey("embedding_generations.id"), index=True
+    )
+    #: "chunk" | "memory_item" | "conversation_chunk". A plain string, not a
+    #: foreign key, because it names which table `owner_id` points into.
+    owner_kind: Mapped[str] = mapped_column(String(24))
+    owner_id: Mapped[str] = mapped_column(String(36))
+    workspace_id: Mapped[str] = mapped_column(String(36), index=True)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
+    #: sha256 of the exact text that produced this vector. The staleness
+    #: detector: re-ingesting a source rewrites `content` in place, and without
+    #: this a chunk keeps a vector describing text it no longer holds —
+    #: retrievable, confident, wrong, and reported nowhere.
+    content_hash: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Chunk(Base):
     __tablename__ = "chunks"
     __table_args__ = (Index("ix_chunks_workspace_source", "workspace_id", "source_id"),)
@@ -651,6 +815,10 @@ class Chunk(Base):
     # Dense half of hybrid retrieval. Nullable because a chunk exists the moment
     # it is written and is embedded shortly after — retrieval must work, lexically,
     # in the window between the two and if the embedding call fails entirely.
+    #: Legacy home for this chunk's vector, kept so a downgrade past 0068 still
+    #: finds what it expects. Vectors are written to and read from
+    #: `embedding_vectors` now — a chunk has one row there per generation, which
+    #: is what lets a new contract be built while the current one keeps serving.
     embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
     embedding_model: Mapped[str] = mapped_column(String(64), default="")
     # Contextual Retrieval: a one-sentence situating blurb generated at ingest and

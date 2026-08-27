@@ -1,3 +1,95 @@
+# Embedding contract + generations + 256-dim (worktree-rag-embedding-generations, 2026-08-26)
+
+Inspired by HF's Papers-with-Code search write-up. Grain already had the post's core
+design (BM25 + dense + RRF at k=60/depth=50, lexical degradation); this closes the four
+gaps that post exposes. Explicitly OUT of scope: pgvector/HNSW, which would break the
+one-ranking-function-serves-both-backends rule that `ChunkTerm` exists to uphold.
+
+## Measured first (probes, real OpenAI key, `apps/api/evals/corpus.json`)
+- [x] 256-dim preserves answer quality exactly: GT@1 .964 / GT@3 1.000 / GT@5 1.000,
+      identical to the 1536 reference across all three question strata
+- [x] float16 costs nothing: rankings identical to float32 -> 512 B/vec, 12x cut
+- [x] `cosine(API dims=256, local truncate+renormalize) = 0.999997` -> a generation can be
+      materialized from stored 1536-dim blobs with ZERO API calls
+- [x] Dense floor does NOT survive dimension change: 0.30 admits 11.5% of pairs at 1536 but
+      24.4% at 256 (noise/query 1.54 -> 4.36). Empirical equal-selectivity floor at 256 is
+      **0.3535** (gold 28/28, noise/query 1.54, matching the reference exactly).
+      The closed-form sqrt(d) rule is WRONG here: 0.3*sqrt(1536/256)=0.735 keeps 1/28 gold.
+
+## Plan
+- [x] `embedding_generations` table: model, revision, dimensions, storage_dtype,
+      normalization, input_format, **dense_floor**, status, timestamps
+- [x] `embedding_vectors` table — one row per (owner, generation). **Replaced** the
+      original plan of contract *columns* on the three owning tables: a column holds one
+      vector, so build-beside would have overwritten the corpus being served and the
+      documented rollback would have been a lie. Caught mid-implementation.
+- [x] `embeddings.py`: dimension-aware embed, float16 pack/unpack, local MRL truncation,
+      dtype-aware `ranked_cosine_scores`
+- [x] Readers filter by ACTIVE generation, not by model-name string; floor comes from the
+      generation, with an explicit `RETRIEVAL_DENSE_FLOOR` still overriding it
+- [x] Migration 0068 + backfill; deriving a narrower generation costs zero API calls
+- [x] Activation: build beside -> verify coverage -> flip atomically -> keep prior for rollback
+- [x] Content hash so an edited chunk cannot silently keep a stale vector
+- [x] Eval gate: `evaluate_retrieval.py --dimensions` measures truncation end to end
+- [x] Web surface: `GET /api/org/retrieval-contract` + `RetrievalContractPanel`
+- [x] Tests; commit + push
+
+## Review
+
+**Result: 256-dim float16 retrieves identically to 1536-dim float32 on this corpus,
+at 1/12th the bytes** — measured through the production path with a live provider:
+
+| contract | lexical | paraphrase | indirect | overall | bytes/vec |
+|---|---|---|---|---|---|
+| 1536d f32 | 100% / 1.000 | 100% / 0.933 | 100% / 1.000 | 100.0% | 6,144 |
+| 512d f16 | 100% / 1.000 | 100% / 0.933 | 100% / 1.000 | 100.0% | 1,024 |
+| **256d f16** | **100% / 1.000** | **100% / 0.933** | **100% / 1.000** | **100.0%** | **512** |
+| 128d f16 | 100% / 1.000 | 100% / 0.883 | 90% / 0.900 | 96.4% | 256 |
+
+128 degrading is what makes 256 a real pass rather than a saturated one: the benchmark
+has resolution immediately below the recommended width.
+
+### What was wrong before this
+- A vector's only provenance was `embedding_model`, a bare name. Same-width vectors from
+  two models compared cleanly and ranked wrongly — the dense arm's own comment admitted it.
+- Editing that setting migrated nothing; it made every stored vector fail the reader's
+  filter at once. Hybrid search became lexical search with **no error anywhere**, because
+  degrading to lexical is a designed behaviour. Quality dropped; the system looked healthy.
+- A re-ingest rewrote `content` in place and kept the old vector. Retrievable, confident,
+  and describing words the chunk no longer held.
+
+### Two things the work itself corrected
+- **The vector-per-row flaw** above. Fixed before shipping, not after.
+- **The floor is not portable across widths.** `retrieval_dense_floor = 0.30` admits 11.5%
+  of query-document pairs at 1536d but **24.4%** at 256d — junk per query 1.54 -> 4.36,
+  rescuing zero additional true answers. So the floor travels with the generation.
+  The tempting closed form is wrong: `0.3 * sqrt(1536/256) = 0.735` keeps **1 of 28**
+  true answers. The equal-selectivity floor is **0.3535**, measured. Measure, don't derive.
+
+### Deliberately not done
+- **pgvector / HNSW.** The dense arm still scans up to `retrieval_vector_candidate_cap`
+  vectors per query in numpy. pgvector would break the one-ranking-function-serves-both-
+  backends rule `ChunkTerm` exists to uphold. 256d f16 cuts that scan 12x as a stopgap;
+  the ANN index is a separate decision.
+- **The default is still 1536.** Lowering it opens a new generation nothing reads until
+  backfilled and activated. Flipping a live corpus is an operator's call, not a deploy's:
+  `scripts/rebuild_embeddings.py --dimensions 256 --dtype float16 --activate`.
+- **The web panel is read-only.** Activation has corpus-wide blast radius; it stays in the
+  script where it is logged and hard to do by accident.
+
+### Verification
+- api suite **2,777 passed** (18 new), web **869 passed** (5 new), ruff + mypy + eslint +
+  tsc clean, `make eval` exit 0 at the documented floors.
+- Migration proven on SQLite via 6 tests: dominant model detected, width inferred from a
+  stored vector, minority-model rows correctly left behind, bytes byte-identical, source
+  columns untouched, upgrade/downgrade/upgrade replays to one generation.
+- Postgres: the full alembic chain was **not** run (the `psycopg` extra is not installed
+  and mutating the shared venv was out of scope). The two backend-dependent constructs
+  were verified directly on PG16 — `length(bytea)` returns bytes, and the partial unique
+  index rejects a second `active` row. **Run the chain on Postgres before deploying.**
+- The staleness test was mutation-checked: reverting the predicate to "does *a* vector
+  exist" makes it fail, so it is not vacuous.
+
 # Security audit + rate limiting (bg/security-audit, 2026-08-25)
 
 ## Plan

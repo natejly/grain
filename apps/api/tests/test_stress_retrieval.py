@@ -41,6 +41,7 @@ from app.services.retrieval import (
     search_evidence,
     tokenize,
 )
+from tests.embedding_doubles import as_batch
 
 EMBED_DIM = 64
 
@@ -387,8 +388,8 @@ def test_the_dense_arm_has_no_stopword_guard_of_its_own(
     """
     monkeypatch.setattr(
         retrieval_service,
-        "embed_texts",
-        lambda texts, settings=None: [_fake_vector(text) for text in texts],
+        "embed_batch",
+        as_batch(lambda texts, settings=None: [_fake_vector(text) for text in texts]),
     )
     db = SessionLocal()
     try:

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useSession } from "../auth/session-provider";
 import { OrganizationPanel } from "./organization";
+import { RetrievalContractPanel } from "./retrieval-contract";
 import { describeError, formatRelative } from "./shared";
 
 /**
@@ -218,6 +219,7 @@ export function PoliciesView({ setError }: PoliciesViewProps) {
       <div className="policies-stack">
         <RulesTable />
         <OrganizationPanel setError={setError} />
+        <RetrievalContractPanel setError={setError} />
       </div>
     </section>
   );

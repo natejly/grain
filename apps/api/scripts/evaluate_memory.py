@@ -57,6 +57,7 @@ from app.services import memory as memory_service  # noqa: E402
 from app.services.embeddings import pack_vector  # noqa: E402
 from app.services.memory import recall  # noqa: E402
 from app.services.retrieval import tokenize  # noqa: E402
+from tests.embedding_doubles import as_batch  # noqa: E402
 
 USER_ID = "00000000-0000-4000-8000-000000000093"
 EMBED_DIM = 64
@@ -169,8 +170,10 @@ def main() -> None:
             # The query embedding has to come from the same fake embedder, or the
             # dense half of recall scores noise.
             query_blob = _fake_vector(item["question"])
-            original = memory_service.embed_texts
-            memory_service.embed_texts = lambda texts, s=None, blob=query_blob: [blob]
+            original = memory_service.embed_batch
+            memory_service.embed_batch = as_batch(
+                lambda texts, s=None, blob=query_blob: [blob]
+            )
             try:
                 found = recall(
                     db,
@@ -180,7 +183,7 @@ def main() -> None:
                     settings=settings,
                 )
             finally:
-                memory_service.embed_texts = original
+                memory_service.embed_batch = original
 
             contents = [entry.content.lower() for entry in found.items]
             blob = "\n".join(contents)
