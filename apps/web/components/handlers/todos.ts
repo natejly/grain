@@ -45,7 +45,14 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
 
   async function addTodoItem(list: Board, title: string) {
     const column = soleColumn(list);
-    if (!column) return;
+    if (!column) {
+      // A list is a board with exactly one column, so an empty name here is a
+      // shape that should never reach the UI. Returning in silence made that
+      // case indistinguishable from a slow add — nothing appeared, nothing
+      // said why. Every other failure in this file is shown; so is this one.
+      setError("Could not add that item: that list has no column.");
+      return;
+    }
     try {
       replaceBoard(await api.addBoardCard(list.id, column, title));
     } catch (caught) {
