@@ -32,14 +32,48 @@ const workspace = readFileSync(
   "utf8",
 );
 
+/** globals.css with its comments removed, so prose cannot be read as CSS. */
+const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+/**
+ * Every rule whose selector list mentions this class, concatenated.
+ *
+ * All of them, not the first. A selector may be written more than once and the
+ * browser applies the union — `.proposal-note` is already split across two
+ * blocks 5,500 lines apart in this file, so that is its normal shape rather
+ * than a hypothesis. A first-match helper reads the earlier block and reports
+ * the later block's declarations as absent, which turns the three negative
+ * assertions below into decoration: appending
+ *
+ *   .thread-actions { position: absolute; opacity: 0; pointer-events: none; }
+ *
+ * to the end of globals.css left the first-match version reporting all three
+ * as null and passing — the exact defect this file exists to catch, waved
+ * through. Checked by doing it, not by reading the regex.
+ */
 function rule(selector: string): string {
-  const found = css.match(new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`));
-  expect(found, `${selector} has no rule in globals.css`).not.toBeNull();
-  return found![1];
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // `(?![\w-])` so `.thread-actions` does not also collect `.thread-actions-x`.
+  const pattern = new RegExp(
+    `(?:^|[};])[^{}]*${escaped}(?![\\w-])[^{}]*\\{([^}]*)\\}`,
+    "g",
+  );
+  let body = "";
+  let found = false;
+  for (const match of bare.matchAll(pattern)) {
+    found = true;
+    body += match[1];
+  }
+  expect(found, `${selector} has no rule in globals.css`).toBe(true);
+  return body;
 }
 
 function declaration(body: string, property: string): string | null {
-  const match = body.match(new RegExp(`(?:^|[;\\s])${property}:\\s*([^;]+);`));
+  // The trailing `;` is optional: the last declaration in a block may omit it,
+  // and concatenating blocks puts such a declaration mid-string.
+  const match = body.match(
+    new RegExp(`(?:^|[;\\s])${property}:\\s*([^;}]+)(?:;|$)`),
+  );
   return match ? match[1].trim() : null;
 }
 
