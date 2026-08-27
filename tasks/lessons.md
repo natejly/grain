@@ -717,3 +717,30 @@ gone" signal sends immediately and cancels whatever was pending.
   `set(...)` for a coverage assertion while the sweep parametrizes over the
   source list, so the collapse discarded nothing that executes. "287 entries
   collapse to 281 in this mapping" is the whole honest finding.
+- A guard is not verified until you have watched it fail. Three CSS suites held
+  assertions that could not fail: `.thread-actions` must have no `opacity`, no
+  `pointer-events`, no `position: absolute`; `.tile-grip` must never carry
+  `opacity`; every full-height surface must pair `vh` with `dvh`. Each read the
+  sheet with a hand-rolled regex, and each regex had a hole — a non-global
+  `String.match` returning only the FIRST block for a selector while the browser
+  applies the union of all of them, or an anchor of `(^|[},])` that cannot match
+  the first rule inside a `@media` block, which is where every override lives.
+  Writing the regression takes one minute and answers the question the green
+  tick cannot: appending the exact defect each suite documents left all three
+  passing. Do this wherever a test asserts something is ABSENT, because absence
+  is what a matcher that finds nothing also reports, and the two are
+  indistinguishable from the outside.
+- Seven copies of a helper are seven different helpers. The same matcher had
+  been re-typed in seven suites; one of them had even FOUND the media-block hole
+  and worked around it locally, with a comment explaining it, while the other
+  six stayed blind. Knowledge written into one copy does not reach the others,
+  so duplication does not merely risk drift — it guarantees a fix lands in one
+  place and the bug survives in six. Parsing beat pattern-matching here too: one
+  walk tracking brace depth made nesting a non-issue instead of a regex to get
+  right, and deleted 148 lines for 60.
+- A comment is not structure. Three tests located a breakpoint by slicing from a
+  section comment (`css.indexOf("Mobile refinements")`). Renaming a heading —
+  or stripping comments, which is correct so prose is not read as a selector —
+  silently repoints such a slice at a different part of the file, with nothing
+  red to say so. Ask the structure for what you mean: the at-rule the rule sits
+  inside, not the prose that happens to precede it.
