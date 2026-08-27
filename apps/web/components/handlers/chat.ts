@@ -71,6 +71,8 @@ export type ChatHandlerDeps = {
   setActiveDocument: Dispatch<SetStateAction<WorkspaceDocument | null>>;
   setDocumentVersions: Dispatch<SetStateAction<DocumentVersion[]>>;
   refreshSecondary: () => Promise<void>;
+  /** Re-read the rail's list, dropping the answer if it was overtaken. */
+  refreshConversations: () => Promise<void>;
   refreshArtifacts: () => Promise<void>;
   refreshInfra: () => Promise<void>;
   refreshPendingEdits: () => Promise<void>;
@@ -113,6 +115,7 @@ export function createChatHandlers({
   setActiveDocument,
   setDocumentVersions,
   refreshSecondary,
+  refreshConversations,
   refreshArtifacts,
   refreshInfra,
   refreshPendingEdits,
@@ -206,7 +209,9 @@ export function createChatHandlers({
      */
     onAgentUnavailable: () => setSelectedAgentId(""),
     onRunSettled: async () => {
-      setConversations(await api.listConversations());
+      // Guarded, because this fires when a run settles and can therefore be
+      // in flight across a delete the user makes in the meantime.
+      await refreshConversations();
       await refreshSecondary();
       await refreshArtifacts().catch(() => undefined);
       await refreshInfra().catch(() => undefined);
