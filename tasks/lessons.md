@@ -717,6 +717,27 @@ gone" signal sends immediately and cancels whatever was pending.
   `set(...)` for a coverage assertion while the sweep parametrizes over the
   source list, so the collapse discarded nothing that executes. "287 entries
   collapse to 281 in this mapping" is the whole honest finding.
+- Never `git reset --hard` while holding uncommitted work you still want. Mid
+  integration I reset onto `origin/main` to pick up a peer's commit and
+  destroyed an untracked-in-index edit to `terraform.tfvars.example` I had just
+  written. Nothing was lost only because the tool surfaced a file-change notice
+  and I re-applied it from memory — that is luck, not a process. The reset is
+  rarely the point anyway: `git stash push -m <tag>` or a throwaway WIP commit
+  gets the same clean tree and keeps the work. Check `git status` before any
+  command whose whole job is to discard state.
+- A task-definition round-trip is a rewrite of the whole object, so verify what
+  you did NOT mean to change. Patching one env var onto `grain-migrate` means
+  `describe` -> mutate -> `register`, and a dropped `secrets` block would have
+  cost the migration its DATABASE_URL — a worse failure than the missing var
+  being fixed. Diff the parts you were not aiming at (secrets, command, image,
+  role ARNs) before registering. Revisions are immutable and additive, which
+  makes the fix cheap to roll back but does not make it cheap to get wrong.
+- Read the environment-specific value off the environment, never off the other
+  one that looked similar. The prod migrate task needed
+  `WEB_ORIGIN=https://grain.natejly.com`; the UAT fix that preceded it used
+  `https://uat.grain.natejly.com`. Reading it from the sibling `grain-api` task
+  definition at patch time makes the wrong value unrepresentable, where copying
+  the working UAT script and editing a string makes it one slip away.
 - A guard is not verified until you have watched it fail. Three CSS suites held
   assertions that could not fail: `.thread-actions` must have no `opacity`, no
   `pointer-events`, no `position: absolute`; `.tile-grip` must never carry
