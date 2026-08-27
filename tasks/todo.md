@@ -1,3 +1,71 @@
+# Fix: the run-failure leak and the citation gap (bg/chat-readiness, 2026-08-27)
+
+The two findings the live-model audit turned up, now fixed and measured.
+
+## Plan
+- [x] Stop `_fail_run` publishing internal exception text to clients
+- [x] Keep the messages that were written for a person (OrgBoundExceeded says so)
+- [x] Close the citation gap in the prompt
+- [x] Prove both against the real model, not just the unit suite
+
+## Review
+
+**The leak.** `_fail_run` catches every exception an agent turn can raise and
+put `str(exc)` on `run.error`, which is published twice — into the `run.failed`
+event the browser streams, and into the member-facing Inbox. A driver error
+therefore became SQL, bound parameters and row ids on a user's screen.
+
+Fixed with an allow-list, not a sanitiser: there is no reliable way to scrub
+identifiers out of arbitrary exception text, so nothing is said about the cause
+unless the exception opts in by TYPE. `UserFacingError` (services/errors.py) is
+the marker; `OrgBoundExceeded`, `ModelConfigurationError` and `ScriptError`
+carry it. Everything else gets one honest sentence naming the run id, and the
+detail goes to the log where operators can correlate it.
+
+The allow-list is not optional politeness: `OrgBoundExceeded`'s own docstring
+argues that telling a user "the request failed", when the honest answer is
+"your organization does not allow this", sends them debugging the wrong thing.
+A blanket generic message would have been its own regression. `ChildAborted` is
+deliberately NOT tagged — delegation.py:322 catches it, so it never reaches
+`_fail_run`; that was checked rather than assumed.
+
+**The citation gap.** `CHAT_INSTRUCTIONS` promises "attach [n] after each claim
+supported by passage n", and the evidence block then introduced itself as
+"Optional source passages from the user's library". The passages are optional
+to USE; citing the ones you do use is not. The header now restates the rule
+where the model is actually reading.
+
+## Measured, not asserted
+
+Same scenario, same harness, before and after:
+
+    BEFORE   markers per turn: [0, 0, parked, 0, 2]
+    AFTER-1  markers per turn: [2, failed, 2, 3, 4]
+    AFTER-2  markers per turn: [1, 2, 2, 2, -]
+    AFTER-3  markers per turn: [1, 2, failed, 2, 4]
+
+Twelve completed evidence-bearing turns after the change, none with zero
+markers, none out of range. Before, three of four cited nothing.
+
+A second effect, n=3 and not the thing being tested, so stated as observation
+rather than claim: the absent-fact question used to park on `ask_user` asking
+permission to search a memo it had already retrieved. It now answers directly —
+"The provided Atlas memo passages do not state: the p50 checkout latency... the
+dollar cost of the Redis caching migration". Dropping "Optional" plausibly made
+the passages read as the authoritative set rather than a suggestion.
+
+The leak fix was proven by the bug that motivated it recurring: a turn died on
+the same SQLite lock and the client received "The assistant could not finish
+this turn. Try again — if it keeps happening, quote run f22a9606-… to your
+workspace owner." No SQL in any of the three runs.
+
+## Still open, deliberately
+
+The lock that produced the original leak is NOT fixed. An audit append of a
+`message.delta` failing still destroys an in-flight answer, and still 500s the
+send. That is the separate "make run_events append non-fatal" item — worth
+doing, and a bigger change than this one.
+
 # Chat response-quality audit (bg/chat-readiness, 2026-08-27)
 
 Second pass, after the composer fixes: does the assistant give GOOD answers, not

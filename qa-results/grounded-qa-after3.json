@@ -1,0 +1,198 @@
+{
+  "name": "grounded-qa",
+  "turns": [
+    {
+      "prompt": "Using the Atlas memo I uploaded: what happened to p99 checkout latency between April and June 2026, and how many Sev-2 incidents were there in Q2 versus Q1?",
+      "answer": "p99 checkout latency **fell from 1,840 ms in April 2026 to 612 ms in June 2026**, a **66.7% reduction**. Sev-2 incidents were **7 in Q2 2026**, down from **11 in Q1 2026**. [1]",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 1,
+        "cited": [
+          1
+        ],
+        "out_of_range": [],
+        "uncited": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "cited 1 of 5 passages; uncited 2, 3, 4, 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 2.3
+    },
+    {
+      "prompt": "From the same memo: who owns the read-replica failover drill, when is it scheduled, and how much of the hardware refresh budget has been spent so far?",
+      "answer": "The **read-replica failover drill** is owned by **Dana Whitfield** and is **scheduled for 3 September 2026**. [4]\n\nThe Atlas hardware refresh budget has spent **$91,000 so far**. [1]",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 2,
+        "cited": [
+          1,
+          4
+        ],
+        "out_of_range": [],
+        "uncited": [
+          2,
+          3,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "cited 2 of 5 passages; uncited 2, 3, 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 3.3
+    },
+    {
+      "prompt": "What was the p50 checkout latency in June 2026, and what did the Redis caching migration cost us in dollars?",
+      "answer": "",
+      "tools": [],
+      "citations": null,
+      "status": "failed",
+      "error": "The assistant could not finish this turn. Try again \u2014 if it keeps happening, quote run 33da7d25-8f38-4fa2-a7a2-ef981b580625 to your workspace owner.",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "run.failed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 33.9
+    },
+    {
+      "prompt": "I recall the memo saying the read-replica failover drill was already completed in July 2026 and that Marcus Oyelaran ran it. Can you confirm the July completion date and Marcus's ownership?",
+      "answer": "No \u2014 the memo does **not** confirm a July 2026 completion or Marcus\u2019s ownership.\n\nIt says the **Read-replica failover drill** was owned by **Dana Whitfield**, had status **\u201cNot started,\u201d** and was **scheduled for 3 September 2026**. [1]\n\nMarcus Oyelaran owned the **Redis caching migration** and **Schema partitioning (orders)**, not the read-replica failover drill. [1]",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 2,
+        "cited": [
+          1
+        ],
+        "out_of_range": [],
+        "uncited": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "cited 1 of 5 passages; uncited 2, 3, 4, 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 31.8
+    },
+    {
+      "prompt": "For the p99 latency figure and the failover drill date, tell me exactly which passage number each came from and quote the line of the memo it came from.",
+      "answer": "- **p99 latency figure:** passage **[1]**. Quote: \u201cp99 checkout latency fell from **1,840 ms in April 2026** to **612 ms in June 2026**, a 66.7% reduction.\u201d [1]\n\n- **Failover drill date:** passage **[5]**. Quote: \u201cRead-replica failover drill | Dana Whitfield | Not started | scheduled **3 September 2026**\u201d [5]",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 4,
+        "cited": [
+          1,
+          5
+        ],
+        "out_of_range": [],
+        "uncited": [
+          2,
+          3,
+          4
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "cited 2 of 5 passages; uncited 2, 3, 4"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 3.8
+    }
+  ],
+  "sources": [
+    {
+      "filename": "atlas-q2-memo.md",
+      "id": "0c9cc5b8-4bff-4fcf-b77b-8ed790e319b1",
+      "ok": true
+    }
+  ],
+  "conversation_id": "38d016ef-9890-4c41-886a-468c1c3dc257"
+}

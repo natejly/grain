@@ -22,6 +22,7 @@ from .agent_loop import (
 from .audit import record_audit
 from .citations import summarize_citations, validate_citations
 from .conversation_index import update_conversation_index
+from .errors import user_facing_message
 from .events import append_event
 from .memory import recall, render_memory_context, write_conversation_memory
 from .model import stream_words
@@ -277,12 +278,21 @@ def _record_citation_report(
 
 
 def _fail_run(db, run_id: str, exc: Exception) -> None:
+    # The whole detail, kept where operators can find it and nowhere else. This
+    # is the only place it survives, so it is logged before anything can go
+    # wrong with writing the row below.
+    logger.error("run %s failed", run_id, exc_info=exc)
     db.rollback()
     run = db.get(Run, run_id)
     if run is None or run.status in TERMINAL_RUN_STATES:
         return
     run.status = "failed"
-    run.error = str(exc)[:1000]
+    # Never `str(exc)`. This field is published twice — into the `run.failed`
+    # event the browser streams, and into the member-facing Inbox — so a driver
+    # error put here becomes SQL, bound parameters and row ids on a user's
+    # screen. `user_facing_message` passes through only the messages written to
+    # be read, and says something honest about everything else.
+    run.error = user_facing_message(exc, run_id=run_id)
     run.paused_reason = ""
     run.lease_expires_at = None
     run.agent_state_json = None

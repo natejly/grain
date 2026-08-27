@@ -106,6 +106,14 @@ class Client:
             content_type=f"multipart/form-data; boundary={boundary}",
         )
 
+    def active_provider(self) -> str:
+        """Which model actually answers here — asked, not assumed."""
+        return str(
+            self._request("GET", "/api/bootstrap")
+            .get("model_provider", {})
+            .get("provider", "unknown")
+        )
+
     def new_conversation(self) -> str:
         return self._request("POST", "/api/conversations", b"{}")["id"]
 
@@ -178,9 +186,40 @@ class Client:
         return collected
 
 
+class AdversarialAgainstLiveProvider(RuntimeError):
+    """Refused: a red-team scenario was pointed at a real provider account."""
+
+
 def run_scenario(spec: dict) -> dict:
     client = Client()
     client.login()
+
+    # A scenario that red-teams the assistant must never reach a real provider.
+    #
+    # Running `injection-and-safety.json` against live OpenAI on 2026-08-27 drew
+    # a Trust & Safety "Cyber Abuse" flag on the account within about five
+    # minutes. The prompts contain an injection payload, a request for
+    # production credentials and a demand to print the system prompt: a
+    # legitimate robustness test, and to an automated classifier indistinguishable
+    # from an attack. The model refused correctly and it made no difference.
+    #
+    # Worse, every dev and QA run shares one seeded identity, so all of this
+    # traffic collapses into a single safety identifier and repeat runs build a
+    # pattern that escalates toward restriction. `store=False` keeps content
+    # unretained; it does not keep classifiers from reading it.
+    #
+    # So the guard asks the server which provider is actually wired up rather
+    # than trusting the caller to have pointed at the right port.
+    if spec.get("adversarial"):
+        provider = client.active_provider()
+        if provider != "scripted":
+            raise AdversarialAgainstLiveProvider(
+                f"{spec.get('name', 'this scenario')!r} is marked adversarial and "
+                f"{BASE} answers with the {provider!r} provider. Run it against "
+                "MODEL_PROVIDER=scripted — assert on how the app handles the "
+                "payload, never on a real model's refusal."
+            )
+
     result: dict[str, Any] = {"name": spec.get("name", "unnamed"), "turns": []}
 
     for source in spec.get("sources", []):

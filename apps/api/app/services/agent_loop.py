@@ -36,6 +36,7 @@ from . import (
     webhooks,
 )
 from .audit import record_audit
+from .errors import UserFacingError
 from .events import DeltaBuffer, append_event
 from .harness import ModelStep, resolve_harness
 from .llm_tools import (
@@ -184,7 +185,7 @@ class LoopState:
         )
 
 
-class OrgBoundExceeded(RuntimeError):
+class OrgBoundExceeded(UserFacingError, RuntimeError):
     """The organization does not permit the harness or model this turn would use.
 
     A distinct type so the worker can report it as configuration rather than as a
