@@ -44,13 +44,21 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
   }
 
   async function addTodoItem(list: Board, title: string) {
+    // Cleared on entry, like every other handler that reports: boards render as
+    // a row of lists sharing one error line, so a message left over from a
+    // failed add sits under a row that later landed and reads as that row
+    // having failed.
+    setError("");
     const column = soleColumn(list);
     if (!column) {
       // A list is a board with exactly one column, so an empty name here is a
       // shape that should never reach the UI. Returning in silence made that
       // case indistinguishable from a slow add — nothing appeared, nothing
       // said why. Every other failure in this file is shown; so is this one.
-      setError("Could not add that item: that list has no column.");
+      //
+      // Named, not "that list": several lists are on screen at once and they
+      // share the one error line, so an unnamed message does not say which.
+      setError(`Could not add that item: “${list.name}” has no column.`);
       return;
     }
     try {
