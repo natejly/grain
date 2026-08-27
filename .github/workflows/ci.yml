@@ -55,6 +55,25 @@ jobs:
 
       - run: npx --yes pnpm@9.15.9 test:e2e
 
+      # The config already writes a trace and a screenshot for every failed
+      # attempt; without this they are thrown away with the runner, and a
+      # failure that does not reproduce locally cannot be diagnosed at all.
+      #
+      # `always()`, not `failure()`, because the case that most needs the trace
+      # is the one where the job SUCCEEDS: a flaky test failed its first attempt
+      # and passed on retry, so the run is green and the only record of what
+      # went wrong is the trace from the attempt nobody sees.
+      - name: Keep the traces of any attempt that failed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Check OpenAPI contract drift
         run: |
           cp packages/api-client/openapi.json /tmp/openapi.json
