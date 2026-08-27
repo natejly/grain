@@ -60,6 +60,7 @@ function deferred<T>() {
 
 const listConversations = vi.fn();
 const deleteConversation = vi.fn();
+const createConversation = vi.fn();
 
 vi.mock("../components/use-coworking", () => ({
   useCoworking: () => ({
@@ -81,6 +82,7 @@ vi.mock("../components/api", () => {
       get(_target, name: string) {
         if (name === "listConversations") return listConversations;
         if (name === "deleteConversation") return deleteConversation;
+        if (name === "createConversation") return createConversation;
         if (name === "bootstrap") {
           // Only the fields this hook dereferences without a guard: `identity`
           // and `model_provider` are reached through `bootstrap?.x.y`, which
@@ -117,6 +119,8 @@ describe("the rail and a snapshot that was overtaken", () => {
     listConversations.mockReset();
     deleteConversation.mockReset();
     deleteConversation.mockResolvedValue(undefined);
+    createConversation.mockReset();
+    createConversation.mockResolvedValue(conversation({ id: "c-fresh", title: "Fresh" }));
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
@@ -164,6 +168,36 @@ describe("the rail and a snapshot that was overtaken", () => {
       view.result.current.conversations.map((row) => row.id),
       "a stale snapshot resurrected the deleted thread",
     ).toEqual([BETA.id]);
+  });
+
+  it("keeps the history when a thread is made during the first load", async () => {
+    // The mirror of the delete case, and the reason the guard cannot simply
+    // drop a snapshot it does not trust. `loadWorkspace` runs once from a
+    // mount effect and nothing on a timer re-reads conversations, so a rail
+    // left holding only the locally-made thread stays that way until the user
+    // happens to finish a run — not for seven seconds, indefinitely.
+    const held = deferred<unknown[]>();
+    listConversations.mockReturnValueOnce(held.promise);
+
+    const { useWorkspace } = await import("../components/use-workspace");
+    const view = renderHook(() => useWorkspace());
+
+    // "New thread", clicked while the first load is still in flight.
+    await act(async () => {
+      await view.result.current.newConversation();
+    });
+
+    await act(async () => {
+      held.settle([conversation(ALPHA), conversation(BETA)]);
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(
+        view.result.current.conversations.map((row: Conversation) => row.id),
+        "the load dropped the history it had just fetched",
+      ).toEqual(["c-fresh", ALPHA.id, BETA.id]),
+    );
   });
 
   it("still applies a refresh that nothing overtook", async () => {

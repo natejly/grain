@@ -744,16 +744,16 @@ export function useWorkspace() {
   }, [refreshSecondary, refreshArtifacts, refreshPendingEdits]);
 
   const loadWorkspace = useCallback(async () => {
-    // Whether this load is still allowed to overwrite the rail by the time it
-    // answers. It is not, if the user changed the list meanwhile.
+    // What the rail held when this load began, and how many local changes it
+    // had seen. Both are needed, and for opposite reasons.
     //
-    // This replaces an id-set of what was known at the start, which existed
-    // because "New thread" clicked on a still-loading workspace used to lose
-    // the thread it just made. That set could only ever catch a CREATION — a
-    // row absent from the snapshot is visibly new — and never a deletion, which
-    // is present in the snapshot and indistinguishable from a row that belongs.
-    // The epoch catches both, so keeping the id-set as well would have left a
-    // filter that can no longer match anything.
+    // The id-set exists because "New thread" clicked on a still-loading
+    // workspace used to lose the thread it just made: a row absent from the
+    // snapshot but present now is visibly new, so it must survive. The epoch
+    // exists because the reverse case is invisible to that test — a thread
+    // deleted while the load was in flight is still IN the snapshot and reads
+    // as an ordinary row.
+    const knownAtStart = new Set(conversationsRef.current.map((item) => item.id));
     const epochAtStart = conversationEpoch.current;
     try {
       const [
@@ -794,15 +794,40 @@ export function useWorkspace() {
       setBootstrap(boot);
       setDigest(boot.digest ?? null);
       setSafeMode(Boolean(boot.safe_mode));
-      // Applied only if the rail did not change under us. A local change makes
-      // `chats` stale in a way that cannot be repaired by merging: a thread
-      // deleted during the load is still present in this snapshot and reads as
-      // an ordinary row, so there is nothing to distinguish it from one that
-      // belongs. The rail keeps what it has and the next refresh brings it
-      // level — a few seconds of a missing row a colleague just made, rather
-      // than a row this user just deleted coming back.
       if (conversationEpoch.current === epochAtStart) {
         setConversationList(chats);
+      } else {
+        // The rail changed under us. Unlike the refresh paths, this cannot
+        // simply drop the answer: `loadWorkspace` runs once, from a mount
+        // effect, and nothing on a timer re-reads conversations — the two
+        // intervals in this file poll sources and the graph. Discarding this
+        // snapshot would leave the rail holding only what that local change
+        // put in it, missing every other thread, until the user happens to
+        // finish a run. That is unbounded, and worse than the staleness the
+        // guard is here to prevent.
+        //
+        // So it merges, which is possible precisely because `knownAtStart`
+        // says which rows this client had before the snapshot was requested:
+        //   - present now, absent from the snapshot, unknown at start
+        //       -> created while the load was in flight; keep it
+        //   - known at start, absent now
+        //       -> deleted while the load was in flight; the snapshot's copy
+        //          is the stale one, so drop it rather than resurrect it
+        // Anything else is the server's to state.
+        setConversationList((current) => {
+          const present = new Set(current.map((item) => item.id));
+          const listed = new Set(chats.map((item) => item.id));
+          const deletedDuringLoad = new Set(
+            [...knownAtStart].filter((id) => !present.has(id)),
+          );
+          const createdDuringLoad = current.filter(
+            (item) => !listed.has(item.id) && !knownAtStart.has(item.id),
+          );
+          return [
+            ...createdDuringLoad,
+            ...chats.filter((item) => !deletedDuringLoad.has(item.id)),
+          ];
+        });
       }
       setSources(nextSources);
       setSpaces(nextSpaces);
