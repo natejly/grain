@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { blocksFor, css, rulesInside } from "./css-rules";
 
 /**
  * The chat fills the panel it is given, and the shell is as tall as the
@@ -20,13 +19,24 @@ import { describe, expect, it } from "vitest";
  *     below the fold. Every full-height surface needs the `dvh` line, and it
  *     has to come *after* the `vh` line, which is the fallback.
  */
-const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
-
+/**
+ * Read through the shared parser in `./css-rules`.
+ *
+ * `blocksFor` returns every block written for exactly this selector, and every
+ * is the operative word: `.sidebar` has three blocks here, `.icon-rail` and
+ * `.main-panel` two, and the extra ones are the `@media` overrides — precisely
+ * where bug 2 above comes back, because an override restating the height is a
+ * second chance to forget `dvh`. The regex this file used could not match the
+ * first rule inside a `@media` block at all, so appending
+ *
+ *   @media (max-width: 720px) { .sidebar { height: 100vh; } }
+ *
+ * left all eleven tests here passing.
+ */
 function rule(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = css.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`, "m"));
-  expect(match, `${selector} has no rule in globals.css`).not.toBeNull();
-  return match![1];
+  const blocks = blocksFor(selector);
+  expect(blocks.length, `${selector} has no rule in globals.css`).toBeGreaterThan(0);
+  return blocks.join("");
 }
 
 describe("the chat measure", () => {
@@ -65,14 +75,23 @@ describe("full-height surfaces", () => {
   ];
 
   for (const [selector, property] of surfaces) {
-    it(`${selector} sizes to the *visible* viewport`, () => {
-      const body = rule(selector);
-      const declarations = [...body.matchAll(new RegExp(`${property}:\\s*100(dvh|vh)`, "g"))].map(
-        (match) => match[1],
+    it(`${selector} sizes to the *visible* viewport in every rule that sizes it`, () => {
+      // EVERY block that sets it, not the joined text of all of them: a phone
+      // override restating the height is a second chance to forget `dvh`, and
+      // concatenating would hide it behind the base rule's correct pair. Same
+      // shape as the `.composer-zone` inset check below, which had this right.
+      const sizing = blocksFor(selector).filter((body) =>
+        new RegExp(`${property}:\\s*100(dvh|vh)`).test(body),
       );
-      // Both, and in this order: `vh` is the fallback for a browser that does
-      // not know `dvh`, so a `dvh` line placed first would be overwritten.
-      expect(declarations, `${selector} ${property}`).toEqual(["vh", "dvh"]);
+      expect(sizing.length, `${selector} sets no viewport ${property}`).toBeGreaterThan(0);
+      for (const body of sizing) {
+        const declarations = [
+          ...body.matchAll(new RegExp(`${property}:\\s*100(dvh|vh)`, "g")),
+        ].map((match) => match[1]);
+        // Both, and in this order: `vh` is the fallback for a browser that does
+        // not know `dvh`, so a `dvh` line placed first would be overwritten.
+        expect(declarations, `${selector} ${property}`).toEqual(["vh", "dvh"]);
+      }
     });
   }
 });
@@ -109,10 +128,13 @@ describe("the composer on a phone", () => {
     // Eight chips is ~560px of controls in a ~380px composer. The desktop rule
     // pins the row at 36px, which clipped everything past the third chip —
     // including Send — with no scrollbar to say so.
-    const mobile = css.slice(css.indexOf("Mobile refinements"));
-    const tools = mobile.match(/\.composer-tools\s*\{([^}]*)\}/);
-    expect(tools, "no mobile .composer-tools rule").not.toBeNull();
-    expect(tools![1]).toMatch(/flex-wrap:\s*wrap/);
-    expect(tools![1]).toMatch(/height:\s*auto/);
+    // Asked of the breakpoint rather than of a slice starting at a section
+    // comment: a comment is not structure, and renaming that heading would have
+    // quietly pointed this at a different part of the sheet with nothing red.
+    const tools = rulesInside(".composer-tools", /max-width/);
+    expect(tools.length, "no narrow-screen .composer-tools rule").toBeGreaterThan(0);
+    const wrapping = tools.filter((rule) => /flex-wrap:\s*wrap/.test(rule.body));
+    expect(wrapping.length, "nothing lets the control row wrap").toBe(1);
+    expect(wrapping[0].body).toMatch(/height:\s*auto/);
   });
 });
