@@ -13,7 +13,7 @@ import { api } from "../api";
 import { readBudgetPark, type BudgetPark } from "../views/budget-format";
 import { readCitationCheck } from "../views/citation-format";
 import { parseAside } from "../views/commands";
-import { describeError } from "../views/shared";
+import { describeActionError } from "../views/shared";
 
 /**
  * One conversation, driven: send, stream, approve, cancel, regenerate.
@@ -231,7 +231,7 @@ export function createThreadHandlers({
       );
       setRunStatus(decision === "approved" ? "Resuming" : "Continuing without the tool");
     } catch (caught) {
-      setError(describeError(caught, "Could not record that decision"));
+      setError(describeActionError(caught, "Could not record that decision"));
     }
   }
 
@@ -241,7 +241,7 @@ export function createThreadHandlers({
       await api.cancelRun(activeRun);
       setRunStatus("Stopping");
     } catch (caught) {
-      setError(describeError(caught, "Could not stop the run"));
+      setError(describeActionError(caught, "Could not stop the run"));
     }
   }
 
@@ -274,7 +274,7 @@ export function createThreadHandlers({
       if (caught instanceof Error && caught.message.includes("Agent is not available")) {
         onAgentUnavailable?.();
       }
-      setError(describeError(caught, "Could not regenerate"));
+      setError(describeActionError(caught, "Could not regenerate"));
     }
   }
 
@@ -332,7 +332,7 @@ export function createThreadHandlers({
       if (caught instanceof Error && caught.message.includes("Agent is not available")) {
         onAgentUnavailable?.();
       }
-      setError(describeError(caught, "Could not edit that message"));
+      setError(describeActionError(caught, "Could not edit that message"));
       return false;
     }
   }
@@ -523,7 +523,7 @@ export function createThreadHandlers({
       }
       await onRunSettled(runId, conversationId);
     } catch (caught) {
-      setError(describeError(caught, "The event stream disconnected"));
+      setError(describeActionError(caught, "The event stream disconnected"));
     } finally {
       setActiveRun((current) => (current === runId ? null : current));
       setRunStatus("");
@@ -565,7 +565,7 @@ export function createThreadHandlers({
         // draft comes back so one more Enter sends it as an ordinary turn.
         setDraft(content);
         setError(
-          describeError(caught, "The run finished first — press Enter to send"),
+          describeActionError(caught, "The run finished first — press Enter to send"),
         );
       }
       return;
@@ -600,7 +600,7 @@ export function createThreadHandlers({
       if (caught instanceof Error && caught.message.includes("Agent is not available")) {
         onAgentUnavailable?.();
       }
-      setError(describeError(caught, "Could not send message"));
+      setError(describeActionError(caught, "Could not send message"));
     }
   }
 

@@ -44,6 +44,34 @@ export function describeError(caught: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * The same, for a failure somebody is *waiting on*.
+ *
+ * `describeError`'s silence above is right for the refreshes that run on their
+ * own — during an outage they all fail at once, and the banner says it better
+ * than a stack of identical toasts would. It is wrong for an action a person
+ * just took. "Unreachable" is not only the full outage the banner covers:
+ *
+ *   - a single request can fail at the network level while `/health` still
+ *     answers, which is a transient blip;
+ *   - a 500 that unwinds past the CORS middleware never gets the
+ *     Access-Control-Allow-Origin header, so the browser reports it as a bare
+ *     network failure — status 0 — rather than the server error it is;
+ *   - and the health poll ticks every 15 seconds while healthy, so even a real
+ *     outage is unannounced for up to that long.
+ *
+ * In all three the turn did not happen, and a composer that just sits there is
+ * indistinguishable from one that ignored the keystroke. Say so.
+ */
+export function describeActionError(caught: unknown, fallback: string): string {
+  if (caught instanceof ApiError && caught.offline) {
+    // Neutral about *what* did not happen: each caller's fallback already
+    // names its own action, and this one sentence rides all of them.
+    return `${fallback} — the API could not be reached. Try again.`;
+  }
+  return describeError(caught, fallback);
+}
+
 export function slugify(value: string): string {
   return value
     .toLowerCase()

@@ -171,7 +171,49 @@ export function useWorkspace() {
   // never touches localStorage. `focusedPane` is null when the primary is focused.
   const [extraPanes, setExtraPanes] = useState<ChatPane[]>(() => readStoredPanes());
   const [focusedPane, setFocusedPane] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  /**
+   * The composer's text, one draft per thread rather than one for the shell.
+   *
+   * A single shared draft followed you to whatever thread you clicked next, so
+   * the very next Enter sent a half-typed message into the wrong conversation —
+   * on a shared thread, in front of the wrong people — with nothing on screen
+   * saying it had moved. It also fed the typing chip below, which then reported
+   * you as typing in a thread you had merely visited.
+   *
+   * Keyed by conversation id. "" is the composer that renders before any thread
+   * exists: typing there creates the thread on send, so there is no other
+   * conversation those words could be misdirected into.
+   */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draftKey = activeConversation ?? "";
+  const draft = drafts[draftKey] ?? "";
+  /**
+   * The key, read through a ref rather than closed over at render.
+   *
+   * `submitPrompt` clears the draft, awaits the send, and on failure puts the
+   * words back — and by then `ensureConversation` may have made this the first
+   * turn of a brand new thread. The restored text has to land in the composer
+   * the user is actually looking at, which is whichever thread is active *now*.
+   */
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
+  const setDraft = useCallback((value: SetStateAction<string>) => {
+    setDrafts((current) => {
+      const key = draftKeyRef.current;
+      const previous = current[key] ?? "";
+      const next = typeof value === "function" ? value(previous) : value;
+      if (next === previous) return current;
+      // An emptied draft is dropped rather than parked as "": this map holds a
+      // key for every thread typed into this session, and a cleared composer
+      // has nothing worth remembering.
+      if (!next) {
+        const rest = { ...current };
+        delete rest[key];
+        return rest;
+      }
+      return { ...current, [key]: next };
+    });
+  }, []);
   // Which authored agent answers the next message; "" is the workspace
   // default. No longer bare session state: the thread remembers it
   // (Conversation.default_agent_id) — see the seeding effect and the pick*

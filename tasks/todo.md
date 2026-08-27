@@ -1,3 +1,59 @@
+# Main chat readiness (bg/chat-readiness, 2026-08-27)
+
+Goal: drive the primary chat as a user and make sure it is fit for people to
+use — not "the specs pass", but "nothing silently does the wrong thing".
+
+## Plan
+- [x] Baseline the existing chat coverage (workspace.spec.ts) before touching anything
+- [x] Drive the real app in a browser: send/stream/settle, reload, rail titling
+- [x] Probe what the specs do NOT cover: composer guards, thread switching,
+      stop/regenerate/edit, steering, copy, failure paths, mobile, keyboard
+- [x] Fix what is actually broken, with a regression test per fix
+- [x] Re-verify: unit suite, lint, typecheck, full chat e2e sweep
+
+## Review
+
+The covered paths were already healthy — the baseline run of `workspace.spec.ts`
+was green before any change, and streaming, cancel, regenerate, edit-and-rerun,
+steering, slash commands, copy, the approval cards, mobile layout and composer
+tab order all behaved correctly under a live browser. Two things did not, and
+both failed *quietly*, which is why neither had been noticed.
+
+### Fixed
+- **A draft was sent into the wrong conversation.** `use-workspace.ts` held one
+  shell-level `draft`, never keyed on the active thread, so a half-typed message
+  followed you to whatever thread you clicked next and the next Enter posted it
+  there — on a shared thread, in front of the wrong people. Proven end to end
+  before fixing. Drafts are now keyed by conversation id (with `""` for the
+  composer that renders before a thread exists); they are isolated *and*
+  remembered, and a send clears only the thread that sent. This also stops the
+  typing chip reporting you as typing in a thread you had merely visited.
+- **A failed send told the user nothing.** `describeError` returns `""` for an
+  unreachable API on the grounds that the health banner covers it — but that
+  banner is driven by a separate `/health` poll on a 15s cadence, so it never
+  fires for a single blipped request, and never for a 500 that unwinds past the
+  CORS middleware and reaches the browser stripped of its status. The send just
+  sat there, indistinguishable from an ignored keystroke. Added
+  `describeActionError` for failures somebody is *waiting on*; the chat turn
+  engine's seven user-initiated catches use it. Background refreshes still keep
+  quiet during a real outage, which is what the original silence was for.
+
+### Tests
+- `apps/web/tests/action-error.test.ts` — pins the split in both directions
+  (background describer stays silent, action describer is never empty).
+- `apps/web/e2e/chat-composer.spec.ts` — the two behaviours above, in a browser.
+  Both verified to FAIL against the unfixed code before being kept.
+
+### Not a product bug, but worth knowing
+`subject-chat.spec.ts` ("the project panel writes a file…") fails in any fresh
+clone or worktree with "React runtime asset is missing (404)".
+`playwright.config.ts`'s webServer runs `next dev` **directly**, which skips the
+`pnpm sandbox-assets` step that `pnpm dev` runs first — so the spec passes only
+where an earlier run happened to leave `apps/web/public/sandbox` behind. Running
+`pnpm --filter @workspace/web sandbox-assets` fixes it locally; pointing the
+webServer command at the `dev` script would fix it for everyone. Left alone here
+because it is neither main chat nor caused by this branch.
+
 # Security audit + rate limiting (bg/security-audit, 2026-08-25)
 
 ## Plan
