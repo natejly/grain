@@ -1,10 +1,31 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { openView } from "./shell";
 
 /**
  * Temporary verification that the 3D graph actually paints, not just that the
  * page survives mounting it. Passing e2e elsewhere only proves no crash.
  */
+
+const SOURCE = "graph3d-e2e.md";
+
+/**
+ * Remove every source of this name, leaving none.
+ *
+ * Every rather than the first: the case worth handling is the one where a
+ * previous attempt left one behind and this one has just added another — which
+ * is also the case a `.first()` would quietly half-fix.
+ */
+async function removeSource(page: Page) {
+  const remove = page
+    .locator(".source-row", { hasText: SOURCE })
+    .getByTitle("Delete source");
+  // Re-counted each pass, since a deletion re-renders the list.
+  for (let left = await remove.count(); left > 0; left = await remove.count()) {
+    page.once("dialog", (dialog) => dialog.accept());
+    await remove.first().click();
+    await expect(remove).toHaveCount(left - 1);
+  }
+}
 test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   const failures: string[] = [];
   page.on("pageerror", (error) => failures.push(String(error)));
@@ -16,15 +37,27 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   // The graph only has a canvas once there is something to draw, so seed an
   // entity-rich source first — the same flow the main spec uses.
   await openView(page, "Library", /Sources/);
+  // Cleared first, because the teardown at the end of this test is exactly what
+  // a failure skips. A leaked source is not merely untidy: the next attempt
+  // uploads a second copy of the same name, so the delete below — and the main
+  // spec's — matches two buttons and dies on strict mode. Every retry then
+  // reports a different error than the one that started it, and the run says
+  // "resolved to 2 elements" when the real failure was the canvas not painting.
+  await removeSource(page);
   await page.locator('input[type="file"]').setInputFiles({
-    name: "graph3d-e2e.md",
+    name: SOURCE,
     mimeType: "text/markdown",
     buffer: Buffer.from(
       "# Northstar\n\nProject Northstar is owned by Maya Chen at Atlas Labs. " +
         "Maya Chen works with Devi Rao on the Juniper rollout at Atlas Labs.",
     ),
   });
-  await expect(page.getByText("Indexed").last()).toBeVisible();
+  // Scoped to THIS spec's row: sources come back newest-first, so `.last()` is
+  // the oldest and is already indexed whenever an earlier spec left one — which
+  // would let the graph be opened before this source had produced any entities.
+  await expect(
+    page.locator(".source-row", { hasText: SOURCE }).getByText("Indexed"),
+  ).toBeVisible({ timeout: 30_000 });
 
   await openView(page, "Library", /Graph/);
   await expect(
@@ -79,11 +112,7 @@ test("the 3d graph paints a non-empty canvas", async ({ page }) => {
   // Leave the shared workspace as we found it. Without this the source lingers
   // and the main spec's "Delete source" lookup matches two buttons.
   await openView(page, "Library", /Sources/);
-  page.once("dialog", (dialog) => dialog.accept());
-  await page
-    .locator(".source-row", { hasText: "graph3d-e2e.md" })
-    .getByTitle("Delete source")
-    .click();
-  await expect(page.getByText("graph3d-e2e.md")).toHaveCount(0);
+  await removeSource(page);
+  await expect(page.getByText(SOURCE)).toHaveCount(0);
   expect(failures).toEqual([]);
 });

@@ -85,7 +85,11 @@ test.describe("dashboards", () => {
         "region,amount,sold_on\nNorth,120,2026-01-01\nSouth,80,2026-01-02\nEast,200,2026-01-03\nNorth,45,2026-01-04\n",
       ),
     });
-    await expect(page.getByText("Indexed").last()).toBeVisible({ timeout: 30_000 });
+    // Scoped to THIS spec's row: sources come back newest-first, so `.last()`
+    // is the oldest and is already indexed whenever an earlier spec left one.
+    await expect(
+      page.locator(".source-row", { hasText: SOURCE }).getByText("Indexed"),
+    ).toBeVisible({ timeout: 30_000 });
 
     // The dataset is created by a client-side effect AFTER the source reads
     // "Indexed" — an async POST this page fires on its own schedule — so the
