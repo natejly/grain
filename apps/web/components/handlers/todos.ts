@@ -120,6 +120,18 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
    * keeps this honest: an optimistic tick that never gets corrected is a
    * checklist that lies about what the server thinks is done.
    */
+  /**
+   * The one handler here that deliberately does NOT clear the error on entry.
+   *
+   * Every other operation in this file is discrete and deliberate — one click,
+   * one intent — so clearing on entry drops a message the person has already
+   * acted on. A tick is neither: it is the optimistic path, it fires on every
+   * checkbox in the list, and it is the thing someone does WHILE reading an
+   * error about something else. Clearing here would wipe a message before it
+   * had been read, so it stays until an operation the person aimed at replaces
+   * it. `todo-add-failure.test.ts` pins this, so it is not mistaken for the
+   * omission it looks like.
+   */
   async function setTodoItemDone(list: Board, itemId: string, done: boolean) {
     markCard(list.id, itemId, done);
     try {
@@ -158,6 +170,7 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
   }
 
   async function removeTodoItem(list: Board, itemId: string) {
+    setError("");
     try {
       replaceBoard(await api.deleteBoardCard(list.id, itemId));
     } catch (caught) {
@@ -166,6 +179,7 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
   }
 
   async function removeTodoList(list: Board) {
+    setError("");
     try {
       await api.deleteBoard(list.id);
       setBoards((items) => items.filter((item) => item.id !== list.id));

@@ -16,10 +16,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * the screen distinguishes it from a dropped keypress.
  */
 const addBoardCard = vi.fn();
+const deleteBoardCard = vi.fn();
+const setTodoItemDone = vi.fn();
+const deleteBoard = vi.fn();
 
 vi.mock("../components/api", () => ({
   api: {
     addBoardCard: (...args: unknown[]) => addBoardCard(...args),
+    deleteBoardCard: (...args: unknown[]) => deleteBoardCard(...args),
+    setTodoItemDone: (...args: unknown[]) => setTodoItemDone(...args),
+    deleteBoard: (...args: unknown[]) => deleteBoard(...args),
   },
 }));
 
@@ -35,6 +41,8 @@ const LIST = {
 /** The same list after losing its column — a board that is no longer a list. */
 const COLUMNLESS = { ...LIST, columns: [] } as unknown as Board;
 
+type TodoOpsUnderTest = ReturnType<typeof handlers>["made"];
+
 function handlers() {
   const state = { error: "", boards: [LIST] };
   const { todoOps } = createTodoHandlers({
@@ -48,7 +56,17 @@ function handlers() {
 
 beforeEach(() => {
   addBoardCard.mockReset();
+  deleteBoardCard.mockReset();
+  setTodoItemDone.mockReset();
+  deleteBoard.mockReset();
 });
+
+/** Leave an unread message on screen, the way a failed add does. */
+async function withStaleError(made: TodoOpsUnderTest, state: { error: string }) {
+  addBoardCard.mockRejectedValue(new Error("nope"));
+  await made.addTodoItem(LIST, "Book the venue");
+  expect(state.error).not.toBe("");
+}
 
 describe("adding a todo item", () => {
   it("says so when the list has no column to add to", async () => {
@@ -86,5 +104,52 @@ describe("adding a todo item", () => {
     // A message from the failed attempt still on screen under a row that did
     // land reads as the row having failed.
     expect(state.error).toBe("");
+  });
+});
+
+/**
+ * Which operations clear the error on entry, and the one that must not.
+ *
+ * Boards render as a row of lists sharing a single error line, so a message
+ * left over from a failed operation sits under whatever the person does next
+ * and reads as THAT having failed. Every discrete, deliberate operation
+ * therefore clears on entry.
+ *
+ * Ticking a checkbox is the exception, and it is pinned here rather than left
+ * to look like the omission it resembles: the tick is optimistic, fires on
+ * every item in the list, and is the thing someone does while reading an error
+ * about something else. Clearing there would wipe a message before it was read.
+ */
+describe("the shared error line", () => {
+  it("is cleared when a delete is started", async () => {
+    const { made, state } = handlers();
+    await withStaleError(made, state);
+
+    deleteBoardCard.mockResolvedValue(LIST);
+    await made.removeTodoItem(LIST, "item-1");
+
+    expect(state.error).toBe("");
+  });
+
+  it("is cleared when a list delete is started", async () => {
+    const { made, state } = handlers();
+    await withStaleError(made, state);
+
+    deleteBoard.mockResolvedValue(undefined);
+    await made.removeTodoList(LIST);
+
+    expect(state.error).toBe("");
+  });
+
+  it("survives a checkbox tick, which is not aimed at it", async () => {
+    const { made, state } = handlers();
+    await withStaleError(made, state);
+
+    setTodoItemDone.mockResolvedValue({ id: "item-1", done: true });
+    await made.setTodoItemDone(LIST, "item-1", true);
+
+    // Deliberate. A tick is incidental to the message on screen, so it leaves
+    // it for an operation the person actually aimed at. Do not "fix" this.
+    expect(state.error).not.toBe("");
   });
 });
