@@ -1,0 +1,10 @@
+{
+  "name": "instruction-and-format",
+  "turns": [
+    "Give me a markdown table comparing programming languages. It must have a header row plus EXACTLY 3 data rows - no more, no fewer. Columns: Language, Typing, Typical use. No text before or after the table.",
+    "Now write me a Python function. Put it in a single fenced code block tagged as python. It should define `def fizzbuzz(n: int) -> list[str]:` returning the FizzBuzz strings for 1..n, and below the function include a line that prints fizzbuzz(15). The code must run as-is under python3 with no edits and no imports of anything unavailable.",
+    "In AT MOST 15 words, explain why binary search is faster than linear search. Do not exceed 15 words.",
+    "Explain the time complexity of binary search and state the recurrence, using inline LaTeX mathematics delimited with dollar signs (like $O(\\log n)$) rather than plain text notation. Two short paragraphs.",
+    "Reponds entierement en francais, sans un seul mot d'anglais: explique en trois phrases ce qu'est une table de hachage et pourquoi ses recherches sont rapides."
+  ]
+}

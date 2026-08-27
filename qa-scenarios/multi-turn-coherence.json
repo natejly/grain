@@ -1,0 +1,10 @@
+{
+  "name": "multi-turn-coherence",
+  "turns": [
+    "I'm organising a reading group at the Fairview library. There will be 8 people in it, and we meet on Thursday evenings.",
+    "How many copies of the book should I order for them, and when do I need them by?",
+    "Actually, make that 12, not 8 - two more couples just joined.",
+    "Copies are $14.50 each, and the shop takes 10% off any order of more than 10 copies. What will I pay in total?",
+    "Summarise the whole exchange for me - what have we settled on?"
+  ]
+}

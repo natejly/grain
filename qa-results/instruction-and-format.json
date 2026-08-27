@@ -1,0 +1,205 @@
+{
+  "name": "instruction-and-format",
+  "turns": [
+    {
+      "prompt": "Give me a markdown table comparing programming languages. It must have a header row plus EXACTLY 3 data rows - no more, no fewer. Columns: Language, Typing, Typical use. No text before or after the table.",
+      "answer": "| Language | Typing | Typical use |\n|---|---|---|\n| Python | Dynamic, strong | Scripting, data science, web backends |\n| Java | Static, strong | Enterprise applications, Android, services |\n| JavaScript | Dynamic, weak | Web frontends, Node.js backends |",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages cited of 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 3.6
+    },
+    {
+      "prompt": "Now write me a Python function. Put it in a single fenced code block tagged as python. It should define `def fizzbuzz(n: int) -> list[str]:` returning the FizzBuzz strings for 1..n, and below the function include a line that prints fizzbuzz(15). The code must run as-is under python3 with no edits and no imports of anything unavailable.",
+      "answer": "```python\ndef fizzbuzz(n: int) -> list[str]:\n    result = []\n    for i in range(1, n + 1):\n        if i % 15 == 0:\n            result.append(\"FizzBuzz\")\n        elif i % 3 == 0:\n            result.append(\"Fizz\")\n        elif i % 5 == 0:\n            result.append(\"Buzz\")\n        else:\n            result.append(str(i))\n    return result\n\nprint(fizzbuzz(15))\n```",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages cited of 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 34.4
+    },
+    {
+      "prompt": "In AT MOST 15 words, explain why binary search is faster than linear search. Do not exceed 15 words.",
+      "answer": "Binary search halves the search space each step; linear search checks items one by one.",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages cited of 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 35.9
+    },
+    {
+      "prompt": "Explain the time complexity of binary search and state the recurrence, using inline LaTeX mathematics delimited with dollar signs (like $O(\\log n)$) rather than plain text notation. Two short paragraphs.",
+      "answer": "Binary search runs in $O(\\log n)$ time because each comparison halves the remaining search space.\n\nIts recurrence is $T(n)=T(n/2)+O(1)$, which solves to $T(n)=O(\\log n)$.",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages cited of 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 33.9
+    },
+    {
+      "prompt": "Reponds entierement en francais, sans un seul mot d'anglais: explique en trois phrases ce qu'est une table de hachage et pourquoi ses recherches sont rapides.",
+      "answer": "Une table de hachage associe des cl\u00e9s \u00e0 des valeurs gr\u00e2ce \u00e0 une fonction de hachage.  \nCette fonction transforme chaque cl\u00e9 en un emplacement o\u00f9 trouver la valeur.  \nLes recherches sont rapides car elles vont presque directement au bon emplacement.",
+      "tools": [],
+      "citations": {
+        "evidence_count": 0,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages supplied"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 4.3
+    }
+  ],
+  "conversation_id": "62b3f2b4-0845-4c0f-b645-ef3678afab91"
+}

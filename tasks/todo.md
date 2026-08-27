@@ -1,3 +1,53 @@
+# Chat response-quality audit (bg/chat-readiness, 2026-08-27)
+
+Second pass, after the composer fixes: does the assistant give GOOD answers, not
+just does the app carry them. The Playwright suite runs against MODEL_PROVIDER=
+scripted, so it can never answer this — canned replies have no quality.
+
+## Plan
+- [x] Stand up a live-model harness (`scripts-serve-live.py`, port 8011, real provider)
+- [x] Build one shared probe client so scenarios are data, not bespoke HTTP code
+- [x] Six scenario families, each probed and then INDEPENDENTLY re-judged
+- [x] Verify the headline findings myself rather than relaying agent claims
+
+## Review
+
+29 turns against real gpt-5.5. The model is the strong part: zero fabricated
+numbers on grounded questions, both planted "tempting adjacent fact" traps held,
+the injection payload was ignored in three scenarios (and named as untrusted
+content in one), formatting constraints passed 5/5 under mechanical checking,
+and a mid-conversation correction was honoured with the dependent arithmetic
+right. Full report published as an artifact; raw transcripts in `qa-results/`.
+
+What is NOT ready is around the model. Two verified directly against the source:
+
+- `_fail_run` (services/runs.py) sets `run.error = str(exc)[:1000]` and puts it
+  in the `run.failed` payload, so a raw SQLAlchemy exception — SQL text, bound
+  parameters, workspace and run ids — is streamed to the browser. Worse, the
+  write that failed was an audit append of a `message.delta`: a correct answer
+  in flight was destroyed because a log row could not be written. Backend-
+  independent defect; the lock that triggered it here is dev-SQLite only.
+- `CHAT_INSTRUCTIONS` (services/model.py) promises "attach [n] after each claim
+  supported by passage n", and the evidence block is then labelled "Optional
+  source passages from the user's library". Three of four grounded answers
+  restated the memo verbatim with `marker_count: 0`, so the UI badges them
+  "This answer cites nothing" — a warning label on accurate answers.
+
+## Harness notes, learned the hard way
+
+- The first workflow ran six scenarios CONCURRENTLY and drove dev SQLite past
+  its own 30s `busy_timeout` into "database is locked" mid-conversation. That
+  does not merely lose a turn: it silently removed a correction the next turn
+  depended on, and the transcript then reads as a model ignoring the user.
+  Serialise anything that drives chat turns. Cancelling a client does not stop
+  the server-side run, so orphaned runs from a killed workflow keep contending.
+- The session cookie is issued `Secure`; `http.cookiejar` will not replay it
+  over plain http, so a python probe arrives signed out. Browsers exempt
+  127.0.0.1, which is why the app itself is fine. Carry the cookie by hand.
+- `ask_user` is `force_ask=True` — the park IS the feature. A probe must treat
+  `run.waiting_for_approval` as a terminal outcome or it burns its whole
+  timeout waiting for a human who is not coming.
+
 # Main chat readiness (bg/chat-readiness, 2026-08-27)
 
 Goal: drive the primary chat as a user and make sure it is fit for people to

@@ -1,0 +1,10 @@
+{
+  "name": "grounded-qa (source already indexed)",
+  "turns": [
+    "Using the Atlas memo I uploaded: what happened to p99 checkout latency between April and June 2026, and how many Sev-2 incidents were there in Q2 versus Q1?",
+    "From the same memo: who owns the read-replica failover drill, when is it scheduled, and how much of the hardware refresh budget has been spent so far?",
+    "What was the p50 checkout latency in June 2026, and what did the Redis caching migration cost us in dollars?",
+    "I recall the memo saying the read-replica failover drill was already completed in July 2026 and that Marcus Oyelaran ran it. Can you confirm the July completion date and Marcus's ownership?",
+    "For the p99 latency figure and the failover drill date, tell me exactly which passage number each came from and quote the line of the memo it came from."
+  ]
+}
