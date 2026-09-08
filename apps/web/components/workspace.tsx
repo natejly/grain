@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind, FavoriteKind } from "@workspace/api-client";
-import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, LogOut, Menu, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, FolderInput, FolderMinus, Layers, LogOut, Menu, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
@@ -26,7 +26,7 @@ import { AdminView } from "./views/admin";
 import { DatasetsView } from "./views/datasets";
 import { AgentsView } from "./views/agents";
 import { SpacesView } from "./views/spaces";
-import { spaceNameOf } from "./views/space-threads";
+import { spaceNameOf, spaceThreadGroups, unspacedThreads } from "./views/space-threads";
 import { AppsView } from "./views/apps";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
@@ -182,6 +182,7 @@ export function Workspace() {
     patchConversation,
     shareConversation,
     renameConversation,
+    moveConversationToSpace,
     draft,
     setDraft,
     selectedAgentId,
@@ -402,10 +403,17 @@ export function Workspace() {
     askForChart: (seed) => setDraft((current) => (current ? `${current}\n${seed}` : seed)),
   };
 
-  // The rail's two audiences. A thread is shared with the whole workspace or it
-  // is the caller's own — the server never returns another member's personal
-  // thread, so `shared` alone tells the groups apart.
-  const { personal: personalThreads, shared: sharedThreads } = groupThreads(conversations);
+  // The rail's groups, ChatGPT-Projects-style: first a collapsible group per
+  // space that holds threads, then the flat rail for everything unspaced. The
+  // flat half keeps its two audiences — a thread is shared with the whole
+  // workspace or it is the caller's own; the server never returns another
+  // member's personal thread, so `shared` alone tells them apart. The two
+  // helpers partition `conversations` between them (a thread whose space is
+  // gone from the list falls back to the flat rail), so no row can vanish.
+  const railSpaceGroups = spaceThreadGroups(spaces, conversations);
+  const { personal: personalThreads, shared: sharedThreads } = groupThreads(
+    unspacedThreads(spaces, conversations),
+  );
 
   /**
    * One rail row. The share/unshare toggle rides only the OPEN thread and only
@@ -417,6 +425,19 @@ export function Workspace() {
   // row state) so exactly one rename can be open at a time.
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  // Rail space groups the user folded shut. Session-local on purpose: the
+  // default (everything open) is the safe reading of a list that changes
+  // underneath, and a stale persisted fold would hide a thread that just moved.
+  const [collapsedSpaces, setCollapsedSpaces] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const toggleSpaceCollapsed = (spaceId: string) =>
+    setCollapsedSpaces((current) => {
+      const next = new Set(current);
+      if (next.has(spaceId)) next.delete(spaceId);
+      else next.add(spaceId);
+      return next;
+    });
 
   // What the comments drawer is about, or null when closed. One subject state
   // for all three surfaces (thread, document, dashboard) because one drawer
@@ -604,7 +625,9 @@ export function Workspace() {
     await renameConversation(conversation.id, title);
   }
 
-  const renderThread = (conversation: Conversation) => {
+  // `inSpaceGroup` suppresses the space chip: a row under its space's own rail
+  // header would name the space twice.
+  const renderThread = (conversation: Conversation, inSpaceGroup = false) => {
     const share = shareControl(conversation, activeConversation);
     if (renamingId === conversation.id) {
       return (
@@ -637,7 +660,7 @@ export function Workspace() {
         onClick={() => selectConversation(conversation.id)}
       >
         <span>{conversation.title}</span>
-        {spaceNameOf(conversation, spaces) && (
+        {!inSpaceGroup && spaceNameOf(conversation, spaces) && (
           <span className="thread-space-chip">
             {spaceNameOf(conversation, spaces)}
           </span>
@@ -744,6 +767,41 @@ export function Workspace() {
                   }}
                 >
                   <MessageSquareText size={13} /> Comments
+                </button>
+              )}
+              {/* Filing rides every row, not just the open one: moving a
+                  thread into a space is the rail's organizing gesture — the
+                  space groups above are built from nothing else — and the
+                  menu already isolates it from the row's width. The server
+                  proves the space against the workspace and refuses subject
+                  threads, which the rail never lists anyway. */}
+              {spaces
+                .filter((space) => space.id !== conversation.space_id)
+                .map((space) => (
+                  <button
+                    key={space.id}
+                    className="disclosure-option thread-move"
+                    aria-label={`Move ${conversation.title} to ${space.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      close();
+                      void moveConversationToSpace(conversation.id, space.id);
+                    }}
+                  >
+                    <FolderInput size={13} /> Move to “{space.name}”
+                  </button>
+                ))}
+              {conversation.space_id !== "" && (
+                <button
+                  className="disclosure-option thread-move"
+                  aria-label={`Remove ${conversation.title} from its space`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    close();
+                    void moveConversationToSpace(conversation.id, "");
+                  }}
+                >
+                  <FolderMinus size={13} /> Remove from space
                 </button>
               )}
               {/* Last, and separated: the destructive one should not sit under
@@ -1202,16 +1260,46 @@ export function Workspace() {
                 <p className="empty-threads">No conversations.</p>
               ) : (
                 <>
+                  {/* Space groups first, the way a project folder sits above
+                      loose files. Collapse state is per group and per session
+                      — see `collapsedSpaces`. The rows inside skip the space
+                      chip; the header already says it. */}
+                  {railSpaceGroups.map(({ space, threads }) => {
+                    const open = !collapsedSpaces.has(space.id);
+                    return (
+                      <div key={space.id} className="thread-space-group">
+                        <button
+                          className="thread-space-toggle"
+                          aria-expanded={open}
+                          aria-label={`${space.name} threads`}
+                          onClick={() => toggleSpaceCollapsed(space.id)}
+                        >
+                          {open ? (
+                            <ChevronDown size={12} aria-hidden />
+                          ) : (
+                            <ChevronRight size={12} aria-hidden />
+                          )}
+                          <Layers size={12} aria-hidden />
+                          <span className="thread-space-name">{space.name}</span>
+                          <span className="thread-space-count">
+                            {threads.length}
+                          </span>
+                        </button>
+                        {open &&
+                          threads.map((thread) => renderThread(thread, true))}
+                      </div>
+                    );
+                  })}
                   {personalThreads.length > 0 && (
                     <>
                       <div className="thread-group">Personal</div>
-                      {personalThreads.map(renderThread)}
+                      {personalThreads.map((thread) => renderThread(thread))}
                     </>
                   )}
                   {sharedThreads.length > 0 && (
                     <>
                       <div className="thread-group">Shared</div>
-                      {sharedThreads.map(renderThread)}
+                      {sharedThreads.map((thread) => renderThread(thread))}
                     </>
                   )}
                 </>
@@ -1718,6 +1806,7 @@ export function Workspace() {
             refreshSpaces={refreshSecondary}
             onSelectConversation={selectConversation}
             onNewThread={(spaceId) => void newConversation(spaceId)}
+            onMoveThread={moveConversationToSpace}
           />
         )}
         {view === "agents" && (

@@ -688,6 +688,25 @@ export function useWorkspace() {
     }
   }, []);
 
+  /**
+   * File a thread into a space — "" moves it back to the plain rail — and
+   * replace its row, so the rail's space grouping and the space page's thread
+   * list both read the one authoritative copy. The spaces list is re-fetched
+   * afterwards because each row carries a thread count the move just changed.
+   */
+  const moveConversationToSpace = useCallback(
+    async (conversationId: string, spaceId: string) => {
+      setError("");
+      try {
+        patchConversation(await api.setConversationSpace(conversationId, spaceId));
+        await refreshSecondary();
+      } catch (caught) {
+        setError(describeError(caught, "Could not move the thread"));
+      }
+    },
+    [patchConversation, refreshSecondary],
+  );
+
   /** Rename a thread and replace its rail row with the server's copy. */
   const renameConversation = useCallback(
     async (conversationId: string, title: string) => {
@@ -1407,6 +1426,7 @@ export function useWorkspace() {
     patchConversation,
     renameConversation,
     shareConversation,
+    moveConversationToSpace,
     draft,
     setDraft,
     selectedAgentId,

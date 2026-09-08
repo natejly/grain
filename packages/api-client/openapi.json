@@ -3198,6 +3198,21 @@
         "title": "ConversationShareRequest",
         "type": "object"
       },
+      "ConversationSpaceRequest": {
+        "description": "The body of `PUT /api/conversations/{id}/space`.\n\nThe space to move the thread into, or \"\" to move it out to the plain rail.\nThe id is proved against the caller's workspace at the route \u2014 a foreign\nor deleted space is a 404, exactly as on create \u2014 so the column can never\ncome to hold a scope the workspace does not have.",
+        "properties": {
+          "space_id": {
+            "maxLength": 36,
+            "title": "Space Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space_id"
+        ],
+        "title": "ConversationSpaceRequest",
+        "type": "object"
+      },
       "ConversationTitleRequest": {
         "description": "The body of `PUT /api/conversations/{id}/title`.\n\nBounded like the create path's title: a name, not a document. Whitespace\nis the caller's to trim \u2014 the route strips and refuses an empty result,\nbecause a thread whose rail row shows nothing cannot be found again.",
         "properties": {
@@ -16701,6 +16716,75 @@
           }
         },
         "summary": "Set Conversation Shared",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/conversations/{conversation_id}/space": {
+      "put": {
+        "description": "Move a thread into a space, or out of one (\"\" is the plain rail).\n\nThis is what makes a space a container rather than a birthmark: before it,\n`space_id` was stamped at creation and never changeable, so a conversation\nthat grew into a project could not be filed with it.\n\nAny member the thread is visible to may move it, same as the rename and\nthe approval mode: which space a thread works in is a working setting of\nthe collaboration, not a visibility change \u2014 personal stays personal and\nshared stays shared, whichever space it sits in. Subject threads are\nrefused: they belong to the document, project or dashboard they hang off,\nand a subject or a space is an either/or by construction.\n\nMoving is an explicit scope decision, and it acts from the next turn on:\nretrieval and recall follow the conversation's *current* space (see\n`spaces.space_id_for_conversation` \u2014 nothing caches the old one), so a\nmoved thread starts seeing the space's knowledge and shelf, and one moved\nout stops. What was already written stays where it was written \u2014 memories\nextracted in the old scope were said in that scope, and re-shelving them\nwould move statements to a shelf they were never uttered on. The thread's\nown chat attachments ride along untouched: they are scoped by\n`conversation_id`, which does not change.\n\nThe new space is proved against the caller's workspace exactly as on\ncreate \u2014 foreign or deleted is a 404, never a silently unscoped thread.\nNo `Idempotency-Key`: a PUT of a value, so a retry lands on the same state\nby construction.",
+        "operationId": "set_conversation_space_api_conversations__conversation_id__space_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationSpaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Conversation Space",
         "tags": [
           "chat"
         ]

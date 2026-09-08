@@ -2815,6 +2815,20 @@ export class WorkspaceApi {
   }
 
   /**
+   * Move a thread into a space, or out of one — "" files it back on the plain
+   * rail. A PUT of a value like share and title, so retries land identically
+   * and no `Idempotency-Key` rides along. The space id is proved against the
+   * caller's workspace server-side: foreign or deleted answers 404, and a
+   * subject thread answers 409 (it belongs to its subject, not a space).
+   */
+  setConversationSpace(conversationId: string, spaceId: string): Promise<Conversation> {
+    return this.request(`/api/conversations/${conversationId}/space`, {
+      method: "PUT",
+      body: JSON.stringify({ space_id: spaceId }),
+    });
+  }
+
+  /**
    * Branch a new personal thread from everything said up to one message.
    *
    * The server copies the transcript prefix (fresh message ids, no run

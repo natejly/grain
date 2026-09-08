@@ -1683,6 +1683,15 @@ ROUTE_CASES: List[RouteCase] = [
         body={"title": "renamed"},
     ),
     RouteCase(
+        "PUT",
+        "/api/conversations/{conversation_id}/space",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"space_id": ""},
+        note="Moving another tenant's thread (even to 'no space') must 404 on "
+        "the workspace filter before the space id is even looked at.",
+    ),
+    RouteCase(
         "POST",
         "/api/conversations/{conversation_id}/fork",
         DENY,

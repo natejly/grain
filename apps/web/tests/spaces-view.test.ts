@@ -81,6 +81,7 @@ function renderView(overrides: Partial<React.ComponentProps<typeof SpacesView>> 
     refreshSpaces: vi.fn().mockResolvedValue(undefined),
     onSelectConversation: vi.fn(),
     onNewThread: vi.fn(),
+    onMoveThread: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   render(React.createElement(SpacesView, props));
@@ -123,9 +124,42 @@ describe("SpacesView", () => {
   it("shows only the space's threads and opens one on click", () => {
     const props = renderView();
     openSpace();
-    fireEvent.click(screen.getByRole("button", { name: /Kestrel notes/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Kestrel notes/ }));
     expect(props.onSelectConversation).toHaveBeenCalledWith("conv-1");
     expect(screen.queryByText("other")).toBeNull();
+  });
+
+  it("files an existing unspaced thread into the space", () => {
+    const props = renderView({
+      conversations: [
+        conversation(),
+        conversation({ id: "loose", title: "Loose thread", space_id: "" }),
+      ],
+    });
+    openSpace();
+    fireEvent.click(screen.getByRole("button", { name: "Add an existing thread" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add Loose thread to Research" }),
+    );
+    expect(props.onMoveThread).toHaveBeenCalledWith("loose", "space-1");
+  });
+
+  it("offers no add menu when every thread is already filed somewhere", () => {
+    renderView({ conversations: [conversation()] });
+    openSpace();
+    expect(
+      screen.queryByRole("button", { name: "Add an existing thread" }),
+    ).toBeNull();
+  });
+
+  it("removes a thread from the space without a confirm — it is not destructive", () => {
+    const props = renderView();
+    openSpace();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove Kestrel notes from this space" }),
+    );
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(props.onMoveThread).toHaveBeenCalledWith("conv-1", "");
   });
 
   it("shows only the space's files and uploads into the space", () => {
@@ -151,6 +185,8 @@ describe("SpacesView", () => {
   it("deletes only after the destructive confirm, which names the stakes", () => {
     renderView();
     openSpace();
+    // Delete lives in the header's actions menu now, off the stray-click path.
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Research" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Research" }));
     expect(window.confirm).toHaveBeenCalledWith(
       expect.stringContaining("threads"),
@@ -162,6 +198,7 @@ describe("SpacesView", () => {
     (window.confirm as ReturnType<typeof vi.fn>).mockReturnValue(false);
     renderView();
     openSpace();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Research" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Research" }));
     expect(deleteSpace).not.toHaveBeenCalled();
   });

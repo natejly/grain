@@ -18,6 +18,7 @@ from ..database import get_db
 from ..models import Project, ProjectFile
 from ..schemas import ApiModel
 from ..services import conversations, subjects
+from ..services.ingestion import remove_object_files
 from ..services.projects import store
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -230,10 +231,13 @@ def delete_project(
     # leaving it behind would leave a conversation whose subject no longer
     # exists, invisible in the Chat rail (which filters scoped threads out) and
     # reachable by nothing.
-    conversations.purge_for_subject(
+    object_keys = conversations.purge_for_subject(
         db,
         workspace_id=actor.workspace_id,
         subject_kind=subjects.PROJECT,
         subject_id=project.id,
     )
     store.delete_project(db, workspace_id=actor.workspace_id, project_id=project.id)
+    # Bytes attached inside the purged thread, only after the commit
+    # (`delete_project`'s) has held.
+    remove_object_files(object_keys)

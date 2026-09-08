@@ -23,6 +23,52 @@ export function sourcesInSpace(sources: Source[], spaceId: string): Source[] {
   return sources.filter((source) => source.space_id === spaceId);
 }
 
+/** One rail group: a space and the visible threads filed in it. */
+export type SpaceThreadGroup = {
+  space: Space;
+  threads: Conversation[];
+};
+
+/**
+ * The rail's space groups: every space that holds at least one visible
+ * thread, in the spaces list's own (name) order, each with its threads in the
+ * server's recency order. A space with no visible threads gets no rail group
+ * — its home is the Spaces page, and an empty header would be sidebar noise.
+ * A thread whose `space_id` names a space the caller's list does not hold
+ * (deleted between fetches) simply stays in the flat rail via the
+ * complementary `unspacedThreads` — nothing disappears.
+ */
+export function spaceThreadGroups(
+  spaces: Space[],
+  conversations: Conversation[],
+): SpaceThreadGroup[] {
+  return spaces
+    .map((space) => ({
+      space,
+      threads: conversations.filter(
+        (conversation) => conversation.space_id === space.id,
+      ),
+    }))
+    .filter((group) => group.threads.length > 0);
+}
+
+/**
+ * The complement of `spaceThreadGroups` over the same list: what the flat
+ * Personal/Shared rail still shows. A thread pointing at a space that is not
+ * in `spaces` counts as unspaced here, so the two functions partition the
+ * list between them whatever state the fetches are in.
+ */
+export function unspacedThreads(
+  spaces: Space[],
+  conversations: Conversation[],
+): Conversation[] {
+  const known = new Set(spaces.map((space) => space.id));
+  return conversations.filter(
+    (conversation) =>
+      !conversation.space_id || !known.has(conversation.space_id),
+  );
+}
+
 /**
  * The name for a thread's space chip, or "" when no chip should render — an
  * unspaced thread, or a `space_id` whose space is gone or not yet loaded. ""

@@ -6,28 +6,39 @@ import type {
   Space,
   SpaceTemplate,
 } from "@workspace/api-client";
-import { BookmarkPlus, Layers, Plus, Trash2, UploadCloud } from "lucide-react";
+import {
+  BookmarkPlus,
+  FolderInput,
+  FolderMinus,
+  Layers,
+  MoreHorizontal,
+  Plus,
+  Trash2,
+  UploadCloud,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { DisclosureMenu } from "../disclosure-menu";
 import {
   describeError,
   formatRelative,
   groupThreads,
   statusLabel,
 } from "./shared";
-import { sourcesInSpace, threadsInSpace } from "./space-threads";
+import { sourcesInSpace, threadsInSpace, unspacedThreads } from "./space-threads";
 import { nextTemplateName, templateBaseName } from "./template-format";
 
 /**
- * A space groups rail threads under standing context: instructions the server
- * appends to every turn, knowledge files retrieved only here, and a memory
- * shelf of its own. This view manages the container; the threads themselves
- * are ordinary chat threads — clicking one goes to Chat, it does not embed a
- * transcript here.
+ * A space is a project-shaped container: a group of chat threads under
+ * standing context — instructions the server appends to every turn, knowledge
+ * files retrieved only here, and a memory shelf of its own. This view IS the
+ * container page: its threads can be started here, filed in from the plain
+ * rail ("Add a thread"), or filed back out, and its files live beside them.
+ * Clicking a thread still goes to Chat — the transcript has one home.
  *
  * Mutations stay inline (the AgentsView pattern) because nothing outside this
  * view creates or edits a space; the *list* lives in use-workspace because
- * the rail chip and the thread counts read it too.
+ * the rail's space groups and the thread counts read it too.
  */
 
 type SpacesViewProps = {
@@ -41,6 +52,8 @@ type SpacesViewProps = {
   refreshSpaces: () => Promise<void>;
   onSelectConversation: (conversationId: string) => void;
   onNewThread: (spaceId: string) => Promise<void> | void;
+  /** File a thread into a space ("" removes it) — moveConversationToSpace. */
+  onMoveThread: (conversationId: string, spaceId: string) => Promise<void> | void;
 };
 
 export function SpacesView({
@@ -52,6 +65,7 @@ export function SpacesView({
   refreshSpaces,
   onSelectConversation,
   onNewThread,
+  onMoveThread,
 }: SpacesViewProps) {
   const [selectedId, setSelectedId] = useState("");
   const [newName, setNewName] = useState("");
@@ -179,9 +193,25 @@ export function SpacesView({
     }
   };
 
+  // Filing is not destructive in either direction — the thread keeps its
+  // transcript and its own attachments; only its standing context changes —
+  // so neither gesture asks for a confirm. No refresh here: the shell's
+  // `moveConversationToSpace` already patches the row and re-fetches the
+  // space counts, and a second refreshSpaces would just double the fetch.
+  const fileThread = async (conversationId: string, spaceId: string) => {
+    try {
+      await onMoveThread(conversationId, spaceId);
+    } catch (caught) {
+      setError(describeError(caught, "Could not move the thread"));
+    }
+  };
+
   const spaceThreads = selected ? threadsInSpace(conversations, selected.id) : [];
   const grouped = groupThreads(spaceThreads);
   const spaceSources = selected ? sourcesInSpace(sources, selected.id) : [];
+  // What "Add a thread" can offer: rail threads in no (known) space. Subject
+  // threads never reach this list — the server keeps them out of the rail.
+  const addable = unspacedThreads(spaces, conversations);
 
   return (
     <div className="spaces-layout">
@@ -225,7 +255,10 @@ export function SpacesView({
         </form>
         {spaces.length === 0 ? (
           <div className="empty-state">
-            <p>No spaces yet. A space groups threads under shared instructions and knowledge.</p>
+            <p>
+              No spaces yet. A space groups threads under shared instructions
+              and knowledge — like a project folder for your chats.
+            </p>
           </div>
         ) : (
           spaces.map((space) => (
@@ -237,7 +270,12 @@ export function SpacesView({
               <Layers size={14} aria-hidden />
               <span className="space-row-name">{space.name}</span>
               <span className="space-row-count">
-                {space.thread_count} {space.thread_count === 1 ? "thread" : "threads"}
+                {space.thread_count}{" "}
+                {space.thread_count === 1 ? "thread" : "threads"}
+                {space.source_count > 0 &&
+                  ` · ${space.source_count} ${
+                    space.source_count === 1 ? "file" : "files"
+                  }`}
               </span>
             </button>
           ))
@@ -268,121 +306,200 @@ export function SpacesView({
             >
               {saving ? "Saving…" : "Save"}
             </button>
-            <button
-              className="ghost-button"
-              onClick={() => void saveAsTemplate()}
-              disabled={savingTemplate}
-              aria-label={`Save ${selected.name} as template`}
-              title="Snapshot this space's instructions as a reusable template"
+            {/* The rarely-used pair lives in a menu, the thread-row
+                arrangement: the header keeps the name and the one everyday
+                action, and the destructive one is never under a stray click. */}
+            <DisclosureMenu
+              id="space-actions"
+              triggerLabel={`Actions for ${selected.name}`}
+              triggerClassName="ghost-button space-actions-trigger"
+              trigger={<MoreHorizontal size={14} />}
+              menuLabel={`Actions for ${selected.name}`}
             >
-              <BookmarkPlus size={14} />
-              {savingTemplate ? "Saving…" : "Save as template"}
-            </button>
-            <button
-              className="ghost-button danger"
-              onClick={() => void remove()}
-              aria-label={`Delete ${selected.name}`}
-            >
-              <Trash2 size={14} />
-              Delete space
-            </button>
+              {(close) => (
+                <>
+                  <button
+                    className="disclosure-option"
+                    onClick={() => {
+                      close();
+                      void saveAsTemplate();
+                    }}
+                    disabled={savingTemplate}
+                    aria-label={`Save ${selected.name} as template`}
+                    title="Snapshot this space's instructions as a reusable template"
+                  >
+                    <BookmarkPlus size={13} />
+                    {savingTemplate ? "Saving…" : "Save as template"}
+                  </button>
+                  <button
+                    className="disclosure-option danger"
+                    onClick={() => {
+                      close();
+                      void remove();
+                    }}
+                    aria-label={`Delete ${selected.name}`}
+                  >
+                    <Trash2 size={13} />
+                    Delete space
+                  </button>
+                </>
+              )}
+            </DisclosureMenu>
           </header>
 
-          <label className="space-instructions">
-            <span>Instructions</span>
-            <textarea
-              aria-label="Space instructions"
-              placeholder="Standing instructions for every thread in this space…"
-              value={instructions}
-              onChange={(event) => setInstructions(event.target.value)}
-              rows={5}
-            />
-          </label>
-
-          <div className="space-knowledge">
-            <h2>Knowledge</h2>
-            <div
-              className={`drop-zone ${dragging ? "dragging" : ""}`}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                setDragging(true);
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(event) => {
-                event.preventDefault();
-                setDragging(false);
-                void uploadFiles(event.dataTransfer.files);
-              }}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".txt,.md,.markdown,.pdf,.csv,.json"
-                hidden
-                onChange={(event) =>
-                  event.target.files && void uploadFiles(event.target.files)
-                }
-              />
-              <div className="upload-icon">
-                <UploadCloud size={18} />
-              </div>
-              <strong>{uploading ? "Indexing…" : "Drop a file for this space"}</strong>
-            </div>
-            {spaceSources.length > 0 && (
-              <ul className="space-source-list">
-                {spaceSources.map((source) => (
-                  <li key={source.id}>
-                    <span className="space-source-name">{source.filename}</span>
-                    <span className="status-pill">{statusLabel(source.status)}</span>
-                    <button
-                      className="ghost-button"
-                      aria-label={`Remove ${source.filename}`}
-                      onClick={() => void removeSource(source)}
+          <div className="space-detail-grid">
+            <div className="space-main space-threads">
+              <div className="space-threads-head">
+                <h2>Threads</h2>
+                <div className="space-threads-actions">
+                  {addable.length > 0 && (
+                    <DisclosureMenu
+                      id="space-add-thread"
+                      triggerLabel="Add an existing thread"
+                      triggerClassName="ghost-button"
+                      trigger={
+                        <>
+                          <FolderInput size={14} />
+                          Add a thread
+                        </>
+                      }
+                      menuLabel="Threads outside any space"
                     >
-                      <Trash2 size={13} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="space-threads">
-            <div className="space-threads-head">
-              <h2>Threads</h2>
-              <button
-                className="primary-button"
-                onClick={() => void onNewThread(selected.id)}
-              >
-                <Plus size={14} />
-                New thread
-              </button>
-            </div>
-            {spaceThreads.length === 0 ? (
-              <div className="empty-state">
-                <p>No threads yet. A new thread here carries the space&apos;s instructions and knowledge.</p>
+                      {(close) => (
+                        <>
+                          {addable.map((conversation) => (
+                            <button
+                              key={conversation.id}
+                              className="disclosure-option"
+                              aria-label={`Add ${conversation.title} to ${selected.name}`}
+                              onClick={() => {
+                                close();
+                                void fileThread(conversation.id, selected.id);
+                              }}
+                            >
+                              <span className="space-add-title">
+                                {conversation.title}
+                              </span>
+                              <time>{formatRelative(conversation.updated_at)}</time>
+                            </button>
+                          ))}
+                        </>
+                      )}
+                    </DisclosureMenu>
+                  )}
+                  <button
+                    className="primary-button"
+                    onClick={() => void onNewThread(selected.id)}
+                  >
+                    <Plus size={14} />
+                    New thread
+                  </button>
+                </div>
               </div>
-            ) : (
-              (["personal", "shared"] as const).map((bucket) =>
-                grouped[bucket].length === 0 ? null : (
-                  <div key={bucket} className="thread-group">
-                    <h3>{bucket === "personal" ? "Personal" : "Shared"}</h3>
-                    {grouped[bucket].map((conversation) => (
-                      <button
-                        key={conversation.id}
-                        className="space-thread-row"
-                        onClick={() => onSelectConversation(conversation.id)}
-                      >
-                        <span>{conversation.title}</span>
-                        <time>{formatRelative(conversation.updated_at)}</time>
-                      </button>
-                    ))}
+              {spaceThreads.length === 0 ? (
+                <div className="empty-state">
+                  <p>
+                    No threads yet. Start one here, or file an existing thread
+                    in — either way it carries the space&apos;s instructions
+                    and knowledge.
+                  </p>
+                </div>
+              ) : (
+                (["personal", "shared"] as const).map((bucket) =>
+                  grouped[bucket].length === 0 ? null : (
+                    <div key={bucket} className="thread-group">
+                      <h3>{bucket === "personal" ? "Personal" : "Shared"}</h3>
+                      {grouped[bucket].map((conversation) => (
+                        <div key={conversation.id} className="space-thread-row">
+                          <button
+                            className="space-thread-open"
+                            onClick={() => onSelectConversation(conversation.id)}
+                          >
+                            <span>{conversation.title}</span>
+                            <time>{formatRelative(conversation.updated_at)}</time>
+                          </button>
+                          <button
+                            className="ghost-button"
+                            aria-label={`Remove ${conversation.title} from this space`}
+                            title="Back to the plain rail — the thread keeps its transcript"
+                            onClick={() => void fileThread(conversation.id, "")}
+                          >
+                            <FolderMinus size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ),
+                )
+              )}
+            </div>
+
+            <div className="space-side">
+              <label className="space-instructions">
+                <span>Instructions</span>
+                <textarea
+                  aria-label="Space instructions"
+                  placeholder="Standing instructions for every thread in this space…"
+                  value={instructions}
+                  onChange={(event) => setInstructions(event.target.value)}
+                  rows={5}
+                />
+              </label>
+
+              <div className="space-knowledge">
+                <h2>Knowledge</h2>
+                <div
+                  className={`drop-zone ${dragging ? "dragging" : ""}`}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setDragging(false);
+                    void uploadFiles(event.dataTransfer.files);
+                  }}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".txt,.md,.markdown,.pdf,.csv,.json"
+                    hidden
+                    onChange={(event) =>
+                      event.target.files && void uploadFiles(event.target.files)
+                    }
+                  />
+                  <div className="upload-icon">
+                    <UploadCloud size={18} />
                   </div>
-                ),
-              )
-            )}
+                  <strong>
+                    {uploading ? "Indexing…" : "Drop a file for this space"}
+                  </strong>
+                </div>
+                {spaceSources.length > 0 && (
+                  <ul className="space-source-list">
+                    {spaceSources.map((source) => (
+                      <li key={source.id}>
+                        <span className="space-source-name">{source.filename}</span>
+                        <span className="status-pill">
+                          {statusLabel(source.status)}
+                        </span>
+                        <button
+                          className="ghost-button"
+                          aria-label={`Remove ${source.filename}`}
+                          onClick={() => void removeSource(source)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
           </div>
         </section>
       )}

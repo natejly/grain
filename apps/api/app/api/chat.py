@@ -36,6 +36,7 @@ from ..schemas import (
     ConversationForkRequest,
     ConversationOut,
     ConversationShareRequest,
+    ConversationSpaceRequest,
     ConversationTitleRequest,
     MessageOut,
     RunOut,
@@ -50,6 +51,7 @@ from ..services import spaces as spaces_service
 from ..services.artifacts import documents
 from ..services.audit import record_audit
 from ..services.events import append_event
+from ..services.ingestion import remove_object_files
 from ..services.projects import store as project_store
 from ..services.runs import TERMINAL_RUN_STATES, process_run
 from .dependencies import idempotency_key
@@ -706,6 +708,79 @@ def set_conversation_shared(
     return _conversation_out(conversation, actor)
 
 
+@router.put("/conversations/{conversation_id}/space", response_model=ConversationOut)
+def set_conversation_space(
+    conversation_id: str,
+    payload: ConversationSpaceRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    """Move a thread into a space, or out of one ("" is the plain rail).
+
+    This is what makes a space a container rather than a birthmark: before it,
+    `space_id` was stamped at creation and never changeable, so a conversation
+    that grew into a project could not be filed with it.
+
+    Any member the thread is visible to may move it, same as the rename and
+    the approval mode: which space a thread works in is a working setting of
+    the collaboration, not a visibility change — personal stays personal and
+    shared stays shared, whichever space it sits in. Subject threads are
+    refused: they belong to the document, project or dashboard they hang off,
+    and a subject or a space is an either/or by construction.
+
+    Moving is an explicit scope decision, and it acts from the next turn on:
+    retrieval and recall follow the conversation's *current* space (see
+    `spaces.space_id_for_conversation` — nothing caches the old one), so a
+    moved thread starts seeing the space's knowledge and shelf, and one moved
+    out stops. What was already written stays where it was written — memories
+    extracted in the old scope were said in that scope, and re-shelving them
+    would move statements to a shelf they were never uttered on. The thread's
+    own chat attachments ride along untouched: they are scoped by
+    `conversation_id`, which does not change.
+
+    The new space is proved against the caller's workspace exactly as on
+    create — foreign or deleted is a 404, never a silently unscoped thread.
+    No `Idempotency-Key`: a PUT of a value, so a retry lands on the same state
+    by construction.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation.subject_id:
+        raise HTTPException(
+            status_code=409,
+            detail="A subject thread belongs to its subject, not a space",
+        )
+    space_id = ""
+    if payload.space_id:
+        try:
+            space_id = spaces_service.get_space(
+                db, workspace_id=actor.workspace_id, space_id=payload.space_id
+            ).id
+        except spaces_service.SpaceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    previous = conversation.space_id
+    conversation.space_id = space_id
+    if previous != space_id:
+        record_audit(
+            db,
+            workspace_id=actor.workspace_id,
+            actor_id=actor.user_id,
+            action="conversation.space_set",
+            resource_type="conversation",
+            resource_id=conversation.id,
+            detail={"from": previous, "to": space_id},
+        )
+    db.commit()
+    db.refresh(conversation)
+    return _conversation_out(conversation, actor)
+
+
 @router.delete("/conversations/{conversation_id}", status_code=204)
 def delete_conversation(
     conversation_id: str,
@@ -738,11 +813,12 @@ def delete_conversation(
             status_code=403,
             detail="Only the creator or an owner may delete this thread",
         )
-    title = conversations.purge(
+    receipt = conversations.purge(
         db, workspace_id=actor.workspace_id, conversation_id=conversation_id
     )
-    if title is None:
+    if receipt is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    title = receipt.title
     record_key(
         db,
         workspace_id=actor.workspace_id,
@@ -760,6 +836,9 @@ def delete_conversation(
         detail={"title": title},
     )
     db.commit()
+    # The thread's attachment bytes, only after the commit has held — same
+    # ordering contract as DELETE /api/sources/{id} and the space teardown.
+    remove_object_files(receipt.object_keys)
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=List[MessageOut])

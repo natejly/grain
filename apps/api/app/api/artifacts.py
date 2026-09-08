@@ -20,6 +20,7 @@ from ..schemas import (
 )
 from ..services import conversations, subjects
 from ..services.artifacts import boards, documents
+from ..services.ingestion import remove_object_files
 
 router = APIRouter(prefix="/api", tags=["artifacts"])
 
@@ -181,7 +182,7 @@ def delete_document(
     # every turn was handed the document's text — so leaving it behind would
     # leave a conversation whose subject no longer exists, invisible in the Chat
     # rail (which filters scoped threads out) and reachable by nothing.
-    conversations.purge_for_subject(
+    object_keys = conversations.purge_for_subject(
         db,
         workspace_id=actor.workspace_id,
         subject_kind=subjects.DOCUMENT,
@@ -194,6 +195,9 @@ def delete_document(
     except documents.DocumentError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # Bytes attached inside the purged thread, only after the commit
+    # (`delete_document`'s) has held.
+    remove_object_files(object_keys)
 
 
 # --------------------------------------------------------------------------
