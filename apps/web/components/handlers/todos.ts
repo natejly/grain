@@ -44,8 +44,23 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
   }
 
   async function addTodoItem(list: Board, title: string) {
+    // Cleared on entry, like every other handler that reports: boards render as
+    // a row of lists sharing one error line, so a message left over from a
+    // failed add sits under a row that later landed and reads as that row
+    // having failed.
+    setError("");
     const column = soleColumn(list);
-    if (!column) return;
+    if (!column) {
+      // A list is a board with exactly one column, so an empty name here is a
+      // shape that should never reach the UI. Returning in silence made that
+      // case indistinguishable from a slow add — nothing appeared, nothing
+      // said why. Every other failure in this file is shown; so is this one.
+      //
+      // Named, not "that list": several lists are on screen at once and they
+      // share the one error line, so an unnamed message does not say which.
+      setError(`Could not add that item: “${list.name}” has no column.`);
+      return;
+    }
     try {
       replaceBoard(await api.addBoardCard(list.id, column, title));
     } catch (caught) {
@@ -105,6 +120,18 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
    * keeps this honest: an optimistic tick that never gets corrected is a
    * checklist that lies about what the server thinks is done.
    */
+  /**
+   * The one handler here that deliberately does NOT clear the error on entry.
+   *
+   * Every other operation in this file is discrete and deliberate — one click,
+   * one intent — so clearing on entry drops a message the person has already
+   * acted on. A tick is neither: it is the optimistic path, it fires on every
+   * checkbox in the list, and it is the thing someone does WHILE reading an
+   * error about something else. Clearing here would wipe a message before it
+   * had been read, so it stays until an operation the person aimed at replaces
+   * it. `todo-add-failure.test.ts` pins this, so it is not mistaken for the
+   * omission it looks like.
+   */
   async function setTodoItemDone(list: Board, itemId: string, done: boolean) {
     markCard(list.id, itemId, done);
     try {
@@ -143,6 +170,7 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
   }
 
   async function removeTodoItem(list: Board, itemId: string) {
+    setError("");
     try {
       replaceBoard(await api.deleteBoardCard(list.id, itemId));
     } catch (caught) {
@@ -151,6 +179,7 @@ export function createTodoHandlers({ setError, setBoards }: TodoHandlerDeps) {
   }
 
   async function removeTodoList(list: Board) {
+    setError("");
     try {
       await api.deleteBoard(list.id);
       setBoards((items) => items.filter((item) => item.id !== list.id));
