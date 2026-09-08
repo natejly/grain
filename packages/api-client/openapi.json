@@ -4852,6 +4852,119 @@
         "title": "DuplicateOut",
         "type": "object"
       },
+      "EmbeddingCoverageOut": {
+        "properties": {
+          "covered": {
+            "title": "Covered",
+            "type": "integer"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "unembedded": {
+            "title": "Unembedded",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "table",
+          "covered",
+          "pending",
+          "unembedded"
+        ],
+        "title": "EmbeddingCoverageOut",
+        "type": "object"
+      },
+      "EmbeddingGenerationOut": {
+        "properties": {
+          "activated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated At"
+          },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingCoverageOut"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dense_floor": {
+            "title": "Dense Floor",
+            "type": "number"
+          },
+          "dimensions": {
+            "title": "Dimensions",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_format": {
+            "title": "Input Format",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "normalization": {
+            "title": "Normalization",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "storage_dtype": {
+            "title": "Storage Dtype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "model",
+          "revision",
+          "dimensions",
+          "storage_dtype",
+          "normalization",
+          "input_format",
+          "dense_floor",
+          "status",
+          "note",
+          "created_at",
+          "activated_at",
+          "coverage"
+        ],
+        "title": "EmbeddingGenerationOut",
+        "type": "object"
+      },
       "FavoriteOrderEntry": {
         "properties": {
           "kind": {
@@ -23242,6 +23355,60 @@
           }
         },
         "summary": "Clear Org Policy",
+        "tags": [
+          "org"
+        ]
+      }
+    },
+    "/api/org/retrieval-contract": {
+      "get": {
+        "description": "How this deployment embeds text, and how much of the corpus agrees.\n\nRead-only, and that is a decision rather than an omission. Building and\nactivating a generation is an operator action with a corpus-wide blast\nradius, it is guarded by a coverage check that wants a human reading the\nnumbers, and it belongs to the deployment rather than to any one org \u2014 so it\nlives in `scripts/rebuild_embeddings.py`, where it is reviewable, scriptable\nand logged. What an admin needs from a console is the answer to \"is a\nmigration in progress, and how far along is it\", which is exactly what a\n`building` generation with a pending count is.\n\nDeployment-wide rows on an org-scoped router, which is worth being explicit\nabout: there is no `organization_id` here to filter on, because two orgs\ndisagreeing about what a vector means is not a state the system can hold. The\ngate is still `require_org_admin` \u2014 the rows describe model names, widths and\ncorpus sizes, which is posture, not tenant data, and the same class of thing\n`GET /api/org` already returns.",
+        "operationId": "list_embedding_generations_api_org_retrieval_contract_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EmbeddingGenerationOut"
+                  },
+                  "title": "Response List Embedding Generations Api Org Retrieval Contract Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Embedding Generations",
         "tags": [
           "org"
         ]
