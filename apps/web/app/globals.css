@@ -1346,10 +1346,29 @@ label,
   overflow-wrap: break-word;
 }
 
+/* The user's turns sit on the right, the way a chat reads: your words on
+   your side, the agent's on the other. Row-reverse keeps the avatar on the
+   outer edge; the hover actions (edit, fork) swap their auto margin below so
+   they push toward the inner edge instead of off the far side. */
+.message.user .message-author {
+  flex-direction: row-reverse;
+}
+
+.message.user .message-author .copy-button,
+.message.user .message-author .fork-button {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+.message.user .message-author .copy-button + .fork-button {
+  margin-right: 0;
+}
+
 .message.user .message-body {
   width: fit-content;
   max-width: 85%;
-  margin-left: 31px;
+  margin-left: auto;
+  margin-right: 31px;
   padding: 9px 11px;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -4099,7 +4118,7 @@ label,
 
   .message.user .message-body {
     max-width: 100%;
-    margin-left: 0;
+    margin-right: 0;
   }
 
   .content-page {
