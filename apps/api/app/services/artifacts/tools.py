@@ -808,7 +808,8 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             description=(
                 "Replace an exact string in a document. `find` must appear exactly "
                 "once unless replace_all is true — include surrounding text to make "
-                "it unique. The user sees a diff and approves before it applies."
+                "it unique. Markdown edits may show the user a diff to approve "
+                "before they apply; edits to plain-text documents apply immediately."
             ),
             parameters={
                 "type": "object",

@@ -366,6 +366,15 @@ def mode_decider(mode: str) -> str:
     return f"{MODE_DECIDER_PREFIX}{mode}" if mode else ""
 
 
+#: `decided_by` marker for the plain-text-document carve-out: a write that only
+#: touches a `kind == "text"` document applies live, canvas-style, instead of
+#: parking on the tool's default `ask`. Not an approval mode a conversation can
+#: choose, but the same *shape* of fact — a write ran and no person reviewed it
+#: — so it wears the prefix the audit trail already knows how to read back out
+#: (`AgentToolCall.approved_by_mode` returns "plain_text_document").
+PLAIN_TEXT_DECIDER = "plain_text_document"
+
+
 #: The three verdicts, ordered by how much they restrain the agent. Every rule in
 #: `evaluate_policy` that is described as "tightening" is a move up this ladder,
 #: and the organization clamp is literally a `max` over it.
@@ -441,6 +450,15 @@ class Verdict:
     #: provenance HERE — where the rows and the ceiling are already in hand — is
     #: what keeps the park site from having to re-derive it and drift.
     guardian_may_review: bool = False
+    #: True when this `ask` is nothing but the tool's own default prudence — no
+    #: policy row asked it, no org ceiling mandated it, no `force_ask` raised
+    #: it — under a mode (ask_writes or guardian) that merely kept that default,
+    #: in chat scope. The provenance the park site needs before applying a
+    #: default-softening carve-out (today: writes that only touch a plain-text
+    #: document run canvas-style, without parking). Like `guardian_may_review`,
+    #: it can only ever soften the default — never anything a person, a
+    #: workspace, or an organization actually said.
+    default_ask: bool = False
 
 
 def evaluate_policy(
@@ -573,19 +591,21 @@ def evaluate_policy(
         resolved = _in_scope_or_carried_deny(scope, _tier)
         base = resolved if resolved is not None else ("allow" if spec.read_only else "ask")
 
-    # An `ask` the guardian may later soften: the tool's own default, under
-    # guardian mode, in chat scope — never one a policy row wrote. Rows are the
-    # user's or the workspace's explicit "ask me", and the reviewer replaces
-    # only the *default* prudence, not a stated instruction. The org ceiling
-    # and `force_ask` get their say below.
-    default_guardian_ask = (
+    # An `ask` a later stage may soften: the tool's own default, under a mode
+    # that keeps that default, in chat scope — never one a policy row wrote.
+    # Rows are the user's or the workspace's explicit "ask me", and both
+    # softeners (the guardian reviewer, the plain-text-document carve-out)
+    # replace only the *default* prudence, not a stated instruction. The org
+    # ceiling and `force_ask` get their say below.
+    default_prudence_ask = (
         spec is not None
         and not spec.force_ask
-        and mode == GUARDIAN
+        and mode in (ASK_WRITES, GUARDIAN)
         and scope == CHAT_SCOPE
         and resolved is None
         and base == "ask"
     )
+    default_guardian_ask = default_prudence_ask and mode == GUARDIAN
 
     # GUARDIAN is deliberately in the first arm: at policy level it *is*
     # ask_writes, and letting a new mode value fall through to the final
@@ -594,7 +614,11 @@ def evaluate_policy(
     # `_drain_pending`, so nothing it does can loosen a deny or reach a
     # workflow scope this line already refused.
     if scope != CHAT_SCOPE or mode in (ASK_WRITES, GUARDIAN) or base == "deny":
-        result = Verdict(policy=base, guardian_may_review=default_guardian_ask)
+        result = Verdict(
+            policy=base,
+            guardian_may_review=default_guardian_ask,
+            default_ask=default_prudence_ask,
+        )
     elif mode == PLAN:
         # Plan mode. Read-only tools keep whatever the rows above said, so a
         # standing `ask` still asks; `exit_plan_mode` parks unconditionally,
@@ -644,11 +668,18 @@ def evaluate_policy(
     # would be the exact scope-may-only-tighten inversion the clamp's
     # placement exists to rule out.
     may_review = result.guardian_may_review and ceiling == "allow"
+    default_ask = result.default_ask and ceiling == "allow"
     if clamped == result.policy:
-        if may_review == result.guardian_may_review:
+        if (
+            may_review == result.guardian_may_review
+            and default_ask == result.default_ask
+        ):
             return result
         return Verdict(
-            policy=result.policy, by_mode=result.by_mode, guardian_may_review=False
+            policy=result.policy,
+            by_mode=result.by_mode,
+            guardian_may_review=may_review,
+            default_ask=default_ask,
         )
     # The org moved the answer, so a `by_mode` attribution would now be a lie: the
     # bypass did not let this call through, it was overruled. Property 3 of the
@@ -1253,6 +1284,45 @@ def _amended(raw_arguments: str, amendment: Optional[Any]) -> str:
     return json.dumps({**parsed, **amendment})
 
 
+def _plain_text_document_call(
+    db: Session,
+    *,
+    context: ToolContext,
+    name: str,
+    call: Dict[str, Any],
+) -> bool:
+    """Whether this would-park write only touches a plain-text document.
+
+    The carve-out that makes `kind == "text"` documents behave like a canvas:
+    their content is exactly what the user sees in the editor, every version is
+    kept, and a wrong edit is one Restore away — so the default prudence of
+    parking each write buys a wait and nothing else. Only ever consulted when
+    `Verdict.default_ask` already ruled the ask was nothing *but* that default
+    (no policy row, no org opinion, no `force_ask`, not `ask_all`), so this
+    resolves the target and nothing more.
+
+    Fail closed: a create is plain-text only when its arguments say
+    `kind: "text"` (the tool's default is markdown), and an edit only when its
+    target — resolved exactly the way the executor will, open-document fallback
+    included — exists here and is a text document. Unresolvable means park.
+    """
+    if name not in ("create_document", "edit_document"):
+        return False
+    from .artifacts import proposals
+
+    args = proposals.arguments_of(str(call.get("arguments") or "{}"))
+    if name == "create_document":
+        return args.get("kind") == "text"
+    document = proposals.target_document(
+        db,
+        workspace_id=context.workspace_id,
+        name=name,
+        args=args,
+        open_document_id=context.document_id,
+    )
+    return document is not None and document.kind == "text"
+
+
 def _guardian_clears(
     db: Session,
     run: Run,
@@ -1612,10 +1682,20 @@ def _drain_pending(
                 mode=mode,
             )
             if verdict.policy == "ask" and spec is not None:
+                # Plain-text documents edit like a canvas: a write that only
+                # touches one applies live instead of parking — but only when
+                # `default_ask` ruled the ask was the tool's own default
+                # prudence. A policy row, an org ceiling, `force_ask`, or
+                # `ask_all` (the injection escalation included) still parks.
+                if verdict.default_ask and _plain_text_document_call(
+                    db, context=context, name=name, call=call
+                ):
+                    decision = "approved"
+                    decided_by = mode_decider(PLAIN_TEXT_DECIDER)
                 # `guardian_may_review` is the policy's provenance ruling: only
                 # the tool's own default ask, org silent, no standing row. The
                 # helper's checks are the second lock, not the first.
-                if verdict.guardian_may_review and _guardian_clears(
+                elif verdict.guardian_may_review and _guardian_clears(
                     db,
                     run,
                     state,

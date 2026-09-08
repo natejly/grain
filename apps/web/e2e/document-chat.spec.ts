@@ -9,7 +9,8 @@ import { openView } from "./shell";
  * pipeline assembled in JSX or a decision that only exists once a real agent
  * run has parked on a real approval:
  *
- *  - "markdown" runs remark-math and rehype-katex and "text" runs *nothing*;
+ *  - "markdown" runs remark-math and rehype-katex; "text" gets no preview
+ *    pane at all — the source column is the document, at full width;
  *  - a turn started in the panel edits the open document without naming it;
  *  - several hunk choices resolve to one version row that says what it did.
  */
@@ -37,7 +38,7 @@ async function deleteOpenDocument(page: Page, title: string) {
 // same is one of them lying about what it is.
 const SOURCE = "# Heading\n\nInline $x^2$ and **bold** prose.\n";
 
-test("markdown renders maths and text renders none of it", async ({ page }) => {
+test("markdown renders maths and text gets no preview at all", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/");
 
@@ -57,17 +58,14 @@ test("markdown renders maths and text renders none of it", async ({ page }) => {
 
   await newDocument(page, "Kind Text E2E", "Plain text");
   await page.locator(".document-source").fill(SOURCE);
-  // "text" means *text*. Running it through ReactMarkdown "just in case" would
-  // be the same category of lie the old LaTeX kind told, where the format's
-  // name and the format's behaviour were two different things.
-  const plain = page.locator(".document-plain");
-  await expect(plain).toBeVisible();
-  await expect(plain).toHaveText(SOURCE.trim());
-  // Presence assertions on the *absence* of a render: no maths, no heading, no
-  // emphasis — the three things the markdown pane produced from this same text.
-  await expect(page.locator(".document-preview .katex")).toHaveCount(0);
-  await expect(page.locator(".document-preview h1")).toHaveCount(0);
-  await expect(page.locator(".document-preview strong")).toHaveCount(0);
+  // "text" means *text*, and text does not preview: no render pass exists, so
+  // a rendered pane would be a monospace copy of the textarea beside it. The
+  // pane is absent entirely and the source column takes the full width.
+  await expect(page.locator(".document-source")).toHaveValue(SOURCE);
+  await expect(page.locator(".document-preview")).toHaveCount(0);
+  await expect(page.locator(".document-panes")).toHaveClass(
+    /document-panes-single/,
+  );
   await page.locator(".document-panes").screenshot({
     path: "test-results/document-kind-text.png",
   });

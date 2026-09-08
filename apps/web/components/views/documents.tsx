@@ -114,12 +114,16 @@ function MathMarkdown({ content }: { content: string }) {
 }
 
 /**
- * The preview pane, which is a different promise per kind.
+ * A rendered document body, which is a different promise per kind.
  *
  * "text" means *text*: no headings, no emphasis, no maths, no smart quotes —
  * what you typed, in a monospace pane. Running it through ReactMarkdown "just
  * in case" would be the same category of lie the LaTeX kind used to tell, where
  * the format's name and the format's behaviour were two different things.
+ *
+ * The editor itself no longer mounts this for "text" — a plain document gets
+ * no preview pane at all, because the source column already IS the document —
+ * so the text branch serves read-only surfaces that render a body verbatim.
  */
 export function DocumentBody({
   kind,
@@ -357,6 +361,13 @@ export function DocumentsView({
     decidePendingEdit && carded.length > 0 ? (
       <PendingEditList edits={carded} decide={decidePendingEdit} />
     ) : null;
+
+  /**
+   * A plain-text document has nothing to preview — no markdown pass, no maths,
+   * so the rendered pane would be a monospace copy of the textarea beside it.
+   * The source pane IS the document, and it takes the whole width.
+   */
+  const plainText = active?.kind === "text";
 
   return (
     <div
@@ -642,7 +653,9 @@ export function DocumentsView({
               <LiveCursorLayer
                 surface={surface}
                 coworking={coworking ?? undefined}
-                className="document-panes"
+                className={
+                  plainText ? "document-panes document-panes-single" : "document-panes"
+                }
               >
                 <div className="document-source-wrap">
                   <textarea
@@ -680,9 +693,11 @@ export function DocumentsView({
                     scrollRef={caretScrollRef}
                   />
                 </div>
-                <div className="document-preview">
-                  <DocumentBody kind={active.kind} content={shownText} />
-                </div>
+                {!plainText && (
+                  <div className="document-preview">
+                    <DocumentBody kind={active.kind} content={shownText} />
+                  </div>
+                )}
               </LiveCursorLayer>
             </>
           )}

@@ -5542,6 +5542,17 @@ label,
   min-height: 0;
 }
 
+/* A plain-text document has no preview pane — the source IS the document — so
+   the grid collapses to the one column that exists, and the border that used
+   to separate the panes goes with it. */
+.document-panes-single {
+  grid-template-columns: 1fr;
+}
+
+.document-panes-single .document-source {
+  border-right: 0;
+}
+
 .document-source {
   padding: 18px 20px;
   border: 0;
