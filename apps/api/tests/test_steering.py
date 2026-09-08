@@ -240,9 +240,9 @@ def test_a_cut_short_stream_keeps_what_streamed(client):
     finally:
         db.close()
     assert result is not None
-    assert result.answer.startswith("Half an answer, mid-")
-    assert "cut short" in result.answer
-    assert "output limit" in result.answer
+    # The partial text stands as the whole answer — no "cut short" note is
+    # appended to it any more.
+    assert result.answer == "Half an answer, mid-"
 
 
 def test_a_note_during_the_final_model_call_still_lands_this_turn(client):
