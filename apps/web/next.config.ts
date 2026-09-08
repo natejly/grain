@@ -10,6 +10,27 @@ const apiOrigins = Array.from(
     apiOrigin.replace("//127.0.0.1", "//localhost"),
   ]),
 ).join(" ");
+// Vercel injects its preview toolbar (vercel.live/_next-live/feedback/feedback.js
+// plus a pusher websocket for live comments) into non-production deployments.
+// Our script-src is deliberately 'self'-only, so on the UAT/preview surface that
+// script is CSP-blocked and logs an error on every page load — noise on the very
+// surface the team uses for QA. The fix is scoped, not a loosening: allow the
+// toolbar's own origins ONLY when Vercel says this build is not production, so
+// the production policy below stays byte-for-byte 'self'. VERCEL_ENV is
+// 'production' | 'preview' | 'development' on Vercel and unset elsewhere; an
+// unset value must NOT open the origins, hence the explicit allowlist of the two
+// non-production values rather than a `!== "production"` test that a missing
+// variable would also pass.
+const isPreviewToolbar =
+  process.env.VERCEL_ENV === "preview" || process.env.VERCEL_ENV === "development";
+const toolbar = {
+  script: isPreviewToolbar ? " https://vercel.live" : "",
+  connect: isPreviewToolbar ? " https://vercel.live https://*.pusher.com wss://*.pusher.com" : "",
+  img: isPreviewToolbar ? " https://vercel.live https://vercel.com" : "",
+  frame: isPreviewToolbar ? " https://vercel.live" : "",
+  style: isPreviewToolbar ? " https://vercel.live" : "",
+  font: isPreviewToolbar ? " https://vercel.live https://assets.vercel.com" : "",
+};
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -25,24 +46,24 @@ const contentSecurityPolicy = [
   // instead would have been both wider and useless: a cross-site <img> carries
   // no workspace header and no third-party cookie in Safari. A blob: URL names
   // only bytes this document already holds and reaches no network.
-  "img-src 'self' data: blob:",
-  "font-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
+  `img-src 'self' data: blob:${toolbar.img}`,
+  `font-src 'self'${toolbar.font}`,
+  `style-src 'self' 'unsafe-inline'${toolbar.style}`,
   // 'wasm-unsafe-eval' is required by esbuild-wasm, which bundles project files
   // in this page so the sandbox never needs a server or a network fetch. It
   // permits WebAssembly compilation only — not eval() or new Function() — and it
   // applies to the host page alone. The generated preview still runs in an
   // iframe under default-src 'none' with connect-src 'none', so the sandbox's
   // own guarantees are unchanged.
-  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
-  `connect-src 'self' ${apiOrigins}`,
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}${toolbar.script}`,
+  `connect-src 'self' ${apiOrigins}${toolbar.connect}`,
   // `blob:` is what the LaTeX preview frames: the compiled PDF never leaves the
   // browser, so it is handed to the <iframe> as a same-origin blob: URL this
   // page created itself. Without it the compile succeeds, the status reads
   // "Compiled", and the frame is silently blocked — a working editor that shows
   // nothing. It grants no network reach: a blob: URL can only name bytes this
   // document already holds.
-  `frame-src 'self' blob: ${apiOrigins}`,
+  `frame-src 'self' blob: ${apiOrigins}${toolbar.frame}`,
 ].join("; ");
 
 const nextConfig: NextConfig = {
