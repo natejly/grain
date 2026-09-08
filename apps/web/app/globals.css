@@ -6169,6 +6169,8 @@ label,
 .board-head h2 {
   margin: 0;
   font-size: 15px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .kanban {
@@ -6195,10 +6197,21 @@ label,
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   color: var(--text-muted);
   font-size: 11px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+/* The name yields, everything else keeps its size: a long column name
+   ellipsizes instead of pushing the count and controls out of the column. */
+.kanban-column-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kanban-count {
@@ -6215,6 +6228,7 @@ label,
 }
 
 .kanban-card {
+  min-width: 0;
   padding: 10px 11px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -6229,27 +6243,36 @@ label,
 .kanban-card-title {
   font-size: 12.5px;
   line-height: 1.45;
+  /* Long URLs and unbroken strings must wrap inside the card, not widen it. */
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .kanban-card p {
   margin: 6px 0 0;
   color: var(--text-dim);
   font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .kanban-card-foot {
   display: flex;
   align-items: center;
+  /* Labels, chevrons, the move control and delete together outgrow a narrow
+     column; the foot folds onto extra rows rather than poking out of the card. */
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
 }
 
 .kanban-label {
+  max-width: 100%;
   padding: 1px 7px;
   border-radius: 4px;
   background: var(--accent-muted);
   color: var(--accent);
   font-size: 10px;
+  overflow-wrap: anywhere;
 }
 
 /* The keyboard route to what a drag does: a card's Move to… control. It takes
@@ -6305,6 +6328,15 @@ label,
 .kanban-add-form {
   display: grid;
   gap: 8px;
+  min-width: 0;
+}
+
+/* Inputs and the delete form's destination select carry wide intrinsic sizes;
+   pinned to the column's width so the forms never overflow it. */
+.kanban-add-form input,
+.kanban-add-form select {
+  width: 100%;
+  min-width: 0;
 }
 
 .kanban-add-form textarea {
@@ -9942,6 +9974,7 @@ label,
   margin: 0;
   font-size: 14px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 /* first-of-type, not first-child: on the merged page the head leads with the
@@ -9951,6 +9984,7 @@ label,
   flex-direction: column;
   gap: 2px;
   margin-right: auto;
+  min-width: 0;
 }
 
 .todo-progress {
@@ -9992,6 +10026,11 @@ label,
   height: 15px;
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+.todo-item-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* Struck *and* dimmed: a tick that only changes the colour of the text is a
@@ -11354,7 +11393,12 @@ label,
    here it sits on its own line under the title rather than at a row's edge. */
 .kanban-card .todo-claim {
   display: inline-flex;
+  flex-wrap: wrap;
   margin: 6px 0 0;
+  max-width: 100%;
+  /* A long claimer name wraps within the chip here; the chip's nowrap default
+     suits a checklist row's edge, not a narrow card. */
+  white-space: normal;
 }
 
 /* `.todo-claim.free` is already hidden and already reveals on :focus-visible;

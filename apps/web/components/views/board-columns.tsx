@@ -287,7 +287,9 @@ export function ColumnHeader({
   return (
     <div className="kanban-column-head">
       {editable && <GripVertical size={13} aria-hidden />}
-      <span>{column.name}</span>
+      <span className="kanban-column-name" title={column.name}>
+        {column.name}
+      </span>
       <span className="kanban-count">{column.cards.length}</span>
       {move && (
         <>
