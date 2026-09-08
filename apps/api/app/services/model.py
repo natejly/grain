@@ -11,13 +11,19 @@ from openai import OpenAI
 
 from ..config import ReasoningEffort, Settings, get_settings
 from . import usage
+from .errors import UserFacingError
 from .retrieval import Evidence
 
 logger = logging.getLogger(__name__)
 
 
-class ModelConfigurationError(RuntimeError):
-    pass
+class ModelConfigurationError(UserFacingError, RuntimeError):
+    """A deployment that cannot answer, and the message says which knob to turn.
+
+    User-facing because a workspace whose provider is unconfigured shows this to
+    whoever asked, and "the assistant could not finish this turn" would send
+    them to support for something an owner fixes in one line of .env.
+    """
 
 
 CHAT_INSTRUCTIONS = """You are a helpful assistant in a knowledge workspace.
@@ -256,9 +262,17 @@ def _openai_input(
                 + "\n"
                 + item.excerpt
             )
+        # The citation rule is restated here, beside the passages, and not left
+        # to CHAT_INSTRUCTIONS alone. The header used to read "Optional source
+        # passages", which contradicted the instruction the validator enforces:
+        # a live audit found three of four grounded answers restating a memo
+        # almost verbatim with no [n] anywhere, so the UI badged accurate
+        # answers "This answer cites nothing". "Optional" was doing that work —
+        # the passages are optional to *use*, but citing what you do use is not.
         sections.append(
-            "Optional source passages from the user's library:\n\n"
-            + "\n\n".join(passages)
+            "Source passages from the user's library. If you use one, attach "
+            "[n] to the claim it supports — a factual claim taken from passage "
+            "n and left unmarked is a citation error:\n\n" + "\n\n".join(passages)
         )
     return "\n\n".join(sections)
 

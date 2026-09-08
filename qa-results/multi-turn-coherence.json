@@ -1,0 +1,186 @@
+{
+  "name": "multi-turn-coherence",
+  "turns": [
+    {
+      "prompt": "I'm organising a reading group at the Fairview library. There will be 8 people in it, and we meet on Thursday evenings.",
+      "answer": "Got it: 8 people, Fairview library, Thursday evenings. Since you need one book per person, you\u2019ll need **8 copies**, ideally delivered by the **Thursday evening of the first meeting**.\n\nWhat book and first meeting date are you planning around?",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages cited of 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 3.5
+    },
+    {
+      "prompt": "How many copies of the book should I order for them, and when do I need them by?",
+      "answer": "Order",
+      "tools": [],
+      "citations": null,
+      "status": "failed",
+      "error": "(sqlite3.OperationalError) database is locked\n[SQL: INSERT INTO run_events (id, workspace_id, run_id, sequence, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)]\n[parameters: ('6053afd3-6cb0-41f5-af8e-8ccb2e011085', '00000000-0000-4000-8000-000000000001', '5b48cea9-8171-4ca6-9758-597a57755586', 6, 'message.delta', '{\"delta\":\" **8 copies**.\\\\n\\\\nYou need them by the **Thursday eve",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "run.failed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 34.6
+    },
+    {
+      "prompt": "Actually, make that 12, not 8 - two more couples just joined.",
+      "answer": "Got it \u2014 with **12 people**, order **12 copies** of the book.\n\nYou\u2019ll need them by the **Thursday evening of the first meeting**.",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages cited of 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 4.3
+    },
+    {
+      "prompt": "Copies are $14.50 each, and the shop takes 10% off any order of more than 10 copies. What will I pay in total?",
+      "answer": "You\u2019ll order **12 copies**.\n\n- Subtotal: 12 \u00d7 $14.50 = **$174.00**\n- 10% discount: **$17.40**\n- Total: **$156.60**",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages cited of 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 3.3
+    },
+    {
+      "prompt": "Summarise the whole exchange for me - what have we settled on?",
+      "answer": "We\u2019ve settled on:\n\n- The Fairview library reading group now has **12 people** and meets on **Thursday evenings**.\n- You should order **12 copies** of the book.\n- You need them by the **Thursday evening of the first meeting**.\n- At **$14.50 per copy**, 12 copies cost **$174.00** before discount.\n- Since the order is for more than 10 copies, the shop applies a **10% discount**.\n- Final total: **$156.60**.",
+      "tools": [],
+      "citations": {
+        "evidence_count": 5,
+        "marker_count": 0,
+        "cited": [],
+        "out_of_range": [],
+        "uncited": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "malformed": [],
+        "valid": true,
+        "summary": "no passages cited of 5"
+      },
+      "status": "completed",
+      "error": "",
+      "events": [
+        "run.queued",
+        "run.started",
+        "retrieval.completed",
+        "memory.recalled",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "message.delta",
+        "run.citations",
+        "message.completed",
+        "run.completed"
+      ],
+      "thinking_chars": 0,
+      "seconds": 33.1
+    }
+  ],
+  "conversation_id": "a5dd9e81-088c-4c72-8f7d-be156a8cf579"
+}

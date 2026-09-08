@@ -28,6 +28,182 @@ Three mechanisms already ship and do most of this:
 So: an attachment is a polymorphic pointer (document | source) from a conversation
 to a file, mirroring `Conversation.subject_kind/subject_id`.
 
+# Fix: the run-failure leak and the citation gap (bg/chat-readiness, 2026-08-27)
+
+The two findings the live-model audit turned up, now fixed and measured.
+
+## Plan
+- [x] Stop `_fail_run` publishing internal exception text to clients
+- [x] Keep the messages that were written for a person (OrgBoundExceeded says so)
+- [x] Close the citation gap in the prompt
+- [x] Prove both against the real model, not just the unit suite
+
+## Review
+
+**The leak.** `_fail_run` catches every exception an agent turn can raise and
+put `str(exc)` on `run.error`, which is published twice — into the `run.failed`
+event the browser streams, and into the member-facing Inbox. A driver error
+therefore became SQL, bound parameters and row ids on a user's screen.
+
+Fixed with an allow-list, not a sanitiser: there is no reliable way to scrub
+identifiers out of arbitrary exception text, so nothing is said about the cause
+unless the exception opts in by TYPE. `UserFacingError` (services/errors.py) is
+the marker; `OrgBoundExceeded`, `ModelConfigurationError` and `ScriptError`
+carry it. Everything else gets one honest sentence naming the run id, and the
+detail goes to the log where operators can correlate it.
+
+The allow-list is not optional politeness: `OrgBoundExceeded`'s own docstring
+argues that telling a user "the request failed", when the honest answer is
+"your organization does not allow this", sends them debugging the wrong thing.
+A blanket generic message would have been its own regression. `ChildAborted` is
+deliberately NOT tagged — delegation.py:322 catches it, so it never reaches
+`_fail_run`; that was checked rather than assumed.
+
+**The citation gap.** `CHAT_INSTRUCTIONS` promises "attach [n] after each claim
+supported by passage n", and the evidence block then introduced itself as
+"Optional source passages from the user's library". The passages are optional
+to USE; citing the ones you do use is not. The header now restates the rule
+where the model is actually reading.
+
+## Measured, not asserted
+
+Same scenario, same harness, before and after:
+
+    BEFORE   markers per turn: [0, 0, parked, 0, 2]
+    AFTER-1  markers per turn: [2, failed, 2, 3, 4]
+    AFTER-2  markers per turn: [1, 2, 2, 2, -]
+    AFTER-3  markers per turn: [1, 2, failed, 2, 4]
+
+Twelve completed evidence-bearing turns after the change, none with zero
+markers, none out of range. Before, three of four cited nothing.
+
+A second effect, n=3 and not the thing being tested, so stated as observation
+rather than claim: the absent-fact question used to park on `ask_user` asking
+permission to search a memo it had already retrieved. It now answers directly —
+"The provided Atlas memo passages do not state: the p50 checkout latency... the
+dollar cost of the Redis caching migration". Dropping "Optional" plausibly made
+the passages read as the authoritative set rather than a suggestion.
+
+The leak fix was proven by the bug that motivated it recurring: a turn died on
+the same SQLite lock and the client received "The assistant could not finish
+this turn. Try again — if it keeps happening, quote run f22a9606-… to your
+workspace owner." No SQL in any of the three runs.
+
+## Still open, deliberately
+
+The lock that produced the original leak is NOT fixed. An audit append of a
+`message.delta` failing still destroys an in-flight answer, and still 500s the
+send. That is the separate "make run_events append non-fatal" item — worth
+doing, and a bigger change than this one.
+
+# Chat response-quality audit (bg/chat-readiness, 2026-08-27)
+
+Second pass, after the composer fixes: does the assistant give GOOD answers, not
+just does the app carry them. The Playwright suite runs against MODEL_PROVIDER=
+scripted, so it can never answer this — canned replies have no quality.
+
+## Plan
+- [x] Stand up a live-model harness (`scripts-serve-live.py`, port 8011, real provider)
+- [x] Build one shared probe client so scenarios are data, not bespoke HTTP code
+- [x] Six scenario families, each probed and then INDEPENDENTLY re-judged
+- [x] Verify the headline findings myself rather than relaying agent claims
+
+## Review
+
+29 turns against real gpt-5.5. The model is the strong part: zero fabricated
+numbers on grounded questions, both planted "tempting adjacent fact" traps held,
+the injection payload was ignored in three scenarios (and named as untrusted
+content in one), formatting constraints passed 5/5 under mechanical checking,
+and a mid-conversation correction was honoured with the dependent arithmetic
+right. Full report published as an artifact; raw transcripts in `qa-results/`.
+
+What is NOT ready is around the model. Two verified directly against the source:
+
+- `_fail_run` (services/runs.py) sets `run.error = str(exc)[:1000]` and puts it
+  in the `run.failed` payload, so a raw SQLAlchemy exception — SQL text, bound
+  parameters, workspace and run ids — is streamed to the browser. Worse, the
+  write that failed was an audit append of a `message.delta`: a correct answer
+  in flight was destroyed because a log row could not be written. Backend-
+  independent defect; the lock that triggered it here is dev-SQLite only.
+- `CHAT_INSTRUCTIONS` (services/model.py) promises "attach [n] after each claim
+  supported by passage n", and the evidence block is then labelled "Optional
+  source passages from the user's library". Three of four grounded answers
+  restated the memo verbatim with `marker_count: 0`, so the UI badges them
+  "This answer cites nothing" — a warning label on accurate answers.
+
+## Harness notes, learned the hard way
+
+- The first workflow ran six scenarios CONCURRENTLY and drove dev SQLite past
+  its own 30s `busy_timeout` into "database is locked" mid-conversation. That
+  does not merely lose a turn: it silently removed a correction the next turn
+  depended on, and the transcript then reads as a model ignoring the user.
+  Serialise anything that drives chat turns. Cancelling a client does not stop
+  the server-side run, so orphaned runs from a killed workflow keep contending.
+- The session cookie is issued `Secure`; `http.cookiejar` will not replay it
+  over plain http, so a python probe arrives signed out. Browsers exempt
+  127.0.0.1, which is why the app itself is fine. Carry the cookie by hand.
+- `ask_user` is `force_ask=True` — the park IS the feature. A probe must treat
+  `run.waiting_for_approval` as a terminal outcome or it burns its whole
+  timeout waiting for a human who is not coming.
+
+# Main chat readiness (bg/chat-readiness, 2026-08-27)
+
+Goal: drive the primary chat as a user and make sure it is fit for people to
+use — not "the specs pass", but "nothing silently does the wrong thing".
+
+## Plan
+- [x] Baseline the existing chat coverage (workspace.spec.ts) before touching anything
+- [x] Drive the real app in a browser: send/stream/settle, reload, rail titling
+- [x] Probe what the specs do NOT cover: composer guards, thread switching,
+      stop/regenerate/edit, steering, copy, failure paths, mobile, keyboard
+- [x] Fix what is actually broken, with a regression test per fix
+- [x] Re-verify: unit suite, lint, typecheck, full chat e2e sweep
+
+## Review
+
+The covered paths were already healthy — the baseline run of `workspace.spec.ts`
+was green before any change, and streaming, cancel, regenerate, edit-and-rerun,
+steering, slash commands, copy, the approval cards, mobile layout and composer
+tab order all behaved correctly under a live browser. Two things did not, and
+both failed *quietly*, which is why neither had been noticed.
+
+### Fixed
+- **A draft was sent into the wrong conversation.** `use-workspace.ts` held one
+  shell-level `draft`, never keyed on the active thread, so a half-typed message
+  followed you to whatever thread you clicked next and the next Enter posted it
+  there — on a shared thread, in front of the wrong people. Proven end to end
+  before fixing. Drafts are now keyed by conversation id (with `""` for the
+  composer that renders before a thread exists); they are isolated *and*
+  remembered, and a send clears only the thread that sent. This also stops the
+  typing chip reporting you as typing in a thread you had merely visited.
+- **A failed send told the user nothing.** `describeError` returns `""` for an
+  unreachable API on the grounds that the health banner covers it — but that
+  banner is driven by a separate `/health` poll on a 15s cadence, so it never
+  fires for a single blipped request, and never for a 500 that unwinds past the
+  CORS middleware and reaches the browser stripped of its status. The send just
+  sat there, indistinguishable from an ignored keystroke. Added
+  `describeActionError` for failures somebody is *waiting on*; the chat turn
+  engine's seven user-initiated catches use it. Background refreshes still keep
+  quiet during a real outage, which is what the original silence was for.
+
+### Tests
+- `apps/web/tests/action-error.test.ts` — pins the split in both directions
+  (background describer stays silent, action describer is never empty).
+- `apps/web/e2e/chat-composer.spec.ts` — the two behaviours above, in a browser.
+  Both verified to FAIL against the unfixed code before being kept.
+
+### Not a product bug, but worth knowing
+`subject-chat.spec.ts` ("the project panel writes a file…") fails in any fresh
+clone or worktree with "React runtime asset is missing (404)".
+`playwright.config.ts`'s webServer runs `next dev` **directly**, which skips the
+`pnpm sandbox-assets` step that `pnpm dev` runs first — so the spec passes only
+where an earlier run happened to leave `apps/web/public/sandbox` behind. Running
+`pnpm --filter @workspace/web sandbox-assets` fixes it locally; pointing the
+webServer command at the `dev` script would fix it for everyone. Left alone here
+because it is neither main chat nor caused by this branch.
+
+# Security audit + rate limiting (bg/security-audit, 2026-08-25)
+
 ## Plan
 - [x] Migration `0068_chat_attachments`: `chat_attachments` table +
       `Source.conversation_id` (indexed, default "")

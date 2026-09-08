@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..config import Settings
+from .errors import UserFacingError
 from .model import stream_words
 from .retrieval import Evidence
 
@@ -84,7 +85,7 @@ class _ScriptedResponse:
     output_text: str = ""
 
 
-class ScriptError(RuntimeError):
+class ScriptError(UserFacingError, RuntimeError):
     pass
 
 

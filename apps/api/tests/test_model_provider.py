@@ -134,12 +134,31 @@ def test_openai_client_is_built_from_settings():
 
 def test_prompt_carries_sources_only_when_there_is_evidence():
     with_sources = _openai_input("Who owns the launch?", evidence())
-    assert "Optional source passages" in with_sources
+    assert "Source passages from the user's library" in with_sources
     assert "brief.md, passage 1" in with_sources
 
     without = _openai_input("hi", [])
     assert "Question:\nhi" in without
-    assert "Optional source passages" not in without
+    assert "Source passages from the user's library" not in without
+
+
+def test_the_evidence_block_restates_the_citation_rule():
+    """The [n] contract is stated beside the passages, not only at the top.
+
+    The header used to read "Optional source passages", which contradicted the
+    instruction the citation validator enforces. A live audit found three of
+    four grounded answers restating a source almost verbatim with no marker
+    anywhere, so the UI badged accurate answers "This answer cites nothing".
+    The passages are optional to use; citing the ones you do use is not, and
+    the prompt has to say so where the model is actually reading.
+    """
+    prompt = _openai_input("Who owns the launch?", evidence())
+    assert "Optional source passages" not in prompt
+    assert "[n]" in prompt
+    # The rule travels with the evidence: everything after the header, not in
+    # some earlier section the passages have scrolled away from.
+    header = prompt.index("Source passages from the user's library")
+    assert prompt.index("[n]", header) > header
 
 
 def test_local_web_origin_accepts_both_loopback_names():

@@ -1,0 +1,15 @@
+{
+  "name": "tool-selection",
+  "sources": [
+    {
+      "filename": "team-notes.md",
+      "content": "# Rice Labs platform team - running notes\n\n## Week of Aug 17\n- Shipped the new ingest queue. Two stale feature flags left behind: `ingest_v2_shadow` and `queue_dual_write`.\n- Draft spec doc for retention policy is half-written and out of date.\n- Kira is the on-call rotation owner. Deploys go out Tuesdays.\n\n## Week of Aug 24\n- Onboarding two new engineers on Sept 2: Priya and Tomas.\n- Laptops ordered. Repo access not yet granted.\n- We still have no written onboarding guide; people ask the same five questions in chat every time.\n\n## Standing facts\n- Prod runs in us-east-1. Staging is us-west-2.\n- Postgres 16. Redis for the queue.\n"
+    }
+  ],
+  "turns": [
+    "We keep re-answering the same questions for every new hire. Write up a one-page onboarding guide for engineers joining our platform team and save it as a document in this workspace, using what's in the team notes.",
+    "Good. Now I need to track the prep work for Priya and Tomas starting Sept 2 - grant repo access, order their dev environment setup, and schedule a first-week 1:1. Put those on my todo list.",
+    "Quick unrelated question while I have you: in plain English, what does it mean for an HTTP endpoint to be idempotent?",
+    "Can you clean up the stuff from last week?"
+  ]
+}
