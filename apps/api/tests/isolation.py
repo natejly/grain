@@ -1683,6 +1683,15 @@ ROUTE_CASES: List[RouteCase] = [
         body={"title": "renamed"},
     ),
     RouteCase(
+        "PUT",
+        "/api/conversations/{conversation_id}/space",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        body={"space_id": ""},
+        note="Moving another tenant's thread (even to 'no space') must 404 on "
+        "the workspace filter before the space id is even looked at.",
+    ),
+    RouteCase(
         "POST",
         "/api/conversations/{conversation_id}/fork",
         DENY,
@@ -3237,6 +3246,13 @@ ROUTE_CASES: List[RouteCase] = [
         path_literals={"scope": "chat", "tool_name": "isolation_probe"},
     ),
     RouteCase("GET", "/api/org/members", SCOPED),
+    # Deployment-wide rows on an org-scoped router, which is why this case is
+    # worth stating rather than assuming. An embedding generation has no
+    # `organization_id` to filter on — two orgs disagreeing about what a vector
+    # means is not a state the system can hold — so what SCOPED asserts here is
+    # the weaker but real property: the response carries model names, widths and
+    # corpus totals, and never a row, id or string belonging to another tenant.
+    RouteCase("GET", "/api/org/retrieval-contract", SCOPED),
     # The one org route that takes an id from the client, and the sharpest case
     # in this group: A, an admin of A's org, sends B's user id. A 2xx here would
     # mean one organization can enroll another organization's people — the

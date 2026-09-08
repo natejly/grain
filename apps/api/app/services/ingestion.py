@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import re
+import shutil
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,7 +22,12 @@ from ..models import Chunk, Source
 from .audit import record_audit
 from .graph import rebuild_graph
 from .model import situate_chunk
-from .retrieval import clear_source_postings, embed_chunks, index_chunks
+from .retrieval import (
+    chunks_needing_embedding,
+    clear_source_postings,
+    embed_chunks,
+    index_chunks,
+)
 from .usage import usage_scope
 
 logger = logging.getLogger(__name__)
@@ -220,13 +226,12 @@ def backfill_workspace(workspace_id: str, settings: Optional[Settings] = None) -
             ]
             index_chunks(db, stale)
             counts["indexed"] += len(stale)
-            pending_vectors = [
-                chunk
-                for chunk in chunks
-                if chunk.embedding is None
-                or chunk.embedding_model != settings.openai_embedding_model
-                or chunk.id in gained
-            ]
+            # `gained` no longer has to be part of this: a chunk that just gained a
+            # blurb embeds different text, and different text has a different
+            # content hash, so `chunks_needing_embedding` already knows. Asking the
+            # hash rather than tracking reasons also catches the case nothing was
+            # tracking — content edited in place by a re-ingest.
+            pending_vectors = chunks_needing_embedding(db, chunks, settings)
             counts["embedded"] += embed_chunks(db, pending_vectors, settings)
             db.commit()
     finally:
@@ -337,6 +342,30 @@ def purge_source(db: Session, *, workspace_id: str, source_id: str) -> Optional[
     clear_source_postings(db, source.id)
     db.execute(delete(Chunk).where(Chunk.source_id == source.id))
     return source
+
+
+def remove_object_files(object_keys: Iterable[str]) -> None:
+    """Unlink the stored bytes behind purged sources — after the commit, only.
+
+    The ordering contract every caller shares: bytes for rows that still exist
+    are recoverable, rows for bytes that are gone are not, so this runs once
+    the transaction that purged the rows has held. Each `object_key` names a
+    file inside its own per-source directory, and the directory goes with it.
+    Failures are swallowed: a file already gone is the outcome asked for, and
+    a permissions hiccup must not turn a committed delete into a 500.
+    """
+    for object_key in object_keys:
+        if not object_key:
+            continue
+        object_file = Path(object_key)
+        try:
+            if object_file.exists():
+                object_file.unlink()
+            parent = object_file.parent
+            if parent.exists():
+                shutil.rmtree(parent)
+        except OSError:
+            pass
 
 
 #: How a browser asks for the bytes `object_path` wrote. Declared here, beside

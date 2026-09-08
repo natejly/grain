@@ -100,7 +100,41 @@ const THINKING_TRAILS_KEY = "grain.thinking-trails";
  */
 export function useWorkspace() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversations, setConversationList] = useState<Conversation[]>([]);
+  /**
+   * How many authoritative local changes the rail has seen.
+   *
+   * A whole-list snapshot from the server is only true as of the moment it was
+   * requested. Delete a thread while a `listConversations()` issued a
+   * millisecond earlier is still in flight, and that reply — which still
+   * contains the row, because the DELETE had not committed when the server
+   * answered — lands after the optimistic removal and puts the thread back. It
+   * then stays back until the next refresh, which for a settled run is about
+   * seven seconds later. Long enough to read as "the delete did not work", and
+   * to delete it again against a row that is already gone.
+   *
+   * So every local mutation bumps this, and a snapshot that was requested
+   * under an older value is dropped rather than applied. `load()` already did
+   * a one-sided version of this — it keeps threads CREATED during a load — but
+   * a creation survives a stale snapshot only because it is absent from it,
+   * while a deletion is present in it, which is exactly the case that needs
+   * the guard.
+   */
+  const conversationEpoch = useRef(0);
+  /**
+   * Change the rail from local knowledge — an add, a delete, a rename, a share.
+   *
+   * Everything that is not a server snapshot goes through here, so that no
+   * caller has to remember to invalidate: bumping IS how a local change is
+   * applied. `setConversationList` stays private to the two snapshot paths.
+   */
+  const setConversations = useCallback(
+    (value: SetStateAction<Conversation[]>) => {
+      conversationEpoch.current += 1;
+      setConversationList(value);
+    },
+    [],
+  );
   const [activeConversation, setActiveConversation] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   // The files this thread is about. Per conversation, so switching threads
@@ -183,7 +217,57 @@ export function useWorkspace() {
   // never touches localStorage. `focusedPane` is null when the primary is focused.
   const [extraPanes, setExtraPanes] = useState<ChatPane[]>(() => readStoredPanes());
   const [focusedPane, setFocusedPane] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  /**
+   * The composer's text, one draft per thread rather than one for the shell.
+   *
+   * A single shared draft followed you to whatever thread you clicked next, so
+   * the very next Enter sent a half-typed message into the wrong conversation —
+   * on a shared thread, in front of the wrong people — with nothing on screen
+   * saying it had moved. It also fed the typing chip below, which then reported
+   * you as typing in a thread you had merely visited.
+   *
+   * Keyed by conversation id. "" is the composer that renders before any thread
+   * exists: typing there creates the thread on send, so there is no other
+   * conversation those words could be misdirected into.
+   */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draftKey = activeConversation ?? "";
+  const draft = drafts[draftKey] ?? "";
+  /**
+   * The key, read through a ref rather than closed over at render.
+   *
+   * `submitPrompt` clears the draft, awaits the send, and on failure puts the
+   * words back — and by then `ensureConversation` may have made this the first
+   * turn of a brand new thread. The restored text has to land in the composer
+   * the user is actually looking at, which is whichever thread is active *now*.
+   */
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
+  const setDraft = useCallback((value: SetStateAction<string>) => {
+    setDrafts((current) => {
+      const key = draftKeyRef.current;
+      const previous = current[key] ?? "";
+      const next = typeof value === "function" ? value(previous) : value;
+      if (next === previous) return current;
+      // An emptied draft is dropped rather than parked as "": this map holds a
+      // key for every thread typed into this session, and a cleared composer
+      // has nothing worth remembering.
+      if (!next) {
+        const rest = { ...current };
+        delete rest[key];
+        return rest;
+      }
+      return { ...current, [key]: next };
+    });
+  }, []);
+  /**
+   * Put a failed send's words back into the thread they were meant for, named
+   * outright instead of inferred from whatever is active when the failure lands.
+   * See `restoreDraft` in ThreadHandlerDeps for why the difference matters.
+   */
+  const restoreDraft = useCallback((conversationId: string, content: string) => {
+    setDrafts((current) => ({ ...current, [conversationId]: content }));
+  }, []);
   // Which authored agent answers the next message; "" is the workspace
   // default. No longer bare session state: the thread remembers it
   // (Conversation.default_agent_id) — see the seeding effect and the pick*
@@ -526,7 +610,12 @@ export function useWorkspace() {
   /** Re-read the rail's conversations list — what an extra pane's finished run
    *  needs the shell to catch up on, and nothing else. */
   const refreshConversations = useCallback(async () => {
-    setConversations(await api.listConversations());
+    const epoch = conversationEpoch.current;
+    const rows = await api.listConversations();
+    // Dropped, not merged: the local change that bumped the epoch is the newer
+    // truth, and this snapshot cannot say which of its rows predate it.
+    if (epoch !== conversationEpoch.current) return;
+    setConversationList(rows);
   }, []);
 
   /** Replace one conversation row in the rail's list. An extra pane changing its
@@ -598,6 +687,25 @@ export function useWorkspace() {
       setError(describeError(caught, "Could not update safe mode"));
     }
   }, []);
+
+  /**
+   * File a thread into a space — "" moves it back to the plain rail — and
+   * replace its row, so the rail's space grouping and the space page's thread
+   * list both read the one authoritative copy. The spaces list is re-fetched
+   * afterwards because each row carries a thread count the move just changed.
+   */
+  const moveConversationToSpace = useCallback(
+    async (conversationId: string, spaceId: string) => {
+      setError("");
+      try {
+        patchConversation(await api.setConversationSpace(conversationId, spaceId));
+        await refreshSecondary();
+      } catch (caught) {
+        setError(describeError(caught, "Could not move the thread"));
+      }
+    },
+    [patchConversation, refreshSecondary],
+  );
 
   /** Rename a thread and replace its rail row with the server's copy. */
   const renameConversation = useCallback(
@@ -717,12 +825,17 @@ export function useWorkspace() {
   }, [refreshSecondary, refreshArtifacts, refreshPendingEdits]);
 
   const loadWorkspace = useCallback(async () => {
-    // The list this load is allowed to overwrite. Anything that appears in the
-    // sidebar *after* this snapshot was taken was created by the user while the
-    // load was in flight, and a response fetched before it existed must not
-    // erase it — "New thread" clicked on a still-loading workspace used to lose
-    // the thread it just made.
+    // What the rail held when this load began, and how many local changes it
+    // had seen. Both are needed, and for opposite reasons.
+    //
+    // The id-set exists because "New thread" clicked on a still-loading
+    // workspace used to lose the thread it just made: a row absent from the
+    // snapshot but present now is visibly new, so it must survive. The epoch
+    // exists because the reverse case is invisible to that test — a thread
+    // deleted while the load was in flight is still IN the snapshot and reads
+    // as an ordinary row.
     const knownAtStart = new Set(conversationsRef.current.map((item) => item.id));
+    const epochAtStart = conversationEpoch.current;
     try {
       const [
         boot,
@@ -762,13 +875,41 @@ export function useWorkspace() {
       setBootstrap(boot);
       setDigest(boot.digest ?? null);
       setSafeMode(Boolean(boot.safe_mode));
-      setConversations((current) => {
-        const listed = new Set(chats.map((item) => item.id));
-        const createdDuringLoad = current.filter(
-          (item) => !listed.has(item.id) && !knownAtStart.has(item.id),
-        );
-        return [...createdDuringLoad, ...chats];
-      });
+      if (conversationEpoch.current === epochAtStart) {
+        setConversationList(chats);
+      } else {
+        // The rail changed under us. Unlike the refresh paths, this cannot
+        // simply drop the answer: `loadWorkspace` runs once, from a mount
+        // effect, and nothing on a timer re-reads conversations — the two
+        // intervals in this file poll sources and the graph. Discarding this
+        // snapshot would leave the rail holding only what that local change
+        // put in it, missing every other thread, until the user happens to
+        // finish a run. That is unbounded, and worse than the staleness the
+        // guard is here to prevent.
+        //
+        // So it merges, which is possible precisely because `knownAtStart`
+        // says which rows this client had before the snapshot was requested:
+        //   - present now, absent from the snapshot, unknown at start
+        //       -> created while the load was in flight; keep it
+        //   - known at start, absent now
+        //       -> deleted while the load was in flight; the snapshot's copy
+        //          is the stale one, so drop it rather than resurrect it
+        // Anything else is the server's to state.
+        setConversationList((current) => {
+          const present = new Set(current.map((item) => item.id));
+          const listed = new Set(chats.map((item) => item.id));
+          const deletedDuringLoad = new Set(
+            [...knownAtStart].filter((id) => !present.has(id)),
+          );
+          const createdDuringLoad = current.filter(
+            (item) => !listed.has(item.id) && !knownAtStart.has(item.id),
+          );
+          return [
+            ...createdDuringLoad,
+            ...chats.filter((item) => !deletedDuringLoad.has(item.id)),
+          ];
+        });
+      }
       setSources(nextSources);
       setSpaces(nextSpaces);
       setSpaceTemplates(nextSpaceTemplates);
@@ -1088,6 +1229,7 @@ export function useWorkspace() {
     setView,
     setSidebarOpen,
     setConversations,
+    refreshConversations,
     setActiveConversation,
     setMessages,
     setAgentCalls,
@@ -1097,6 +1239,7 @@ export function useWorkspace() {
     setBudgetPark,
     onScreenFlag: recordScreenFlag,
     setDraft,
+    restoreDraft,
     setActiveProject,
     setActiveDocument,
     setDocumentVersions,
@@ -1283,6 +1426,7 @@ export function useWorkspace() {
     patchConversation,
     renameConversation,
     shareConversation,
+    moveConversationToSpace,
     draft,
     setDraft,
     selectedAgentId,

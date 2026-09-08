@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { blocksFor, css, ruleBody } from "./css-rules";
 
 /**
  * The collapse rules, asserted as text.
@@ -12,18 +11,6 @@ import { describe, expect, it } from "vitest";
  * that lands before the rule it must beat, and a collapsed pane that takes its
  * own toggle with it.
  */
-const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
-
-/** Every rule body whose selector list mentions `selector`, concatenated. */
-function ruleBody(selector: string): string {
-  const pattern = new RegExp(
-    `(^|[},])([^{}]*\\${selector}(?![\\w-])[^{}]*)\\{([^}]*)\\}`,
-    "g",
-  );
-  let body = "";
-  for (const match of css.matchAll(pattern)) body += match[3];
-  return body;
-}
 
 /** Where a literal first appears in the sheet — order is what decides a tie. */
 function at(needle: string): number {
@@ -34,8 +21,12 @@ function at(needle: string): number {
 
 describe("the collapsed rail", () => {
   it("gives the whole grid width to the main panel", () => {
-    // Read from the selector forward rather than through `ruleBody`, which
-    // anchors on `^ } ,` and so cannot see the first rule inside a media block.
+    // This used to read 260 characters forward from the selector, because the
+    // local `ruleBody` anchored on `^ } ,` and so could not see the first rule
+    // inside a media block — which is where this rule lives. The shared parser
+    // tracks brace depth instead, so the block can just be asked for. A fixed
+    // slice was also a quiet trap: one longer declaration and the assertion
+    // would read past the rule it meant to check.
     //
     // Two tracks in the collapsed shell — the icon rail's 56px and the main
     // panel — and the count is the assertion. The CONTEXT sidebar is removed
@@ -43,10 +34,9 @@ describe("the collapsed rail", () => {
     // kept a `0` track for it would auto-place <main> into the 0 and the whole
     // app would measure zero wide. That is the bug this pins: the browser
     // rendered a blank window, and the width the spec measures went *down*.
-    const rule = css.slice(
-      at(".workspace-shell.rail-collapsed {"),
-      at(".workspace-shell.rail-collapsed {") + 260,
-    );
+    const blocks = blocksFor(".workspace-shell.rail-collapsed");
+    expect(blocks.length, "no collapsed-shell rule").toBe(1);
+    const rule = blocks[0];
     expect(rule).toMatch(/grid-template-columns:\s*56px minmax\(0, 1fr\);/);
     // No bare `0` track (the `0` inside minmax() is not a track of its own).
     expect(rule).not.toMatch(/grid-template-columns:[^;]*\s0[\s;]/);

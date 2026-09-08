@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { ruleBody } from "./css-rules";
 
 /**
  * The pending-edit panel in Documents borrows chat's approval-card classes and
@@ -14,18 +13,6 @@ import { describe, expect, it } from "vitest";
  *    squeezed `.document-panes` to 0px and pushed Approve/Deny past the clip with
  *    no scrollbar to reach them — measured at 43 diff lines in Chromium.
  */
-const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
-
-function ruleBody(selector: string): string {
-  // Every rule whose selector list mentions this exact class, concatenated.
-  const pattern = new RegExp(
-    `(^|[},])([^{}]*\\${selector}(?![\\w-])[^{}]*)\\{([^}]*)\\}`,
-    "g",
-  );
-  let body = "";
-  for (const match of css.matchAll(pattern)) body += match[3];
-  return body;
-}
 
 describe("documents pending-edit panel styling", () => {
   it("has a rule for every class the panel renders", () => {

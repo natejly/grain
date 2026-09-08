@@ -67,10 +67,14 @@ export type ChatHandlerDeps = {
   /** Records a run the prompt-injection screen flagged, so the transcript can mark it. */
   onScreenFlag: (runId: string) => void;
   setDraft: Dispatch<SetStateAction<string>>;
+  /** Restore a failed send's words into a named thread — see ThreadHandlerDeps. */
+  restoreDraft: (conversationId: string, content: string) => void;
   setActiveProject: Dispatch<SetStateAction<WorkspaceProject | null>>;
   setActiveDocument: Dispatch<SetStateAction<WorkspaceDocument | null>>;
   setDocumentVersions: Dispatch<SetStateAction<DocumentVersion[]>>;
   refreshSecondary: () => Promise<void>;
+  /** Re-read the rail's list, dropping the answer if it was overtaken. */
+  refreshConversations: () => Promise<void>;
   refreshArtifacts: () => Promise<void>;
   refreshInfra: () => Promise<void>;
   refreshPendingEdits: () => Promise<void>;
@@ -109,10 +113,12 @@ export function createChatHandlers({
   setBudgetPark,
   onScreenFlag,
   setDraft,
+  restoreDraft,
   setActiveProject,
   setActiveDocument,
   setDocumentVersions,
   refreshSecondary,
+  refreshConversations,
   refreshArtifacts,
   refreshInfra,
   refreshPendingEdits,
@@ -190,6 +196,7 @@ export function createChatHandlers({
     setRunThinking,
     setBudgetPark,
     setDraft,
+    restoreDraft,
     activeConversationRef,
     // The skill attachment is per-turn; drop it once the send is accepted.
     onSent: clearAttachedSkill,
@@ -206,7 +213,9 @@ export function createChatHandlers({
      */
     onAgentUnavailable: () => setSelectedAgentId(""),
     onRunSettled: async () => {
-      setConversations(await api.listConversations());
+      // Guarded, because this fires when a run settles and can therefore be
+      // in flight across a delete the user makes in the meantime.
+      await refreshConversations();
       await refreshSecondary();
       await refreshArtifacts().catch(() => undefined);
       await refreshInfra().catch(() => undefined);

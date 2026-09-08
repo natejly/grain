@@ -8,8 +8,6 @@ allowed".
 """
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
 from typing import Dict, List, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -22,6 +20,7 @@ from ..schemas import SpaceCreate, SpaceOut, SpaceUpdateRequest
 from ..services import spaces
 from ..services.audit import record_audit
 from ..services.graph import mark_graph_stale, rebuild_graph
+from ..services.ingestion import remove_object_files
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
 
@@ -198,13 +197,4 @@ def delete_space(
     # Disk only after the commit has held, mirroring DELETE /api/sources/{id}:
     # bytes for rows that still exist are recoverable, rows for bytes that are
     # gone are not.
-    for object_key in teardown.object_keys:
-        object_file = Path(object_key)
-        try:
-            if object_file.exists():
-                object_file.unlink()
-            parent = object_file.parent
-            if parent.exists():
-                shutil.rmtree(parent)
-        except OSError:
-            pass
+    remove_object_files(teardown.object_keys)

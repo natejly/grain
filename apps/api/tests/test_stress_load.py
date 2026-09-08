@@ -340,6 +340,7 @@ def test_the_vector_candidate_cap_is_a_recency_window(big_corpus: str) -> None:
     from app.services import retrieval as retrieval_service
     from app.services.embeddings import pack_vector
     from app.services.retrieval import tokenize
+    from tests.embedding_doubles import as_batch
 
     def fake(texts, settings=None):
         vectors = []
@@ -351,8 +352,8 @@ def test_the_vector_candidate_cap_is_a_recency_window(big_corpus: str) -> None:
             vectors.append(pack_vector([v / norm for v in values] if norm else values))
         return vectors
 
-    original = retrieval_service.embed_texts
-    retrieval_service.embed_texts = fake  # type: ignore[assignment]
+    original = retrieval_service.embed_batch
+    retrieval_service.embed_batch = as_batch(fake)  # type: ignore[assignment]
     db = SessionLocal()
     try:
         chunks = list(
@@ -367,7 +368,7 @@ def test_the_vector_candidate_cap_is_a_recency_window(big_corpus: str) -> None:
             db, workspace_id=big_corpus, query="quarterly revenue", settings=settings
         )
     finally:
-        retrieval_service.embed_texts = original  # type: ignore[assignment]
+        retrieval_service.embed_batch = original  # type: ignore[assignment]
         db.close()
 
     assert len(ranked) <= 10, "the candidate cap is not applied in SQL"

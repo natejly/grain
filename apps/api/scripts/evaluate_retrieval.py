@@ -68,6 +68,7 @@ os.environ.setdefault("APP_ENV", "development")
 from app.config import Settings, get_settings  # noqa: E402
 from app.database import Base  # noqa: E402
 from app.models import Chunk, Source, User, Workspace  # noqa: E402
+from app.services import embedding_generations as generations  # noqa: E402
 from app.services.embeddings import query_embedding_cache  # noqa: E402
 from app.services.ingestion import contextualize_chunks, make_chunks  # noqa: E402
 from app.services.retrieval import (  # noqa: E402
@@ -421,6 +422,95 @@ def run_stages() -> None:
         )
 
 
+def run_dimensions(widths: Sequence[int], dtype: str) -> None:
+    """What narrowing the vector actually costs, on this corpus, end to end.
+
+    The question a Matryoshka migration has to answer before it ships, and the
+    only honest way to answer it is to run the pipeline the product runs: embed
+    the corpus once at full width, then re-cut that same generation to each
+    smaller width and re-measure. Re-embedding per width would confound the
+    dimension with whatever else differed between two provider calls; truncating
+    the one pass isolates the variable, which is also exactly what the migration
+    does in production.
+
+    Each width gets its own generation, its own calibrated floor, and a full
+    activation — so what is measured is the deployed configuration rather than an
+    approximation of it.
+    """
+    base = Settings(model_provider="openai")
+    if not base.has_openai_key:
+        print(
+            "--dimensions needs OPENAI_API_KEY: the dense arm is the thing being "
+            "measured and there is no offline stand-in for it that would mean "
+            "anything."
+        )
+        raise SystemExit(2)
+
+    settings = base.model_copy(
+        update={"retrieval_bm25": True, "retrieval_hybrid": True}
+    )
+    documents, questions = _load()
+    db = _fresh_db()
+    try:
+        chunks = _seed(db, documents)
+        _prepare(db, chunks, settings)
+        source = generations.active_generation(db)
+        if source is None:
+            print("nothing was embedded; is the provider reachable?")
+            raise SystemExit(2)
+
+        rows: List[Tuple[str, Report]] = []
+        label = f"{source.dimensions}d {source.storage_dtype}"
+        print(f"\n{'=' * 70}\nbaseline: {label} (floor {source.dense_floor:.4f})\n{'=' * 70}")
+        rows.append((label, evaluate(db, questions, settings)))
+
+        for width in widths:
+            target = generations.create_generation(
+                db,
+                model=source.model,
+                dimensions=width,
+                revision=source.revision,
+                storage_dtype=dtype,
+                normalization=source.normalization,
+                input_format=source.input_format,
+                note=f"eval: truncated from {source.dimensions}d",
+                settings=settings,
+            )
+            written = generations.materialize_by_truncation(
+                db, source=source, target=target
+            )
+            # `force`: the source generation's vectors stay behind by design, so
+            # coverage is never "complete" while both exist. That is the point of
+            # building beside, not a defect in this build.
+            generations.activate(db, target, force=True)
+            db.commit()
+            label = f"{width}d {dtype}"
+            print(
+                f"\n{'=' * 70}\n{label} (floor {target.dense_floor:.4f}, "
+                f"{written} vectors re-cut, no provider calls)\n{'=' * 70}"
+            )
+            rows.append((label, evaluate(db, questions, settings)))
+
+        print(f"\n{'=' * 70}\nsummary\n{'=' * 70}")
+        header = (
+            f"{'contract':<16}"
+            + "".join(f"{kind:>22}" for kind in KINDS)
+            + f"{'overall':>10}{'bytes/vec':>11}"
+        )
+        print(header)
+        for label, report in rows:
+            width = int(label.split("d ")[0])
+            dtype_name = label.split(" ")[1]
+            cells = "".join(
+                f"{report.recall.get(kind, 0.0):>13.1%} /{report.mrr.get(kind, 0.0):>7.3f}"
+                for kind in KINDS
+            )
+            per_vector = width * (2 if dtype_name == "float16" else 4)
+            print(f"{label:<16}{cells}{report.overall:>10.1%}{per_vector:>11,}")
+    finally:
+        db.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -428,9 +518,25 @@ def main() -> None:
         action="store_true",
         help="ablate each retrieval stage in turn (needs an embedding provider)",
     )
+    parser.add_argument(
+        "--dimensions",
+        nargs="*",
+        type=int,
+        metavar="WIDTH",
+        help="measure Matryoshka truncation to these widths (needs a provider)",
+    )
+    parser.add_argument(
+        "--dtype",
+        default="float16",
+        choices=("float32", "float16"),
+        help="storage dtype for the truncated generations (default: float16)",
+    )
     args = parser.parse_args()
     if args.stages:
         run_stages()
+        return
+    if args.dimensions is not None:
+        run_dimensions(args.dimensions or [1024, 512, 256, 128], args.dtype)
         return
     _report, failures = run_once(get_settings(), floors=FLOORS)
     if failures:

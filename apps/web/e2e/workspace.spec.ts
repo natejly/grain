@@ -34,7 +34,13 @@ test("upload, cited answer, provenance, graph, and deletion", async ({
     ),
   });
   await expect(page.getByText("northstar-e2e.md")).toBeVisible();
-  await expect(page.getByText("Indexed").last()).toBeVisible();
+  // Scoped to THIS spec's row. Sources come back newest-first, so
+  // `getByText("Indexed").last()` is the OLDEST row — already indexed whenever
+  // an earlier spec left one — and the wait then returns at once, before this
+  // upload is ready.
+  await expect(
+    page.locator(".source-row", { hasText: "northstar-e2e.md" }).getByText("Indexed"),
+  ).toBeVisible({ timeout: 30_000 });
 
   await page.getByRole("button", { name: "Chat", exact: true }).click();
   const composer = page.getByRole("textbox", { name: "Message" });
@@ -76,7 +82,12 @@ test("build a dashboard from chat, then publish it", async ({ page }) => {
       "team,month,revenue\nNorth,2026-01,10\nSouth,2026-01,20\nNorth,2026-02,15\n",
     ),
   });
-  await expect(page.getByText("Indexed").last()).toBeVisible();
+  // Scoped, and this is the one that caught it: a loose wait let the run reach
+  // Apps before the CSV had become a dataset, so the chip below was simply not
+  // there yet and the failure read as a missing element.
+  await expect(
+    page.locator(".source-row", { hasText: "revenue-e2e.csv" }).getByText("Indexed"),
+  ).toBeVisible({ timeout: 30_000 });
 
   await openView(page, "Library", /^Apps/);
   await page.getByRole("button", { name: "New app" }).first().click();
@@ -330,7 +341,9 @@ test("a fabricated citation is flagged under the answer that made it", async ({
     ),
   });
   await expect(page.getByText("rollout-e2e.md")).toBeVisible();
-  await expect(page.getByText("Indexed").last()).toBeVisible();
+  await expect(
+    page.locator(".source-row", { hasText: "rollout-e2e.md" }).getByText("Indexed"),
+  ).toBeVisible({ timeout: 30_000 });
 
   await page.getByRole("button", { name: "Chat", exact: true }).click();
   await newThread(page);

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -31,6 +30,7 @@ from ..services.ingestion import (
     ingest_source,
     object_path,
     purge_source,
+    remove_object_files,
     sanitize_filename,
     validate_filename,
 )
@@ -331,12 +331,4 @@ def delete_source(
     )
     db.commit()
     background_tasks.add_task(rebuild_graph, actor.workspace_id, actor.user_id)
-    object_file = Path(source.object_key)
-    try:
-        if object_file.exists():
-            object_file.unlink()
-        parent = object_file.parent
-        if parent.exists():
-            shutil.rmtree(parent)
-    except OSError:
-        pass
+    remove_object_files([source.object_key])

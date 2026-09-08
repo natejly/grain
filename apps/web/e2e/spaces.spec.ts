@@ -24,13 +24,19 @@ async function openSpaces(page: Page) {
   await expect(page.locator(".spaces-layout")).toBeVisible();
 }
 
+/** Delete lives in the header's actions menu now, off the stray-click path. */
+async function deleteSpace(page: Page, name: string) {
+  await detail(page).getByRole("button", { name: `Actions for ${name}` }).click();
+  await page.getByRole("button", { name: `Delete ${name}` }).click();
+}
+
 /** Leftovers from a retried run would 422 the create below; clear them first. */
 async function deleteIfPresent(page: Page, name: string) {
   const row = list(page).getByRole("button", { name: new RegExp(`^${name}`) });
   if ((await row.count()) === 0) return;
   await row.first().click();
   page.once("dialog", (dialog) => void dialog.accept());
-  await detail(page).getByRole("button", { name: `Delete ${name}` }).click();
+  await deleteSpace(page, name);
   await expect(row).toHaveCount(0);
 }
 
@@ -74,14 +80,22 @@ test("a space carries instructions, knowledge and threads, and dies whole", asyn
     });
   await expect(detail(page).getByText("e2e-space-note.md")).toBeVisible();
 
-  // A thread started here is an ordinary rail thread wearing the space's chip.
+  // A thread started here is an ordinary rail thread filed under the space's
+  // own collapsible rail group — the ChatGPT-Projects arrangement.
   await detail(page).getByRole("button", { name: "New thread" }).click();
   await expect(page.locator(".message-scroll.empty")).toBeVisible();
-  const railRow = page
-    .locator(".thread-list")
+  const railGroup = page
+    .locator(".thread-space-group")
+    .filter({ hasText: SPACE });
+  const groupRow = railGroup
     .getByRole("button", { name: /^New conversation/ })
     .first();
-  await expect(railRow.locator(".thread-space-chip")).toHaveText(SPACE);
+  await expect(groupRow).toBeVisible();
+  // The group folds shut and back open, and the row goes with it.
+  await railGroup.getByRole("button", { name: `${SPACE} threads` }).click();
+  await expect(groupRow).toBeHidden();
+  await railGroup.getByRole("button", { name: `${SPACE} threads` }).click();
+  await expect(groupRow).toBeVisible();
 
   // And the space page lists it back.
   await openView(page, "Chat", /^Spaces/);
@@ -90,17 +104,36 @@ test("a space carries instructions, knowledge and threads, and dies whole", asyn
     detail(page).getByRole("button", { name: /^New conversation/ }),
   ).toBeVisible();
 
+  // Filing is two-way. Removing the thread sends it back to the flat rail —
+  // the group needs a member to render — and "Add a thread" files it back in.
+  await detail(page)
+    .getByRole("button", { name: /^Remove New conversation from this space/ })
+    .click();
+  await expect(
+    detail(page).getByRole("button", { name: /^New conversation/ }),
+  ).toHaveCount(0);
+  await expect(railGroup).toHaveCount(0);
+  await detail(page).getByRole("button", { name: "Add an existing thread" }).click();
+  await page
+    .getByRole("button", { name: `Add New conversation to ${SPACE}` })
+    .first()
+    .click();
+  await expect(
+    detail(page).getByRole("button", { name: /^New conversation/ }),
+  ).toBeVisible();
+  await expect(railGroup.getByRole("button", { name: /^New conversation/ }).first()).toBeVisible();
+
   // Delete — the confirm names the stakes, and the cascade IS the cleanup:
   // afterwards the thread is out of the rail and the file is out of Sources.
   page.once("dialog", (dialog) => {
     expect(dialog.message()).toContain("threads");
     void dialog.accept();
   });
-  await detail(page).getByRole("button", { name: `Delete ${SPACE}` }).click();
+  await deleteSpace(page, SPACE);
   await expect(
     list(page).getByRole("button", { name: new RegExp(`^${SPACE}`) }),
   ).toHaveCount(0);
-  await expect(page.locator(".thread-space-chip")).toHaveCount(0);
+  await expect(page.locator(".thread-space-group")).toHaveCount(0);
   await openView(page, "Library", /^Sources/);
   await expect(page.getByText("e2e-space-note.md")).toHaveCount(0);
 });

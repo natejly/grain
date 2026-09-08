@@ -54,11 +54,28 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
+      // `sandbox-assets` first, which is not optional and not incidental.
+      // public/sandbox/ is generated from node_modules and gitignored, so a
+      // fresh clone or a new worktree has none of it, and the sandbox frame
+      // serves a 404 for the React runtime it inlines — subject-chat.spec.ts
+      // fails there and nowhere else. The package's own `dev` and `build`
+      // scripts both run it for this reason; only this config skipped it, and
+      // CI stayed green solely because `pnpm build` happens to run earlier in
+      // the same job. That made the suite pass on the machines that had
+      // already built and fail on the ones that had not, which reads as
+      // flakiness rather than as a missing step.
+      //
+      // Spelled out here rather than by calling the `dev` script, because
+      // pnpm appends forwarded args to the END of a script: `dev -p 3010`
+      // would put the port on whatever command that script happens to end
+      // with today.
       command:
-        "NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_API_URL=http://127.0.0.1:8010 npx --yes pnpm@9.15.9 --filter @workspace/web exec next dev -p 3010",
+        "npx --yes pnpm@9.15.9 --filter @workspace/web run sandbox-assets && NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_API_URL=http://127.0.0.1:8010 npx --yes pnpm@9.15.9 --filter @workspace/web exec next dev -p 3010",
       url: "http://127.0.0.1:3010",
       reuseExistingServer: false,
-      timeout: 60_000,
+      // Bundling the runtime with esbuild-wasm happens before the server
+      // starts listening, and it is the cold-cache case that needs the room.
+      timeout: 120_000,
     },
   ],
 });

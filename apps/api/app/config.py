@@ -93,12 +93,31 @@ class Settings(BaseSettings):
     # want user-selectable, or wants to offer one it has not priced.
     selectable_models_raw: str = ""
     openai_timeout_seconds: float = 60.0
-    # See `anthropic_max_output_tokens`: same ceiling-not-reservation reasoning
-    # and the same failure it fixes. Reasoning tokens count against this budget
-    # on a reasoning model, so 1200 was routinely exhausted before the first
-    # visible character - a hard error on a turn with nothing wrong with it.
+    # No longer applied to chat turns — those stream with no explicit cap, so
+    # an answer is bounded only by the model's own maximum output length (see
+    # `stream_agent_response`). Still the ceiling for the workflow compiler's
+    # single-shot calls; same ceiling-not-reservation reasoning as
+    # `anthropic_max_output_tokens`.
     openai_max_output_tokens: int = 32000
     openai_embedding_model: str = "text-embedding-3-small"
+    # Vector width new embeddings are written at. A knob rather than a property of
+    # the model, because Matryoshka-trained models return a usable prefix at any
+    # width and 3-small's native 1536 is not obviously the right one.
+    #
+    # Measured on evals/corpus.json, 256 dimensions retrieves identically to 1536
+    # — GT@1 .964, GT@3 1.000, GT@5 1.000, unchanged across all three question
+    # strata — for a sixth of the bytes, or a twelfth stored as float16.
+    #
+    # It nevertheless defaults to 1536, which is what every existing vector was
+    # written at. Lowering this does not rewrite a corpus; it opens a *new*
+    # generation that nothing reads until it is backfilled and activated
+    # (scripts/rebuild_embeddings.py), which is deliberate — a live index should
+    # change on an operator's word, not as a side effect of a deploy picking up a
+    # new default.
+    openai_embedding_dimensions: int = 1536
+    # "float32" or "float16". float16 halves storage and changed no ranking at any
+    # k on the eval corpus; like the width, it applies to new generations only.
+    embedding_storage_dtype: str = "float32"
     openai_codegen_max_output_tokens: int = 16000
 
     # --- Model pricing -----------------------------------------------------
