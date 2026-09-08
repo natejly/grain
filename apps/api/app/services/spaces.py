@@ -119,11 +119,17 @@ def update_space(
     space_id: str,
     name: Optional[str] = None,
     instructions: Optional[str] = None,
+    default_agent_id: Optional[str] = None,
 ) -> Space:
-    """Rename and/or rewrite the instructions.
+    """Rename, rewrite the instructions, and/or pick the space's agent.
 
     `None` means "leave it alone"; `""` for `instructions` means "clear them",
-    which is a real edit — the next turn in the space simply gets no block.
+    which is a real edit — the next turn in the space simply gets no block —
+    and `""` for `default_agent_id` returns new threads to the workspace
+    default. A non-empty agent id arrives here already proved against the
+    workspace: that check needs the Agent table and the route's 404 shape,
+    so it lives at the route beside the identical space-id proof on
+    `POST /api/conversations`.
     """
     space = get_space(db, workspace_id=workspace_id, space_id=space_id)
     if name is not None:
@@ -134,6 +140,8 @@ def update_space(
         space.name = clean
     if instructions is not None:
         space.instructions = _clean_instructions(instructions)
+    if default_agent_id is not None:
+        space.default_agent_id = default_agent_id
     db.flush()
     return space
 

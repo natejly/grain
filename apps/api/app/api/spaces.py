@@ -11,11 +11,12 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
 from ..database import get_db
-from ..models import Space
+from ..models import Agent, Space
 from ..schemas import SpaceCreate, SpaceOut, SpaceUpdateRequest
 from ..services import spaces
 from ..services.audit import record_audit
@@ -33,6 +34,7 @@ def _out(space: Space, counts: Dict[str, Tuple[int, int]]) -> SpaceOut:
         id=space.id,
         name=space.name,
         instructions=space.instructions,
+        default_agent_id=space.default_agent_id,
         thread_count=threads,
         source_count=sources,
         created_at=space.created_at,
@@ -126,6 +128,19 @@ def update_space(
         spaces.get_space(db, workspace_id=actor.workspace_id, space_id=space_id)
     except spaces.SpaceError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if payload.default_agent_id:
+        # Proved against the caller's workspace before it is stored, the same
+        # 404 the templates route gives an unknown agent id: a foreign or
+        # deleted agent must read as absent, never become a stored dangling
+        # preference. "" (clear) and None (leave alone) skip the proof.
+        agent = db.scalar(
+            select(Agent).where(
+                Agent.id == payload.default_agent_id,
+                Agent.workspace_id == actor.workspace_id,
+            )
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="No agent with that id")
     try:
         space = spaces.update_space(
             db,
@@ -133,6 +148,7 @@ def update_space(
             space_id=space_id,
             name=payload.name,
             instructions=payload.instructions,
+            default_agent_id=payload.default_agent_id,
         )
     except spaces.SpaceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -50,6 +50,7 @@ function space(overrides: Partial<Space> = {}): Space {
     id: "space-1",
     name: "Research",
     instructions: "",
+    default_agent_id: "",
     thread_count: 0,
     source_count: 0,
     created_at: "2026-08-01T00:00:00Z",

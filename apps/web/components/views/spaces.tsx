@@ -1,7 +1,9 @@
 "use client";
 
 import type {
+  AgentInfo,
   Conversation,
+  MemoryItem,
   Source,
   Space,
   SpaceTemplate,
@@ -31,10 +33,14 @@ import { nextTemplateName, templateBaseName } from "./template-format";
 /**
  * A space is a project-shaped container: a group of chat threads under
  * standing context — instructions the server appends to every turn, knowledge
- * files retrieved only here, and a memory shelf of its own. This view IS the
- * container page: its threads can be started here, filed in from the plain
- * rail ("Add a thread"), or filed back out, and its files live beside them.
+ * files retrieved only here, an agent its new threads are born preferring,
+ * and a memory shelf of its own. This view IS the container page: its threads
+ * can be started here, filed in from the plain rail ("Add a thread"), or
+ * filed back out, and its files, agent and memories live beside them.
  * Clicking a thread still goes to Chat — the transcript has one home.
+ *
+ * The agent list is fetched here rather than held by the shell, the
+ * AgentsView pattern: nobody who is chatting needs it at page load.
  *
  * Mutations stay inline (the AgentsView pattern) because nothing outside this
  * view creates or edits a space; the *list* lives in use-workspace because
@@ -47,6 +53,10 @@ type SpacesViewProps = {
   spaceTemplates: SpaceTemplate[];
   conversations: Conversation[];
   sources: Source[];
+  /** The shell's memory list; the panel shows only the selected space's shelf. */
+  memories: MemoryItem[];
+  /** The shell's forget handler — tombstones the row and refreshes the list. */
+  forgetMemory: (item: MemoryItem) => Promise<void>;
   setError: (message: string) => void;
   /** Re-fetches spaces, templates and sources — refreshSecondary from the hook. */
   refreshSpaces: () => Promise<void>;
@@ -61,6 +71,8 @@ export function SpacesView({
   spaceTemplates,
   conversations,
   sources,
+  memories,
+  forgetMemory,
   setError,
   refreshSpaces,
   onSelectConversation,
@@ -81,6 +93,22 @@ export function SpacesView({
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // The enabled agents, for the space's picker. A failed fetch leaves the
+  // list empty and the picker simply offers only "Workspace default" — the
+  // page must not fail over an optional control.
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listAgents()
+      .then((rows) => {
+        if (!cancelled) setAgents(rows.filter((row) => row.enabled));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selected = spaces.find((space) => space.id === selectedId) ?? null;
 
@@ -92,6 +120,19 @@ export function SpacesView({
   const dirty =
     selected !== null &&
     (name !== selected.name || instructions !== selected.instructions);
+
+  // Applied immediately, not through the Save/dirty model: a select is one
+  // decided value (the pickAgent shape in the composer), and holding it in a
+  // buffer would let Save silently change which agent new threads get.
+  const pickAgent = async (agentId: string) => {
+    if (!selected) return;
+    try {
+      await api.updateSpace(selected.id, { default_agent_id: agentId });
+      await refreshSpaces();
+    } catch (caught) {
+      setError(describeError(caught, "Could not set the space's agent"));
+    }
+  };
 
   const create = async () => {
     const trimmed = newName.trim();
@@ -209,6 +250,12 @@ export function SpacesView({
   const spaceThreads = selected ? threadsInSpace(conversations, selected.id) : [];
   const grouped = groupThreads(spaceThreads);
   const spaceSources = selected ? sourcesInSpace(sources, selected.id) : [];
+  // Only this space's shelf. The workspace-wide shelf ("" — which the space's
+  // turns also recall) stays on the Memory page; showing it here would say
+  // these rows are the space's to delete.
+  const spaceMemories = selected
+    ? memories.filter((item) => item.space_id === selected.id)
+    : [];
   // What "Add a thread" can offer: rail threads in no (known) space. Subject
   // threads never reach this list — the server keeps them out of the rail.
   const addable = unspacedThreads(spaces, conversations);
@@ -435,6 +482,34 @@ export function SpacesView({
             </div>
 
             <div className="space-side">
+              <label className="space-agent">
+                <span>Agent</span>
+                <select
+                  aria-label="Space agent"
+                  value={selected.default_agent_id}
+                  onChange={(event) => void pickAgent(event.target.value)}
+                >
+                  <option value="">Workspace default</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </option>
+                  ))}
+                  {/* A preference whose agent was retired still renders — as
+                      itself, so the select's value stays honest — and picking
+                      anything else heals it. */}
+                  {selected.default_agent_id !== "" &&
+                    !agents.some(
+                      (agent) => agent.id === selected.default_agent_id,
+                    ) && (
+                      <option value={selected.default_agent_id}>
+                        Retired agent
+                      </option>
+                    )}
+                </select>
+                <small>New threads in this space start with this agent.</small>
+              </label>
+
               <label className="space-instructions">
                 <span>Instructions</span>
                 <textarea
@@ -491,6 +566,39 @@ export function SpacesView({
                           className="ghost-button"
                           aria-label={`Remove ${source.filename}`}
                           onClick={() => void removeSource(source)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="space-memory">
+                <h2>Memory</h2>
+                {spaceMemories.length === 0 ? (
+                  <p className="space-memory-empty">
+                    Nothing learned here yet. What the agent picks up in this
+                    space&apos;s threads lands on this shelf and is recalled
+                    only here.
+                  </p>
+                ) : (
+                  <ul className="space-memory-list">
+                    {spaceMemories.map((item) => (
+                      <li key={item.id}>
+                        <div className="space-memory-body">
+                          <span>{item.content}</span>
+                          <small>
+                            {item.shared ? "workspace-shared" : "personal"} ·
+                            updated {formatRelative(item.updated_at)}
+                          </small>
+                        </div>
+                        <button
+                          className="ghost-button"
+                          aria-label={`Forget: ${item.content.slice(0, 60)}`}
+                          title="Forget this memory"
+                          onClick={() => void forgetMemory(item)}
                         >
                           <Trash2 size={13} />
                         </button>

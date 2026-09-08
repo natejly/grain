@@ -1177,6 +1177,17 @@ class Space(Base):
     #: after the base/agent layer and before any skill injection. Blank means
     #: no injection — never an empty block.
     instructions: Mapped[str] = mapped_column(Text, default="")
+    #: The agent a new thread in this space is born preferring, or "" for the
+    #: workspace default. A SEED, not a resolution layer: it is copied onto
+    #: `Conversation.default_agent_id` at `POST /api/conversations` and read
+    #: from there by the composer alone — the run path never consults either
+    #: column, so what reached the provider stays answerable from the Run row
+    #: (see the `Conversation` defaults' own docstring for that contract).
+    #: Not an FK, like `Conversation.default_agent_id`: the agent may be
+    #: retired later, and the composer self-heals a ghost id to "".
+    default_agent_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
     created_by: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
