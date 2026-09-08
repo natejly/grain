@@ -2,13 +2,19 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Conversation, Source, Space } from "@workspace/api-client";
+import type {
+  Conversation,
+  MemoryItem,
+  Source,
+  Space,
+} from "@workspace/api-client";
 
 const createSpace = vi.fn();
 const updateSpace = vi.fn();
 const deleteSpace = vi.fn();
 const uploadSource = vi.fn();
 const deleteSource = vi.fn();
+const listAgents = vi.fn();
 
 vi.mock("../components/api", () => ({
   api: {
@@ -17,6 +23,7 @@ vi.mock("../components/api", () => ({
     deleteSpace: (...a: unknown[]) => deleteSpace(...a),
     uploadSource: (...a: unknown[]) => uploadSource(...a),
     deleteSource: (...a: unknown[]) => deleteSource(...a),
+    listAgents: (...a: unknown[]) => listAgents(...a),
   },
 }));
 
@@ -27,6 +34,7 @@ function space(overrides: Partial<Space> = {}): Space {
     id: "space-1",
     name: "Research",
     instructions: "Cite primary sources.",
+    default_agent_id: "",
     thread_count: 1,
     source_count: 1,
     created_at: "2026-08-01T00:00:00Z",
@@ -71,12 +79,31 @@ function source(overrides: Partial<Source> = {}): Source {
   };
 }
 
+function memory(overrides: Partial<MemoryItem> = {}): MemoryItem {
+  return {
+    id: "mem-1",
+    conversation_id: "conv-1",
+    kind: "fact",
+    content: "The kestrel figures live in table 4.",
+    entity_names: [],
+    message_ids: [],
+    importance: 1,
+    shared: true,
+    space_id: "space-1",
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
 function renderView(overrides: Partial<React.ComponentProps<typeof SpacesView>> = {}) {
   const props: React.ComponentProps<typeof SpacesView> = {
     spaces: [space()],
     spaceTemplates: [],
     conversations: [conversation(), conversation({ id: "other", space_id: "" })],
     sources: [source(), source({ id: "library", space_id: "", filename: "lib.md" })],
+    memories: [],
+    forgetMemory: vi.fn().mockResolvedValue(undefined),
     setError: vi.fn(),
     refreshSpaces: vi.fn().mockResolvedValue(undefined),
     onSelectConversation: vi.fn(),
@@ -97,6 +124,28 @@ beforeEach(() => {
   updateSpace.mockResolvedValue(space());
   deleteSpace.mockResolvedValue(undefined);
   uploadSource.mockResolvedValue(source());
+  listAgents.mockResolvedValue([
+    {
+      id: "agent-1",
+      name: "Archivist",
+      description: "",
+      instructions: "Answer as Archivist.",
+      enabled: true,
+      allowed_tools: null,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    },
+    {
+      id: "agent-off",
+      name: "Sleeper",
+      description: "",
+      instructions: "",
+      enabled: false,
+      allowed_tools: null,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    },
+  ]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
@@ -201,6 +250,46 @@ describe("SpacesView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Actions for Research" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Research" }));
     expect(deleteSpace).not.toHaveBeenCalled();
+  });
+
+  it("picks the space's agent, offering only enabled agents", async () => {
+    renderView();
+    openSpace();
+    const select = screen.getByLabelText("Space agent") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    await screen.findByRole("option", { name: "Archivist" });
+    expect(screen.queryByRole("option", { name: "Sleeper" })).toBeNull();
+    fireEvent.change(select, { target: { value: "agent-1" } });
+    expect(updateSpace).toHaveBeenCalledWith("space-1", {
+      default_agent_id: "agent-1",
+    });
+  });
+
+  it("renders a retired preference as itself, not as a silent reset", async () => {
+    renderView({ spaces: [space({ default_agent_id: "gone-agent" })] });
+    openSpace();
+    await screen.findByRole("option", { name: "Archivist" });
+    const select = screen.getByLabelText("Space agent") as HTMLSelectElement;
+    expect(select.value).toBe("gone-agent");
+    expect(screen.getByRole("option", { name: "Retired agent" })).toBeTruthy();
+  });
+
+  it("shows only the space's memory shelf and forgets through the shell", () => {
+    const props = renderView({
+      memories: [
+        memory(),
+        memory({ id: "global", space_id: "", content: "Workspace-wide fact." }),
+        memory({ id: "elsewhere", space_id: "space-2", content: "Другое." }),
+      ],
+    });
+    openSpace();
+    expect(screen.getByText("The kestrel figures live in table 4.")).toBeTruthy();
+    expect(screen.queryByText("Workspace-wide fact.")).toBeNull();
+    expect(screen.queryByText("Другое.")).toBeNull();
+    fireEvent.click(screen.getByTitle("Forget this memory"));
+    expect(props.forgetMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "mem-1" }),
+    );
   });
 
   it("creates a space from the list pane form", () => {

@@ -430,6 +430,12 @@ export type Space = {
   name: string;
   /** Appended to the system prompt of every turn in the space's threads. "" = none. */
   instructions: string;
+  /**
+   * The agent a new thread in this space is born preferring; "" = workspace
+   * default. A composer seed copied onto the thread at creation — the run
+   * path never reads it.
+   */
+  default_agent_id: string;
   /** How much the space holds — rail threads and live knowledge files. */
   thread_count: number;
   source_count: number;
@@ -442,10 +448,14 @@ export type SpaceCreateBody = {
   instructions?: string;
 };
 
-/** Absent field = unchanged; `instructions: ""` clears them. */
+/**
+ * Absent field = unchanged; `instructions: ""` clears them and
+ * `default_agent_id: ""` returns new threads to the workspace default.
+ */
 export type SpaceUpdateBody = {
   name?: string;
   instructions?: string;
+  default_agent_id?: string;
 };
 
 /**

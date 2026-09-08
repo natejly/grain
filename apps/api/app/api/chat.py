@@ -228,22 +228,42 @@ def create_conversation(
             raise replayed_resource_gone()
         return _conversation_out(conversation, actor)
     space_id = ""
+    default_agent_id = ""
     if payload.space_id:
         # Proved against the caller's workspace before it is stamped; a foreign
         # or deleted space is the same fact to this caller — 404 — never a
         # thread that silently lost its scope.
         try:
-            space_id = spaces_service.get_space(
+            space = spaces_service.get_space(
                 db, workspace_id=actor.workspace_id, space_id=payload.space_id
-            ).id
+            )
         except spaces_service.SpaceError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        space_id = space.id
+        if space.default_agent_id:
+            # The space's agent becomes the thread's composer seed — a seed
+            # only: the run path never reads either column, so this cannot
+            # steer a turn the client did not ask it to (the defaults
+            # columns' own contract). Seeded only while the agent is still
+            # live and enabled; a retired preference degrades to "" here the
+            # same way the composer would self-heal it later.
+            default_agent_id = (
+                db.scalar(
+                    select(Agent.id).where(
+                        Agent.id == space.default_agent_id,
+                        Agent.workspace_id == actor.workspace_id,
+                        Agent.enabled.is_(True),
+                    )
+                )
+                or ""
+            )
     conversation = Conversation(
         id=new_id(),
         workspace_id=actor.workspace_id,
         created_by=actor.user_id,
         title=payload.title.strip() or "New conversation",
         space_id=space_id,
+        default_agent_id=default_agent_id,
         approval_mode=conversations.default_approval_mode(
             db, workspace_id=actor.workspace_id, user_id=actor.user_id
         ),

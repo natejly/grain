@@ -953,6 +953,10 @@ class SpaceOut(ApiModel):
     #: Appended to the system prompt of every turn in this space's threads.
     #: "" means no injection.
     instructions: str
+    #: The agent a new thread here is born preferring; "" = workspace default.
+    #: A composer seed copied onto the thread at creation, never consulted by
+    #: the run path — see `models.Space`.
+    default_agent_id: str = ""
     #: How much the space holds, for the list view — threads in the rail and
     #: live knowledge files. Computed per request, not stored.
     thread_count: int = 0
@@ -967,13 +971,17 @@ class SpaceCreate(BaseModel):
 
 
 class SpaceUpdateRequest(BaseModel):
-    """Rename, rewrite the instructions, or both. Omitted means "leave it";
-    `instructions: ""` clears them, which is why neither field has a usable
-    default.
+    """Rename, rewrite the instructions, pick the space's agent — or any mix.
+    Omitted means "leave it"; `instructions: ""` clears them and
+    `default_agent_id: ""` returns new threads to the workspace default,
+    which is why no field has a usable default. The agent id is proved
+    against the caller's workspace at the route — foreign or unknown is a
+    404, never a stored dangling preference.
     """
 
     name: Optional[str] = Field(default=None, max_length=120)
     instructions: Optional[str] = None
+    default_agent_id: Optional[str] = Field(default=None, max_length=36)
 
 
 class DocumentSummaryOut(ApiModel):

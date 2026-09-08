@@ -1,3 +1,35 @@
+# Space agents + memory panel (worktree-space-agents, 2026-09-08)
+
+Asks: "can we add agents and stuff to spaces?" and "memory scoped to spaces
+that are specific to only those spaces".
+
+Memory was already space-scoped (MemoryItem.space_id, memory_space() reads the
+conversation, recall = space shelf + workspace shelf, cascade deletes the
+shelf); what was missing was visibility, so the space page now shows its own
+shelf with forget. Deliberately NOT sealed: space turns still recall the
+workspace-wide shelf; sealing is a one-line predicate change if ever wanted.
+
+Agents, following the grain (thread defaults are composer SEEDS, never a
+server-side resolution layer):
+- [x] Space.default_agent_id column + migration 0070 (guarded both ways,
+      up/down/up proven on scratch sqlite)
+- [x] PATCH /api/spaces/{id} accepts default_agent_id (workspace-proved, 404
+      unknown/foreign; "" clears); SpaceOut carries it (both _out builders)
+- [x] POST /api/conversations seeds the thread's default_agent_id from its
+      space when the agent is live+enabled; degrades to "" otherwise
+- [x] instantiate_space_template finally APPLIES agent_ids_json (first
+      surviving id -> space default); save-as-template from a space snapshots
+      its agent (ghost ids silently skipped)
+- [x] SpacesView: Agent picker (immediate-apply, enabled agents only, retired
+      preference rendered honestly) + Memory panel (space shelf only, forget
+      via the shell handler)
+- [x] tests: test_space_agents.py (8), spaces-view vitest (14), fixtures in
+      two other web tests gained the new field
+- [x] gates: ruff/mypy clean, web tsc + 904 vitest + build green, migration
+      round-trip; full pytest run recorded below when green
+
+---
+
 # Spaces as Projects (ChatGPT-style containers) — DONE, see Review
 
 All items below landed on `worktree-spaces-projects`; every box is checked in

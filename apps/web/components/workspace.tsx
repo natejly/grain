@@ -1802,6 +1802,8 @@ export function Workspace() {
             spaceTemplates={spaceTemplates}
             conversations={conversations}
             sources={sources}
+            memories={memories}
+            forgetMemory={forgetMemory}
             setError={setError}
             refreshSpaces={refreshSecondary}
             onSelectConversation={selectConversation}

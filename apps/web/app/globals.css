@@ -10592,15 +10592,18 @@ label,
   min-width: 0;
 }
 
-.space-instructions {
+.space-instructions,
+.space-agent {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
 .space-instructions > span,
+.space-agent > span,
 .space-knowledge h2,
-.space-threads h2 {
+.space-threads h2,
+.space-memory h2 {
   color: var(--text-dim);
   font-size: 11px;
   font-weight: 600;
@@ -10613,11 +10616,57 @@ label,
   resize: vertical;
 }
 
+.space-agent select {
+  width: 100%;
+}
+
+.space-agent small,
+.space-memory-empty {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.space-memory-empty {
+  margin: 0;
+}
+
 .space-knowledge,
-.space-threads {
+.space-threads,
+.space-memory {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.space-memory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.space-memory-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.space-memory-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.space-memory-body small {
+  color: var(--text-dim);
+  font-size: 10px;
 }
 
 .space-source-list {

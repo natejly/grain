@@ -9716,6 +9716,11 @@
             "title": "Created At",
             "type": "string"
           },
+          "default_agent_id": {
+            "default": "",
+            "title": "Default Agent Id",
+            "type": "string"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -9857,8 +9862,20 @@
         "type": "object"
       },
       "SpaceUpdateRequest": {
-        "description": "Rename, rewrite the instructions, or both. Omitted means \"leave it\";\n`instructions: \"\"` clears them, which is why neither field has a usable\ndefault.",
+        "description": "Rename, rewrite the instructions, pick the space's agent \u2014 or any mix.\nOmitted means \"leave it\"; `instructions: \"\"` clears them and\n`default_agent_id: \"\"` returns new threads to the workspace default,\nwhich is why no field has a usable default. The agent id is proved\nagainst the caller's workspace at the route \u2014 foreign or unknown is a\n404, never a stored dangling preference.",
         "properties": {
+          "default_agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Agent Id"
+          },
           "instructions": {
             "anyOf": [
               {

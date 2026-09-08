@@ -174,6 +174,7 @@ def _space_out(space: Space, db: Session, workspace_id: str) -> SpaceOut:
         id=space.id,
         name=space.name,
         instructions=space.instructions,
+        default_agent_id=space.default_agent_id,
         thread_count=threads,
         source_count=sources,
         created_at=space.created_at,
@@ -236,8 +237,28 @@ def create_space_template(
         if source_space is None:
             raise HTTPException(status_code=404, detail="Space not found")
         instructions = source_space.instructions
+    requested_agent_ids = list(payload.agent_ids)
+    if payload.from_space_id and source_space is not None:
+        # Snapshotting a space that has a default agent records it, unless
+        # the caller named their own list: the template's whole promise is
+        # "a space like that one", and its agent is part of what that one is
+        # like. Unlike a caller-typed id, this one is only a preference the
+        # space holds — if the agent has since been retired, the snapshot
+        # quietly records nothing rather than failing the save on an id
+        # nobody named.
+        if (
+            not requested_agent_ids
+            and source_space.default_agent_id
+            and db.scalar(
+                select(Agent.id).where(
+                    Agent.id == source_space.default_agent_id,
+                    Agent.workspace_id == actor.workspace_id,
+                )
+            )
+        ):
+            requested_agent_ids = [source_space.default_agent_id]
     agent_ids: List[str] = []
-    for agent_id in dict.fromkeys(payload.agent_ids):
+    for agent_id in dict.fromkeys(requested_agent_ids):
         agent = db.scalar(
             select(Agent.id).where(
                 Agent.id == agent_id, Agent.workspace_id == actor.workspace_id
@@ -346,6 +367,19 @@ def instantiate_space_template(
         )
     except spaces.SpaceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # The stored agent ids finally land somewhere: the first one still present
+    # in the workspace becomes the new space's default agent. Historical ids,
+    # not FKs, so each is re-proved rather than trusted — a retired agent is
+    # skipped, and a template whose whole roster is gone applies none, exactly
+    # as a blank template would.
+    for agent_id in json.loads(template.agent_ids_json):
+        if db.scalar(
+            select(Agent.id).where(
+                Agent.id == agent_id, Agent.workspace_id == actor.workspace_id
+            )
+        ):
+            space.default_agent_id = agent_id
+            break
     record_key(
         db,
         workspace_id=actor.workspace_id,
