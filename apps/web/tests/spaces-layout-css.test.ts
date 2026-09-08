@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { ruleBody } from "./css-rules";
 
 /**
  * The spaces view is a two-pane grid inside the main panel's flex column.
@@ -9,17 +8,6 @@ import { describe, expect, it } from "vitest";
  * independently — so the invariants are pinned the way the other layouts pin
  * theirs.
  */
-const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
-
-function ruleBody(selector: string): string {
-  const pattern = new RegExp(
-    `(^|[},])([^{}]*\\${selector}(?![\\w-])[^{}]*)\\{([^}]*)\\}`,
-    "g",
-  );
-  let body = "";
-  for (const match of css.matchAll(pattern)) body += match[3];
-  return body;
-}
 
 describe("spaces layout fills the main panel", () => {
   it(".spaces-layout participates in flex and has min-height: 0", () => {

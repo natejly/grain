@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { ruleBody } from "./css-rules";
 
 /**
  * The LaTeX preview iframe needs an unbroken flex height chain from
@@ -8,17 +7,6 @@ import { describe, expect, it } from "vitest";
  * collapses to the browser default (~150px) and the compiled PDF appears as a
  * short white band inside an otherwise empty pane.
  */
-const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
-
-function ruleBody(selector: string): string {
-  const pattern = new RegExp(
-    `(^|[},])([^{}]*\\${selector}(?![\\w-])[^{}]*)\\{([^}]*)\\}`,
-    "g",
-  );
-  let body = "";
-  for (const match of css.matchAll(pattern)) body += match[3];
-  return body;
-}
 
 describe("projects layout fills the main panel", () => {
   it(".projects-layout participates in flex and has min-height: 0", () => {
