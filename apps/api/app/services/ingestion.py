@@ -21,7 +21,12 @@ from ..models import Chunk, Source
 from .audit import record_audit
 from .graph import rebuild_graph
 from .model import situate_chunk
-from .retrieval import clear_source_postings, embed_chunks, index_chunks
+from .retrieval import (
+    chunks_needing_embedding,
+    clear_source_postings,
+    embed_chunks,
+    index_chunks,
+)
 from .usage import usage_scope
 
 logger = logging.getLogger(__name__)
@@ -220,13 +225,12 @@ def backfill_workspace(workspace_id: str, settings: Optional[Settings] = None) -
             ]
             index_chunks(db, stale)
             counts["indexed"] += len(stale)
-            pending_vectors = [
-                chunk
-                for chunk in chunks
-                if chunk.embedding is None
-                or chunk.embedding_model != settings.openai_embedding_model
-                or chunk.id in gained
-            ]
+            # `gained` no longer has to be part of this: a chunk that just gained a
+            # blurb embeds different text, and different text has a different
+            # content hash, so `chunks_needing_embedding` already knows. Asking the
+            # hash rather than tracking reasons also catches the case nothing was
+            # tracking — content edited in place by a re-ingest.
+            pending_vectors = chunks_needing_embedding(db, chunks, settings)
             counts["embedded"] += embed_chunks(db, pending_vectors, settings)
             db.commit()
     finally:

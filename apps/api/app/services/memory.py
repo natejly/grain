@@ -29,6 +29,8 @@ from ..database import SessionLocal
 from ..models import (
     SHARED_OWNER,
     Conversation,
+    EmbeddingGeneration,
+    EmbeddingVector,
     GraphEdge,
     GraphEntity,
     MemoryItem,
@@ -36,9 +38,12 @@ from ..models import (
     Run,
     new_id,
 )
+from . import embedding_generations as generations
 from .audit import record_audit
 from .embeddings import (
-    embed_texts,
+    DEFAULT_DTYPE,
+    content_fingerprint,
+    embed_batch,
     query_cache_key,
     query_embedding_cache,
     ranked_cosine_scores,
@@ -409,28 +414,47 @@ def _upsert_item(
     return item
 
 
-def _embed_pending(items: Sequence[MemoryItem], settings: Settings) -> None:
+def _embed_pending(
+    db: Session, items: Sequence[MemoryItem], settings: Settings
+) -> None:
     """Attach vectors to items that have none. Best-effort by design.
 
-    An exception here means the provider is down, and `embed_texts` answers None
+    An exception here means the provider is down, and `embed_batch` answers None
     when there is no key to reach it with — neither is a reason to lose the
     memory itself, which stays lexically recallable either way.
     """
     pending = [item for item in items if item.status == "active" and item.embedding is None]
     if not pending:
         return
+    generation = generations.writable_generation(db, settings)
     try:
         # The rows carry the tenant, so this is attributed whether the caller was
         # the post-run writer (which also knows the run) or the `remember` tool.
         with usage_scope(workspace_id=pending[0].workspace_id):
-            vectors = embed_texts([item.content for item in pending], settings)
+            result = embed_batch(
+                [item.content for item in pending],
+                settings,
+                dimensions=generation.dimensions,
+                dtype=generation.storage_dtype,
+            )
     except Exception:
-        vectors = None
-    if vectors is None:
+        result = None
+    if result is None:
         return
+    if result.revision and not generation.revision:
+        generation.revision = result.revision
     # strict=False: vectors come back from an external embedding API, so a short
     # response should embed fewer items, not lose them all.
-    for item, vector in zip(pending, vectors, strict=False):
+    for item, vector in zip(pending, result.blobs, strict=False):
+        generations.store_vector(
+            db,
+            generation=generation,
+            owner_kind=generations.MEMORY_ITEM,
+            owner_id=item.id,
+            workspace_id=item.workspace_id,
+            vector=vector,
+            content_hash=content_fingerprint(item.content),
+        )
         item.embedding = vector
         item.embedding_model = settings.openai_embedding_model
 
@@ -628,7 +652,7 @@ def write_conversation_memory(run_id: str) -> None:
         _refresh_summary(db, run, settings)
         db.flush()
 
-        _embed_pending(touched, settings)
+        _embed_pending(db, touched, settings)
 
         if touched:
             mark_graph_stale(db, run.workspace_id)
@@ -843,7 +867,9 @@ def _lexical_candidates(
 
 
 def _vector_scores(
-    rows: Sequence[Tuple[str, Optional[bytes]]], query_blob: bytes
+    rows: Sequence[Tuple[str, Optional[bytes]]],
+    query_blob: bytes,
+    dtype: str = DEFAULT_DTYPE,
 ) -> Tuple[Dict[str, float], List[str]]:
     """Cosine similarity in one matmul: (score for every row, shortlist of ids).
 
@@ -858,7 +884,7 @@ def _vector_scores(
     document retrieval needs exactly the same three things over `Chunk.embedding`;
     what stays here is the shortlist policy, which is memory's own.
     """
-    ranked = ranked_cosine_scores(rows, query_blob)
+    ranked = ranked_cosine_scores(rows, query_blob, dtype)
     return dict(ranked), [row_id for row_id, _ in ranked[:VECTOR_SHORTLIST]]
 
 
@@ -869,12 +895,23 @@ def _vector_candidates(
     query_blob: bytes,
     exclude_id: Optional[str],
     settings: Settings,
+    generation: EmbeddingGeneration,
     viewer_id: str = SHARED_OWNER,
     space_id: str = SHARED_SPACE,
 ) -> Tuple[Dict[str, float], List[str]]:
     stmt = _active(
-        select(MemoryItem.id, MemoryItem.embedding), workspace_id, viewer_id, space_id
-    ).where(MemoryItem.embedding.is_not(None))
+        select(EmbeddingVector.owner_id, EmbeddingVector.vector).join(
+            MemoryItem, MemoryItem.id == EmbeddingVector.owner_id
+        ),
+        workspace_id,
+        viewer_id,
+        space_id,
+    ).where(
+        # Scored within one contract, so every vector in this matmul came from one
+        # model at one width. See `EmbeddingGeneration`.
+        EmbeddingVector.generation_id == generation.id,
+        EmbeddingVector.owner_kind == generations.MEMORY_ITEM,
+    )
     if exclude_id is not None:
         stmt = stmt.where(MemoryItem.id != exclude_id)
     cap = settings.memory_recall_candidate_cap
@@ -890,10 +927,12 @@ def _vector_candidates(
         # 100k scan peaks at +1.4GB RSS, which OOMs a small container on one turn.
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(cap)
     rows = [(str(row_id), blob) for row_id, blob in db.execute(stmt).all()]
-    return _vector_scores(rows, query_blob)
+    return _vector_scores(rows, query_blob, generation.storage_dtype)
 
 
-def _embed_query(query: str, settings: Settings) -> Optional[bytes]:
+def _embed_query(
+    query: str, settings: Settings, generation: EmbeddingGeneration
+) -> Optional[bytes]:
     """This turn's query vector, reusing one we already paid for when we can.
 
     With scoring now local and bounded (~78ms at 10k memories), the embedding
@@ -922,18 +961,27 @@ def _embed_query(query: str, settings: Settings) -> Optional[bytes]:
         # into the caller's degrade-to-lexical path.
         return None
     key = query_cache_key(
-        query, settings.openai_embedding_model, settings.active_model_provider
+        query,
+        generation.model,
+        settings.active_model_provider,
+        generation.id,
     )
     cached = query_embedding_cache.get(key)
     if cached is not None:
         return cached
-    vectors = embed_texts([query], settings)
-    if not vectors:
+    result = embed_batch(
+        [query],
+        settings,
+        model=generation.model,
+        dimensions=generation.dimensions,
+        dtype=generation.storage_dtype,
+    )
+    if result is None or not result.blobs:
         # None is "no key to embed with"; [] is a provider that answered with
         # nothing. `put` refuses either, but returning early keeps that explicit.
         return None
-    query_embedding_cache.put(key, vectors[0])
-    return vectors[0]
+    query_embedding_cache.put(key, result.blobs[0])
+    return result.blobs[0]
 
 
 def _personal_shadows_shared(items: Sequence[MemoryItem]) -> List[MemoryItem]:
@@ -1053,15 +1101,24 @@ def recall(
     )
 
     semantic_by_id: Dict[str, float] = {}
-    try:
-        with usage_scope(workspace_id=workspace_id, conversation_id=conversation_id):
-            query_blob = _embed_query(query, settings)
-    except Exception:
-        # A missing key returns None without raising; reaching here means the
-        # provider actually failed, which silently degrades recall to lexical-only.
-        logger.warning("memory recall degraded to lexical-only: embedding failed", exc_info=True)
-        query_blob = None
-    if query_blob:
+    # Recall reads the active contract, never the configured one — during a
+    # migration those differ, and a query embedded at the width being built would
+    # match nothing that is currently readable.
+    generation = generations.active_generation(db)
+    query_blob = None
+    if generation is not None:
+        try:
+            with usage_scope(workspace_id=workspace_id, conversation_id=conversation_id):
+                query_blob = _embed_query(query, settings, generation)
+        except Exception:
+            # A missing key returns None without raising; reaching here means the
+            # provider actually failed, which silently degrades recall to
+            # lexical-only.
+            logger.warning(
+                "memory recall degraded to lexical-only: embedding failed", exc_info=True
+            )
+            query_blob = None
+    if query_blob and generation is not None:
         # Every scanned row keeps its similarity, but only the shortlist joins the
         # candidate set: a lexical hit that is not in the vector top-k still needs
         # its real semantic term, or its score silently loses up to 1.0.
@@ -1071,6 +1128,7 @@ def recall(
             query_blob=query_blob,
             exclude_id=summary_id,
             settings=settings,
+            generation=generation,
             viewer_id=viewer_id,
             space_id=space_id,
         )
@@ -1216,7 +1274,7 @@ def remember_memory(
         db.add(item)
         outcome = "created"
     db.flush()
-    _embed_pending([item], settings)
+    _embed_pending(db, [item], settings)
     mark_graph_stale(db, workspace_id)
     record_audit(
         db,

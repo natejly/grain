@@ -18,6 +18,7 @@ from app.auth import DEV_SEED_USER_ID
 from app.config import Settings, get_settings
 from app.database import SessionLocal
 from app.models import Conversation, MemoryItem, Workspace
+from app.services import embedding_generations as generations
 from app.services import memory as memory_service
 from app.services.embeddings import (
     QUERY_CACHE_MAX_ENTRIES,
@@ -28,6 +29,7 @@ from app.services.embeddings import (
 )
 from app.services.memory import MemoryContext, recall
 from app.services.retrieval import tokenize
+from tests.embedding_doubles import as_batch, seed_vector
 
 EMBED_DIM = 8
 
@@ -57,9 +59,15 @@ class _CountingEmbedder:
         self.calls: List[Tuple[str, str]] = []
 
     def __call__(
-        self, texts: Sequence[str], settings: Optional[Settings] = None
+        self,
+        texts: Sequence[str],
+        settings: Optional[Settings] = None,
+        model: Optional[str] = None,
+        **_contract: object,
     ) -> List[bytes]:
-        model = settings.openai_embedding_model if settings else ""
+        # The model actually asked for, which on a read is the generation's rather
+        # than the configured one — see `embed_batch`.
+        model = model or (settings.openai_embedding_model if settings else "")
         self.calls.append((texts[0], model))
         override = self._by_model.get(model)
         if override is not None:
@@ -93,14 +101,24 @@ def _seed(
     *,
     embedding: Optional[bytes] = None,
 ) -> MemoryItem:
+    blob = embedding if embedding is not None else _fake_vector(content)
     item = MemoryItem(
         workspace_id=workspace_id,
         kind="fact",
         content=content,
         normalized_key=hashlib.sha256(content.encode()).hexdigest()[:40],
-        embedding=embedding if embedding is not None else _fake_vector(content),
+        embedding=blob,
     )
     db.add(item)
+    db.flush()
+    # Recall reads `embedding_vectors`, not the column. See `seed_vector`.
+    seed_vector(
+        db,
+        owner_kind=generations.MEMORY_ITEM,
+        owner_id=item.id,
+        workspace_id=workspace_id,
+        blob=blob,
+    )
     db.flush()
     return item
 
@@ -120,7 +138,7 @@ def _shape(context: MemoryContext) -> Tuple[List[Tuple[str, str, str]], List[str
 
 def test_cache_hit_returns_the_same_memory_context_as_the_miss(workspace, monkeypatch):
     embedder = _CountingEmbedder()
-    monkeypatch.setattr(memory_service, "embed_texts", embedder)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(embedder))
     db = SessionLocal()
     try:
         conversation_id = _conversation(db, workspace)
@@ -160,13 +178,24 @@ def test_cache_hit_returns_the_same_memory_context_as_the_miss(workspace, monkey
 # --------------------------------------------------------------------------- #
 
 
-def test_changing_the_embedding_model_does_not_serve_the_old_model_vector(
-    workspace, monkeypatch
-):
-    """Two models, two rankings — with the model out of the key, one wins twice.
+def test_a_query_vector_is_never_served_across_generations(workspace, monkeypatch):
+    """Two contracts, two rankings — with the generation out of the key, one wins twice.
 
     This is the silent one: dimensions often match between model versions, so a
     stale vector does not crash, it just answers a different question.
+
+    The identity of a query vector is its *generation*, not the configured model.
+    That is what the model name used to stand in for, badly — it says nothing
+    about width, dtype or normalisation, all of which are now choices, and two
+    generations can name one model and still produce vectors that must never be
+    compared. Changing configuration no longer changes what a read does at all;
+    it opens a new generation and leaves reads on the active one, so the flip
+    below is what a migration actually looks like.
+
+    Both memories carry a vector under both generations, so the corpus is not what
+    changes between the two recalls — only which contract the query is embedded
+    under. If the cache leaked across generations the second recall would reuse
+    the first vector and alpha would win twice.
     """
     alpha_vector = _fake_vector("alpha helix folding")
     beta_vector = _fake_vector("beta sheet stacking")
@@ -176,15 +205,35 @@ def test_changing_the_embedding_model_does_not_serve_the_old_model_vector(
             "text-embedding-3-large": beta_vector,
         }
     )
-    monkeypatch.setattr(memory_service, "embed_texts", embedder)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(embedder))
     db = SessionLocal()
     try:
         conversation_id = _conversation(db, workspace)
         alpha = _seed(db, workspace, "alpha helix folding", embedding=alpha_vector)
         beta = _seed(db, workspace, "beta sheet stacking", embedding=beta_vector)
+        first = generations.active_generation(db)
+        assert first is not None and first.model == "text-embedding-3-small"
+
+        # The generation a migration to a different model would build, holding the
+        # same corpus, activated after the first read has already cached a vector.
+        second = generations.create_generation(
+            db,
+            model="text-embedding-3-large",
+            dimensions=first.dimensions,
+            note="test: a second contract over the same corpus",
+        )
+        for item, vector in ((alpha, alpha_vector), (beta, beta_vector)):
+            generations.store_vector(
+                db,
+                generation=second,
+                owner_kind=generations.MEMORY_ITEM,
+                owner_id=item.id,
+                workspace_id=workspace,
+                vector=vector,
+            )
         db.commit()
 
-        base = get_settings()
+        settings = get_settings()
         # No lexical overlap with either memory, so ranking is purely semantic.
         query = "which structure question"
         small = recall(
@@ -192,24 +241,33 @@ def test_changing_the_embedding_model_does_not_serve_the_old_model_vector(
             workspace_id=workspace,
             conversation_id=conversation_id,
             query=query,
-            settings=base.model_copy(
-                update={"openai_embedding_model": "text-embedding-3-small"}
-            ),
+            settings=settings,
         )
+
+        # `force` because coverage is deployment-wide by design — a real migration
+        # backfills every workspace before flipping — and this suite shares one
+        # database, so rows belonging to other tests are legitimately uncovered.
+        generations.activate(db, second, force=True)
+        db.commit()
+
         large = recall(
             db,
             workspace_id=workspace,
             conversation_id=conversation_id,
             query=query,
-            settings=base.model_copy(
-                update={"openai_embedding_model": "text-embedding-3-large"}
-            ),
+            settings=settings,
         )
 
         assert [item.id for item in small.items] == [alpha.id]
         assert [item.id for item in large.items] == [beta.id]
-        assert len(embedder.calls) == 2
+        assert len(embedder.calls) == 2, "the second generation reused a cached vector"
         assert embedder.calls[1][1] == "text-embedding-3-large"
+
+        # The active generation is deployment-wide state, and this suite shares one
+        # database — leaving `second` active would silently re-point every later
+        # test's reads at a contract it never asked for.
+        generations.activate(db, first, force=True)
+        db.commit()
     finally:
         db.close()
 
@@ -221,7 +279,7 @@ def test_changing_the_embedding_model_does_not_serve_the_old_model_vector(
 
 def test_case_and_whitespace_variants_share_one_cache_entry(workspace, monkeypatch):
     embedder = _CountingEmbedder()
-    monkeypatch.setattr(memory_service, "embed_texts", embedder)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(embedder))
     db = SessionLocal()
     try:
         conversation_id = _conversation(db, workspace)
@@ -273,7 +331,7 @@ def test_semantically_different_queries_never_share_an_entry():
 
 def test_negated_query_reaches_the_provider_again(workspace, monkeypatch):
     embedder = _CountingEmbedder()
-    monkeypatch.setattr(memory_service, "embed_texts", embedder)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(embedder))
     db = SessionLocal()
     try:
         conversation_id = _conversation(db, workspace)
@@ -337,7 +395,7 @@ def test_missing_vector_is_not_cached_and_a_later_run_still_embeds(workspace, mo
 
         # No key to embed with: embed_texts returns None, recall degrades to lexical.
         monkeypatch.setattr(
-            memory_service, "embed_texts", lambda texts, settings=None: None
+            memory_service, "embed_batch", as_batch(lambda texts, settings=None: None)
         )
         lexical_only = recall(
             db,
@@ -353,7 +411,7 @@ def test_missing_vector_is_not_cached_and_a_later_run_still_embeds(workspace, mo
         embedder = _CountingEmbedder({"text-embedding-3-small": _fake_vector(
             "alpha helix folding"
         )})
-        monkeypatch.setattr(memory_service, "embed_texts", embedder)
+        monkeypatch.setattr(memory_service, "embed_batch", as_batch(embedder))
         online = recall(
             db,
             workspace_id=workspace,
@@ -381,7 +439,7 @@ def test_scripted_mode_never_serves_a_vector_an_openai_run_cached(
     """
     only_vector = _fake_vector("alpha helix folding")
     monkeypatch.setattr(
-        memory_service, "embed_texts", lambda texts, settings=None: [only_vector]
+        memory_service, "embed_batch", as_batch(lambda texts, settings=None: [only_vector])
     )
     db = SessionLocal()
     try:
@@ -405,7 +463,7 @@ def test_scripted_mode_never_serves_a_vector_an_openai_run_cached(
 
         # Same process, same query text, a provider that cannot embed at all.
         monkeypatch.setattr(
-            memory_service, "embed_texts", lambda texts, settings=None: None
+            memory_service, "embed_batch", as_batch(lambda texts, settings=None: None)
         )
         lexical_only = recall(
             db,
@@ -455,7 +513,7 @@ def test_provider_failure_is_not_cached(workspace, monkeypatch):
     def _boom(texts, settings=None):
         raise RuntimeError("provider down")
 
-    monkeypatch.setattr(memory_service, "embed_texts", _boom)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(_boom))
     db = SessionLocal()
     try:
         conversation_id = _conversation(db, workspace)
@@ -482,7 +540,7 @@ def test_provider_failure_is_not_cached(workspace, monkeypatch):
 @pytest.mark.parametrize("query", ["", "   \n\t "])
 def test_blank_query_skips_the_embedding_round_trip(workspace, monkeypatch, query):
     embedder = _CountingEmbedder()
-    monkeypatch.setattr(memory_service, "embed_texts", embedder)
+    monkeypatch.setattr(memory_service, "embed_batch", as_batch(embedder))
     db = SessionLocal()
     try:
         conversation_id = _conversation(db, workspace)

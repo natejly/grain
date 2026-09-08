@@ -45,9 +45,18 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
 from ..database import SessionLocal
-from ..models import Conversation, ConversationChunk, Message, Run
+from ..models import (
+    Conversation,
+    ConversationChunk,
+    EmbeddingGeneration,
+    EmbeddingVector,
+    Message,
+    Run,
+)
+from . import embedding_generations as generations
 from .embeddings import (
-    embed_texts,
+    content_fingerprint,
+    embed_batch,
     query_cache_key,
     query_embedding_cache,
     ranked_cosine_scores,
@@ -233,22 +242,41 @@ def _refresh_summary(
     return summary
 
 
-def _embed_pending(rows: Sequence[ConversationChunk], settings: Settings) -> None:
+def _embed_pending(
+    db: Session, rows: Sequence[ConversationChunk], settings: Settings
+) -> None:
     """Attach vectors, best-effort: rows stay lexically searchable regardless."""
     pending = [row for row in rows if row.embedding is None and row.content.strip()]
     if not pending:
         return
+    generation = generations.writable_generation(db, settings)
     try:
         with usage_scope(workspace_id=pending[0].workspace_id):
-            vectors = embed_texts([row.content for row in pending], settings)
+            result = embed_batch(
+                [row.content for row in pending],
+                settings,
+                dimensions=generation.dimensions,
+                dtype=generation.storage_dtype,
+            )
     except Exception:
         logger.warning("conversation chunk embedding failed; search stays lexical", exc_info=True)
         return
-    if vectors is None:
+    if result is None:
         return
+    if result.revision and not generation.revision:
+        generation.revision = result.revision
     # strict=False: a short response from an external API should embed fewer
     # rows, not lose them all.
-    for row, vector in zip(pending, vectors, strict=False):
+    for row, vector in zip(pending, result.blobs, strict=False):
+        generations.store_vector(
+            db,
+            generation=generation,
+            owner_kind=generations.CONVERSATION_CHUNK,
+            owner_id=row.id,
+            workspace_id=row.workspace_id,
+            vector=vector,
+            content_hash=content_fingerprint(row.content),
+        )
         row.embedding = vector
         row.embedding_model = settings.openai_embedding_model
 
@@ -320,7 +348,7 @@ def index_conversation(
 
     if touched:
         db.flush()
-        _embed_pending(touched, settings)
+        _embed_pending(db, touched, settings)
     return sum(1 for row in touched if row.kind == "chunk")
 
 
@@ -472,23 +500,37 @@ def _lexical_ranking(
     return [(str(row_id), float(count)) for row_id, count in db.execute(stmt).all()]
 
 
-def _embed_query(query: str, settings: Settings) -> Optional[bytes]:
+def _embed_query(
+    query: str, settings: Settings, generation: EmbeddingGeneration
+) -> Optional[bytes]:
     """This search's query vector, via the process-wide LRU both other
     retrieval paths share — the same prompt text is often embedded by memory
-    recall and document retrieval in the same turn."""
+    recall and document retrieval in the same turn.
+
+    Embedded under the generation being *read*, so that a migration in progress
+    cannot serve this search a vector none of its rows can be compared to."""
     if not query.strip():
         return None
     key = query_cache_key(
-        query, settings.openai_embedding_model, settings.active_model_provider
+        query,
+        generation.model,
+        settings.active_model_provider,
+        generation.id,
     )
     cached = query_embedding_cache.get(key)
     if cached is not None:
         return cached
-    vectors = embed_texts([query], settings)
-    if not vectors:
+    result = embed_batch(
+        [query],
+        settings,
+        model=generation.model,
+        dimensions=generation.dimensions,
+        dtype=generation.storage_dtype,
+    )
+    if result is None or not result.blobs:
         return None
-    query_embedding_cache.put(key, vectors[0])
-    return vectors[0]
+    query_embedding_cache.put(key, result.blobs[0])
+    return result.blobs[0]
 
 
 def _dense_ranking(
@@ -501,9 +543,12 @@ def _dense_ranking(
 ) -> List[Tuple[str, float]]:
     """Cosine ranking over chunk vectors, floored, or empty — and empty must
     leave the caller ranking lexically, never ranking nothing."""
+    generation = generations.active_generation(db)
+    if generation is None:
+        return []
     try:
         with usage_scope(workspace_id=workspace_id):
-            query_blob = _embed_query(query, settings)
+            query_blob = _embed_query(query, settings, generation)
     except Exception:
         logger.warning(
             "conversation search degraded to lexical-only: embedding failed",
@@ -513,21 +558,29 @@ def _dense_ranking(
     if not query_blob:
         return []
     stmt = _visible(
-        select(ConversationChunk.id, ConversationChunk.embedding),
+        select(EmbeddingVector.owner_id, EmbeddingVector.vector).join(
+            ConversationChunk, ConversationChunk.id == EmbeddingVector.owner_id
+        ),
         workspace_id,
         viewer_id,
     ).where(
-        ConversationChunk.embedding.is_not(None),
-        # Same-width vectors from a different model are the case the length
-        # guard cannot catch; exclude them in SQL as document retrieval does.
-        ConversationChunk.embedding_model == settings.openai_embedding_model,
+        # One contract, so everything in this matmul is comparable. This is what
+        # the `embedding_model ==` filter was reaching for: a model name is not an
+        # identity once width and dtype are choices.
+        EmbeddingVector.generation_id == generation.id,
+        EmbeddingVector.owner_kind == generations.CONVERSATION_CHUNK,
     )
     cap = settings.conversation_vector_candidate_cap
     if cap > 0:
         stmt = stmt.order_by(ConversationChunk.last_message_at.desc()).limit(cap)
     rows = [(str(row_id), blob) for row_id, blob in db.execute(stmt).all()]
-    ranked = ranked_cosine_scores(rows, query_blob)[:VECTOR_SHORTLIST]
-    floor = settings.retrieval_dense_floor
+    ranked = ranked_cosine_scores(rows, query_blob, generation.storage_dtype)[
+        :VECTOR_SHORTLIST
+    ]
+    # The generation's floor: cosine between unrelated vectors rises as
+    # dimensionality falls, so this cannot be one global number. An explicit
+    # configuration override still wins — see `effective_floor`.
+    floor = generations.effective_floor(generation, settings)
     # Sorted descending, so the first score below the floor ends the ranking.
     for position, (_row_id, score) in enumerate(ranked):
         if score < floor:
