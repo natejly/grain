@@ -17,7 +17,11 @@ test("chat renders LaTeX maths, not TeX source", async ({ page }) => {
     mimeType: "text/markdown",
     buffer: Buffer.from("# Maths\n\nA note so the composer unlocks.\n"),
   });
-  await expect(page.getByText("Indexed").last()).toBeVisible({ timeout: 30_000 });
+  // Scoped to THIS spec's row: sources come back newest-first, so `.last()` is
+  // the oldest and is already indexed whenever an earlier spec left one.
+  await expect(
+    page.locator(".source-row", { hasText: "math-e2e.md" }).getByText("Indexed"),
+  ).toBeVisible({ timeout: 30_000 });
 
   await page.getByRole("button", { name: "Chat", exact: true }).click();
   const composer = page.getByRole("textbox", { name: "Message" });

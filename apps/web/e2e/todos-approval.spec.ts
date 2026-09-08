@@ -42,8 +42,43 @@ const listNamed = (page: Page, name: string) =>
 const item = (page: Page, title: string) =>
   page.locator(".todo-item", { hasText: title }).first();
 
+/**
+ * Remove every list of this name. Confirm()-gated — the same as a board: the
+ * two shapes are one object, and share one deletion gate.
+ *
+ * Every, not the first, because a failed attempt can leave one behind and the
+ * point of calling this is to be left with none.
+ */
+async function removeLists(page: Page, name: string) {
+  const remove = page.getByRole("button", { name: `Delete ${name}` });
+  // Re-counted each pass rather than counted once: a deletion re-renders the
+  // shelf, so the honest count is the one taken after the previous removal.
+  for (let left = await remove.count(); left > 0; left = await remove.count()) {
+    page.once("dialog", (dialog) => dialog.accept());
+    await remove.first().click();
+    await expect(remove).toHaveCount(left - 1);
+  }
+}
+
+/**
+ * Create a list, having first cleared any list of that name left lying around.
+ *
+ * The teardown at the end of a test is exactly what a failure skips, so a
+ * failed attempt leaves its list on the backend the next attempt shares. The
+ * create form then happily makes a SECOND "Launch checklist"; the scripted
+ * agent writes into whichever it finds, and the assertions read a checklist
+ * carrying every item twice — "1 of 4 done", then "1 of 6 done". That made
+ * Playwright's retries incapable of recovering this spec, and worse, each
+ * retry died on a different assertion than the one that started it, so the CI
+ * log described a stale-data failure instead of the real one.
+ *
+ * The name cannot just vary per attempt: agent-script.json addresses the list
+ * by the literal "Launch checklist" in three scripted calls, so the fixture
+ * and the spec have to agree on exactly one name.
+ */
 async function createList(page: Page, name: string) {
   await openView(page, "Library", /^Boards & todos/);
+  await removeLists(page, name);
   // One create form for both shapes: "List" births the one-column shape.
   await page.getByRole("combobox", { name: "Create as" }).selectOption("list");
   await page.getByRole("textbox", { name: "List name" }).fill(name);
@@ -51,14 +86,9 @@ async function createList(page: Page, name: string) {
   await expect(page.getByRole("heading", { name })).toBeVisible();
 }
 
-/**
- * Delete a list. Confirm()-gated — the same as a board: the two shapes are one
- * object, and share one deletion gate.
- */
 async function deleteList(page: Page, name: string) {
   await openView(page, "Library", /^Boards & todos/);
-  page.once("dialog", (dialog) => dialog.accept());
-  await listNamed(page, name).getByRole("button", { name: `Delete ${name}` }).click();
+  await removeLists(page, name);
   await expect(page.getByRole("heading", { name })).toHaveCount(0);
 }
 

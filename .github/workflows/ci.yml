@@ -55,6 +55,37 @@ jobs:
 
       - run: npx --yes pnpm@9.15.9 test:e2e
 
+      # The config already writes a trace and a screenshot for every failed
+      # attempt; without this they are thrown away with the runner, and a
+      # failure that does not reproduce locally cannot be diagnosed at all.
+      #
+      # `always()`, not `failure()`, because the case that most needs the trace
+      # is the one where the job SUCCEEDS: a flaky test failed its first attempt
+      # and passed on retry, so the run is green and the only record of what
+      # went wrong is the trace from the attempt nobody sees.
+      # Only the failure output, which is what makes this affordable to keep on
+      # every run. Two things also live under `test-results/` and must not be
+      # uploaded: `playwright-report/` is an HTML report written whether or not
+      # anything failed, and the 55 screenshots the specs take deliberately
+      # (`page.screenshot({ path: "test-results/..." })`) are ~4.4 MB of flat
+      # .png that a green run produces every time. Storing either would put a
+      # 500 MB allowance a few weeks from refusing the upload, and CI with it.
+      #
+      # Playwright writes a failed attempt's trace, screenshot and error context
+      # into a SUBDIRECTORY per test, so excluding the flat .png keeps exactly
+      # the failure output and nothing else — and a green run, having no
+      # subdirectories, uploads nothing at all.
+      - name: Keep the traces of any attempt that failed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: |
+            test-results/
+            !test-results/*.png
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Check OpenAPI contract drift
         run: |
           cp packages/api-client/openapi.json /tmp/openapi.json
