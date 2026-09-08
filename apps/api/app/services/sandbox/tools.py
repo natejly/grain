@@ -445,11 +445,18 @@ def _preview_run_command(db: Session, context: ToolContext, args: Dict[str, Any]
 # Moving files in and out
 
 
-def _workspace_sources(db: Session, workspace_id: str) -> List[Source]:
+def _workspace_sources(
+    db: Session, workspace_id: str, conversation_id: str
+) -> List[Source]:
     return list(
         db.scalars(
             select(Source).where(
-                Source.workspace_id == workspace_id, Source.deleted_at.is_(None)
+                Source.workspace_id == workspace_id,
+                Source.deleted_at.is_(None),
+                # A file attached to a chat belongs to that chat: a sandbox run
+                # sees the library plus its own conversation's files, never
+                # another thread's.
+                Source.conversation_id.in_(("", conversation_id)),
             )
         )
     )
@@ -462,7 +469,7 @@ def _files_from_sources(db: Session, context: ToolContext, names: List[str]) -> 
     answer to "is this path allowed to exist" — absolute paths, `..`, backslashes
     and control characters are refused there rather than sanitized here.
     """
-    available = _workspace_sources(db, context.workspace_id)
+    available = _workspace_sources(db, context.workspace_id, context.conversation_id)
     by_name = {source.filename.lower(): source for source in available}
     files: Dict[str, bytes] = {}
     for name in names:

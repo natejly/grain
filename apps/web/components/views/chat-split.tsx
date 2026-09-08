@@ -11,7 +11,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
-import { ChatPane } from "../chat-pane";
+import { ChatPane, type ChatPaneProps } from "../chat-pane";
 import { AttachmentPane } from "./attachment-pane";
 import type { DashboardPinning } from "./dashboard-pin-bar";
 import {
@@ -67,6 +67,9 @@ export type ChatSplitProps = {
   /** The shell's one pin bundle, handed to every extra pane — a dashboard
    *  made in a side pane deserves the same finish-the-job bar. */
   pinning?: DashboardPinning;
+  /** The shell's workspace-level attach halves, handed to every extra pane —
+   *  each pane adds its own conversation-scoped state on top. */
+  attach?: ChatPaneProps["attach"];
   /**
    * Bumped by the shell after it writes ratios to storage on the split's
    * behalf (applying a saved layout). The split re-reads the store when the
@@ -135,6 +138,7 @@ export function ChatSplit({
   onSettled,
   onApprovalChanged,
   pinning,
+  attach,
   resetKey,
   forcedSizes,
 }: ChatSplitProps) {
@@ -370,6 +374,7 @@ export function ChatSplit({
               onSettled={onSettled}
               onApprovalChanged={onApprovalChanged}
               pinning={pinning}
+              attach={attach}
               maximized={maximized === pane.id}
               onToggleMaximize={() =>
                 setMaximized((current) => (current === pane.id ? null : pane.id))

@@ -60,6 +60,10 @@ def _source_for_dataset(db: Session, actor: Actor, source_id: str) -> Source:
             Source.workspace_id == actor.workspace_id,
             Source.deleted_at.is_(None),
             Source.status == "ready",
+            # A dataset is workspace-wide, so it can only be built from the
+            # workspace library — a CSV attached to one chat stays that
+            # chat's file until it is promoted.
+            Source.conversation_id == "",
         )
     )
     if source is None:

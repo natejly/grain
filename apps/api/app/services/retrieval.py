@@ -651,7 +651,7 @@ def search_evidence(
         return []
     arms = rank_arms(
         db, workspace_id=workspace_id, query=query, space_id=space_id,
-            conversation_id=conversation_id,
+        conversation_id=conversation_id,
         settings=settings,
     )
     fused = reciprocal_rank_fusion(

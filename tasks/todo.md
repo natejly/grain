@@ -116,10 +116,29 @@ healthy document. The editor is now gated on having the content.
 - **Spaces still leak into the graph.** `rebuild_graph` filters the conversation
   axis now but has never filtered `space_id` — pre-existing, and left alone
   because changing it would alter Spaces behaviour that is not this task's.
-- `chat-pane.tsx` and `subject-chat.tsx` deliberately get no `attachToChat`: a
-  panel beside a document already has a subject, and a second way to say what the
-  conversation is about would be one too many.
+- `subject-chat.tsx` deliberately gets no `attachToChat`: a panel beside a
+  document already has a subject, and a second way to say what the conversation
+  is about would be one too many. `chat-pane.tsx` originally shared that fate,
+  but the reason never applied to it — an extra split pane is a free-standing
+  thread, not a subject panel — so it now carries the paperclip with pane-local
+  attachment state (2026-09-08).
 - File panes are **not persisted** and close on a thread switch — a working
   surface is not a layout, and a revived editor would reopen files the user had
   closed. This is why they are a separate list from `chat-panes`, whose store,
   pruning and saved layouts keep the one shape they already have.
+
+---
+
+# Merge to main + follow-ups (main, 2026-09-08)
+
+## Plan
+- [x] Fast-forward `worktree-screen-order-fix` into main (chat attachments + screen-order fix)
+- [x] Close the two cross-conversation scope gaps the branch left: sandbox `_workspace_sources` and analytics `_source_for_dataset` now honour `Source.conversation_id`; tests for both in `test_chat_attachments.py`
+- [x] Fix the misindented `conversation_id` kwarg in `retrieval.search_evidence`
+- [x] Give the extra split panes the paperclip: `ChatPane` holds pane-local attachment state (chips, attach-to-chat, detach) on top of the shell's workspace-level `attach` halves, threaded through `ChatSplit`
+- [x] `alembic upgrade head` (0067 → 0068) on the dev DB
+- [x] e2e: `workspace-create.spec.ts` (the switcher's New-workspace row, previously untested in a browser) and `chat-attachments.spec.ts` (chip strip, split-pane editor, scoped upload absent from the library)
+
+## Review
+- Full api suite, full vitest suite, and the workspace e2e specs all green after the merge and fixes.
+- Workspace creation needed no feature work — it shipped with the live-cursors merge; what was missing was browser-level proof, which the new spec now provides.

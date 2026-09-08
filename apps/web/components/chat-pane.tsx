@@ -1,9 +1,17 @@
 "use client";
 
-import type { Bootstrap, Citation, Conversation, GeneratedApp, Source } from "@workspace/api-client";
+import type {
+  Bootstrap,
+  ChatAttachment,
+  Citation,
+  Conversation,
+  GeneratedApp,
+  Source,
+} from "@workspace/api-client";
 import { Maximize2, Minimize2, X } from "lucide-react";
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { useSession } from "./auth/session-provider";
+import { createAttachmentHandlers } from "./handlers/attachments";
 import { useConversationThread } from "./use-conversation-thread";
 import { ChatView } from "./views/chat";
 import type { DashboardPinning } from "./views/dashboard-pin-bar";
@@ -37,6 +45,16 @@ export type ChatPaneProps = {
   maximized?: boolean;
   /** Maximize this pane, or restore the split when it already is. */
   onToggleMaximize?: () => void;
+  /** The shell's workspace-level attach halves — library upload, dataset
+   *  promotion, opening a file column in the split. The conversation-scoped
+   *  halves (this pane's chips, attach-to-chat, detach) are the pane's own
+   *  state, because they belong to THIS pane's thread, not the rail's. */
+  attach?: {
+    upload: (files: FileList | File[]) => Promise<Source | null>;
+    uploading: boolean;
+    createDataset?: (name: string, sourceId: string) => Promise<void>;
+    openFile?: (documentId: string, filename: string) => void;
+  };
 };
 
 /**
@@ -46,9 +64,11 @@ export type ChatPaneProps = {
  * `useConversationThread` instance holds every bit of turn and composer state,
  * and `ChatView` is reused unchanged — all pane-specific controls flow through
  * its optional `turnControls` / `skills` / `approval` / `onSelectAgent` bundles.
- * There is no paperclip: adding a source navigates to the Knowledge view, which
- * would replace the whole split — a button that throws away what you were doing
- * is worse than no button, so ChatView omits it when no handler is given.
+ * The paperclip is here too, when the shell hands over its `attach` halves:
+ * uploads no longer navigate anywhere, and a file attached in this pane is a
+ * claim about THIS pane's conversation — so the chips, the attach call and the
+ * detach confirm are pane-local state, refreshed per conversation, while the
+ * library upload and dataset promotion stay the shell's.
  */
 export function ChatPane({
   conversation,
@@ -64,6 +84,7 @@ export function ChatPane({
   pinning,
   maximized,
   onToggleMaximize,
+  attach,
 }: ChatPaneProps) {
   const thread = useConversationThread({
     conversationId: conversation.id,
@@ -82,6 +103,27 @@ export function ChatPane({
   // The signed-in member, so this pane's shared thread offers the edit pencil
   // only on their own prompts — same rule as the primary chat.
   const { session } = useSession();
+
+  // This pane's own attachment chips. The shell's list tracks the RAIL's
+  // active conversation, which is a different thread than this pane shows.
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState("");
+  const attachmentHandlers = useMemo(
+    () =>
+      createAttachmentHandlers({
+        setError: setAttachError,
+        setAttaching,
+        setAttachments,
+        // A pane always shows an existing conversation, so unlike the rail's
+        // empty composer there is nothing to conjure.
+        ensureConversation: async () => conversation.id,
+      }),
+    [conversation.id],
+  );
+  useEffect(() => {
+    void attachmentHandlers.refreshAttachments(conversation.id);
+  }, [attachmentHandlers, conversation.id]);
 
   // Whether the head is currently asking "close a pane whose turn is still
   // running?". Never a window.confirm and never a scrim: the pane itself is
@@ -171,6 +213,11 @@ export function ChatPane({
           {thread.error}
         </div>
       )}
+      {attachError && (
+        <div className="tool-error" role="alert">
+          {attachError}
+        </div>
+      )}
       <ChatView
         messages={thread.messages}
         sources={sources}
@@ -189,6 +236,15 @@ export function ChatPane({
         viewerId={session?.user_id}
         decideAgentCall={thread.decideAgentCall}
         openCitation={openCitation}
+        attach={
+          attach && {
+            ...attach,
+            attachToChat: attachmentHandlers.attachFile,
+            attaching,
+            attachments,
+            detach: attachmentHandlers.detachFile,
+          }
+        }
         // The pin/open halves are pane-agnostic, but the composer seed is not:
         // the shell's askForChart feeds the PRIMARY composer, and a request
         // about this pane's chart typed into another thread asks the wrong

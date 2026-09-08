@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind, FavoriteKind } from "@workspace/api-client";
-import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, LogOut, Menu, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, ShieldAlert, Trash2, Users, X } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, LogOut, Menu, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
@@ -1372,6 +1372,15 @@ export function Workspace() {
             onSettled={refreshConversations}
             onApprovalChanged={patchConversation}
             pinning={pinning}
+            // The workspace-level attach halves only: each pane keeps its own
+            // conversation-scoped chips and attach-to-chat state, because the
+            // shell's `attachments` list tracks the rail's thread, not theirs.
+            attach={{
+              upload: uploadFiles,
+              uploading,
+              createDataset: createDatasetFromSource,
+              openFile: openFilePane,
+            }}
             primary={
               <ChatView
                 messages={messages}

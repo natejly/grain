@@ -341,3 +341,51 @@ def test_detaching_a_document_leaves_the_document(client) -> None:
     attachment = _attach(client, conversation_id, "notes.md", b"keep me").json()
     assert client.delete(f"/api/attachments/{attachment['id']}").status_code == 204
     assert client.get(f"/api/documents/{attachment['target_id']}").status_code == 200
+
+
+# --------------------------------------------------------------------------
+# The two read paths that are not retrieval: sandbox staging and datasets
+
+
+def test_a_sandbox_run_stages_only_its_own_chats_files(client) -> None:
+    """`_workspace_sources` feeds uploaded files into sandbox runs by name —
+    without the scope predicate it is the leak the docstring above forbids,
+    reached through a side door instead of a search."""
+    from app.services.sandbox.tools import (
+        _workspace_sources,  # type: ignore[attr-defined]
+    )
+
+    conversation_id = _conversation(client)
+    attachment = _attach(client, conversation_id, "heron.csv", b"a,b\n1,2\n").json()
+    assert attachment["kind"] == "source"
+    workspace_id, _user = _workspace_of(conversation_id)
+
+    db = SessionLocal()
+    try:
+        def staged(for_conversation: str) -> Set[str]:
+            return {
+                source.filename
+                for source in _workspace_sources(db, workspace_id, for_conversation)
+            }
+
+        assert "heron.csv" in staged(conversation_id)
+        assert "heron.csv" not in staged(_conversation(client, "A different chat"))
+        assert "heron.csv" not in staged("")
+    finally:
+        db.close()
+
+
+def test_an_attached_csv_cannot_become_a_workspace_dataset(client) -> None:
+    """A dataset is workspace-wide. Building one from a chat's CSV would
+    publish that chat's file to everyone — the source must be promoted to the
+    library first."""
+    conversation_id = _conversation(client)
+    attachment = _attach(client, conversation_id, "egret.csv", b"a,b\n1,2\n").json()
+    assert attachment["kind"] == "source"
+
+    refused = client.post(
+        "/api/datasets",
+        headers=key(),
+        json={"name": "Egret", "source_id": attachment["target_id"]},
+    )
+    assert refused.status_code == 404, refused.text
