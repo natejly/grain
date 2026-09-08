@@ -46,6 +46,7 @@ from ..services.analytics import AnalyticsValidationError, execute_dataset_query
 from ..services.audit import record_audit
 from ..services.dashboards import store
 from ..services.dashboards.binding import DashboardBindError
+from ..services.ingestion import remove_object_files
 from .dependencies import idempotency_key
 from .idempotency import find_replay, record_key, replayed_resource_gone
 
@@ -288,7 +289,7 @@ def delete_dashboard(
     # The side-panel thread goes with it, exactly as a document's does: it was
     # only ever about this dashboard's spec, and the Chat rail filters scoped
     # threads out, so an orphan here is unreachable rather than merely untidy.
-    conversations.purge_for_subject(
+    object_keys = conversations.purge_for_subject(
         db,
         workspace_id=actor.workspace_id,
         subject_kind=subjects.DASHBOARD,
@@ -305,6 +306,8 @@ def delete_dashboard(
         detail={"name": dashboard.name},
     )
     db.commit()
+    # Bytes attached inside the purged thread, only after the commit has held.
+    remove_object_files(object_keys)
     return Response(status_code=204)
 
 

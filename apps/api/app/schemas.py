@@ -550,6 +550,18 @@ class ConversationShareRequest(BaseModel):
     shared: bool
 
 
+class ConversationSpaceRequest(BaseModel):
+    """The body of `PUT /api/conversations/{id}/space`.
+
+    The space to move the thread into, or "" to move it out to the plain rail.
+    The id is proved against the caller's workspace at the route — a foreign
+    or deleted space is a 404, exactly as on create — so the column can never
+    come to hold a scope the workspace does not have.
+    """
+
+    space_id: str = Field(max_length=36)
+
+
 class ConversationForkRequest(BaseModel):
     """The body of `POST /api/conversations/{id}/fork`.
 

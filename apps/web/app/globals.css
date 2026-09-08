@@ -10546,6 +10546,33 @@ label,
   font-weight: 600;
 }
 
+/* The container page's two columns: threads are the work, so they take the
+   wide track; instructions and knowledge stand beside them. Below 900px the
+   side column drops under the threads rather than crushing both. */
+.space-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .space-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.space-main {
+  min-width: 0;
+}
+
+.space-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
 .space-instructions {
   display: flex;
   flex-direction: column;
@@ -10603,14 +10630,46 @@ label,
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
 }
 
+.space-threads-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* "Add a thread" options: title first and shrinkable, the timestamp held. */
+.space-add-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-threads-actions .disclosure-option time {
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* A row is a div now, not one big button: the open target and the
+   remove-from-space target must be two elements, since a button cannot nest
+   a button. The open half keeps the old whole-row look. */
 .space-thread-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.space-thread-open {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  width: 100%;
   padding: 8px 10px;
   border: 0;
   border-radius: 6px;
@@ -10620,18 +10679,68 @@ label,
   cursor: pointer;
 }
 
-.space-thread-row:hover {
+.space-thread-open:hover {
   background: var(--surface-hover);
 }
 
-.space-thread-row time {
+.space-thread-open span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-thread-open time {
   color: var(--text-dim);
   font-size: 11px;
   white-space: nowrap;
 }
 
+/* Rail space groups: a project folder above the loose threads. The toggle is
+   the group's one control — a header that folds, in the .thread-group label's
+   type but interactive. */
+.thread-space-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.thread-space-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 4px 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-space-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.thread-space-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-space-count {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
 /* The rail chip naming a thread's space. Sits inside .thread-open, which is
-   a flex row; the chip must shrink before the title does. */
+   a flex row; the chip must shrink before the title does. Rows inside a
+   .thread-space-group render no chip — the group header names the space. */
 .thread-space-chip {
   padding: 1px 6px;
   border-radius: 4px;

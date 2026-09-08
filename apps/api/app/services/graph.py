@@ -405,6 +405,11 @@ def rebuild_graph(workspace_id: str, actor_id: str) -> None:
                 # which is the same leak `retrieval._live_sources` closes one
                 # layer down. Its passages stay retrievable from its own thread.
                 Source.conversation_id == "",
+                # A space's knowledge files, for the same reason on the other
+                # axis: they were scoped to one space's threads, and the graph
+                # projecting them would put their entities in front of every
+                # thread — retrieval's scoping with a bypass one layer up.
+                Source.space_id == "",
             )
             .order_by(Source.id, Chunk.ordinal)
         ).all()

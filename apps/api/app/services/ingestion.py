@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import re
+import shutil
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -337,6 +338,30 @@ def purge_source(db: Session, *, workspace_id: str, source_id: str) -> Optional[
     clear_source_postings(db, source.id)
     db.execute(delete(Chunk).where(Chunk.source_id == source.id))
     return source
+
+
+def remove_object_files(object_keys: Iterable[str]) -> None:
+    """Unlink the stored bytes behind purged sources — after the commit, only.
+
+    The ordering contract every caller shares: bytes for rows that still exist
+    are recoverable, rows for bytes that are gone are not, so this runs once
+    the transaction that purged the rows has held. Each `object_key` names a
+    file inside its own per-source directory, and the directory goes with it.
+    Failures are swallowed: a file already gone is the outcome asked for, and
+    a permissions hiccup must not turn a committed delete into a 500.
+    """
+    for object_key in object_keys:
+        if not object_key:
+            continue
+        object_file = Path(object_key)
+        try:
+            if object_file.exists():
+                object_file.unlink()
+            parent = object_file.parent
+            if parent.exists():
+                shutil.rmtree(parent)
+        except OSError:
+            pass
 
 
 #: How a browser asks for the bytes `object_path` wrote. Declared here, beside

@@ -4,7 +4,9 @@ import {
   sourcesInSpace,
   spaceNameForId,
   spaceNameOf,
+  spaceThreadGroups,
   threadsInSpace,
+  unspacedThreads,
 } from "../components/views/space-threads";
 
 function conversation(overrides: Partial<Conversation> = {}): Conversation {
@@ -87,6 +89,41 @@ describe("sourcesInSpace", () => {
 
   it('matches nothing for ""', () => {
     expect(sourcesInSpace([source()], "")).toEqual([]);
+  });
+});
+
+describe("spaceThreadGroups / unspacedThreads", () => {
+  const spaces = [
+    space({ id: "space-1", name: "Research" }),
+    space({ id: "space-2", name: "Empty" }),
+  ];
+  const rows = [
+    conversation({ id: "a", space_id: "space-1" }),
+    conversation({ id: "b" }),
+    conversation({ id: "c", space_id: "space-1" }),
+    conversation({ id: "orphan", space_id: "deleted-space" }),
+  ];
+
+  it("groups threads under their space, keeping both orders", () => {
+    const groups = spaceThreadGroups(spaces, rows);
+    expect(groups.map((group) => group.space.id)).toEqual(["space-1"]);
+    expect(groups[0].threads.map((row) => row.id)).toEqual(["a", "c"]);
+  });
+
+  it("renders no group for a space with no visible threads", () => {
+    expect(
+      spaceThreadGroups(spaces, rows).some((group) => group.space.id === "space-2"),
+    ).toBe(false);
+  });
+
+  it("partitions: whatever is not in a group is unspaced, so no row can vanish", () => {
+    const grouped = spaceThreadGroups(spaces, rows).flatMap((group) =>
+      group.threads.map((row) => row.id),
+    );
+    const flat = unspacedThreads(spaces, rows).map((row) => row.id);
+    expect([...grouped, ...flat].sort()).toEqual(["a", "b", "c", "orphan"].sort());
+    // The thread pointing at a deleted space falls back to the flat rail.
+    expect(flat).toContain("orphan");
   });
 });
 

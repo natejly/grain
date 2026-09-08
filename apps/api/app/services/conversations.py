@@ -14,6 +14,7 @@ kinds, and three columns would be three places for each rule to forget one.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from sqlalchemy import delete, false, select, update
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     AgentToolCall,
+    ChatAttachment,
     Conversation,
     ConversationChunk,
     Membership,
@@ -28,6 +30,7 @@ from ..models import (
     Message,
     Run,
     RunEvent,
+    Source,
     ToolCall,
     WorkflowRun,
 )
@@ -228,27 +231,46 @@ def for_subject_ids(
 
 def purge_for_subject(
     db: Session, *, workspace_id: str, subject_kind: str, subject_id: str
-) -> None:
+) -> List[str]:
     """Delete every thread about a subject that is going away.
 
     Does not commit: the caller decides what else belongs in the same
-    transaction — for a project deletion, the project itself does.
+    transaction — for a project deletion, the project itself does. Returns the
+    object keys of every purged attachment file, for the caller's post-commit
+    disk sweep.
     """
+    object_keys: List[str] = []
     for conversation_id in for_subject_ids(
         db,
         workspace_id=workspace_id,
         subject_kind=subject_kind,
         subject_id=subject_id,
     ):
-        purge(db, workspace_id=workspace_id, conversation_id=conversation_id)
+        receipt = purge(db, workspace_id=workspace_id, conversation_id=conversation_id)
+        if receipt is not None:
+            object_keys.extend(receipt.object_keys)
+    return object_keys
 
 
-def purge(db: Session, *, workspace_id: str, conversation_id: str) -> Optional[str]:
+@dataclass
+class PurgeReceipt:
+    """What a purge removed: the title for the caller's audit row, and the
+    `object_key` of every purged attachment source — bytes to unlink only once
+    the transaction has held, never before."""
+
+    title: str
+    object_keys: List[str] = field(default_factory=list)
+
+
+def purge(
+    db: Session, *, workspace_id: str, conversation_id: str
+) -> Optional[PurgeReceipt]:
     """Delete a conversation and everything hanging off its runs.
 
-    Returns the title, so a caller can audit what it removed, or None if there
-    was nothing there. Does not commit: the caller decides what else belongs in
-    the same transaction — for a document deletion, the document itself does.
+    Returns a receipt, so a caller can audit what it removed and sweep the
+    disk after its commit, or None if there was nothing there. Does not
+    commit: the caller decides what else belongs in the same transaction —
+    for a document deletion, the document itself does.
     """
     conversation = db.scalar(
         select(Conversation).where(
@@ -297,8 +319,39 @@ def purge(db: Session, *, workspace_id: str, conversation_id: str) -> Optional[s
             ConversationChunk.workspace_id == workspace_id,
         )
     )
+    # The files this thread brought with it. The attachment rows go with the
+    # thread; what happens to each target follows `attachments.detach`, kind
+    # for kind: a `document` survives untouched (a first-class workspace
+    # object, reachable from its own page), while a `source` exists *because*
+    # of this thread and is indexed nowhere else, so it is purged through the
+    # same `purge_source` the detach path runs. Purging by
+    # `Source.conversation_id` rather than walking the attachment rows means
+    # a scoped source whose row somehow went missing still cannot outlive its
+    # thread. Its bytes ride out on the receipt for the post-commit sweep.
+    #
+    # Imported here, not at module top: ingestion → retrieval/graph pulls the
+    # whole indexing stack, which no other purge caller needs at import time.
+    from .ingestion import purge_source
+
+    object_keys: List[str] = []
+    for source_id in db.scalars(
+        select(Source.id).where(
+            Source.workspace_id == workspace_id,
+            Source.conversation_id == conversation.id,
+            Source.deleted_at.is_(None),
+        )
+    ):
+        purged = purge_source(db, workspace_id=workspace_id, source_id=source_id)
+        if purged is not None:
+            object_keys.append(purged.object_key)
+    db.execute(
+        delete(ChatAttachment).where(
+            ChatAttachment.conversation_id == conversation.id,
+            ChatAttachment.workspace_id == workspace_id,
+        )
+    )
     db.delete(conversation)
-    return title
+    return PurgeReceipt(title=title, object_keys=object_keys)
 
 
 class TruncationBlocked(Exception):

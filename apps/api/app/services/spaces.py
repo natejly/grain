@@ -177,7 +177,14 @@ def delete_space(db: Session, *, workspace_id: str, space_id: str) -> SpaceTeard
         )
     )
     for conversation_id in thread_ids:
-        conversations.purge(db, workspace_id=workspace_id, conversation_id=conversation_id)
+        receipt = conversations.purge(
+            db, workspace_id=workspace_id, conversation_id=conversation_id
+        )
+        if receipt is not None:
+            # Files attached inside the space's threads, not just the space's
+            # own knowledge files — their rows purge with their thread, so
+            # their bytes join the same post-commit sweep.
+            teardown.object_keys.extend(receipt.object_keys)
     teardown.thread_count = len(thread_ids)
 
     source_ids = list(
