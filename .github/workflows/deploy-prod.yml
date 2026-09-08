@@ -38,6 +38,11 @@ jobs:
       url: https://grain.natejly.com
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The release promotion is a plain fast-forward push, and git can only
+          # prove a fast-forward when it holds release's history — a depth-1
+          # clone gets "fetch first" even for a legal promotion.
+          fetch-depth: 0
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
