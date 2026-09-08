@@ -1984,35 +1984,24 @@ def _advance(
             answer = state.text_so_far.strip()
             if not answer:
                 # Nothing streamed at all, so there is no partial answer to
-                # stand behind. Name the ceiling rather than only the provider's
-                # reason code: the one cause that produces this is a turn whose
-                # whole output budget went to reasoning tokens before the first
-                # visible character, and the reader can only act on that if the
-                # message says which knob it is.
+                # stand behind. The chat call sends no output cap, so a
+                # max_output_tokens reason means the model's own maximum was
+                # spent entirely on reasoning tokens before the first visible
+                # character — the one knob left is reasoning effort.
                 if reason == "max_output_tokens":
                     raise RuntimeError(
-                        "Model stream ended early: the turn used its entire "
-                        f"{settings.openai_max_output_tokens}-token output budget "
-                        "on reasoning and produced no answer. Raise "
-                        "OPENAI_MAX_OUTPUT_TOKENS, or lower OPENAI_REASONING_EFFORT."
+                        "Model stream ended early: the turn exhausted the "
+                        "model's maximum output length on reasoning and "
+                        "produced no answer. Lower OPENAI_REASONING_EFFORT."
                     )
                 raise RuntimeError(
                     "Model stream ended early: " + (reason or "response.incomplete")
                 )
-            note = (
-                "it hit the output limit"
-                if reason == "max_output_tokens"
-                else "the model stopped early"
-            )
-            # No "say continue" advice on purpose: the next turn's transcript
-            # truncates long messages, so a continue could not reliably see
-            # what it was continuing — advertising it would promise more than
-            # the product keeps. The note itself stays: the reader must know
-            # the answer is not the whole answer.
-            return Done(
-                answer=answer + f"\n\n*(The answer was cut short — {note}.)*",
-                evidence=state.evidence,
-            )
+            # The partial answer stands as-is, with no appended "cut short"
+            # note: with no configured cap this fires only at the model's own
+            # maximum output length, and a trailing disclaimer was judged
+            # noisier than the truncation it described.
+            return Done(answer=answer, evidence=state.evidence)
 
         calls = [
             item

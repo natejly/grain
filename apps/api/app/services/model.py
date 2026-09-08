@@ -383,7 +383,8 @@ def stream_agent_response(
         tools=cast(Any, tools),
         reasoning=cast(Any, reasoning),
         text={"verbosity": "low"},
-        max_output_tokens=settings.openai_max_output_tokens,
+        # No explicit output cap: chat turns run to the model's own maximum
+        # output length, so an answer is never truncated by a setting.
         safety_identifier=privacy_safe_identifier(user_id),
         store=False,
         stream=True,
@@ -433,16 +434,14 @@ def stream_agent_response(
                 or ""
             )
             if reason == "max_output_tokens":
-                # Name the knob rather than echo the provider's reason code. The
-                # one cause that produces this is a turn that spent its whole
-                # output budget on reasoning tokens before the first visible
-                # character, and a reader can only act on that if told which
-                # setting bounds it.
+                # No cap is sent on this call, so the ceiling that fired is the
+                # model's own maximum output length — a turn that spent all of
+                # it on reasoning tokens before the first visible character.
+                # The only knob left is how hard the model thinks.
                 raise RuntimeError(
-                    "Model stream ended early: the turn used its entire "
-                    f"{settings.openai_max_output_tokens}-token output budget "
-                    "on reasoning and produced no answer. Raise "
-                    "OPENAI_MAX_OUTPUT_TOKENS, or lower OPENAI_REASONING_EFFORT."
+                    "Model stream ended early: the turn exhausted the model's "
+                    "maximum output length on reasoning and produced no "
+                    "answer. Lower OPENAI_REASONING_EFFORT."
                 )
             raise RuntimeError("Model stream ended early: " + str(detail))
 

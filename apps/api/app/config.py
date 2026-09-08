@@ -93,10 +93,11 @@ class Settings(BaseSettings):
     # want user-selectable, or wants to offer one it has not priced.
     selectable_models_raw: str = ""
     openai_timeout_seconds: float = 60.0
-    # See `anthropic_max_output_tokens`: same ceiling-not-reservation reasoning
-    # and the same failure it fixes. Reasoning tokens count against this budget
-    # on a reasoning model, so 1200 was routinely exhausted before the first
-    # visible character - a hard error on a turn with nothing wrong with it.
+    # No longer applied to chat turns — those stream with no explicit cap, so
+    # an answer is bounded only by the model's own maximum output length (see
+    # `stream_agent_response`). Still the ceiling for the workflow compiler's
+    # single-shot calls; same ceiling-not-reservation reasoning as
+    # `anthropic_max_output_tokens`.
     openai_max_output_tokens: int = 32000
     openai_embedding_model: str = "text-embedding-3-small"
     openai_codegen_max_output_tokens: int = 16000
