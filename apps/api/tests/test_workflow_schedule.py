@@ -366,6 +366,16 @@ def test_the_tick_also_picks_up_a_run_a_dead_process_left_behind(
         .where(Run.id != workflow_run.run_id)
         .values(lease_expires_at=utcnow() + timedelta(hours=1), status="succeeded")
     )
+    # `claim_orphaned_runs` selects WorkflowRun rows with a RECOVERABLE status,
+    # so a sibling test's orphaned WorkflowRun — reusing the same `probe_read`
+    # tool — would be recovered here too and inflate `probe.calls`. Retiring
+    # every OTHER WorkflowRun to a terminal status leaves this one the sole
+    # candidate, which is what makes the assertion below order-independent.
+    db.execute(
+        update(WorkflowRun)
+        .where(WorkflowRun.id != workflow_run.id)
+        .values(status="succeeded")
+    )
     db.commit()
 
     with _secret(monkeypatch, "correct-horse"):
