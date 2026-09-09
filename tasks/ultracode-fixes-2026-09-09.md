@@ -55,3 +55,14 @@ through `conversations.purge`, so their vectors are covered.
   (#2), detach-removes-the-disk-file (#6), plus a tenant-isolation allowlist entry
   for the idempotency replay lookup.
 - Full API suite green; web unit suite 907 green; ruff, mypy, tsc, eslint clean.
+
+## Shipped
+All on `main` and deployed to UAT (green): `c2c7f12` (the 10 fixes) → `e177b36`
+(regenerated the OpenAPI contract for the new Idempotency-Key param, which the
+contract-drift gate caught) → `9f892cb` (made an unrelated scheduler test
+order-independent — its `probe.calls == 2` assertion counted *global* orphaned
+WorkflowRuns and CI hit `5 == 2` purely on test order; the fix retires sibling
+WorkflowRuns so only the one under test is recoverable). CI's full suite —
+Postgres-backed pytest, e2e, contract check, sandbox proofs — is green, and
+`api.uat.grain.natejly.com` / `uat.grain.natejly.com` both return 200. Production
+is unchanged; promote when ready.
