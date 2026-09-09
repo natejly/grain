@@ -2123,6 +2123,9 @@ def run_agent_turn(
             db,
             workspace_id=run.workspace_id,
             conversation_id=run.conversation_id,
+            # The member who sent this turn sees their own staged files plus every
+            # file already sent in the thread — never another member's unsent one.
+            actor_id=run.created_by,
         )
         + subject_context(subject)
     )

@@ -834,6 +834,11 @@ DB_GET_ALLOWLIST = {
         "id from a scoped replay row; workspace re-checked"
     ),
     ("app/api/chat.py", "Conversation"): "workspace re-checked on the next line",
+    ("app/api/attachments.py", "ChatAttachment"): (
+        "replay lookup by a scoped idempotency record's resource_id; the row's "
+        "workspace_id is compared to the actor's on the very next line, 404ing a "
+        "cross-tenant row"
+    ),
     ("app/api/spaces.py", "Space"): "id from a scoped replay row; workspace re-checked",
     ("app/api/generated_apps.py", "AppRelease"): "workspace re-checked on the next line",
     ("app/api/integrations.py", "IntegrationAccount"): "id from a scoped replay row",

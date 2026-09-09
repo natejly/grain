@@ -348,6 +348,8 @@ export function useWorkspace() {
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeConversationRef = useRef<string | null>(null);
+  // Orders attachment appends against the per-thread refetch; see refreshAttachments.
+  const attachmentEpoch = useRef(0);
   const conversationsRef = useRef<Conversation[]>([]);
   // Synced like conversationsRef, so `openInNewPane` (a [] callback) can read
   // the live pane count without re-binding on every open and close.
@@ -1256,6 +1258,8 @@ export function useWorkspace() {
     setError,
     setAttaching,
     setAttachments,
+    attachmentEpoch,
+    currentConversationId: () => activeConversationRef.current,
     ensureConversation: chatHandlers.ensureConversation,
   });
 

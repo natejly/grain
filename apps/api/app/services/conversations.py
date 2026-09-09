@@ -34,6 +34,7 @@ from ..models import (
     ToolCall,
     WorkflowRun,
 )
+from . import embedding_generations as generations
 
 #: The two modes a new thread can be seeded with, spelled here rather than
 #: imported from `agent_loop` — importing the loop to create a row would pull
@@ -312,7 +313,21 @@ def purge(
     # The derived search index over this transcript. Nothing else ever deletes
     # a ConversationChunk, and the rows quote the transcript verbatim — so
     # without this line a deleted thread stayed quotable through
-    # `search_conversations` and the palette's deep search forever.
+    # `search_conversations` and the palette's deep search forever. Their dense
+    # vectors go too, across every generation: an owner row that is deleted must
+    # not leave a vector behind, or coverage() counts a dead owner as pending
+    # and refuses to activate a new embedding generation.
+    chunk_ids = list(
+        db.scalars(
+            select(ConversationChunk.id).where(
+                ConversationChunk.conversation_id == conversation.id,
+                ConversationChunk.workspace_id == workspace_id,
+            )
+        )
+    )
+    generations.drop_vectors(
+        db, owner_kind=generations.CONVERSATION_CHUNK, owner_ids=chunk_ids
+    )
     db.execute(
         delete(ConversationChunk).where(
             ConversationChunk.conversation_id == conversation.id,
@@ -348,6 +363,30 @@ def purge(
         delete(ChatAttachment).where(
             ChatAttachment.conversation_id == conversation.id,
             ChatAttachment.workspace_id == workspace_id,
+        )
+    )
+    # The memories learned from this thread. MemoryItem.conversation_id is a real
+    # foreign key to conversations.id, so on Postgres a surviving memory row makes
+    # the db.delete(conversation) below fail outright; on SQLite (foreign keys
+    # unenforced) it would instead orphan the row and keep recalling a "deleted"
+    # thread's memories forever. Purge removes everything hanging off the thread,
+    # memories included — vectors first, across every generation, for the same
+    # reason the chunks' were.
+    memory_ids = list(
+        db.scalars(
+            select(MemoryItem.id).where(
+                MemoryItem.conversation_id == conversation.id,
+                MemoryItem.workspace_id == workspace_id,
+            )
+        )
+    )
+    generations.drop_vectors(
+        db, owner_kind=generations.MEMORY_ITEM, owner_ids=memory_ids
+    )
+    db.execute(
+        delete(MemoryItem).where(
+            MemoryItem.conversation_id == conversation.id,
+            MemoryItem.workspace_id == workspace_id,
         )
     )
     db.delete(conversation)
@@ -470,6 +509,17 @@ def truncate_after(
             )
             .values(status="deleted")
         )
+    chunk_ids = list(
+        db.scalars(
+            select(ConversationChunk.id).where(
+                ConversationChunk.conversation_id == conversation_id,
+                ConversationChunk.workspace_id == workspace_id,
+            )
+        )
+    )
+    generations.drop_vectors(
+        db, owner_kind=generations.CONVERSATION_CHUNK, owner_ids=chunk_ids
+    )
     db.execute(
         delete(ConversationChunk).where(
             ConversationChunk.conversation_id == conversation_id,

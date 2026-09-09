@@ -9,7 +9,7 @@ import type {
   Source,
 } from "@workspace/api-client";
 import { Maximize2, Minimize2, X } from "lucide-react";
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useSession } from "./auth/session-provider";
 import { createAttachmentHandlers } from "./handlers/attachments";
 import { useConversationThread } from "./use-conversation-thread";
@@ -109,12 +109,18 @@ export function ChatPane({
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attaching, setAttaching] = useState(false);
   const [attachError, setAttachError] = useState("");
+  // Orders this pane's appends against its own refetch; see refreshAttachments.
+  const attachmentEpoch = useRef(0);
   const attachmentHandlers = useMemo(
     () =>
       createAttachmentHandlers({
         setError: setAttachError,
         setAttaching,
         setAttachments,
+        attachmentEpoch,
+        // A pane is pinned to one conversation, so its uploads are always for
+        // the thread on screen.
+        currentConversationId: () => conversation.id,
         // A pane always shows an existing conversation, so unlike the rail's
         // empty composer there is nothing to conjure.
         ensureConversation: async () => conversation.id,

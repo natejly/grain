@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import uuid
+from pathlib import Path
 from typing import Set
 
 from app.database import SessionLocal
@@ -57,6 +58,7 @@ def _conversation(client, title: str = "About the file") -> str:
 def _attach(client, conversation_id: str, filename: str, body: bytes):
     return client.post(
         f"/api/conversations/{conversation_id}/attachments",
+        headers=key(),
         files={"file": (filename, io.BytesIO(body), "application/octet-stream")},
     )
 
@@ -329,6 +331,10 @@ def test_detaching_keeps_the_file_but_revokes_the_scope(client) -> None:
         assert source.conversation_id == conversation_id
         assert source.deleted_at is not None
         assert db.get(ChatAttachment, attachment["id"]) is None
+        # The bytes are swept from disk too, not just the row soft-deleted —
+        # otherwise every detach leaks an unreferenced file forever.
+        assert source.object_key
+        assert not Path(source.object_key).exists()
     finally:
         db.close()
     assert "kestrel.csv" not in _retrieved(

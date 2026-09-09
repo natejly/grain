@@ -133,7 +133,14 @@ export function createChatHandlers({
     setView("chat");
     setError("");
     try {
-      setMessages(await api.listMessages(id));
+      const rows = await api.listMessages(id);
+      // A slower fetch for a thread the user has already clicked away from must
+      // not replace the transcript now on screen — the same guard followRun and
+      // loadWorkspace use. Without it a fast switch lands one thread's messages
+      // under another thread's header, and the composer sends to the wrong one.
+      if (activeConversationRef.current === id) {
+        setMessages(rows);
+      }
     } catch (caught) {
       setError(describeError(caught, "Could not open conversation"));
     }
@@ -249,7 +256,13 @@ export function createChatHandlers({
       activeConversationRef.current = fork.id;
       setView("chat");
       setSidebarOpen(false);
-      setMessages(await api.listMessages(fork.id));
+      const rows = await api.listMessages(fork.id);
+      // Same guard as selectConversation: if the user navigated away while the
+      // copied transcript was loading, don't drop the fork's messages under
+      // whatever thread is active now.
+      if (activeConversationRef.current === fork.id) {
+        setMessages(rows);
+      }
     } catch (caught) {
       setError(describeError(caught, "Could not fork the thread"));
     }

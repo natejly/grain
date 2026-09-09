@@ -24,9 +24,12 @@ from ..services.audit import record_audit
 from ..services.ingestion import (
     ingest_source,
     object_path,
+    remove_object_files,
     sanitize_filename,
     validate_filename,
 )
+from .dependencies import idempotency_key
+from .idempotency import find_replay, record_key, replayed_resource_gone
 from .ratelimit import rate_limit
 
 router = APIRouter(prefix="/api", tags=["attachments"])
@@ -53,8 +56,13 @@ def list_attachments(
     db: Session = Depends(get_db),
 ) -> List[ChatAttachment]:
     _conversation(db, actor, conversation_id)
+    # Scoped to the viewer: a shared thread shows everyone the files that were
+    # sent, but a member's own not-yet-sent staging is theirs alone.
     return attachments_service.list_for_conversation(
-        db, workspace_id=actor.workspace_id, conversation_id=conversation_id
+        db,
+        workspace_id=actor.workspace_id,
+        conversation_id=conversation_id,
+        actor_id=actor.user_id,
     )
 
 
@@ -68,11 +76,26 @@ async def create_attachment(
     conversation_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    key: str = Depends(idempotency_key),
     actor: Actor = Depends(get_actor),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> ChatAttachment:
     _conversation(db, actor, conversation_id)
+    # A retried upload (a network blip, a double-click) must replay the first
+    # result, not ingest the file a second time under a "notes (2).md" title with
+    # a second chip and a second copy on disk — the same guard sources.upload has.
+    replay = find_replay(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="attachment.create",
+        key=key,
+    )
+    if replay:
+        attachment = db.get(ChatAttachment, replay.resource_id)
+        if attachment is None or attachment.workspace_id != actor.workspace_id:
+            raise replayed_resource_gone()
+        return attachment
     filename = sanitize_filename(file.filename or "attachment.txt")
     try:
         validate_filename(filename)
@@ -141,6 +164,13 @@ async def create_attachment(
             "conversation_id": conversation_id,
         },
     )
+    record_key(
+        db,
+        workspace_id=actor.workspace_id,
+        operation="attachment.create",
+        key=key,
+        resource_id=attachment.id,
+    )
     db.commit()
     db.refresh(attachment)
     return attachment
@@ -158,10 +188,10 @@ def delete_attachment(
         )
     except attachments_service.AttachmentError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    # Read off the row before it is deleted: `detach` commits, and a deleted
-    # instance cannot be asked what it used to say.
+    # Read off the row before it is deleted: a deleted instance cannot be asked
+    # what it used to say.
     detail = {"filename": attachment.filename, "kind": attachment.kind}
-    attachments_service.detach(
+    object_key = attachments_service.detach(
         db, workspace_id=actor.workspace_id, attachment_id=attachment_id
     )
     record_audit(
@@ -174,3 +204,6 @@ def delete_attachment(
         detail=detail,
     )
     db.commit()
+    # Sweep the bytes only after the purge has committed, mirroring DELETE
+    # /api/sources — before this the detached source's file leaked on disk.
+    remove_object_files([object_key])

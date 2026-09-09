@@ -179,18 +179,31 @@ def attach_document(
 
 
 def list_for_conversation(
-    db: Session, *, workspace_id: str, conversation_id: str
+    db: Session,
+    *,
+    workspace_id: str,
+    conversation_id: str,
+    actor_id: Optional[str] = None,
 ) -> List[ChatAttachment]:
-    return list(
-        db.scalars(
-            select(ChatAttachment)
-            .where(
-                ChatAttachment.workspace_id == workspace_id,
-                ChatAttachment.conversation_id == conversation_id,
-            )
-            .order_by(ChatAttachment.created_at.asc())
-        )
+    """The files attached to a thread.
+
+    `actor_id` scopes the *staged* (unbound) rows to the member who staged them:
+    a file dropped into the composer but not yet sent is that person's alone, so
+    in a shared thread it is neither fed into another member's turn nor shown in
+    their tray. Files that were actually sent (a non-empty `message_id`) stay
+    visible to everyone, the way the messages carrying them are. `actor_id=None`
+    means no scoping — for internal callers (purge, teardown) that want the lot.
+    """
+    query = select(ChatAttachment).where(
+        ChatAttachment.workspace_id == workspace_id,
+        ChatAttachment.conversation_id == conversation_id,
     )
+    if actor_id is not None:
+        query = query.where(
+            (ChatAttachment.message_id != "")
+            | (ChatAttachment.created_by == actor_id)
+        )
+    return list(db.scalars(query.order_by(ChatAttachment.created_at.asc())))
 
 
 def get(db: Session, *, workspace_id: str, attachment_id: str) -> ChatAttachment:
@@ -200,7 +213,7 @@ def get(db: Session, *, workspace_id: str, attachment_id: str) -> ChatAttachment
     return attachment
 
 
-def detach(db: Session, *, workspace_id: str, attachment_id: str) -> ChatAttachment:
+def detach(db: Session, *, workspace_id: str, attachment_id: str) -> str:
     """Unlink a file from the thread. What that means differs by kind.
 
     A **document** survives untouched. It is a first-class workspace object with
@@ -218,34 +231,53 @@ def detach(db: Session, *, workspace_id: str, attachment_id: str) -> ChatAttachm
     library — removing a file from one chat would publish it to every other one.
     That is exactly the leak this whole feature exists to prevent, and it is
     what a `conversation_id = ""` here would quietly do.
+
+    Does not commit, and returns the object_key of any source whose bytes the
+    caller must sweep from disk once the commit has held (an empty string for a
+    document, or a source with no file) — the same contract as `purge_source`
+    and `DELETE /api/sources/{id}`. Without this the source row was soft-deleted
+    but its file was left on disk forever, unreferenced and unreachable.
     """
     attachment = get(db, workspace_id=workspace_id, attachment_id=attachment_id)
+    object_key = ""
     if attachment.kind == SOURCE:
         # Imported here rather than at module scope: ingestion imports the model
         # layer this module also uses, and only this one branch needs it.
         from .ingestion import purge_source
 
-        purge_source(db, workspace_id=workspace_id, source_id=attachment.target_id)
+        purged = purge_source(
+            db, workspace_id=workspace_id, source_id=attachment.target_id
+        )
+        if purged is not None:
+            object_key = purged.object_key
     db.delete(attachment)
-    db.commit()
-    return attachment
+    return object_key
 
 
 def bind_to_message(
-    db: Session, *, workspace_id: str, conversation_id: str, message_id: str
+    db: Session,
+    *,
+    workspace_id: str,
+    conversation_id: str,
+    message_id: str,
+    actor_id: str,
 ) -> None:
-    """Stamp everything staged in the composer onto the turn that sent it.
+    """Stamp the sender's staged files onto the turn that sent them.
 
     Called as a message is staged, so the transcript can show each file on the
     message that introduced it rather than floating above the whole thread. Only
     unbound rows move: an attachment already stamped belongs to an earlier turn
-    and stays there, which is what keeps a long thread's history readable.
+    and stays there, which is what keeps a long thread's history readable. And
+    only the *sender's* unbound rows: in a shared thread another member may have
+    a file staged and unsent, and binding it here would attribute it to — and
+    feed it into — the wrong person's turn.
     """
     staged = db.scalars(
         select(ChatAttachment).where(
             ChatAttachment.workspace_id == workspace_id,
             ChatAttachment.conversation_id == conversation_id,
             ChatAttachment.message_id == "",
+            ChatAttachment.created_by == actor_id,
         )
     )
     for attachment in staged:
@@ -285,7 +317,13 @@ def _document_bodies(
     return bodies
 
 
-def turn_context(db: Session, *, workspace_id: str, conversation_id: str) -> str:
+def turn_context(
+    db: Session,
+    *,
+    workspace_id: str,
+    conversation_id: str,
+    actor_id: Optional[str] = None,
+) -> str:
     """What a turn is handed about the files attached to its thread.
 
     Two tiers, for the same reason `subjects._project` has two: name everything,
@@ -304,7 +342,10 @@ def turn_context(db: Session, *, workspace_id: str, conversation_id: str) -> str
     it goes through `_screen` exactly like the open document does.
     """
     attachments = list_for_conversation(
-        db, workspace_id=workspace_id, conversation_id=conversation_id
+        db,
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+        actor_id=actor_id,
     )
     if not attachments:
         return ""

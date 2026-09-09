@@ -6,7 +6,7 @@ import { FormEvent, useState } from "react";
 
 export type SandboxSecretsViewProps = {
   secrets: SandboxSecret[];
-  addSecret: (input: SandboxSecretInput) => Promise<void>;
+  addSecret: (input: SandboxSecretInput) => Promise<boolean>;
   removeSecret: (secret: SandboxSecret) => Promise<void>;
 };
 
@@ -149,8 +149,11 @@ export function SandboxSecretsView({
           }}
           onSubmit={async (input) => {
             setError("");
-            await addSecret(input);
-            setAdding(false);
+            // Only close the form when the save actually succeeded — otherwise
+            // the once-typed, unrecoverable credential would be discarded on a
+            // server rejection and the user would have to re-paste it.
+            const ok = await addSecret(input);
+            if (ok) setAdding(false);
           }}
         />
       )}

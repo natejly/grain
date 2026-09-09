@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import ChatAttachment, Membership, Source, User
+from app.models import ChatAttachment, Membership, MemoryItem, Source, User
 from app.services import spaces as spaces_service
 from app.services.graph import rebuild_graph
 from app.services.memory import memory_space
@@ -204,6 +204,7 @@ def test_another_members_personal_thread_cannot_be_moved() -> None:
 def _attach_pdf(client: TestClient, conversation_id: str, filename: str):
     response = client.post(
         f"/api/conversations/{conversation_id}/attachments",
+        headers=_key(),
         files={"file": (filename, b"%PDF-1.4 kestrel facts %%EOF", "application/pdf")},
     )
     assert response.status_code in (200, 201), response.text
@@ -258,6 +259,51 @@ def test_deleting_a_thread_takes_its_attachments_rows_sources_and_bytes() -> Non
     assert not Path(object_key).exists()
 
 
+def test_deleting_a_thread_takes_its_learned_memories() -> None:
+    """A memory learned in a thread has a real FK to it. Purge must remove it —
+    or the delete fails outright on Postgres, and on SQLite the "deleted"
+    thread's memories keep being recalled forever."""
+    client = _fresh_client("Rememberer")
+    workspace_id = _workspace_of(client)
+    thread = _thread(client, title="Thread with a memory")
+
+    db = SessionLocal()
+    try:
+        db.add(
+            MemoryItem(
+                workspace_id=workspace_id,
+                conversation_id=thread["id"],
+                content="the kestrel hovers into the wind",
+                normalized_key="kestrel-hovers",
+            )
+        )
+        db.commit()
+        before = (
+            db.query(MemoryItem)
+            .filter(MemoryItem.conversation_id == thread["id"])
+            .count()
+        )
+        assert before == 1
+    finally:
+        db.close()
+
+    assert (
+        client.delete(f"/api/conversations/{thread['id']}", headers=_key()).status_code
+        == 204
+    )
+
+    db = SessionLocal()
+    try:
+        after = (
+            db.query(MemoryItem)
+            .filter(MemoryItem.conversation_id == thread["id"])
+            .count()
+        )
+        assert after == 0
+    finally:
+        db.close()
+
+
 def test_deleting_a_space_takes_its_threads_attachments_too() -> None:
     client = _fresh_client("Cascade")
     workspace_id = _workspace_of(client)
@@ -274,6 +320,29 @@ def test_deleting_a_space_takes_its_threads_attachments_too() -> None:
     assert _attachment_rows(thread["id"]) == []
     assert _live_source_files(workspace_id, thread["id"]) == []
     assert not Path(object_key).exists()
+
+
+def test_a_members_staged_file_is_private_until_they_send_it() -> None:
+    """In a shared thread, a file one member stages but has not sent must not
+    appear in another member's tray — otherwise the next person's turn silently
+    binds and ingests a file they never chose."""
+    owner = _fresh_client("Owner")
+    workspace_id = _workspace_of(owner)
+    thread = _thread(owner, title="Shared work")
+    # Make it multiplayer, and add a second member to the workspace.
+    owner.put(f"/api/conversations/{thread['id']}/share", json={"shared": True})
+    other = _member(workspace_id, name="Collaborator")
+
+    # The collaborator stages a file but does not send a message.
+    staged = _attach_pdf(other, thread["id"], "collaborator.pdf")
+
+    # The owner's tray for the shared thread does not show it.
+    owner_tray = owner.get(f"/api/conversations/{thread['id']}/attachments").json()
+    assert staged["id"] not in {row["id"] for row in owner_tray}
+
+    # The collaborator, who staged it, does see their own.
+    other_tray = other.get(f"/api/conversations/{thread['id']}/attachments").json()
+    assert staged["id"] in {row["id"] for row in other_tray}
 
 
 # --------------------------------------------------------------------------

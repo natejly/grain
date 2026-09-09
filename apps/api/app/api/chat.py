@@ -1001,6 +1001,7 @@ def _stage_turn(
         workspace_id=actor.workspace_id,
         conversation_id=conversation.id,
         message_id=message.id,
+        actor_id=actor.user_id,
     )
     append_event(
         db,

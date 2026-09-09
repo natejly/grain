@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Conversation, MemoryItem, Run, Source, Space
 from . import conversations
+from . import embedding_generations as generations
 from .ingestion import purge_source
 
 MAX_NAME_CHARS = 120
@@ -213,6 +214,20 @@ def delete_space(db: Session, *, workspace_id: str, space_id: str) -> SpaceTeard
     # Hard delete, not the user-facing tombstone: `status="deleted"` exists so
     # a person's "forget that" is auditable, but these rows are structural
     # casualties — already unreachable to recall the moment the space is gone.
+    # Their dense vectors go first, across every generation: a deleted owner row
+    # that leaves a vector behind makes coverage() count a dead owner as pending
+    # and refuse to activate a new embedding generation.
+    memory_ids = list(
+        db.scalars(
+            select(MemoryItem.id).where(
+                MemoryItem.workspace_id == workspace_id,
+                MemoryItem.space_id == space.id,
+            )
+        )
+    )
+    generations.drop_vectors(
+        db, owner_kind=generations.MEMORY_ITEM, owner_ids=memory_ids
+    )
     # Session.execute is typed as the generic Result, which has no rowcount;
     # a bulk DELETE always answers with a CursorResult, which does.
     deleted_memories = cast(

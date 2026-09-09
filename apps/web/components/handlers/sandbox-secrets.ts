@@ -14,7 +14,9 @@ export function createSandboxSecretHandlers({
   setError,
   setSandboxSecrets,
 }: SandboxSecretHandlerDeps) {
-  async function addSandboxSecret(input: SandboxSecretInput) {
+  // Returns whether the save succeeded, so the form can stay open (and keep the
+  // typed-once, unrecoverable credential) when the server rejects it.
+  async function addSandboxSecret(input: SandboxSecretInput): Promise<boolean> {
     setError("");
     try {
       const saved = await api.putSandboxSecret(input);
@@ -23,12 +25,24 @@ export function createSandboxSecretHandlers({
         const without = items.filter((item) => item.name !== saved.name);
         return [...without, saved].sort((a, b) => a.name.localeCompare(b.name));
       });
+      return true;
     } catch (caught) {
       setError(describeError(caught, "Could not save that secret"));
+      return false;
     }
   }
 
   async function removeSandboxSecret(secret: SandboxSecret) {
+    // A secret is written once and never shown again, so its removal is
+    // irreversible and silently breaks any sandbox code reading it — confirm,
+    // the way every other destructive action in the app does.
+    if (
+      !window.confirm(
+        `Remove “${secret.name}”? Sandbox code that reads it will stop working, and the value can’t be recovered.`,
+      )
+    ) {
+      return;
+    }
     try {
       await api.deleteSandboxSecret(secret.name);
       setSandboxSecrets((items) =>
