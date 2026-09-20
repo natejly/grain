@@ -557,3 +557,53 @@ healthy document. The editor is now gated on having the content.
 ## Review
 - Full api suite, full vitest suite, and the workspace e2e specs all green after the merge and fixes.
 - Workspace creation needed no feature work — it shipped with the live-cursors merge; what was missing was browser-level proof, which the new spec now provides.
+
+---
+
+# Memory system + UI exposure + collaboration (worktree-ultracode-memory-ui-collab, 2026-09-20)
+
+Ultracode run: understand → design → implement → review. Research base: docs/RESEARCH.md verdicts + competitor-UX study (Claude/ChatGPT desktop, Context).
+
+## Plan
+### Stream A — memory backend (RESEARCH.md verdicts)
+- [x] #18 recency decay term in recall() with config weight, re-fit vs importance
+- [x] #19 cheap fix: _refresh_summary uses LAST 8 user messages
+- [x] #25 IDF weighting on the memory lexical half (Counter DF over the bounded candidate set)
+- [x] #26 fold entity_names_json tokens into item_terms
+- [x] Wire evaluate_memory.py into CI + Makefile (MEMORY_SUPERSESSION=1 pinned), re-baseline floors
+- [x] POST /api/memory (manual add) + PATCH /api/memory/{id} (edit), isolation.py registered
+- [x] memory.updated workspace_event after post-run extraction (delivered by coworking SSE)
+- [x] Per-member memory opt-out + per-conversation incognito flag (migration 0071)
+### Stream B — UI design & feature exposure (Claude/ChatGPT desktop parity)
+- [x] New-thread affordance visible from every rail group
+- [x] '?' keyboard-shortcut cheat-sheet overlay
+- [x] Composer '+' tool menu (point-of-use feature doors)
+- [x] ?view=/?t= query-param deep links for view + focused thread (no parallel router)
+- [x] Memory UX: add/edit in memory.tsx, 'Memory updated' toast, post-run list refresh, incognito toggle, member memory pref
+- [x] Empty-state pattern for the 3 worst views
+### Stream C — collaborative shared workspace
+- [x] Document save precondition (409 on version mismatch) + merge-choice banner
+- [x] LiveCursorLayer on board + shared-thread chat panes
+- [x] Chat typing presence for shared threads
+- [x] In-context Share popover: member presence + invite deep-link
+- [x] ADR: real-time collaborative editing roadmap (CRDT vs OT vs staged preconditions)
+
+## Review
+- Ultracode pipeline: 5-mapper understand pass, 3 file-level design specs, 6 implementers in 3
+  conflict-free waves, then a 5-finder/27-verifier adversarial review (26 confirmed findings, 1
+  refuted) fixed in a 2-agent pass. Notable review catches: incognito threads still offered the
+  `remember` tool (now gated at the registry), entity-name terms could not create lexical
+  candidacy (now LIKEd in `_lexical_candidates`), `memory.updated` events leaked personal-thread
+  activity (now viewer-scoped at the stream, same doctrine as presence), and the document save
+  precondition was check-then-write (now a row-locked compare-and-swap).
+- Gates, all green: full api pytest (direct exit 0), vitest 94 files / 994 tests, tsc clean,
+  production next build, Playwright 86-pass regression + 10 new QA tests (new-chat, cheat-sheet,
+  composer '+', ?t= deep-link round-trip, memory add/edit/forget, memory pref persistence,
+  incognito thread, Memory-updated toast through to the extracted row, 409 conflict banner with
+  reload-theirs), memory eval gate byte-identical baseline (floors re-baselined upward only,
+  MEMORY_SUPERSESSION=0 ablation still fails the stale ceiling as designed), ruff clean.
+- evaluate_memory.py is now a structural merge gate (ci.yml + Makefile, MEMORY_SUPERSESSION=1
+  pinned) instead of a convention.
+- Deferred, recorded in ADR 0011: real concurrent editing (CRDT/OT) — stage 1 (precondition +
+  conflict banner) shipped here; per-range attribution, per-document ACLs, delta transport.
+- Post-merge: `alembic upgrade head` (0070 -> 0071) on the dev DB.

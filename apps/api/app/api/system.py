@@ -111,6 +111,10 @@ def bootstrap(
         # "on" for a member who has no row to write to would be a lie the very
         # next time they touched it.
         safe_mode=bool(membership.safe_mode) if membership else False,
+        # True with no membership, unlike safe_mode: memory_opted_in() treats a
+        # missing row as opted in, so the toggle must render the same default
+        # the recall path actually applies.
+        memory_enabled=bool(membership.memory_enabled) if membership else True,
         unrestricted_agent=settings.dev_unrestricted_agent,
         feature_flags={
             "cited_memory": True,

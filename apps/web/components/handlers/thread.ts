@@ -10,6 +10,7 @@ import type {
 } from "@workspace/api-client";
 import type { Dispatch, FormEvent, RefObject, SetStateAction } from "react";
 import { api } from "../api";
+import { registerOwnRun } from "../own-runs";
 import { readBudgetPark, type BudgetPark } from "../views/budget-format";
 import { readCitationCheck } from "../views/citation-format";
 import { parseAside } from "../views/commands";
@@ -356,6 +357,10 @@ export function createThreadHandlers({
 
   async function followRun(runId: string, conversationId: string) {
     const temporaryId = `streaming-${runId}`;
+    // The one seam EVERY client-started run passes through — the rail, an
+    // extra pane, the subject panels — so the memory.updated own-run filter
+    // sees them all, not just the primary chat's.
+    registerOwnRun(runId);
     setActiveRun(runId);
     setRunStatus("Starting");
     setRunThinking?.("");

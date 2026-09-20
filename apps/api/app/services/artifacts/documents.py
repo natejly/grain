@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from ...clock import utcnow
 from ...models import Document, DocumentVersion
 
 MAX_DOCUMENT_CHARS = 400_000
@@ -26,6 +28,16 @@ KINDS = {"text", "markdown"}
 
 class DocumentError(ValueError):
     """A user- and model-facing problem with a document operation."""
+
+
+class DocumentConflict(DocumentError):
+    """The document was saved over after the caller loaded their base version."""
+
+    def __init__(self, *, head_version_id: str, updated_at: datetime, saved_by: str):
+        super().__init__("This document was saved after you loaded it")
+        self.head_version_id = head_version_id
+        self.updated_at = updated_at
+        self.saved_by = saved_by
 
 
 def render_diff(before: str, after: str, *, title: str = "document") -> str:
@@ -385,6 +397,28 @@ def edit_document(
     )
 
 
+def head_version_id(db: Session, *, workspace_id: str, document_id: str) -> str:
+    """The newest DocumentVersion id, or "" when the doc was never saved over.
+
+    The id tiebreak keeps the ordering deterministic: two saves can land
+    within the same created_at granule.
+    """
+    return (
+        db.scalar(
+            select(DocumentVersion.id)
+            .where(
+                DocumentVersion.workspace_id == workspace_id,
+                DocumentVersion.document_id == document_id,
+            )
+            .order_by(
+                DocumentVersion.created_at.desc(), DocumentVersion.id.desc()
+            )
+            .limit(1)
+        )
+        or ""
+    )
+
+
 def replace_content(
     db: Session,
     *,
@@ -393,26 +427,93 @@ def replace_content(
     content: str,
     summary: str = "Manual edit",
     created_by: str = "",
+    base_version_id: Optional[str] = None,
 ) -> Document:
-    """Wholesale replacement, used by the editor pane rather than the agent."""
+    """Wholesale replacement, used by the editor pane rather than the agent.
+
+    `base_version_id` is an optional precondition: the head version id the
+    caller loaded alongside the content it edited. A stale base raises
+    DocumentConflict instead of silently last-write-winning. None (the
+    legacy caller, restore, and the agent apply path — the latter governed
+    by the pending-edit interlock instead) skips the check.
+    """
     if len(content) > MAX_DOCUMENT_CHARS:
         raise DocumentError(
             f"Document exceeds the {MAX_DOCUMENT_CHARS:,}-character limit"
         )
     document = get_document(db, workspace_id=workspace_id, document_id=document_id)
     if document.content == content:
+        # An identical save stays a conflict-free no-op, stale base or not.
         return document
-    db.add(
-        DocumentVersion(
-            workspace_id=workspace_id,
-            document_id=document.id,
-            content=document.content,
-            summary=summary[:300],
-            created_by=created_by,
+    if base_version_id is not None:
+        # The compare and the write must be one atomic step, or two saves
+        # carrying the same valid base both pass the check and the loser's
+        # edit is silently replaced — the exact lost update the 409 exists to
+        # prevent, with both editors told "Saved". A read-then-compare cannot
+        # be that step, so the document's row lock is taken FIRST, with a
+        # conditional UPDATE (the coworking.claim_card shape: the database
+        # decides, not a Python `if`). On Postgres this blocks a concurrent
+        # saver on the row lock until we commit; on SQLite it takes the write
+        # lock the same way. Only then is the head read — so it is read after
+        # any in-flight winner has committed its new version, and the loser's
+        # compare fails into the 409 instead of last-write-winning.
+        db.execute(
+            update(Document)
+            .where(Document.id == document.id, Document.workspace_id == workspace_id)
+            .values(updated_at=utcnow())
         )
+        # Under the lock: the pre-lock ORM state may predate a winner's
+        # commit, and the snapshot below must capture what this save actually
+        # replaces.
+        db.refresh(document)
+        # Head "" vs base "" compares equal, covering a never-saved document.
+        head = head_version_id(
+            db, workspace_id=workspace_id, document_id=document_id
+        )
+        if base_version_id != head:
+            # Release the lock (and undo the touch) before answering: the 409
+            # payload reads are plain SELECTs and need no transaction of ours.
+            db.rollback()
+            row = db.scalar(
+                select(DocumentVersion).where(
+                    DocumentVersion.id == head,
+                    DocumentVersion.workspace_id == workspace_id,
+                )
+            )
+            if row is not None:
+                raise DocumentConflict(
+                    head_version_id=row.id,
+                    updated_at=row.created_at,
+                    saved_by=row.created_by,
+                )
+            # A base was sent but the document has no versions at all: still
+            # stale by definition, with nothing better to point at than the
+            # document itself.
+            raise DocumentConflict(
+                head_version_id=head,
+                updated_at=document.updated_at,
+                saved_by="",
+            )
+        if document.content == content:
+            # Re-checked under the lock, same no-op semantics as above.
+            db.rollback()
+            return document
+    snapshot = DocumentVersion(
+        workspace_id=workspace_id,
+        document_id=document.id,
+        content=document.content,
+        summary=summary[:300],
+        created_by=created_by,
     )
+    db.add(snapshot)
     document.content = content
     db.commit()
+    # The head THIS save produced, stamped on the returned instance (a plain
+    # Python attribute, not a column). The PUT route used to recompute the
+    # head with a second query after the commit, and a save landing in that
+    # window handed the caller someone else's head as their new base — their
+    # next save then passed the precondition over content they never saw.
+    document.saved_head_version_id = snapshot.id
     return document
 
 

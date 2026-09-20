@@ -1,7 +1,7 @@
 "use client";
 
 import type { CoworkingPresence } from "@workspace/api-client";
-import { Eye, Pencil } from "lucide-react";
+import { AlertTriangle, Eye, Pencil, RefreshCw } from "lucide-react";
 import { Fragment } from "react";
 
 /**
@@ -121,18 +121,59 @@ export function RemoteCaretLayer({
 }
 
 /**
- * The banner over a document someone else is working in. Two honest modes,
+ * The banner over a document someone else is working in. Three honest modes,
  * not a merge that is not there: following (they type, you watch, your pane
- * is read-only until you touch it) and both-editing (you both typed; last
- * save wins, and the banner says so before it happens).
+ * is read-only until you touch it), both-editing (you both typed; last save
+ * wins, and the banner says so before it happens), and conflict (the server
+ * refused a save because theirs already landed — reload theirs or overwrite).
  */
 export function LiveEditBanner({
   editor,
   following,
+  conflict,
 }: {
-  editor: CoworkingPresence;
-  following: boolean;
+  /** Absent in conflict mode: the other editor may already be gone. */
+  editor?: CoworkingPresence | null;
+  following?: boolean;
+  /**
+   * The 409 mode. `savedByName` is optional on purpose — the id the server
+   * reports only becomes a name where a members list is at hand, and the
+   * neutral copy is honest without one.
+   */
+  conflict?: {
+    savedByName?: string;
+    reload: () => void;
+    overwrite: () => void;
+  };
 }) {
+  if (conflict) {
+    return (
+      <div className="document-live-banner conflict" role="status">
+        <AlertTriangle size={14} aria-hidden />
+        <span>
+          This document changed while you were editing
+          {conflict.savedByName ? (
+            <>
+              {" — "}
+              <strong>{conflict.savedByName}</strong> saved a newer version
+            </>
+          ) : null}
+          .
+        </span>
+        <span className="document-conflict-actions">
+          <button type="button" className="ghost-button" onClick={conflict.reload}>
+            <RefreshCw size={13} /> Reload theirs
+          </button>
+          {/* No promise of winning: a third save can land between the click
+              and the resend, and the banner simply re-arms with it. */}
+          <button type="button" className="ghost-button" onClick={conflict.overwrite}>
+            Overwrite anyway
+          </button>
+        </span>
+      </div>
+    );
+  }
+  if (!editor) return null;
   return (
     <div
       className={following ? "document-live-banner following" : "document-live-banner clash"}

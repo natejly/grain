@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Dataset, GraphEdge, GraphEntity
+from ..models import Conversation, Dataset, GraphEdge, GraphEntity
 from ..schemas import DatasetQuery
 from .analytics import AnalyticsValidationError, current_dataset_version, execute_dataset_query
 from .conversation_index import search_conversation_chunks
@@ -533,9 +533,28 @@ def exit_plan_mode_spec() -> ToolSpec:
 
 def agentic_memory_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
     """Deliberate memory writes (remember/forget) and deep search, next to the
-    read-only recall_memory above."""
+    read-only recall_memory above.
+
+    An incognito thread gets none of them. Incognito is the user's explicit
+    per-thread instruction that nothing durable comes out of this chat
+    (migration 0071: "its runs neither recall nor store memories"), and a
+    `remember` call is model-initiated — under the default auto_writes mode it
+    would execute with no approval card. So the tools are simply never offered
+    there. The per-member `memory_enabled` toggle is different on purpose and
+    keeps its documented carve-out: an opted-out member saying "remember this"
+    is an explicit instruction that outranks their default, so the toggle does
+    not remove the tools.
+    """
     from .memory_tools import registry_tools
 
+    if context.conversation_id:
+        incognito = db.scalar(
+            select(Conversation.incognito).where(
+                Conversation.id == context.conversation_id
+            )
+        )
+        if incognito:
+            return {}
     return registry_tools(db, context)
 
 

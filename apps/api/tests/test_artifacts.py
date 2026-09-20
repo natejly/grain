@@ -737,3 +737,358 @@ def test_document_tools_fall_back_to_the_document_the_user_is_looking_at(workspa
         assert other.content == "THERE\n"
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------
+# Save preconditions (optimistic concurrency on wholesale replacement)
+
+
+def test_stale_base_raises_conflict_carrying_the_current_head(workspace):
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db, workspace_id=workspace["workspace_id"], title="Plan", content="v1"
+        )
+        documents.replace_content(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            content="v2",
+            created_by="user-a",
+        )
+        head = documents.head_version_id(
+            db, workspace_id=workspace["workspace_id"], document_id=doc.id
+        )
+        with pytest.raises(documents.DocumentConflict) as caught:
+            documents.replace_content(
+                db,
+                workspace_id=workspace["workspace_id"],
+                document_id=doc.id,
+                content="v3",
+                base_version_id="stale-token",
+            )
+        assert caught.value.head_version_id == head
+        assert caught.value.saved_by == "user-a"
+        assert caught.value.updated_at is not None
+        db.refresh(doc)
+        assert doc.content == "v2"
+    finally:
+        db.close()
+
+
+def test_matching_base_saves_and_moves_the_head(workspace):
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db, workspace_id=workspace["workspace_id"], title="Plan", content="v1"
+        )
+        documents.replace_content(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            content="v2",
+        )
+        head = documents.head_version_id(
+            db, workspace_id=workspace["workspace_id"], document_id=doc.id
+        )
+        documents.replace_content(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            content="v3",
+            base_version_id=head,
+        )
+        db.refresh(doc)
+        assert doc.content == "v3"
+        new_head = documents.head_version_id(
+            db, workspace_id=workspace["workspace_id"], document_id=doc.id
+        )
+        assert new_head and new_head != head
+    finally:
+        db.close()
+
+
+def test_base_none_skips_the_precondition_and_empty_base_matches_a_fresh_doc(workspace):
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db, workspace_id=workspace["workspace_id"], title="Plan", content="v1"
+        )
+        # "" is the honest token for a never-saved-over document, so it matches.
+        documents.replace_content(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            content="v2",
+            base_version_id="",
+        )
+        # None is the legacy caller: no check, even though the head has moved on.
+        documents.replace_content(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            content="v3",
+        )
+        db.refresh(doc)
+        assert doc.content == "v3"
+    finally:
+        db.close()
+
+
+def test_identical_save_with_a_stale_base_stays_a_silent_no_op(workspace):
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db, workspace_id=workspace["workspace_id"], title="Plan", content="v1"
+        )
+        documents.replace_content(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            content="v2",
+        )
+        # The identical-content early return precedes the precondition check.
+        documents.replace_content(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            content="v2",
+            base_version_id="stale-token",
+        )
+        versions = documents.list_versions(
+            db, workspace_id=workspace["workspace_id"], document_id=doc.id
+        )
+        assert len(versions) == 1
+    finally:
+        db.close()
+
+
+def test_concurrent_saves_on_one_base_yield_one_winner_and_one_conflict(workspace):
+    """The precondition is atomic with the write, not a read-then-compare.
+
+    Two sessions load the same head and save concurrently — the exact
+    two-editors situation the 409 exists for. Check-then-write let both pass
+    (both preconditions read the old head before either commit) and the loser
+    was silently last-write-overwritten, its content in no version row either.
+    The row lock replace_content now takes before reading the head serializes
+    them: exactly one saves, the other gets DocumentConflict, and the single
+    new snapshot holds the content the winner actually replaced.
+    """
+    import threading
+
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db, workspace_id=workspace["workspace_id"], title="Race", content="v1"
+        )
+        documents.replace_content(
+            db,
+            workspace_id=workspace["workspace_id"],
+            document_id=doc.id,
+            content="base",
+            created_by="setup",
+        )
+        head = documents.head_version_id(
+            db, workspace_id=workspace["workspace_id"], document_id=doc.id
+        )
+        doc_id = doc.id
+    finally:
+        db.close()
+
+    barrier = threading.Barrier(2, timeout=30)
+    outcomes: dict[str, str] = {}
+
+    def save(name: str, content: str) -> None:
+        session = SessionLocal()
+        try:
+            # Both writers are past their reads and hold the same base token
+            # before either one enters the save — the interleaving the old
+            # code lost an edit to.
+            barrier.wait()
+            try:
+                documents.replace_content(
+                    session,
+                    workspace_id=workspace["workspace_id"],
+                    document_id=doc_id,
+                    content=content,
+                    created_by=name,
+                    base_version_id=head,
+                )
+                outcomes[name] = "saved"
+            except documents.DocumentConflict:
+                outcomes[name] = "conflict"
+        finally:
+            session.close()
+
+    threads = [
+        threading.Thread(target=save, args=("alice", "alice's draft")),
+        threading.Thread(target=save, args=("bob", "bob's draft")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert sorted(outcomes.values()) == ["conflict", "saved"], outcomes
+    winner = next(name for name, result in outcomes.items() if result == "saved")
+
+    db = SessionLocal()
+    try:
+        final = documents.get_document(
+            db, workspace_id=workspace["workspace_id"], document_id=doc_id
+        )
+        assert final.content == f"{winner}'s draft"
+        versions = documents.list_versions(
+            db, workspace_id=workspace["workspace_id"], document_id=doc_id
+        )
+        # Setup's save plus exactly one racing save: the loser inserted nothing.
+        assert len(versions) == 2
+        # The winning save's snapshot is the content it replaced, so the
+        # pre-race state stays restorable. (A set, not versions[0]: the two
+        # snapshots can land in one created_at granule.)
+        assert {version.content for version in versions} == {"v1", "base"}
+    finally:
+        db.close()
+
+
+def test_head_version_id_is_empty_when_never_saved_and_tiebreaks_by_id(workspace):
+    from datetime import datetime as _dt
+
+    db = SessionLocal()
+    try:
+        doc = documents.create_document(
+            db, workspace_id=workspace["workspace_id"], title="Plan", content="v1"
+        )
+        assert (
+            documents.head_version_id(
+                db, workspace_id=workspace["workspace_id"], document_id=doc.id
+            )
+            == ""
+        )
+        # Two saves inside the same timestamp granule: the id breaks the tie.
+        tick = _dt(2026, 9, 1, 12, 0, 0)
+        for version_id in ("version-aaa", "version-bbb"):
+            db.add(
+                DocumentVersion(
+                    id=version_id,
+                    workspace_id=workspace["workspace_id"],
+                    document_id=doc.id,
+                    content="snap",
+                    created_at=tick,
+                )
+            )
+        db.commit()
+        assert (
+            documents.head_version_id(
+                db, workspace_id=workspace["workspace_id"], document_id=doc.id
+            )
+            == "version-bbb"
+        )
+    finally:
+        db.close()
+
+
+def test_put_with_stale_base_answers_409_with_the_exact_detail_shape(client, workspace):
+    created = client.post(
+        "/api/documents", json={"title": "Race", "content": "v1"}
+    ).json()
+    assert created["head_version_id"] == ""
+    # A concurrent save lands, minting the first version.
+    assert (
+        client.put(
+            f"/api/documents/{created['id']}", json={"content": "v2"}
+        ).status_code
+        == 200
+    )
+    # The loser saves against the token it loaded before that ("").
+    response = client.put(
+        f"/api/documents/{created['id']}",
+        json={"content": "v3", "base_version_id": ""},
+    )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert set(detail) == {
+        "code",
+        "message",
+        "head_version_id",
+        "updated_at",
+        "saved_by",
+    }
+    assert detail["code"] == "document_version_conflict"
+    db = SessionLocal()
+    try:
+        assert detail["head_version_id"] == documents.head_version_id(
+            db, workspace_id=workspace["workspace_id"], document_id=created["id"]
+        )
+        # The losing write never landed.
+        assert (
+            documents.get_document(
+                db,
+                workspace_id=workspace["workspace_id"],
+                document_id=created["id"],
+            ).content
+            == "v2"
+        )
+    finally:
+        db.close()
+
+
+def test_put_with_matching_base_answers_200_and_the_new_head(client, workspace):
+    created = client.post(
+        "/api/documents", json={"title": "Race", "content": "v1"}
+    ).json()
+    first = client.put(
+        f"/api/documents/{created['id']}",
+        json={"content": "v2", "base_version_id": ""},
+    )
+    assert first.status_code == 200
+    head = first.json()["head_version_id"]
+    assert head
+    second = client.put(
+        f"/api/documents/{created['id']}",
+        json={"content": "v3", "base_version_id": head},
+    )
+    assert second.status_code == 200
+    new_head = second.json()["head_version_id"]
+    assert new_head != head
+    db = SessionLocal()
+    try:
+        assert new_head == documents.head_version_id(
+            db, workspace_id=workspace["workspace_id"], document_id=created["id"]
+        )
+    finally:
+        db.close()
+    # GET hands back the same token atomically with the content.
+    fetched = client.get(f"/api/documents/{created['id']}").json()
+    assert fetched["head_version_id"] == new_head
+    assert fetched["content"] == "v3"
+
+
+def test_put_without_a_base_field_stays_back_compat(client, workspace):
+    created = client.post(
+        "/api/documents", json={"title": "Legacy", "content": "v1"}
+    ).json()
+    for content in ("v2", "v3"):
+        response = client.put(
+            f"/api/documents/{created['id']}", json={"content": content}
+        )
+        assert response.status_code == 200
+    assert client.get(f"/api/documents/{created['id']}").json()["content"] == "v3"
+
+
+def test_restore_after_a_concurrent_save_still_answers_200(client, workspace):
+    created = client.post(
+        "/api/documents", json={"title": "Undo", "content": "v1"}
+    ).json()
+    client.put(f"/api/documents/{created['id']}", json={"content": "v2"})
+    client.put(f"/api/documents/{created['id']}", json={"content": "v3"})
+    versions = client.get(f"/api/documents/{created['id']}/versions").json()
+    oldest = versions[-1]["id"]
+    response = client.post(
+        f"/api/documents/{created['id']}/versions/{oldest}/restore"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["content"] == "v1"
+    # The restore itself minted a version, so the head moved again.
+    assert body["head_version_id"] not in ("", oldest)

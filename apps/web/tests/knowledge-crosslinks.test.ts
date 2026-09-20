@@ -39,6 +39,7 @@ function conversation(overrides: Partial<Conversation> = {}): Conversation {
     default_effort: "",
     approval_mode: "ask_writes",
     shared: false,
+    incognito: false,
     owned: true,
     can_share: true,
     created_at: "2026-08-01T00:00:00Z",

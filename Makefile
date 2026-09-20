@@ -38,6 +38,7 @@ build:
 
 eval:
 	PYTHONPATH=apps/api .venv/bin/python apps/api/scripts/evaluate_retrieval.py
+	MEMORY_SUPERSESSION=1 PYTHONPATH=apps/api .venv/bin/python apps/api/scripts/evaluate_memory.py
 
 sandbox-image:
 	docker build -t $${SANDBOX_CONTAINER_IMAGE:-grain-sandbox:latest} infra/sandbox

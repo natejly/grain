@@ -36,6 +36,14 @@ export type WorkspaceSettingsMenuProps = {
   /** Safe mode: new threads start by asking before they write. */
   safeMode: boolean;
   onSafeModeChange: (enabled: boolean) => void;
+  /**
+   * Whether this member's runs recall and store memories. Null until the
+   * bootstrap read lands (control hidden, like the digest) — the toggle
+   * governs what the assistant learns about you, which must not be
+   * misreported for even a second. Optional so existing bare mounts stand.
+   */
+  memoryEnabled?: boolean | null;
+  onMemoryEnabledChange?: (enabled: boolean) => void;
 };
 
 /** "9" reads as "09:00 UTC" — the mail goes out after the hour, on the tick. */
@@ -50,6 +58,8 @@ export function WorkspaceSettingsMenu({
   onDigestChange,
   safeMode,
   onSafeModeChange,
+  memoryEnabled = null,
+  onMemoryEnabledChange,
 }: WorkspaceSettingsMenuProps) {
   const inSettings = SETTINGS_GROUPS.some((group) => group.id === activeGroup);
 
@@ -108,6 +118,31 @@ export function WorkspaceSettingsMenu({
               ? "New threads start in “Ask before writes”. Threads already open keep the mode they are in."
               : "New threads act on their own and show you what ran. Denied tools stay denied, and anything flagged still asks."}
           </p>
+          {memoryEnabled !== null && (
+            <>
+              <p className="disclosure-note">Memory</p>
+              <label className="approval-remember">
+                <input
+                  type="checkbox"
+                  checked={memoryEnabled}
+                  onChange={(event) =>
+                    onMemoryEnabledChange?.(event.target.checked)
+                  }
+                />
+                Remember things from my chats
+              </label>
+              {/* Same doctrine as the Safe mode hint: say what each edge DOES.
+                  Off has to name its two boundaries — the explicit remember
+                  tool still works (an instruction outranks a default), and
+                  nothing already learned is deleted — or a member flips it
+                  expecting an erasure this toggle does not perform. */}
+              <p className="disclosure-hint">
+                {memoryEnabled
+                  ? "Your runs recall saved memories and store new ones. Temporary chats never do either."
+                  : "Your runs neither recall nor store memories. Asking the assistant to remember something still works, and the Memory page keeps what it already learned."}
+              </p>
+            </>
+          )}
           {digest && (
             <>
               <p className="disclosure-note">Daily digest</p>

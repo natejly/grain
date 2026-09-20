@@ -80,6 +80,10 @@ class BootstrapResponse(ApiModel):
     #: existing one, which is why the client shows it as a preference and not
     #: as the state of the thread on screen.
     safe_mode: bool = False
+    #: Whether this member's runs recall and store memories. A preference the
+    #: same shape as `safe_mode` above: it governs future runs only, and the
+    #: explicit remember/forget tools keep working either way.
+    memory_enabled: bool = True
     #: `DEV_UNRESTRICTED_AGENT` is on: every tool available and nothing parks.
     #: A first-class field rather than a `feature_flags` entry because the client
     #: does not *branch* on it, it *warns* about it — the failure mode is not
@@ -469,6 +473,9 @@ class ConversationCreate(BaseModel):
     #: is proved against the caller's workspace at the route, so a foreign or
     #: deleted space is a 404, never a silent unscoped thread.
     space_id: str = ""
+    #: A temporary chat: its runs neither recall nor store memories. Creation-
+    #: time only — see `models.Conversation.incognito`.
+    incognito: bool = False
 
 
 #: How much a conversation asks before acting. Spelled out here rather than
@@ -495,6 +502,8 @@ class ConversationOut(ApiModel):
     #: Personal (False) vs shared (True). A shared thread is visible to every
     #: member of the same workspace; a personal thread only to its creator.
     shared: bool = False
+    #: A temporary chat whose runs neither recall nor store memories.
+    incognito: bool = False
     #: True when the caller authored it (a personal thread only they can see).
     owned: bool = False
     #: True when the caller may toggle `shared` (creator or workspace owner) —
@@ -1000,6 +1009,10 @@ class DocumentOut(ApiModel):
     content: str
     folder_id: str
     updated_at: datetime
+    #: The newest DocumentVersion id ("" for a never-saved-over document),
+    #: handed back atomically with the content so a later save can send it
+    #: as its base_version_id precondition.
+    head_version_id: str = ""
 
 
 class DocumentRequest(BaseModel):
@@ -1011,6 +1024,8 @@ class DocumentRequest(BaseModel):
 
 class DocumentContentRequest(BaseModel):
     content: str
+    #: None = legacy caller; the precondition is skipped entirely.
+    base_version_id: Optional[str] = None
 
 
 class DocumentVersionOut(ApiModel):
@@ -1329,6 +1344,26 @@ class MemoryItemOut(ApiModel):
     space_id: str = ""
     created_at: datetime
     updated_at: datetime
+
+
+class MemoryCreate(ApiModel):
+    """The body of `POST /api/memory` — a memory added by hand."""
+
+    content: str = Field(min_length=1, max_length=900)
+    kind: Literal["fact", "preference"] = "fact"
+    #: False -> the caller's own memory; True -> everyone's. The only two
+    #: scopes an authenticated member can choose between — never another
+    #: member's, and never a model-settable argument.
+    shared: bool = False
+    #: "" -> the global shelf; otherwise a space id, proved against the
+    #: caller's workspace at the route.
+    space_id: str = ""
+
+
+class MemoryUpdate(ApiModel):
+    """The body of `PATCH /api/memory/{id}` — a new value, never a re-scope."""
+
+    content: str = Field(min_length=1, max_length=900)
 
 
 class GraphOut(BaseModel):

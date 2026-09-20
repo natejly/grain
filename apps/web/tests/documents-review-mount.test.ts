@@ -26,6 +26,7 @@ const DOCUMENT: WorkspaceDocument = {
   content: "Alpha needs review.\nBeta stays.\nGamma needs review.\n",
   folder_id: "",
   updated_at: "2026-01-01T00:00:00Z",
+  head_version_id: "",
 };
 
 function edit(id: string): PendingDocumentEdit {
@@ -71,7 +72,7 @@ function view(pending: PendingDocumentEdit[]) {
     versions: [],
     openDocument: noop,
     createDocument: noop,
-    saveDocument: noop,
+    saveDocument: async () => "saved" as const,
     restoreVersion: noop,
     removeDocument: noop,
     pendingEdits: pending,

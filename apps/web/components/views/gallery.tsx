@@ -9,6 +9,7 @@ import type {
 import { Download, Pin, RefreshCw, Search, Store, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { EmptyState } from "./empty-state";
 import { describeError, formatRelative } from "./shared";
 import { WorkflowGraphView } from "./workflow-graph";
 
@@ -32,6 +33,12 @@ import { WorkflowGraphView } from "./workflow-graph";
 
 type GalleryViewProps = {
   setError: (message: string) => void;
+  /**
+   * Land on the Skills view — the first-run empty state's action, since
+   * publishing happens from a skill's own page. Optional so the view still
+   * mounts bare in tests; without it the empty state shows no button.
+   */
+  openSkills?: () => void;
 };
 
 const KIND_TABS = [
@@ -43,7 +50,7 @@ const KIND_TABS = [
 
 type KindFilter = (typeof KIND_TABS)[number]["key"];
 
-export function GalleryView({ setError }: GalleryViewProps) {
+export function GalleryView({ setError, openSkills }: GalleryViewProps) {
   const [listings, setListings] = useState<Listing[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
@@ -112,12 +119,13 @@ export function GalleryView({ setError }: GalleryViewProps) {
       </div>
 
       {loaded && listings.length === 0 ? (
-        <div className="empty-state">
-          <p>
-            Nothing published yet. Publish from a skill, workflow or agent&rsquo;s
-            own page.
-          </p>
-        </div>
+        <EmptyState
+          icon={Store}
+          title="Nothing published yet"
+          line="Publish a skill from its own page and it appears here for every workspace."
+          actionLabel="Go to Skills"
+          onAction={openSkills}
+        />
       ) : (
         <div className="mcp-list">
           {visible.map((listing) => (

@@ -42,7 +42,7 @@ export type FileTreeProps = {
   folders: Folder[];
   documents: DocumentSummary[];
   activeId: string;
-  openDocument: (documentId: string) => Promise<void>;
+  openDocument: (documentId: string) => Promise<boolean | void>;
   ops: FolderOps;
   /** Called with the folder the user was pointing at when they asked for a file. */
   onNewDocument: (folderId: string) => void;
@@ -63,7 +63,7 @@ function FileRow({
   file: DocumentSummary;
   folders: Folder[];
   activeId: string;
-  openDocument: (documentId: string) => Promise<void>;
+  openDocument: (documentId: string) => Promise<boolean | void>;
   ops: FolderOps;
   indent: number;
   pendingIds?: Set<string>;
@@ -129,7 +129,7 @@ function FolderRow({
   node: FolderNode;
   folders: Folder[];
   activeId: string;
-  openDocument: (documentId: string) => Promise<void>;
+  openDocument: (documentId: string) => Promise<boolean | void>;
   ops: FolderOps;
   onNewDocument: (folderId: string) => void;
   expanded: Set<string>;

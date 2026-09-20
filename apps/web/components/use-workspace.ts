@@ -53,7 +53,8 @@ import {
 } from "./chat-panes";
 
 export type { ChatPane } from "./chat-panes";
-import { viewFromUrl, pushViewToUrl } from "./view-url";
+import { viewFromUrl, threadFromUrl, pushWorkspaceUrl } from "./view-url";
+import { isOwnRun } from "./own-runs";
 import { createBoardHandlers } from "./handlers/boards";
 import { createAttachmentHandlers } from "./handlers/attachments";
 import { createChatHandlers } from "./handlers/chat";
@@ -135,7 +136,11 @@ export function useWorkspace() {
     },
     [],
   );
-  const [activeConversation, setActiveConversation] = useState<string | null>(null);
+  const [activeConversation, setActiveConversationRaw] = useState<string | null>(null);
+  // Read synchronously by every async guard (a slow fetch must not replace the
+  // transcript of a thread the user already left) and by the URL sync below.
+  // The wrapped setter keeps it current; nothing else assigns it.
+  const activeConversationRef = useRef<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   // The files this thread is about. Per conversation, so switching threads
   // reloads them rather than carrying one thread's chips into another.
@@ -167,8 +172,37 @@ export function useWorkspace() {
   // shows the posture new threads actually get, which with no preference read
   // yet is the agentic one.
   const [safeMode, setSafeMode] = useState(false);
+  // The member's memory preference. `boolean | null` like the digest, not a
+  // bare boolean like safeMode: true would be the honest guess, but the
+  // settings menu hides the control until the read lands rather than show a
+  // default it might contradict — the toggle governs what the assistant
+  // learns about you, which is not a thing to misreport for even a second.
+  const [memoryEnabled, setMemoryEnabled] = useState<boolean | null>(null);
+  // The composer's incognito toggle before any thread exists: consumed by the
+  // creation `ensureConversation`/`newConversation` perform, because the
+  // server sets Conversation.incognito at creation only.
+  const [pendingIncognito, setPendingIncognito] = useState(false);
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
+  /**
+   * How many authoritative local changes the memory list has seen — the
+   * rail's `conversationEpoch` pattern, applied to the shelf the
+   * memory.updated SSE now refreshes. A `listMemory()` snapshot is only true
+   * as of the moment it was requested: forget a row while a refresh fired by
+   * a teammate's run is still in flight and the reply — which still holds the
+   * row — lands after the local removal and resurrects it on screen (until
+   * the next memory event, possibly hours; a second Forget then 404s). The
+   * same stale snapshot reverts an inline edit that already saved. Every
+   * local mutation bumps this, and a snapshot requested under an older value
+   * is dropped rather than applied.
+   */
+  const memoryEpoch = useRef(0);
+  /** The bumping setter the local mutations (forget, add, edit) write
+   *  through; the snapshot paths keep the raw one and check the epoch. */
+  const setMemoriesLocal = useCallback((value: SetStateAction<MemoryItem[]>) => {
+    memoryEpoch.current += 1;
+    setMemories(value);
+  }, []);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [apps, setApps] = useState<GeneratedApp[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationProvider[]>([]);
@@ -184,27 +218,95 @@ export function useWorkspace() {
   const [dbConnections, setDbConnections] = useState<DbConnection[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [activeProject, setActiveProject] = useState<WorkspaceProject | null>(null);
-  // The active view lives in the URL as `?view=…` so a screen is deep-linkable
-  // and back/forward moves between views. The state stays the source of truth
-  // for the render; the URL is a projection of it. SSR and hydration both
-  // render the "chat" default so they agree, then a mount effect adopts the
-  // URL's view on the client without a hydration mismatch.
+  // The active view lives in the URL as `?view=…` — plus `?t=<thread>` on the
+  // chat view — so a screen and a focused thread are deep-linkable and
+  // back/forward moves between them. The state stays the source of truth for
+  // the render; the URL is a projection of it. SSR and hydration both render
+  // the "chat" default so they agree, then a mount effect adopts the URL's
+  // view (and parks its thread) on the client without a hydration mismatch.
   const [view, setViewRaw] = useState<View>("chat");
   // Keep the current view in a ref so the wrapper below can resolve a
   // functional updater without re-creating on every view change.
   const viewRef = useRef(view);
   viewRef.current = view;
-  const setView = useCallback((next: SetStateAction<View>) => {
-    const resolved = typeof next === "function" ? next(viewRef.current) : next;
-    setViewRaw(resolved);
-    pushViewToUrl(resolved);
+  /**
+   * Project view + focused thread into the URL, once per tick.
+   *
+   * Both wrapped setters call this, and `selectConversation` fires them as a
+   * pair in one tick — coalescing on a microtask writes ONE history entry for
+   * the pair instead of a ghost entry per setter, so back/forward never hops
+   * through half-applied states. `pushWorkspaceUrl` itself no-ops when the URL
+   * already matches, which is what keeps a popstate-driven change (where the
+   * browser moved the URL first) from writing anything at all.
+   */
+  const urlSyncQueued = useRef(false);
+  const scheduleUrlSync = useCallback(() => {
+    if (urlSyncQueued.current) return;
+    urlSyncQueued.current = true;
+    queueMicrotask(() => {
+      urlSyncQueued.current = false;
+      pushWorkspaceUrl(viewRef.current, activeConversationRef.current);
+    });
   }, []);
+  const setView = useCallback(
+    (next: SetStateAction<View>) => {
+      const resolved = typeof next === "function" ? next(viewRef.current) : next;
+      // Synchronously, not just at render: the coalesced sync runs on a
+      // microtask, which lands BEFORE React re-renders, and it must read the
+      // view this call just chose rather than the one still on screen.
+      viewRef.current = resolved;
+      setViewRaw(resolved);
+      scheduleUrlSync();
+    },
+    [scheduleUrlSync],
+  );
+  /**
+   * The one path thread-focus changes take, so `?t=` can never fall behind
+   * what is on screen: state, the ref (synchronously, exactly as the callers'
+   * inline assignments used to), and the URL sync. Handed to the chat handlers
+   * so select/new/ensure/fork/delete all flow through it with no bookkeeping
+   * of their own.
+   */
+  const setActiveConversation = useCallback(
+    (next: SetStateAction<string | null>) => {
+      const resolved =
+        typeof next === "function" ? next(activeConversationRef.current) : next;
+      activeConversationRef.current = resolved;
+      setActiveConversationRaw(resolved);
+      scheduleUrlSync();
+    },
+    [scheduleUrlSync],
+  );
+  /**
+   * A `?t=` read from the loaded URL, parked until the conversations list can
+   * vouch for it. The raw param is never trusted further than that lookup:
+   * only a thread the client actually knows gets opened — the isView fence's
+   * philosophy, applied to ids — and a shared link to someone else's personal
+   * (or deleted) thread degrades silently to the default.
+   */
+  const pendingUrlThread = useRef<string | null>(null);
+  /**
+   * Open a known conversation by id — `selectConversation` behind the fence.
+   * A ref because the handlers are plain functions rebuilt every render, while
+   * the popstate listener below is mount-scoped; reading through the ref is
+   * what lets it reach the current copy without re-subscribing.
+   */
+  const openConversationRef = useRef<((id: string) => void) | null>(null);
   useEffect(() => {
     const fromUrl = viewFromUrl(window.location.search);
     if (fromUrl) setViewRaw(fromUrl);
+    pendingUrlThread.current = threadFromUrl(window.location.search);
     const onPop = () => {
       const next = viewFromUrl(window.location.search);
       if (next) setViewRaw(next);
+      // Adopt the entry's thread too. The known-conversation fence lives in
+      // the opener, so a stale or foreign id is dropped; and the sync the
+      // opener schedules lands as a no-op against the URL the browser already
+      // holds, so travelling history never writes new entries.
+      const thread = threadFromUrl(window.location.search);
+      if (thread && thread !== activeConversationRef.current) {
+        openConversationRef.current?.(thread);
+      }
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -343,11 +445,17 @@ export function useWorkspace() {
   // dismiss clock: a presentation flip is a thing to glimpse, but an undo's
   // skipped half is a thing to act on, and must not expire unread.
   const [notice, setNotice] = useState<
-    { text: string; at: number; sticky?: boolean } | null
+    {
+      text: string;
+      at: number;
+      sticky?: boolean;
+      /** One button beside the line — "View" on "Memory updated". Runs, then
+       *  the toast dismisses; the render keeps role="status" either way. */
+      action?: { label: string; run: () => void };
+    } | null
   >(null);
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const activeConversationRef = useRef<string | null>(null);
   // Orders attachment appends against the per-thread refetch; see refreshAttachments.
   const attachmentEpoch = useRef(0);
   const conversationsRef = useRef<Conversation[]>([]);
@@ -478,6 +586,7 @@ export function useWorkspace() {
   }, []);
 
   const refreshExpansion = useCallback(async () => {
+    const epoch = memoryEpoch.current;
     const [
       nextGraph,
       nextMemories,
@@ -498,13 +607,29 @@ export function useWorkspace() {
       api.listSandboxSecrets(),
     ]);
     setGraph(nextGraph);
-    setMemories(nextMemories);
+    // Same staleness rule as refreshMemories below; the sibling lists have no
+    // local mutations racing them, so only the memory half is guarded.
+    if (epoch === memoryEpoch.current) setMemories(nextMemories);
     setDatasets(nextDatasets);
     setApps(nextApps);
     setIntegrations(nextIntegrations);
     setMcpServers(nextMcp);
     setSandboxTools(nextSandboxTools);
     setSandboxSecrets(nextSandboxSecrets);
+  }, []);
+
+  /** Re-read the Memory page's list alone — refreshExpansion's eight parallel
+   *  calls are too heavy for a per-run tick, and only this list moved.
+   *  Epoch-guarded like refreshConversations: this fires for every member's
+   *  settled run, so a slow reply must not overwrite a forget or an edit the
+   *  user made while it was in flight. */
+  const refreshMemories = useCallback(async () => {
+    const epoch = memoryEpoch.current;
+    const rows = await api.listMemory();
+    // Dropped, not merged: the local change that bumped the epoch is the
+    // newer truth, and this snapshot cannot say which rows predate it.
+    if (epoch !== memoryEpoch.current) return;
+    setMemories(rows);
   }, []);
 
   /** Everything the home screen reads: what exists, what is bindable, what is pinned. */
@@ -567,12 +692,38 @@ export function useWorkspace() {
   const coworking = useCoworking(
     bootstrap?.identity.user_id ?? "",
     useCallback(
-      (eventType: string) => {
+      (eventType: string, data?: unknown) => {
         if (eventType.startsWith("card.") || eventType.startsWith("todo.")) {
           void refreshArtifacts().catch(() => undefined);
         }
+        if (eventType === "memory.updated") {
+          // The authoritative "memory changed" signal: it reaches every open
+          // tab of every member. The refresh re-reads GET /api/memory, which
+          // re-applies visibility server-side — a personal memory named in
+          // the payload's ids simply does not come back for anyone else.
+          void refreshMemories().catch(() => undefined);
+          // The own-run filter reads the module registry rather than a local
+          // Set, so runs started from a split pane or a subject panel — which
+          // hold their own `setActiveRun` — count as "yours" too.
+          const runId = (data as { run_id?: string } | undefined)?.run_id;
+          if (runId && isOwnRun(runId)) {
+            // A background event, unlike every other notice writer, so it
+            // must not evict what the user has not acted on yet: a sticky
+            // notice (an undo's skipped half) outranks this transient line,
+            // which the refreshed Memory page repeats anyway.
+            setNotice((current) =>
+              current?.sticky
+                ? current
+                : {
+                    text: "Memory updated",
+                    at: Date.now(),
+                    action: { label: "View", run: () => setView("memory") },
+                  },
+            );
+          }
+        }
       },
-      [refreshArtifacts],
+      [refreshArtifacts, refreshMemories, setView],
     ),
   );
 
@@ -581,6 +732,23 @@ export function useWorkspace() {
   // `report` is the hook's stable, throttled callback, so this costs one
   // heartbeat per keystroke burst; the timeout reads a pause as a pause.
   const reportPresence = coworking.report;
+  const leavePresence = coworking.leave;
+  // The goodbye the documents surface always had and threads did not: when
+  // the focused thread changes (or the shell unmounts), leave the OLD
+  // conversation surface. Its own effect, keyed on the surface alone, because
+  // the typing effect below cleans up per keystroke — switching threads
+  // within the 3s downgrade window used to cancel the pending {typing:false}
+  // and strand a {typing:true} beat that use-coworking re-sent forever:
+  // teammates saw "X is typing…" on the abandoned thread until the tab
+  // closed. `leave` is the right verb, not a {typing:false} report: it
+  // bypasses the throttle, cancels any queued beat (the ghost-cursor
+  // invariant), and drops the surface from the re-beat map, so presence dots
+  // stop claiming a thread the user left.
+  useEffect(() => {
+    if (!activeConversation || !bootstrap) return;
+    const surface = `conversation:${activeConversation}`;
+    return () => leavePresence(surface);
+  }, [activeConversation, bootstrap, leavePresence]);
   useEffect(() => {
     if (!activeConversation || !bootstrap) return;
     const surface = `conversation:${activeConversation}`;
@@ -687,6 +855,29 @@ export function useWorkspace() {
     } catch (caught) {
       setSafeMode(previous);
       setError(describeError(caught, "Could not update safe mode"));
+    }
+  }, []);
+
+  /**
+   * Turn memory on or off for this member's future runs — the safe-mode
+   * pattern exactly: optimistic so the checkbox answers the click, replaced
+   * with the server's copy, rolled back with the error on a refusal. It
+   * governs future runs only, so the optimistic second cannot have decided
+   * anything mid-flight.
+   */
+  const updateMemoryPref = useCallback(async (enabled: boolean) => {
+    setError("");
+    let previous: boolean | null = null;
+    setMemoryEnabled((current) => {
+      previous = current;
+      return enabled;
+    });
+    try {
+      const saved = await api.updateMemoryPref(enabled);
+      setMemoryEnabled(saved.enabled);
+    } catch (caught) {
+      setMemoryEnabled(previous);
+      setError(describeError(caught, "Could not update the memory preference"));
     }
   }, []);
 
@@ -877,6 +1068,10 @@ export function useWorkspace() {
       setBootstrap(boot);
       setDigest(boot.digest ?? null);
       setSafeMode(Boolean(boot.safe_mode));
+      // On by default server-side; ?? true keeps an older server from
+      // reading as opted out, and the null start keeps the toggle hidden
+      // until this line has run.
+      setMemoryEnabled(boot.memory_enabled ?? true);
       if (conversationEpoch.current === epochAtStart) {
         setConversationList(chats);
       } else {
@@ -928,7 +1123,11 @@ export function useWorkspace() {
       setSandboxSecrets(nextSandboxSecrets);
       setError("");
       if (chats[0] && !activeConversationRef.current) {
-        setActiveConversation(chats[0].id);
+        // The raw setter, deliberately: this auto-select is the default the
+        // page renders, not a navigation, and syncing it would push a ghost
+        // history entry under the back button on every load. The wrapped
+        // setter is for focus the user (or a deep link) actually changed.
+        setActiveConversationRaw(chats[0].id);
         activeConversationRef.current = chats[0].id;
         const loaded = await api.listMessages(chats[0].id);
         // The user may have switched threads while this fetch was in flight —
@@ -1033,6 +1232,21 @@ export function useWorkspace() {
 
   useEffect(() => {
     conversationsRef.current = conversations;
+  }, [conversations]);
+
+  // Adopt a deep-linked thread once the rail can vouch for it: a `?t=` read
+  // at mount is only a candidate until the conversations list has loaded. A
+  // known id opens exactly once; an unknown one — deleted, someone else's
+  // personal thread, garbage — is dropped silently and the default stands,
+  // the same degrade `?view=garbage` gets from the isView fence. Declared
+  // after the conversationsRef sync above so the opener's fence reads the
+  // list this effect just saw.
+  useEffect(() => {
+    if (conversations.length === 0) return;
+    const pending = pendingUrlThread.current;
+    if (!pending) return;
+    pendingUrlThread.current = null;
+    openConversationRef.current?.(pending);
   }, [conversations]);
 
   useEffect(() => {
@@ -1235,6 +1449,8 @@ export function useWorkspace() {
     setActiveConversation,
     setMessages,
     setAgentCalls,
+    // Own-run tracking for the memory.updated toast lives in the turn engine
+    // itself (followRun → registerOwnRun), so every surface's runs count.
     setActiveRun,
     setRunStatus,
     setRunThinking,
@@ -1249,10 +1465,23 @@ export function useWorkspace() {
     refreshArtifacts,
     refreshInfra,
     refreshPendingEdits,
+    refreshMemories,
+    pendingIncognito,
+    clearPendingIncognito: () => setPendingIncognito(false),
     activeConversationRef,
     activeProjectRef,
     activeDocumentRef,
   });
+
+  // The deep-link/popstate seam: `selectConversation` behind the known-id
+  // fence. Assigned every render because the handlers are rebuilt per render;
+  // the mount-scoped popstate listener and the adoption effect read through
+  // the ref and always get this, the current copy.
+  openConversationRef.current = (id: string) => {
+    if (id === activeConversationRef.current) return;
+    if (!conversationsRef.current.some((item) => item.id === id)) return;
+    void chatHandlers.selectConversation(id);
+  };
 
   const attachmentHandlers = createAttachmentHandlers({
     setError,
@@ -1339,7 +1568,9 @@ export function useWorkspace() {
   const graphHandlers = createGraphHandlers({
     setError,
     setGraph,
-    setMemories,
+    // The epoch-bumping setter: a forget/add/edit is local truth that must
+    // invalidate any listMemory snapshot still in flight.
+    setMemories: setMemoriesLocal,
     setProvenance,
     setLoadingProvenance,
     refreshSecondary,
@@ -1395,6 +1626,11 @@ export function useWorkspace() {
     updateDigest,
     safeMode,
     updateSafeMode,
+    memoryEnabled,
+    updateMemoryPref,
+    pendingIncognito,
+    setPendingIncognito,
+    refreshMemories,
     refreshSecondary,
     createDatasetFromSource,
     createDatasetVersionFromSource,

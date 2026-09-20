@@ -1741,6 +1741,10 @@ ROUTE_CASES: List[RouteCase] = [
     # enabled=false so the sweep leaves every member it touches on the product
     # default rather than opted into asking.
     RouteCase("PUT", "/api/me/safe-mode", SCOPED, body={"enabled": False}),
+    # The memory opt-out is the same shape again: the caller's own membership
+    # row, no resource id. enabled=False is the probe, and harmless to leave —
+    # the sweep tenant runs nothing that would remember anyway.
+    RouteCase("PUT", "/api/me/memory", SCOPED, body={"enabled": False}),
     # Transcript search: a workspace-scoped list whose visibility chokepoint is
     # the same one the agent tool reads; the sweep proves tenant A's query
     # never quotes tenant B's words.
@@ -2094,6 +2098,18 @@ ROUTE_CASES: List[RouteCase] = [
     RouteCase("GET", "/api/graph", SCOPED),
     RouteCase("POST", "/api/graph/rebuild", SCOPED),
     RouteCase("GET", "/api/memory", SCOPED),
+    # The manual add names no foreign resource — the scope choice is only ever
+    # "mine" or "everyone's" in the caller's own workspace.
+    RouteCase(
+        "POST", "/api/memory", SCOPED, body={"content": "made by hand", "kind": "fact"}
+    ),
+    RouteCase(
+        "PATCH",
+        "/api/memory/{memory_id}",
+        DENY,
+        path_ids={"memory_id": "memory"},
+        body={"content": "edited"},
+    ),
     RouteCase(
         "DELETE", "/api/memory/{memory_id}", DENY, path_ids={"memory_id": "memory"}
     ),

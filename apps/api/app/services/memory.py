@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import operator
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import reduce, wraps
 from typing import (
@@ -33,6 +35,7 @@ from ..models import (
     EmbeddingVector,
     GraphEdge,
     GraphEntity,
+    Membership,
     MemoryItem,
     Message,
     Run,
@@ -40,6 +43,7 @@ from ..models import (
 )
 from . import embedding_generations as generations
 from .audit import record_audit
+from .coworking import append_workspace_event
 from .embeddings import (
     DEFAULT_DTYPE,
     content_fingerprint,
@@ -64,6 +68,8 @@ VECTOR_SHORTLIST = 64
 # a several-hundred-clause OR badly. The longest tokens are the most selective,
 # so they are the ones worth spending clauses on.
 MAX_LEXICAL_TERMS = 12
+
+_LN2 = math.log(2.0)
 
 _SelectT = TypeVar("_SelectT", bound=Select[Any])
 
@@ -476,11 +482,13 @@ def _refresh_summary(
     )
     if len(messages) < SUMMARY_REFRESH_EVERY:
         return
+    # The LAST eight user messages: the window tracks the conversation's tail,
+    # because the pinned summary otherwise freezes after the eighth user turn.
     user_lines = [
         " ".join(message.content.split())[:120]
         for message in messages
         if message.role == "user"
-    ][:8]
+    ][-8:]
     content = "Conversation topics so far: " + "; ".join(user_lines)
     _upsert_item(
         db,
@@ -600,6 +608,44 @@ def memory_owner(db: Session, conversation_id: Optional[str], author_id: str) ->
     return SHARED_OWNER if shared else author_id
 
 
+def memory_opted_in(
+    db: Session,
+    *,
+    workspace_id: str,
+    user_id: str,
+    conversation_id: Optional[str],
+) -> bool:
+    """Whether memory runs at all for this member's turn in this thread.
+
+    NOT a status filter — `_active()` remains the only one — this reads the
+    member's toggle (`Membership.memory_enabled`) and the thread's flag
+    (`Conversation.incognito`). The explicit remember/forget/search_memory
+    tools deliberately ignore the MEMBER TOGGLE only: an opted-out member
+    saying "remember this" is an explicit instruction that outranks their
+    default, the same doctrine as the tombstone override in `remember_memory`.
+    Incognito is not a default to outrank — it is itself the user's explicit
+    per-thread instruction — so an incognito thread is never offered those
+    tools at all (`llm_tools.agentic_memory_tools` is that gate; this function
+    stays the run-path one).
+    """
+    if conversation_id:
+        incognito = db.scalar(
+            select(Conversation.incognito).where(Conversation.id == conversation_id)
+        )
+        if incognito:
+            return False
+    if user_id and user_id != SHARED_OWNER:
+        enabled = db.scalar(
+            select(Membership.memory_enabled).where(
+                Membership.workspace_id == workspace_id,
+                Membership.user_id == user_id,
+            )
+        )
+        if enabled is False:
+            return False
+    return True
+
+
 def write_conversation_memory(run_id: str) -> None:
     """Persist durable memories after a completed run. Best-effort by design."""
     settings = get_settings()
@@ -609,6 +655,15 @@ def write_conversation_memory(run_id: str) -> None:
     try:
         run = db.get(Run, run_id)
         if run is None or run.status != "completed":
+            return
+        if not memory_opted_in(
+            db,
+            workspace_id=run.workspace_id,
+            user_id=run.created_by,
+            conversation_id=run.conversation_id,
+        ):
+            # Also skips _refresh_summary, on purpose: the rolling summary is a
+            # memory row like any other.
             return
         messages = list(
             db.scalars(
@@ -633,6 +688,7 @@ def write_conversation_memory(run_id: str) -> None:
                 run.prompt, answer, user_id=run.created_by, settings=settings
             )
 
+        owner_id = memory_owner(db, run.conversation_id, run.created_by)
         touched = apply_extracted_memories(
             db,
             workspace_id=run.workspace_id,
@@ -644,7 +700,7 @@ def write_conversation_memory(run_id: str) -> None:
             # The leak this closes: a personal thread is visible only to its
             # creator, and until now everything the extractor learned from one
             # was written workspace-wide and recalled into every member's turn.
-            owner_id=memory_owner(db, run.conversation_id, run.created_by),
+            owner_id=owner_id,
             # And the shelf: learned in a space's thread, recalled in that
             # space's threads — plus the global shelf everywhere.
             space_id=memory_space(db, run.conversation_id),
@@ -666,6 +722,38 @@ def write_conversation_memory(run_id: str) -> None:
                 detail={"items": len(touched)},
             )
         db.commit()
+        if touched:
+            # A SECOND commit on purpose: a workspace_events sequence collision
+            # must never discard memories already committed above. Losing the
+            # signal costs one stale Memory page; losing the rows costs the
+            # memories themselves.
+            try:
+                append_workspace_event(
+                    db,
+                    workspace_id=run.workspace_id,
+                    event_type="memory.updated",
+                    payload={
+                        "run_id": run.id,
+                        "conversation_id": run.conversation_id or "",
+                        "count": len(touched),
+                        "ids": [item.id for item in touched],
+                        # Who may be told. Durable events are relayed to every
+                        # member's stream, and a personal thread's extraction
+                        # writes personal rows — the stream filters this event
+                        # per viewer (api/coworking._event_visible), the same
+                        # doctrine _visible_runs applies, and the owner here is
+                        # what it filters on. "" is SHARED_OWNER: everyone.
+                        "owner_id": owner_id,
+                    },
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.warning(
+                    "memory.updated event was not appended for run %s",
+                    run_id,
+                    exc_info=True,
+                )
     except Exception:
         # Writing memory must never fail a run that already answered, but
         # swallowing it without a word is how a workspace quietly stops learning:
@@ -841,8 +929,22 @@ def _lexical_candidates(
     """
     if not terms:
         return []
+    # A term counts once whether it appears in the sentence, the entity list,
+    # or both: entity names are unioned into the item's terms at scoring time,
+    # so candidacy has to see them too — a row whose ONLY overlap with the
+    # query is an entity name ("prefers Visx" stored with entities=["Visx"])
+    # must be reachable through this path, not only when it happens to ride
+    # the vector shortlist. That is the whole lexical path in lexical-only
+    # mode (no embedding key, no active generation), where this prefilter is
+    # the sole source of candidates. LIKE over the raw JSON text is deliberate:
+    # it is the same bounded C-level scan as the content column, and a false
+    # positive only enters the candidate set, where the tokenized scoring pass
+    # decides admission.
     hits = [
         func.lower(MemoryItem.content).like(_like_pattern(term), escape="\\")
+        | func.lower(MemoryItem.entity_names_json).like(
+            _like_pattern(term), escape="\\"
+        )
         for term in terms
     ]
     # How many distinct query terms this row contains — the numerator of the
@@ -1145,12 +1247,49 @@ def recall(
             )
         )
 
-    scored: List[Tuple[float, MemoryItem]] = []
+    # Two passes over the bounded candidates: terms and document frequencies
+    # first, then IDF-weighted scores. Properties this keeps: `lexical` stays in
+    # [0, 1], reduces exactly to the old overlap fraction when all DFs are
+    # equal, and is nonzero iff the overlap is nonempty — so the admission gate
+    # below means what it always meant. A query term found in no candidate gets
+    # max IDF and only inflates the denominator, exactly as |query_terms| did
+    # before. DF is a Counter over the <=~464 bounded candidates (the 400-row
+    # lexical cap plus the 64-row vector shortlist) — no index, no numpy needed
+    # at this size. The recency decay reorders but never admits or evicts, and
+    # the pinned summary bypasses scoring entirely and is unaffected.
+    now = utcnow()
+    tokenized: List[Tuple[MemoryItem, set[str]]] = []
+    df: Counter[str] = Counter()
     for item in items:
         item_terms = set(tokenize(item.content))
-        lexical = len(query_terms & item_terms) / max(1, len(query_terms))
+        # Entity names count as the item's own terms: "prefers Visx" should
+        # match a question naming Visx even when the sentence itself does not.
+        try:
+            for name in json.loads(item.entity_names_json or "[]"):
+                item_terms |= set(tokenize(str(name)))
+        except ValueError:
+            pass
+        tokenized.append((item, item_terms))
+        df.update(item_terms & query_terms)
+
+    n = len(tokenized)
+    idf = {term: math.log((n + 1) / (df[term] + 1)) + 1.0 for term in query_terms}
+    idf_mass = sum(idf.values())
+
+    scored: List[Tuple[float, MemoryItem]] = []
+    for item, item_terms in tokenized:
+        overlap = query_terms & item_terms
+        lexical = (sum(idf[term] for term in overlap) / idf_mass) if idf_mass else 0.0
         semantic = semantic_by_id.get(item.id, 0.0)
-        score = lexical + semantic + min(item.importance, 5) * 0.05
+        half = settings.memory_recency_half_life_days
+        age_days = max(0.0, (now - item.updated_at).total_seconds() / 86400.0)
+        recency = math.exp(-_LN2 * age_days / half) if half > 0 else 0.0
+        score = (
+            lexical
+            + semantic
+            + min(item.importance, 5) * settings.memory_importance_weight
+            + settings.memory_recency_weight * recency
+        )
         if lexical > 0 or semantic > 0.3:
             scored.append((score, item))
     # Ties broke on database scan order before, which differs between backends;
@@ -1213,6 +1352,8 @@ def remember_memory(
     kind: str = "fact",
     entities: Optional[Sequence[str]] = None,
     settings: Optional[Settings] = None,
+    owner_id: Optional[str] = None,
+    space_id: Optional[str] = None,
 ) -> RememberResult:
     """Store a durable memory now, deduplicating on content.
 
@@ -1223,14 +1364,21 @@ def remember_memory(
     Whose it is comes from the conversation, exactly as the post-run extractor's
     does: "remember this" said in a personal thread is a personal memory. There
     is deliberately no argument for the model to set — an owner the model chooses
-    is an owner prompt-injected content can choose.
+    is an owner prompt-injected content can choose. The `owner_id`/`space_id`
+    overrides exist solely for the authenticated HTTP manual-add route, where
+    the caller chooses between "mine" and "everyone's"; memory_tools.py call
+    sites pass neither, so the model still cannot choose scope.
     """
     settings = settings or get_settings()
     content = normalize_memory_content(content)
     names = [str(name).strip() for name in (entities or []) if str(name).strip()][:16]
     normalized_key = _content_key(content)
-    owner_id = memory_owner(db, conversation_id, user_id)
-    space_id = memory_space(db, conversation_id)
+    owner_id = (
+        owner_id if owner_id is not None else memory_owner(db, conversation_id, user_id)
+    )
+    space_id = (
+        space_id if space_id is not None else memory_space(db, conversation_id)
+    )
     existing = db.scalar(
         select(MemoryItem).where(
             MemoryItem.workspace_id == workspace_id,
@@ -1287,6 +1435,66 @@ def remember_memory(
     )
     db.flush()
     return RememberResult(item=item, outcome=outcome)
+
+
+def _subject_still_present(normalized_key: str, content: str) -> bool:
+    """Does the claim key's subject still appear in the edited sentence?
+
+    Deterministic on purpose: subject = `key.split("|")[0]`, split on the
+    underscores `normalize_claim_key` folds separators into, compared as
+    tokens against `tokenize(content)`. Any surviving subject token keeps the
+    key (a correction rewords the value, not the subject); an unusable subject
+    — nothing tokenizes — keeps it too, because "cannot tell" must not start
+    re-keying rows that were stable before this check existed.
+    """
+    subject = normalized_key.split("|", 1)[0]
+    subject_tokens = set(tokenize(subject.replace("_", " ")))
+    if not subject_tokens:
+        return True
+    return bool(subject_tokens & set(tokenize(content)))
+
+
+def edit_memory(
+    db: Session,
+    *,
+    item: MemoryItem,
+    content: str,
+    settings: Settings,
+) -> MemoryItem:
+    """Rewrite one memory's sentence in place.
+
+    It never touches owner_id, space_id, kind or status — an edit is a new
+    value, never a re-scope (the "" sentinels mean re-scoping is a promotion
+    and is out of scope here). The caller handles IntegrityError from the
+    flush: another active row already holding the new key is a conflict the
+    route reports, not one this function can resolve.
+    """
+    content = normalize_memory_content(content)
+    item.content = content
+    if "|" not in item.normalized_key:
+        # A content-hash key IS the sentence, so it moves with the edit; a
+        # claim key names the slot, which the edit keeps — a later extractor
+        # correction still supersedes it. The "|" heuristic is load-bearing:
+        # content hashes are hex and never contain one, active claim keys
+        # always do (see CLAIM_KEY_RE in services/model.py), and retired or
+        # tombstoned rows never reach an edit because _active filters them.
+        item.normalized_key = _content_key(content)
+    elif not _subject_still_present(item.normalized_key, content):
+        # Keeping the claim key is right for a correction of the same fact,
+        # and destructive for a rewrite into a different one: the row would
+        # still occupy the old slot, and the next extractor pass on that
+        # claim would supersede — silently destroy — a sentence the user
+        # authored by hand. The line between the two is drawn on the key's
+        # own subject (deterministic, no model call): when none of the
+        # subject's tokens survive in the new sentence, this is no longer
+        # that slot's value, so the row leaves the slot for a content hash.
+        item.normalized_key = _content_key(content)
+    item.embedding = None
+    item.updated_at = utcnow()
+    db.flush()
+    _embed_pending(db, [item], settings)
+    mark_graph_stale(db, item.workspace_id)
+    return item
 
 
 def resolve_forget_targets(

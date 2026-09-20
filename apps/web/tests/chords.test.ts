@@ -5,6 +5,7 @@ import {
   chordEligible,
   chordHint,
   chordTarget,
+  isTypingContext,
   parseChordsEnabled,
   serializeChordsEnabled,
 } from "../components/views/chords";
@@ -77,6 +78,38 @@ describe("chordEligible", () => {
     Object.defineProperty(editable, "isContentEditable", { value: true });
     expect(chordEligible(true, { ...bare, target: editable })).toBe(false);
     expect(chordEligible(true, { ...bare, target: document.createElement("div") })).toBe(true);
+  });
+});
+
+describe("the '?' cheat-sheet key composes with the same guards", () => {
+  // The shell's "?" listener reuses isTypingContext directly — these pin the
+  // predicate's answers for the shapes that listener sees.
+  it("isTypingContext suppresses '?' typed into a field", () => {
+    for (const tag of ["input", "textarea"] as const) {
+      expect(isTypingContext(document.createElement(tag))).toBe(true);
+    }
+    const editable = document.createElement("div");
+    // jsdom does not compute isContentEditable from the attribute alone.
+    Object.defineProperty(editable, "isContentEditable", { value: true });
+    expect(isTypingContext(editable)).toBe(true);
+  });
+
+  it("isTypingContext lets '?' through from the page", () => {
+    // Falsy, not `false`: jsdom leaves isContentEditable undefined on a plain
+    // element (a real browser says false), and the listener only ever negates.
+    expect(isTypingContext(document.body)).toBeFalsy();
+    expect(isTypingContext(null)).toBeFalsy();
+    expect(isTypingContext(document.createElement("div"))).toBeFalsy();
+  });
+
+  it("chordEligible rejects nothing new — shift is not a disqualifier", () => {
+    // '?' is shift+/ on most layouts, and chordEligible never consults
+    // shiftKey: a single character with no meta/ctrl/alt stays eligible.
+    const question = { key: "?", metaKey: false, ctrlKey: false, altKey: false };
+    expect(chordEligible(true, { ...question, target: document.body })).toBe(true);
+    expect(
+      chordEligible(true, { ...question, target: document.createElement("input") }),
+    ).toBe(false);
   });
 });
 

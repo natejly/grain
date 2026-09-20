@@ -2516,6 +2516,11 @@
           "identity": {
             "$ref": "#/components/schemas/Identity"
           },
+          "memory_enabled": {
+            "default": true,
+            "title": "Memory Enabled",
+            "type": "boolean"
+          },
           "model_provider": {
             "$ref": "#/components/schemas/ModelProviderStatus"
           },
@@ -2982,6 +2987,11 @@
       },
       "ConversationCreate": {
         "properties": {
+          "incognito": {
+            "default": false,
+            "title": "Incognito",
+            "type": "boolean"
+          },
           "space_id": {
             "default": "",
             "title": "Space Id",
@@ -3104,6 +3114,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "incognito": {
+            "default": false,
+            "title": "Incognito",
+            "type": "boolean"
           },
           "owned": {
             "default": false,
@@ -4683,6 +4698,17 @@
       },
       "DocumentContentRequest": {
         "properties": {
+          "base_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Version Id"
+          },
           "content": {
             "title": "Content",
             "type": "string"
@@ -4713,6 +4739,11 @@
           },
           "folder_id": {
             "title": "Folder Id",
+            "type": "string"
+          },
+          "head_version_id": {
+            "default": "",
+            "title": "Head Version Id",
             "type": "string"
           },
           "id": {
@@ -7045,6 +7076,41 @@
         "title": "MemberOut",
         "type": "object"
       },
+      "MemoryCreate": {
+        "description": "The body of `POST /api/memory` \u2014 a memory added by hand.",
+        "properties": {
+          "content": {
+            "maxLength": 900,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "kind": {
+            "default": "fact",
+            "enum": [
+              "fact",
+              "preference"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "shared": {
+            "default": false,
+            "title": "Shared",
+            "type": "boolean"
+          },
+          "space_id": {
+            "default": "",
+            "title": "Space Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "MemoryCreate",
+        "type": "object"
+      },
       "MemoryItemOut": {
         "properties": {
           "content": {
@@ -7121,6 +7187,48 @@
           "updated_at"
         ],
         "title": "MemoryItemOut",
+        "type": "object"
+      },
+      "MemoryPrefIn": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "MemoryPrefIn",
+        "type": "object"
+      },
+      "MemoryPrefOut": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "MemoryPrefOut",
+        "type": "object"
+      },
+      "MemoryUpdate": {
+        "description": "The body of `PATCH /api/memory/{id}` \u2014 a new value, never a re-scope.",
+        "properties": {
+          "content": {
+            "maxLength": 900,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "MemoryUpdate",
         "type": "object"
       },
       "MessageOut": {
@@ -22493,6 +22601,66 @@
         ]
       }
     },
+    "/api/me/memory": {
+      "put": {
+        "description": "Turn memory on or off for the caller's future runs.\n\nOff skips recall AND extraction on this member's runs, and takes effect on\nthe next run \u2014 nothing mid-flight is touched. The explicit remember/forget\ntools still work: an explicit instruction outranks a default.\n\nAudited on both edges, like Safe mode: off is the interesting direction,\nand a trail that only recorded the cautious half would be no trail at all.",
+        "operationId": "update_memory_pref_api_me_memory_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryPrefIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryPrefOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Memory Pref",
+        "tags": [
+          "me"
+        ]
+      }
+    },
     "/api/me/safe-mode": {
       "put": {
         "description": "Turn the approval step on or off for the caller's future threads.\n\nA seed, not a switch on anything already running: it changes what\n`services.conversations.default_approval_mode` hands the next thread this\nmember creates, and touches no existing conversation. That is the whole\nreason it can be a plain preference rather than a privileged operation \u2014\nturning it *off* cannot loosen a thread a colleague is watching, and\nturning it *on* cannot strand one mid-turn.\n\nAudited on both edges. Off is the interesting direction, and an audit trail\nthat only recorded the cautious half would be no trail at all.",
@@ -22659,6 +22827,75 @@
         "tags": [
           "memory"
         ]
+      },
+      "post": {
+        "description": "Add a memory by hand.\n\nScope is chosen by the authenticated user between exactly \"mine\" and\n\"everyone's\" \u2014 never another member's, and never a model-settable argument\n(the agent's `remember` tool derives scope from its conversation instead).",
+        "operationId": "create_memory_api_memory_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryItemOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Memory",
+        "tags": [
+          "memory"
+        ]
       }
     },
     "/api/memory/{memory_id}": {
@@ -22718,6 +22955,73 @@
           }
         },
         "summary": "Forget Memory",
+        "tags": [
+          "memory"
+        ]
+      },
+      "patch": {
+        "description": "Rewrite one memory's sentence. A new value, never a re-scope.\n\nNo Idempotency-Key: replaying the same content lands on the same state,\nthe `set_conversation_defaults` precedent.",
+        "operationId": "update_memory_api_memory__memory_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "title": "Memory Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryItemOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Memory",
         "tags": [
           "memory"
         ]

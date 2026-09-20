@@ -8,10 +8,12 @@ import {
   Check,
   ChevronRight,
   Copy,
+  EyeOff,
   FileText,
   GitFork,
   Paperclip,
   Pencil,
+  Plus,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
@@ -31,6 +33,7 @@ import type {
   Board,
   Citation,
   CitationCheck,
+  CoworkingPresence,
   GeneratedApp,
   Message,
   Skill,
@@ -43,7 +46,9 @@ import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChatDashboardEmbeds } from "../chat-dashboard-embed";
+import { LiveCursorLayer } from "../live-cursors";
 import { ArtifactImages } from "../source-image";
+import type { CoworkingState } from "../use-coworking";
 import { autoApprovedCalls, isBypass } from "./approval-format";
 import {
   commandDescription,
@@ -60,9 +65,35 @@ import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
 import { ProposalDiff } from "./proposal-diff";
 import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
-import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel } from "./shared";
+import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel, type View } from "./shared";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
+
+/**
+ * Who is typing into this thread right now, besides the viewer. Fed by the
+ * presence heartbeat use-workspace.ts already sends on `conversation:<id>`
+ * (state `{typing}` only — never a draft); this is purely the receiving end.
+ */
+export function typersOn(
+  presences: CoworkingPresence[],
+  surface: string,
+  viewerId: string,
+): CoworkingPresence[] {
+  return presences.filter(
+    (presence) =>
+      presence.surface === surface &&
+      presence.actor_id !== viewerId &&
+      presence.state.typing === true,
+  );
+}
+
+/** The typing line's sentence; "" when nobody is. */
+export function typingLine(names: string[]): string {
+  if (names.length === 0) return "";
+  if (names.length === 1) return `${names[0]} is typing…`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+  return "Several people are typing…";
+}
 
 export type ToolDecision = (
   call: AgentToolCall,
@@ -275,6 +306,31 @@ export type ChatViewProps = {
    * handler owns the confirm and the skipped-summary notice.
    */
   undo?: (runId: string) => Promise<void>;
+  /**
+   * Jump to another view from the composer's "+" menu — the point-of-use doors
+   * to Sources, Datasets and the Gallery. Only the shell owns setView, so only
+   * the primary rail chat passes it; the document-side and split-pane mounts
+   * omit it and the menu simply shows no navigation rows.
+   */
+  openView?: (view: View) => void;
+  /**
+   * The thread's temporary-chat state: its runs neither recall nor store
+   * memories. `toggle` is present only while it can still do anything — the
+   * server stamps incognito at creation, so the pre-thread composer offers
+   * the flip and an existing thread only reports the fact. Optional like
+   * `approval`: only the primary rail chat passes it.
+   */
+  incognito?: { on: boolean; toggle?: () => void };
+  /**
+   * The shell's live-coworking channel, with the id of the conversation this
+   * view is showing. Both matter only on a SHARED thread — pointer cursors
+   * over the transcript and the typing line above the composer — and the
+   * mounts are gated on `sharedThread` so a personal thread never even emits
+   * a pointer beat (the server's visibility gate would hide it anyway; this
+   * is belt and braces plus zero wasted heartbeats).
+   */
+  coworking?: CoworkingState;
+  conversationId?: string;
 };
 
 /**
@@ -755,6 +811,40 @@ function AttachMenu({
 }
 
 /**
+ * The composer's "+" menu: the discoverable index of everything the composer
+ * can do, at the point of use. Floats above the composer like AttachMenu and
+ * closes on pick. Every row reuses an existing handler — this menu is
+ * exposure, not capability: the Attach and Skills chips stay beside it as the
+ * fast path, and the navigation rows only render when the shell wired
+ * `openView` (the side-panel mounts have no setView to give).
+ */
+function PlusMenu({
+  rows,
+  close,
+}: {
+  rows: { label: string; run: () => void }[];
+  close: () => void;
+}) {
+  return (
+    <div className="attach-menu plus-menu" role="group" aria-label="Tools">
+      {rows.map((row) => (
+        <button
+          key={row.label}
+          type="button"
+          className="ghost-button plus-menu-row"
+          onClick={() => {
+            row.run();
+            close();
+          }}
+        >
+          {row.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
  * The files this thread is about, as chips above the composer.
  *
  * Every attachment the thread has, not only the unsent ones. A file attached
@@ -1172,7 +1262,20 @@ export function ChatView({
   thinking,
   fork,
   undo,
+  openView,
+  incognito,
+  coworking,
+  conversationId,
 }: ChatViewProps) {
+  // The shared-thread presence surface, "" everywhere presence has no
+  // business: personal threads, panels mounted without the channel.
+  const presenceSurface =
+    sharedThread && coworking && conversationId
+      ? `conversation:${conversationId}`
+      : "";
+  const typers = presenceSurface
+    ? typersOn(coworking!.presences, presenceSurface, viewerId ?? "")
+    : [];
   // Tool calls belong to a run, and every message carries its run_id, so they
   // stay anchored to the right turn after a reload rather than only while live.
   const callsForRun = (runId: string) =>
@@ -1185,6 +1288,9 @@ export function ChatView({
   // card: nothing outside the composer cares, and closing must not re-render
   // the transcript.
   const [attachOpen, setAttachOpen] = useState(false);
+  // The "+" tool menu, open or not — local like `attachOpen` and for the same
+  // reason: nothing outside the composer cares.
+  const [plusOpen, setPlusOpen] = useState(false);
   // Which message is an editor right now, and what it says. View state (not
   // row state) so exactly one edit can be open at a time — the rail's rename
   // pattern. Deliberately no on-blur submit anywhere below: an edit deletes
@@ -1507,8 +1613,9 @@ export function ChatView({
     );
   };
 
-  return (
-    <section className="chat-layout">
+  // Built once so the shared and personal paths can never drift; only the
+  // shared thread wraps it in the pointer layer below.
+  const transcript = (
       <div
         ref={scrollRef}
         className={`message-scroll ${messages.length === 0 ? "empty" : ""}`}
@@ -1610,8 +1717,34 @@ export function ChatView({
           </div>
         )}
       </div>
+  );
 
-      <div className={bypassed ? "composer-zone bypassed" : "composer-zone"}>
+  return (
+    <section className="chat-layout">
+      {/* Mounted ONLY for shared threads: a personal thread never emits a
+          pointer beat, and reflowing message lists make the fractional
+          positions approximate there — the documented layer trade. */}
+      {presenceSurface ? (
+        <LiveCursorLayer
+          surface={presenceSurface}
+          coworking={coworking}
+          className="chat-cursor-box"
+        >
+          {transcript}
+        </LiveCursorLayer>
+      ) : (
+        transcript
+      )}
+
+      <div
+        className={[
+          "composer-zone",
+          bypassed ? "bypassed" : "",
+          incognito?.on ? "incognito" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
         {/* Blocked-on-you, in the non-scrolling zone. "Working…" and "waiting
             for your approval" are opposite states — one needs patience, the
             other needs a decision — and a card in a transcript can be scrolled
@@ -1666,6 +1799,24 @@ export function ChatView({
             />
           )
         )}
+        {/* Above the composer, in the non-scrolling zone like the banners: a
+            state the user chose, restated where the words it governs are
+            typed, so a temporary chat can never be mistaken for one that is
+            learning. */}
+        {incognito?.on && (
+          <p className="incognito-note" role="status">
+            <EyeOff size={12} aria-hidden="true" />
+            Temporary chat — the assistant won&apos;t remember this conversation.
+          </p>
+        )}
+        {/* Whenever the thread is shared, not only while someone types: the
+            line's height is reserved so the composer does not jump when a
+            teammate starts. aria-live announces the change politely. */}
+        {presenceSurface && (
+          <p className="chat-typing" aria-live="polite">
+            {typingLine(typers.map((presence) => presence.actor_label))}
+          </p>
+        )}
         <div className="composer-shell">
           {pickerOpen && (
             <SkillPicker
@@ -1674,6 +1825,35 @@ export function ChatView({
               onPickCommand={pickCommand}
               skills={skillMatches}
               onPick={attachSkill}
+            />
+          )}
+          {plusOpen && (
+            <PlusMenu
+              rows={[
+                ...(attach
+                  ? [{ label: "Attach a file", run: () => setAttachOpen(true) }]
+                  : []),
+                ...(skills && !skills.attached && !activeRun
+                  ? [
+                      {
+                        label: "Use a skill",
+                        // The Skills chip's exact handler: "/" in the draft
+                        // opens the picker; this row is only a second door.
+                        run: () => {
+                          if (!draft.startsWith("/")) setDraft(`/${draft}`);
+                        },
+                      },
+                    ]
+                  : []),
+                ...(openView
+                  ? [
+                      { label: "Sources", run: () => openView("sources") },
+                      { label: "Datasets", run: () => openView("datasets") },
+                      { label: "Gallery", run: () => openView("gallery") },
+                    ]
+                  : []),
+              ]}
+              close={() => setPlusOpen(false)}
             />
           )}
           {attach && attachOpen && (
@@ -1731,6 +1911,18 @@ export function ChatView({
                 paperclip, a dropdown that hid below two agents, and a "/"
                 incantation nothing advertised — are labelled chips now. The
                 composer is the product's front door; its verbs say their names. */}
+            {/* The "+" menu duplicates the Attach/Skills chips by design: the
+                menu is the discoverable index, the chips are the fast path.
+                Consolidating them would regress the labelled-chips work above. */}
+            <button
+              type="button"
+              className={plusOpen ? "composer-chip plus on" : "composer-chip plus"}
+              onClick={() => setPlusOpen((value) => !value)}
+              aria-expanded={plusOpen}
+              aria-label="Open tools"
+            >
+              <Plus size={14} />
+            </button>
             {attach && (
               <button
                 type="button"
@@ -1771,6 +1963,31 @@ export function ChatView({
             )}
             {approval && (
               <ApprovalModeControl mode={approval.mode} setMode={approval.setMode} />
+            )}
+            {incognito && (
+              // Disabled once the thread exists: incognito is stamped at
+              // creation (flipping it later would misdescribe turns that
+              // already ran), so on a live thread the chip only reports.
+              <button
+                type="button"
+                className={
+                  incognito.on ? "composer-chip incognito-chip on" : "composer-chip incognito-chip"
+                }
+                onClick={incognito.toggle}
+                disabled={!incognito.toggle}
+                aria-pressed={incognito.on}
+                aria-label="Incognito"
+                title={
+                  incognito.toggle
+                    ? "Start this thread as a temporary chat — it won't read or write memory"
+                    : incognito.on
+                      ? "A temporary chat — this thread doesn't read or write memory"
+                      : "Set when a chat is created — use “New temporary chat” for the next one"
+                }
+              >
+                <EyeOff size={14} />
+                Incognito
+              </button>
             )}
             <span className="composer-spacer" />
             {activeRun ? (

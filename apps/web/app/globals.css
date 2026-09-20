@@ -1792,6 +1792,17 @@ label,
   line-height: 1.45;
 }
 
+/* The "+" tool menu rides the attach-menu float; its rows are a menu, not a
+   form, so they pack tighter and read from the left. */
+.attach-menu.plus-menu {
+  gap: 2px;
+}
+
+.plus-menu .plus-menu-row {
+  justify-content: flex-start;
+  text-align: left;
+}
+
 /* ---- Command palette ---- */
 
 .palette-scrim {
@@ -1926,6 +1937,57 @@ label,
   padding: 12px 14px;
   color: var(--text-dim);
   font-size: 11.5px;
+}
+
+/* ---- Shortcut cheat sheet ---- */
+
+/* Rides the palette's scrim and card chrome; the body is a keyed grid of
+   sections rather than a result list, so it pads and scrolls itself. */
+.palette.cheatsheet {
+  max-height: 72vh;
+  padding: 14px;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.cheatsheet-section h2 {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Two columns, key then label — the <kbd> chips share the palette's chrome. */
+.cheatsheet-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.cheatsheet-row kbd {
+  justify-self: start;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* The chords with the kill-switch off: present but visibly dormant. */
+.cheatsheet-row.dimmed {
+  opacity: 0.45;
+}
+
+.cheatsheet-note {
+  margin: 4px 0 0;
+  color: var(--text-dim);
+  font-size: 11px;
 }
 
 /* The rail row mid-rename: the input takes the whole row. */
@@ -3368,6 +3430,11 @@ label,
 
 .feature-empty span {
   font-size: 9px;
+}
+
+/* The shared empty-state's one primary action, spaced off the explanation. */
+.feature-empty .empty-action {
+  margin-top: 6px;
 }
 
 .graph-layout {
@@ -11411,4 +11478,254 @@ label,
    never wraps one. */
 .kanban-card:hover .todo-claim.free {
   opacity: 1;
+}
+
+/* ---- Memory: manual add and inline edit ---- */
+
+/* The inline "Add memory" card, above the list it will land in. The same
+   surface/border tokens as .memory-panel so it reads as part of the page,
+   not a dialog over it. */
+.memory-add-form {
+  width: min(1060px, 100%);
+  margin: 0 auto 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.memory-add-form textarea,
+.memory-edit-area textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.memory-add-form textarea:focus,
+.memory-edit-area textarea:focus {
+  outline: none;
+  border-color: var(--accent-border-strong);
+}
+
+.memory-form-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.memory-form-controls select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.memory-form-shared {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.memory-form-spacer {
+  flex: 1;
+}
+
+/* One memory's content swapped for its editor; lives inside the row, so it
+   only needs the gap between the textarea and its buttons. */
+.memory-edit-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 5px 0 3px;
+}
+
+.memory-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The pencil borrows .delete-button's box but not its red hover: editing is
+   not a destructive act, and a red pencil would say it is. */
+.memory-edit-button:hover {
+  background: var(--tint);
+  color: var(--accent);
+}
+
+/* ---- Incognito (temporary chats) ---- */
+
+/* The sidebar's paired doors: "New thread" keeps the track, the Ghost takes
+   only its own width. */
+.new-thread-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.new-thread-row .new-thread-button {
+  flex: 1;
+}
+
+.new-thread-row .new-thread-button.temporary {
+  flex: 0 0 auto;
+  width: 38px;
+  padding: 0;
+  justify-content: center;
+}
+
+.thread-incognito {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+/* The composer restating a state the user chose. Muted, not alarming — a
+   temporary chat is a feature working, not a warning. */
+.incognito-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.composer-zone.incognito .composer {
+  border-style: dashed;
+}
+
+.composer-chip.incognito-chip.on {
+  border-color: var(--accent-border-strong);
+  color: var(--accent);
+}
+
+/* The notice toast's optional way in ("View" on "Memory updated"): the
+   ghost-button look, sized down to the toast's 11px line. */
+.notice-toast .notice-action {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+/* ---- Shared-thread presence in the chat pane -----------------------------
+   The pointer layer's wrapper around the transcript has to take over the
+   scroll pane's place in .chat-layout's column — flex and min-height move up
+   one level, .message-scroll keeps its own. */
+.chat-cursor-box {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* "X is typing…" above the composer. Rendered whenever the thread is shared
+   — empty between keystrokes — so the reserved line-height keeps the composer
+   from jumping when a teammate starts. */
+.chat-typing {
+  margin: 0 0 4px;
+  min-height: 17px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 17px;
+}
+
+/* ---- Pointer layer over a board -------------------------------------------
+   Only a containing block (position: relative rides .live-cursor-layer);
+   deliberately no padding, background or size, so wrapping a board's columns
+   changes nothing until somebody else's cursor is actually there. */
+.board-cursor-box {
+  display: block;
+}
+
+/* ---- The document save-conflict banner ------------------------------------
+   Third mode of .document-live-banner: the server refused a save because a
+   newer version landed. Same warm treatment as a clash — it IS the clash,
+   caught by the precondition instead of silently last-write-won. */
+.document-live-banner.conflict {
+  color: var(--amber);
+  background: var(--amber-muted);
+}
+
+.document-conflict-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* ---- Share modal: people with access --------------------------------------
+   The workspace roster with presence dots. Renders the workspace-shared
+   model, it does not change it — everyone listed can already open the
+   resource. */
+.share-people {
+  display: grid;
+  gap: 8px;
+}
+
+.share-people-title {
+  font-size: 12.5px;
+}
+
+.share-people-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-people-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  font-size: 12.5px;
+}
+
+.share-people-row .admin-tag {
+  margin-left: auto;
+}
+
+.share-people-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-people-here {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Unlit until presence says otherwise; a lit dot's colour is set inline from
+   the member's own actorHue, so the dot and their cursor match. */
+.share-presence-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+/* "In this document": the same dot, ringed, because a second colour would
+   compete with the per-actor hue that makes the dot recognisable. */
+.share-presence-dot.here {
+  box-shadow: 0 0 0 2px var(--accent-border-strong);
 }

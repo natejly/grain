@@ -49,13 +49,25 @@ export type ChatHandlerDeps = {
   activeRun: string | null;
   setError: Dispatch<SetStateAction<string>>;
   /** The neutral toast — an outcome to read, not a failure. `sticky` keeps it
-   * open: an undo's skipped half must not vanish on a four-second timer. */
+   * open: an undo's skipped half must not vanish on a four-second timer.
+   * `action` renders one button beside the line ("View" on "Memory updated"). */
   setNotice: (
-    notice: { text: string; at: number; sticky?: boolean } | null,
+    notice: {
+      text: string;
+      at: number;
+      sticky?: boolean;
+      action?: { label: string; run: () => void };
+    } | null,
   ) => void;
   setView: Dispatch<SetStateAction<View>>;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
   setConversations: Dispatch<SetStateAction<Conversation[]>>;
+  /**
+   * The workspace's WRAPPED setter, not the raw state hook: it keeps
+   * `activeConversationRef` current synchronously (the guards below read it
+   * right after calling this) and schedules the `?t=` URL sync — so every
+   * thread-focus path here deep-links without bookkeeping of its own.
+   */
   setActiveConversation: Dispatch<SetStateAction<string | null>>;
   setMessages: Dispatch<SetStateAction<Message[]>>;
   setAgentCalls: Dispatch<SetStateAction<AgentToolCall[]>>;
@@ -78,6 +90,16 @@ export type ChatHandlerDeps = {
   refreshArtifacts: () => Promise<void>;
   refreshInfra: () => Promise<void>;
   refreshPendingEdits: () => Promise<void>;
+  /** Re-read the Memory page's list alone — the settle-time belt to the
+   * memory.updated event's braces, cheap enough to run per turn. */
+  refreshMemories: () => Promise<void>;
+  /**
+   * The composer's incognito toggle before any thread exists: the very first
+   * turn must not write memory, so the flag has to ride the creation the send
+   * path performs, not a later patch the server deliberately does not offer.
+   */
+  pendingIncognito: boolean;
+  clearPendingIncognito: () => void;
   activeConversationRef: RefObject<string | null>;
   activeProjectRef: RefObject<string | null>;
   activeDocumentRef: RefObject<string | null>;
@@ -122,13 +144,15 @@ export function createChatHandlers({
   refreshArtifacts,
   refreshInfra,
   refreshPendingEdits,
+  refreshMemories,
+  pendingIncognito,
+  clearPendingIncognito,
   activeConversationRef,
   activeProjectRef,
   activeDocumentRef,
 }: ChatHandlerDeps) {
   async function selectConversation(id: string) {
     setActiveConversation(id);
-    activeConversationRef.current = id;
     setSidebarOpen(false);
     setView("chat");
     setError("");
@@ -146,12 +170,20 @@ export function createChatHandlers({
     }
   }
 
-  async function newConversation(spaceId = "") {
+  // `incognito` defaults to the composer's pending toggle so the Ghost
+  // button's explicit `true` and a plain "New thread" both do what they say;
+  // the pending flag is consumed either way — it described the next thread,
+  // and this is the next thread.
+  async function newConversation(spaceId = "", incognito = pendingIncognito) {
     try {
-      const conversation = await api.createConversation(undefined, spaceId);
+      const conversation = await api.createConversation(
+        undefined,
+        spaceId,
+        incognito,
+      );
+      clearPendingIncognito();
       setConversations((items) => [conversation, ...items]);
       setActiveConversation(conversation.id);
-      activeConversationRef.current = conversation.id;
       setMessages([]);
       setView("chat");
       setSidebarOpen(false);
@@ -170,9 +202,12 @@ export function createChatHandlers({
    */
   async function ensureConversation(): Promise<string> {
     if (activeConversation) return activeConversation;
-    const created = await api.createConversation();
+    // Incognito must be stamped BEFORE the first turn runs, or that turn
+    // writes memory the user asked it not to — hence the pending flag rides
+    // the conjuring here, exactly like the "" draft composer's words do.
+    const created = await api.createConversation(undefined, "", pendingIncognito);
+    clearPendingIncognito();
     setActiveConversation(created.id);
-    activeConversationRef.current = created.id;
     setConversations((items) => [created, ...items]);
     return created.id;
   }
@@ -227,6 +262,11 @@ export function createChatHandlers({
       await refreshArtifacts().catch(() => undefined);
       await refreshInfra().catch(() => undefined);
       await refreshPendingEdits().catch(() => undefined);
+      // Belt to the memory.updated event's braces: a tab whose SSE is
+      // mid-redial still reconciles the Memory page when its own run settles.
+      // The workspace event remains the real carrier — extraction finishes
+      // after the run completes, so this refresh can land a beat early.
+      await refreshMemories().catch(() => undefined);
       const openProjectId = activeProjectRef.current;
       if (openProjectId) {
         setActiveProject(await api.getProject(openProjectId).catch(() => null));
@@ -253,7 +293,6 @@ export function createChatHandlers({
       const fork = await api.forkConversation(activeConversation, messageId);
       setConversations((items) => [fork, ...items]);
       setActiveConversation(fork.id);
-      activeConversationRef.current = fork.id;
       setView("chat");
       setSidebarOpen(false);
       const rows = await api.listMessages(fork.id);
@@ -331,7 +370,6 @@ export function createChatHandlers({
           await selectConversation(remaining[0].id);
         } else {
           setActiveConversation(null);
-          activeConversationRef.current = null;
           setMessages([]);
         }
       }

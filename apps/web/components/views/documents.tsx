@@ -26,6 +26,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import type { SaveConflict, SaveOutcome } from "../handlers/documents";
 import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
 import { LiveCursorLayer } from "../live-cursors";
 import { ShareLinksModal } from "../share-links-modal";
@@ -55,9 +56,21 @@ export type DocumentsViewProps = {
   folderOps: FolderOps;
   active: WorkspaceDocument | null;
   versions: DocumentVersion[];
-  openDocument: (documentId: string) => Promise<void>;
+  /** Resolving false means the load failed — "Reload theirs" reads it to
+   *  keep the conflict banner honest. `void` (older stubs) counts as loaded. */
+  openDocument: (documentId: string) => Promise<boolean | void>;
   createDocument: (title: string, kind: DocumentKind, folderId: string) => Promise<void>;
-  saveDocument: (documentId: string, content: string) => Promise<void>;
+  /**
+   * Save under the precondition that `baseVersionId` is still the head. The
+   * outcome drives the state machine: "saved" (and only "saved") marks the
+   * pane clean, a conflict renders the banner, "failed" leaves the dirty
+   * draft and whatever banner was up exactly where they were.
+   */
+  saveDocument: (
+    documentId: string,
+    content: string,
+    baseVersionId?: string,
+  ) => Promise<SaveOutcome>;
   restoreVersion: (documentId: string, versionId: string) => Promise<void>;
   removeDocument: (document: DocumentSummary) => Promise<void>;
   /** Open the shell's comments drawer about this document. */
@@ -76,6 +89,12 @@ export type DocumentsViewProps = {
    * no heartbeats sent.
    */
   coworking?: CoworkingState;
+  /** Deep-link to the Admin invites panel, for the Share popover's footer. */
+  openInvites?: () => void;
+  /** Whether this member can invite — owners only, per the Admin panel. */
+  canInvite?: boolean;
+  /** The signed-in member, so the Share popover's roster can mark "you". */
+  selfId?: string;
 };
 
 /**
@@ -151,9 +170,21 @@ export function DocumentsView({
   favorites,
   chat,
   coworking,
+  openInvites,
+  canInvite,
+  selfId,
 }: DocumentsViewProps) {
   const [draft, setDraft] = useState("");
   const [dirty, setDirty] = useState(false);
+  /**
+   * The refused save the banner is showing, or null. The state machine:
+   * clean → dirty (keystroke) → saving (Save/⌘S sends the loaded head as its
+   * base) → saved, or → conflict (409; draft and dirty kept). From conflict,
+   * "Reload theirs" re-opens the document — the sync effect below resets the
+   * draft to theirs and clears this — and "Overwrite anyway" resends against
+   * the head the banner just showed, converging or re-arming with a newer one.
+   */
+  const [conflict, setConflict] = useState<SaveConflict | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showChat, setShowChat] = useState(false);
   // Whether the share-links modal is open, about the active document. The
@@ -193,10 +224,14 @@ export function DocumentsView({
     if (!active) {
       setDraft("");
       setDirty(false);
+      setConflict(null);
       return;
     }
     setDraft(active.content);
     setDirty(false);
+    // A fresh load or a landed save is a fresh base; whatever conflict was on
+    // screen is about a version this pane is no longer holding.
+    setConflict(null);
   }, [active?.id, active?.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A proposed create has no document to sit under, so it rides along with the
@@ -338,7 +373,11 @@ export function DocumentsView({
       if (event.key !== "s" || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
       if (!dirty || editingPaused) return;
-      void saveDocument(active.id, draft).then(() => setDirty(false));
+      void saveDocument(active.id, draft, active.head_version_id).then((result) => {
+        // Clean only on the server's word; "failed" keeps the dirty draft.
+        if (result === "saved") setDirty(false);
+        else if (result !== "failed") setConflict(result);
+      });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -513,8 +552,11 @@ export function DocumentsView({
                     : undefined
                 }
                 onClick={async () => {
-                  await saveDocument(active.id, draft);
-                  setDirty(false);
+                  const result = await saveDocument(active.id, draft, active.head_version_id);
+                  // Same rule as ⌘S: only the server's "saved" flips the
+                  // label — a failed save must keep offering Save.
+                  if (result === "saved") setDirty(false);
+                  else if (result !== "failed") setConflict(result);
                 }}
               >
                 <Save size={14} /> {dirty ? "Save" : "Saved"}
@@ -629,6 +671,39 @@ export function DocumentsView({
             </>
           ) : (
             <>
+              {/* Only while the refused draft is still on screen: reloading
+                  or saving clears `dirty`/`conflict` and the banner with it. */}
+              {conflict && dirty && (
+                <LiveEditBanner
+                  conflict={{
+                    reload: () => {
+                      // The banner clears only when their version actually
+                      // arrived; a failed reload over a dirty draft keeps it.
+                      void openDocument(active.id).then((loaded) => {
+                        if (loaded !== false) setConflict(null);
+                      });
+                    },
+                    overwrite: () => {
+                      // Resend against exactly the head the banner showed: it
+                      // wins over that version, re-arms with a newer one, or
+                      // — on any other failure — changes NOTHING: the banner
+                      // stays, the draft stays dirty, and the error toast the
+                      // handler raised says why. A blown resend must never
+                      // read as "Saved" over words the server never stored.
+                      void saveDocument(active.id, draft, conflict.headVersionId).then(
+                        (result) => {
+                          if (result === "saved") {
+                            setConflict(null);
+                            setDirty(false);
+                          } else if (result !== "failed") {
+                            setConflict(result);
+                          }
+                        },
+                      );
+                    },
+                  }}
+                />
+              )}
               {(following || clash) && editingOther && (
                 <LiveEditBanner
                   editor={liveEditor ?? editingOther}
@@ -704,6 +779,20 @@ export function DocumentsView({
           resourceId={active.id}
           resourceName={active.title}
           close={() => setSharing(false)}
+          // The collaboration half of Share: the workspace roster with
+          // presence dots, and the owner's way to grow it. Only where the
+          // shell wired the invites door — the modal stays link-only without.
+          people={
+            openInvites
+              ? {
+                  coworking,
+                  surface: `document:${active.id}`,
+                  selfId: selfId ?? "",
+                  canInvite: Boolean(canInvite),
+                  openInvites,
+                }
+              : undefined
+          }
         />
       )}
 

@@ -66,7 +66,10 @@ type PendingBeat = {
 
 export function useCoworking(
   selfId: string,
-  onEvent?: (eventType: string) => void,
+  // Durable events carry their payload through so a consumer can filter (the
+  // memory.updated toast reads its run_id); the presence/pointer channels are
+  // untouched — runs and presence frames never reach this callback.
+  onEvent?: (eventType: string, data?: unknown) => void,
 ): CoworkingState {
   const [runs, setRuns] = useState<CoworkingRun[]>([]);
   const [presences, setPresences] = useState<CoworkingPresence[]>([]);
@@ -101,7 +104,7 @@ export function useCoworking(
             } else if (frame.event === "presence") {
               setPresences(frame.data as CoworkingPresence[]);
             } else {
-              onEventRef.current?.(frame.event);
+              onEventRef.current?.(frame.event, frame.data);
             }
           }
         } catch {
@@ -174,19 +177,38 @@ export function useCoworking(
         queue(surface, held, POINTER_THROTTLE_MS);
         return;
       }
+      // Nothing held means nothing to clear: a layer that unmounts (or blurs)
+      // without the mouse ever crossing it must not beat at all, or a page of
+      // cursor layers — one per board — would stamp its user onto every
+      // surface on the way out. Any queued *editing* beat still lands on its
+      // own timer; only the pointer channel has nothing to say here.
+      if (!pointers.current.has(surface)) return;
       pointers.current.delete(surface);
       // The clear goes out NOW, and any beat still queued behind it is
-      // dropped. Both halves matter on unmount: the surface's `leave` fires
-      // immediately after this, and a throttled beat landing after that DELETE
-      // would recreate the presence row — a stranger left standing on the
-      // surface, cursor and all, until the TTL swept them fifteen seconds
-      // later. Going out immediately also means a cursor disappears when the
-      // mouse leaves rather than a tenth of a second afterwards.
+      // dropped. Both halves matter on unmount: a throttled beat landing
+      // after the goodbye would recreate the presence row — a stranger left
+      // standing on the surface, cursor and all, until the TTL swept them
+      // fifteen seconds later. Going out immediately also means a cursor
+      // disappears when the mouse leaves rather than a tenth of a second
+      // afterwards.
       if (entry?.timer != null) {
         window.clearTimeout(entry.timer);
         entry.timer = null;
       }
-      if (entry) entry.lastSent = Date.now();
+      // A surface whose only claim was the pointer — a board, a chat nobody
+      // typed into from here — has nothing left to say once the pointer goes,
+      // so the clear IS the goodbye: drop the pending entry (or the re-beat
+      // loop re-sends the empty state forever, keeping the user "here" on
+      // every board the mouse ever crossed) and DELETE the row rather than
+      // beating it one last time. Surfaces with reported state (a document's
+      // editing beat, a thread's typing chip) keep their entry: their view
+      // owns the surface and says its own goodbye via `leave`.
+      if (!entry || Object.keys(entry.state).length === 0) {
+        pending.current.delete(surface);
+        void api.leavePresence(surface).catch(() => undefined);
+        return;
+      }
+      entry.lastSent = Date.now();
       send(surface, held);
     },
     [queue, send],

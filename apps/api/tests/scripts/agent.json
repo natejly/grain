@@ -22,6 +22,36 @@
     ]
   },
   {
+    "match": "aurora gateway is maintained by the tools team",
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "Aurora Gateway is maintained by the tools team.",
+        "entities": ["Aurora Gateway"]
+      }
+    ]
+  },
+  {
+    "match": "helios array powers the beacon relay",
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "Helios Array powers the beacon relay.",
+        "entities": ["Helios Array"]
+      }
+    ]
+  },
+  {
+    "match": "nimbus relay guards the night shift",
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "Nimbus Relay guards the night shift.",
+        "entities": ["Nimbus Relay"]
+      }
+    ]
+  },
+  {
     "match": "orion initiative belongs to the platform team",
     "memories": [
       {

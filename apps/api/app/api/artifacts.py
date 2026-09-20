@@ -25,7 +25,7 @@ from ..services.ingestion import remove_object_files
 router = APIRouter(prefix="/api", tags=["artifacts"])
 
 
-def _document_out(document: Document) -> DocumentOut:
+def _document_out(document: Document, head_version_id: str = "") -> DocumentOut:
     return DocumentOut(
         id=document.id,
         title=document.title,
@@ -33,6 +33,7 @@ def _document_out(document: Document) -> DocumentOut:
         content=document.content,
         folder_id=document.folder_id,
         updated_at=document.updated_at,
+        head_version_id=head_version_id,
     )
 
 
@@ -91,7 +92,12 @@ def get_document(
         )
     except documents.DocumentError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _document_out(document)
+    return _document_out(
+        document,
+        documents.head_version_id(
+            db, workspace_id=actor.workspace_id, document_id=document_id
+        ),
+    )
 
 
 @router.put("/documents/{document_id}", response_model=DocumentOut)
@@ -118,10 +124,34 @@ def update_document(
             document_id=document_id,
             content=payload.content,
             created_by=actor.user_id,
+            base_version_id=payload.base_version_id,
         )
+    # Before DocumentError: DocumentConflict is a subclass, and a stale base
+    # is 409-with-machine-detail, not 422. Content is deliberately left out
+    # of the payload — the client re-GETs on "reload theirs".
+    except documents.DocumentConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "document_version_conflict",
+                "message": "This document was saved after you loaded it",
+                "head_version_id": exc.head_version_id,
+                "updated_at": exc.updated_at.isoformat(),
+                "saved_by": exc.saved_by,
+            },
+        ) from exc
     except documents.DocumentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _document_out(document)
+    # The head from the version row THIS save inserted, not a post-commit
+    # re-query: a concurrent save landing in between must not hand this
+    # caller its head as their next base. The fallback covers the
+    # identical-content no-op, which inserts nothing and moves no head.
+    head = getattr(document, "saved_head_version_id", None)
+    if head is None:
+        head = documents.head_version_id(
+            db, workspace_id=actor.workspace_id, document_id=document_id
+        )
+    return _document_out(document, head)
 
 
 @router.get("/documents/{document_id}/versions", response_model=List[DocumentVersionOut])
@@ -169,7 +199,12 @@ def restore_version(
         )
     except documents.DocumentError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _document_out(document)
+    return _document_out(
+        document,
+        documents.head_version_id(
+            db, workspace_id=actor.workspace_id, document_id=document_id
+        ),
+    )
 
 
 @router.delete("/documents/{document_id}", status_code=204)
