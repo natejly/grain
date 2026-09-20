@@ -24,7 +24,7 @@ jobs:
       # MEMORY_SUPERSESSION=1 is pinned explicitly even though it is the
       # default: an ablated run is EXPECTED to fail the stale ceiling, and CI
       # must never inherit an ambient ablation.
-      - run: MEMORY_SUPERSESSION=1 PYTHONPATH=apps/api python apps/api/scripts/evaluate_memory.py
+      - run: APP_ENV=development MEMORY_SUPERSESSION=1 PYTHONPATH=apps/api python apps/api/scripts/evaluate_memory.py
 
       - uses: actions/setup-node@v4
         with:
