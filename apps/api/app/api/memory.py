@@ -254,11 +254,12 @@ def update_memory(
     # commit — and an edit that commits onto a retired row is acknowledged
     # with 200 and then invisible everywhere. One conditional UPDATE decides
     # it (the coworking.claim_card shape): zero rows means the slot moved on.
-    still_active = db.execute(
+    liveness = db.execute(
         update(MemoryItem)
         .where(MemoryItem.id == memory_id, MemoryItem.status == "active")
         .values(updated_at=utcnow())
-    ).rowcount
+    )
+    still_active = (getattr(liveness, "rowcount", 0) or 0) > 0
     if not still_active:
         db.rollback()
         raise HTTPException(

@@ -509,11 +509,12 @@ def replace_content(
     document.content = content
     db.commit()
     # The head THIS save produced, stamped on the returned instance (a plain
-    # Python attribute, not a column). The PUT route used to recompute the
-    # head with a second query after the commit, and a save landing in that
+    # Python attribute, not a column — setattr keeps it off the 2.0 mapper,
+    # pairing with the route's getattr read). The PUT route used to recompute
+    # the head with a second query after the commit, and a save landing in that
     # window handed the caller someone else's head as their new base — their
     # next save then passed the precondition over content they never saw.
-    document.saved_head_version_id = snapshot.id
+    setattr(document, "saved_head_version_id", snapshot.id)
     return document
 
 
