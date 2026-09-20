@@ -114,6 +114,7 @@ def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationO
         subject_id=conversation.subject_id,
         approval_mode=cast(ApprovalMode, conversation.approval_mode),
         shared=bool(conversation.shared),
+        incognito=bool(conversation.incognito),
         owned=conversation.created_by == actor.user_id,
         can_share=_can_share(conversation, actor),
         space_id=conversation.space_id,
@@ -262,6 +263,7 @@ def create_conversation(
         workspace_id=actor.workspace_id,
         created_by=actor.user_id,
         title=payload.title.strip() or "New conversation",
+        incognito=payload.incognito,
         space_id=space_id,
         default_agent_id=default_agent_id,
         approval_mode=conversations.default_approval_mode(
@@ -353,6 +355,9 @@ def fork_conversation(
         created_by=actor.user_id,
         title=(payload.title.strip() or f"Fork of {source.title}")[:200],
         shared=False,
+        # A transcript the user kept out of memory must not start feeding it
+        # because they forked.
+        incognito=bool(source.incognito),
         space_id=source.space_id,
         # A fork continues the source's work, so it continues its posture: a
         # thread deliberately put in `plan` or `ask_all` would otherwise have

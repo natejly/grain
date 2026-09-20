@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, Trash2, User, Users } from "lucide-react";
+import { Pencil, Plus, Search, Trash2, User, Users } from "lucide-react";
 import type {
   Conversation,
   GraphEntity,
@@ -27,6 +27,23 @@ export type MemoryViewProps = {
   openEntity?: (entityId: string) => void;
   focused?: string | null;
   setFocused?: (id: string | null) => void;
+  /**
+   * Add a memory by hand. Optional like the cross-links, so the view still
+   * mounts bare; no space picker is offered on purpose — a manual add lands
+   * on the workspace-wide shelf, and scope stays a choice between exactly
+   * "mine" and "everyone's".
+   */
+  addMemory?: (input: {
+    content: string;
+    kind: "fact" | "preference";
+    shared: boolean;
+  }) => Promise<boolean | void>;
+  /** Rewrite one memory's sentence in place — a new value, never a re-scope.
+   *  Summary rows never offer it: the rolling summary rewrites itself.
+   *  Both handlers resolve `false` when the server refused the write (the
+   *  409 dedup, a network blip); the form then stays open with the draft.
+   *  `void` — older stubs, read-only mounts — counts as accepted. */
+  editMemory?: (item: MemoryItem, content: string) => Promise<boolean | void>;
 };
 
 /**
@@ -87,9 +104,45 @@ export function MemoryView({
   openEntity,
   focused = null,
   setFocused = noFocus,
+  addMemory,
+  editMemory,
 }: MemoryViewProps) {
   const [query, setQuery] = useState("");
+  // The add form and per-row edit drafts. Local component state only: an
+  // abandoned half-typed memory is not a thing worth remembering, unlike a
+  // composer draft, so no storage rides along.
+  const [adding, setAdding] = useState(false);
+  const [addDraft, setAddDraft] = useState("");
+  const [addKind, setAddKind] = useState<"fact" | "preference">("fact");
+  const [addShared, setAddShared] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   useFocusReveal("memory", focused, setFocused);
+
+  const submitAdd = async () => {
+    const content = addDraft.trim();
+    if (!content || !addMemory) return;
+    // A refused save (the dedup 409, a network blip) keeps the form open
+    // with the sentence as typed — the error names why, and closing over it
+    // would discard up to 900 characters the server never took.
+    if ((await addMemory({ content, kind: addKind, shared: addShared })) === false) {
+      return;
+    }
+    setAddDraft("");
+    setAddKind("fact");
+    setAddShared(false);
+    setAdding(false);
+  };
+
+  const submitEdit = async (item: MemoryItem) => {
+    const content = editDraft.trim();
+    if (!content || !editMemory) return;
+    // Same contract as the add form: only an accepted write closes the
+    // editor; a refusal keeps the draft in place for the user to adjust.
+    if ((await editMemory(item, content)) === false) return;
+    setEditingId(null);
+    setEditDraft("");
+  };
   const entities = graph?.entities ?? [];
   const needle = query.trim().toLowerCase();
   const matches = needle
@@ -105,6 +158,16 @@ export function MemoryView({
           <h1>Memory</h1>
           <p>What the agent learned from talking with you, rather than from your files.</p>
         </div>
+        {addMemory && (
+          <button
+            className="ghost-button memory-add-button"
+            aria-expanded={adding}
+            onClick={() => setAdding((value) => !value)}
+          >
+            <Plus size={14} />
+            Add memory
+          </button>
+        )}
         {memories.length > 0 && (
           <label className="memory-search">
             <Search size={14} />
@@ -117,6 +180,64 @@ export function MemoryView({
           </label>
         )}
       </div>
+
+      {addMemory && adding && (
+        <div className="memory-add-form">
+          <textarea
+            value={addDraft}
+            onChange={(event) => setAddDraft(event.target.value)}
+            placeholder="Something the assistant should always know…"
+            maxLength={900}
+            rows={2}
+            aria-label="New memory"
+            autoFocus
+          />
+          <div className="memory-form-controls">
+            <select
+              value={addKind}
+              onChange={(event) =>
+                setAddKind(event.target.value as "fact" | "preference")
+              }
+              aria-label="Kind of memory"
+            >
+              <option value="fact">fact</option>
+              <option value="preference">preference</option>
+            </select>
+            {/* Same title the rows' shared badge carries, so the checkbox
+                says exactly what it is about to do — this is the one control
+                here that widens who a sentence reaches. */}
+            <label
+              className="memory-form-shared"
+              title="Every member of this workspace is answered from this"
+            >
+              <input
+                type="checkbox"
+                checked={addShared}
+                onChange={(event) => setAddShared(event.target.checked)}
+              />
+              {addShared ? <Users size={12} /> : <User size={12} />}
+              Share with the workspace
+            </label>
+            <span className="memory-form-spacer" />
+            <button
+              className="ghost-button"
+              onClick={() => {
+                setAdding(false);
+                setAddDraft("");
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="ghost-button"
+              disabled={!addDraft.trim()}
+              onClick={() => void submitAdd()}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
 
       {memories.length === 0 ? (
         <div className="empty-state">
@@ -180,7 +301,39 @@ export function MemoryView({
                         {spaceName}
                       </span>
                     )}
-                    <p>{item.content}</p>
+                    {editingId === item.id && editMemory ? (
+                      <div className="memory-edit-area">
+                        <textarea
+                          value={editDraft}
+                          onChange={(event) => setEditDraft(event.target.value)}
+                          maxLength={900}
+                          rows={2}
+                          aria-label="Edit this memory"
+                          autoFocus
+                        />
+                        <div className="memory-form-controls">
+                          <span className="memory-form-spacer" />
+                          <button
+                            className="ghost-button"
+                            onClick={() => {
+                              setEditingId(null);
+                              setEditDraft("");
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            className="ghost-button"
+                            disabled={!editDraft.trim()}
+                            onClick={() => void submitEdit(item)}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p>{item.content}</p>
+                    )}
                     <small>
                       {item.entity_names.map((name) => {
                         const entity = entityFor(item, name, entities);
@@ -225,14 +378,32 @@ export function MemoryView({
                       updated {formatRelative(item.updated_at)}
                     </small>
                   </div>
-                  <button
-                    className="delete-button"
-                    title="Forget this memory"
-                    aria-label="Forget this memory"
-                    onClick={() => void forgetMemory(item)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="memory-actions">
+                    {/* Never on a summary row: the rolling summary rewrites
+                        itself, and the server answers a PATCH of one with a
+                        422 saying exactly that. */}
+                    {editMemory && item.kind !== "summary" && (
+                      <button
+                        className="delete-button memory-edit-button"
+                        title="Edit this memory"
+                        aria-label="Edit this memory"
+                        onClick={() => {
+                          setEditingId(item.id);
+                          setEditDraft(item.content);
+                        }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
+                    <button
+                      className="delete-button"
+                      title="Forget this memory"
+                      aria-label="Forget this memory"
+                      onClick={() => void forgetMemory(item)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
                 );
               })}

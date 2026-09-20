@@ -3,6 +3,8 @@
 import { ChevronDown, ChevronUp, KanbanSquare, ListChecks, Plus, Trash2 } from "lucide-react";
 import type { Board } from "@workspace/api-client";
 import { useState } from "react";
+import { LiveCursorLayer } from "../live-cursors";
+import type { CoworkingState } from "../use-coworking";
 import {
   AddColumn,
   type BoardColumnOps,
@@ -33,6 +35,12 @@ export type BoardViewProps = {
   favorites?: FavoritesApi;
   /** Who is looking, for the claim chips — see TodoChecklistProps.selfId. */
   selfId?: string;
+  /**
+   * The shell's live-coworking channel, for the pointer layer over each
+   * board. Optional like everywhere else: without it the page renders
+   * identically and no heartbeat is ever sent.
+   */
+  coworking?: CoworkingState;
 };
 
 /** The glyph an entry wears — the whole visible difference between the shapes. */
@@ -506,6 +514,7 @@ export function BoardView({
   todoOps,
   favorites,
   selfId,
+  coworking,
 }: BoardViewProps) {
   const [name, setName] = useState("");
   const [shape, setShape] = useState<"board" | "list">("board");
@@ -566,30 +575,41 @@ export function BoardView({
         boards.map((board) =>
           isTodoList(board) ? (
             <section key={board.id} className="board" data-shape={glyphFor(board)}>
-              <TodoChecklist
-                list={board}
-                ops={gatedTodoOps}
-                selfId={selfId}
-                // The list IS a board, so its header carries the same star —
-                // threaded in because the checklist's chat mount has none.
-                headerExtra={
-                  favorites && (
-                    <FavoriteStar
-                      kind="board"
-                      targetId={board.id}
-                      label={board.name}
-                      favorites={favorites}
-                    />
-                  )
-                }
-              />
+              {/* One pointer layer per board, not per page: two people on
+                  different boards should not see each other's cursors. The
+                  layer alone creates the presence beat (reportPointer merges
+                  the pointer at send time), and board surfaces are
+                  workspace-shared server-side, so no report() is added. */}
+              <LiveCursorLayer
+                surface={`board:${board.id}`}
+                coworking={coworking}
+                className="board-cursor-box"
+              >
+                <TodoChecklist
+                  list={board}
+                  ops={gatedTodoOps}
+                  selfId={selfId}
+                  // The list IS a board, so its header carries the same star —
+                  // threaded in because the checklist's chat mount has none.
+                  headerExtra={
+                    favorites && (
+                      <FavoriteStar
+                        kind="board"
+                        targetId={board.id}
+                        label={board.name}
+                        favorites={favorites}
+                      />
+                    )
+                  }
+                />
 
-              {/* The graduation affordance: the same Add column a board offers.
-                  Grow a second column and this entry redraws as a board — same
-                  place, same items, ticks intact. */}
-              {columnOps && (
-                <AddColumn onAdd={(columnName) => columnOps.addColumn(board.id, columnName)} />
-              )}
+                {/* The graduation affordance: the same Add column a board offers.
+                    Grow a second column and this entry redraws as a board — same
+                    place, same items, ticks intact. */}
+                {columnOps && (
+                  <AddColumn onAdd={(columnName) => columnOps.addColumn(board.id, columnName)} />
+                )}
+              </LiveCursorLayer>
             </section>
           ) : (
             <section key={board.id} className="board" data-shape={glyphFor(board)}>
@@ -614,15 +634,22 @@ export function BoardView({
                   <Trash2 size={15} />
                 </button>
               </header>
-              <BoardCanvas
-                board={board}
-                addCard={addCard}
-                moveCard={moveCard}
-                removeCard={removeCard}
-                ops={columnOps}
-                todoOps={gatedTodoOps}
-                selfId={selfId}
-              />
+              {/* Same one-layer-per-board rule as the list branch above. */}
+              <LiveCursorLayer
+                surface={`board:${board.id}`}
+                coworking={coworking}
+                className="board-cursor-box"
+              >
+                <BoardCanvas
+                  board={board}
+                  addCard={addCard}
+                  moveCard={moveCard}
+                  removeCard={removeCard}
+                  ops={columnOps}
+                  todoOps={gatedTodoOps}
+                  selfId={selfId}
+                />
+              </LiveCursorLayer>
             </section>
           ),
         )

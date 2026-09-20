@@ -30,6 +30,13 @@ the `subject|relation` claim key the extractor is asked to return for that fact,
 which is the one thing a harness with no model has to supply: the corpus asserts
 that two phrasings of one claim share a key and that unrelated claims do not, and
 the code under test decides everything that follows from that.
+
+Floors were re-baselined against the IDF/entity-token lexical change, which is
+the only changed term this corpus can observe. It cannot observe the scoring
+weights at all — see the honesty note above FLOORS — so no floor here certifies
+memory_recency_weight, memory_recency_half_life_days or
+memory_importance_weight; those are pinned by the ordering tests in
+tests/test_memory_depth.py instead.
 """
 from __future__ import annotations
 
@@ -68,12 +75,27 @@ EMBED_DIM = 64
 # 0/5 with every category's recall unmoved, so it is now held there. A run with
 # MEMORY_SUPERSESSION=0 is expected to fail this ceiling: that failure is the
 # ablation's result, not a broken harness.
+#
+# What the 0.95 floors do and do not certify. They pin categories that are
+# STRUCTURALLY INVARIANT to the recency/importance scoring weights: every
+# workspace here seeds at most 3 facts against memory_recall_limit=6, so the
+# top-k cut never binds and score ORDER cannot change a hit — the floors gate
+# admission (`lexical > 0 or semantic > 0.3`) and supersession only. And every
+# row is seeded "now" (_seed_workspace), so the recency term is a constant
+# across candidates. Consequently no category exercises memory_recency_weight,
+# memory_recency_half_life_days or memory_importance_weight — a typo'd weight
+# passes this gate byte-identically. What the categories DO exercise: all five
+# drive the lexical/semantic admission gate (the IDF re-weighting preserves
+# "nonzero iff overlap", so it reorders without admitting), and
+# knowledge_update plus temporal drive supersession, which the STALE ceiling
+# measures. The corpus carries no entity names either; entity-token candidacy
+# and the weight orderings are pinned by tests/test_memory_depth.py, not here.
 FLOORS: Dict[str, float] = {
     "preference": 0.60,
-    "single_session": 0.60,
-    "multi_session": 0.50,
-    "temporal": 0.50,
-    "knowledge_update": 0.50,
+    "single_session": 0.95,
+    "multi_session": 0.95,
+    "temporal": 0.95,
+    "knowledge_update": 0.95,
 }
 STALE_CEILING = 0.0
 

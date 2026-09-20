@@ -4,6 +4,7 @@ import type { Dataset, DatasetQueryResult, Source } from "@workspace/api-client"
 import { BarChart3, Plus, RefreshCw, Table2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
+import { EmptyState } from "./empty-state";
 import { describeError, formatRelative, isTabular } from "./shared";
 
 /**
@@ -31,6 +32,11 @@ export type DatasetsViewProps = {
    */
   chartThis: (dataset: Dataset) => void;
   setError: (message: string) => void;
+  /**
+   * Land on the Sources view — the empty state's action. Optional so the view
+   * still mounts bare in tests; without it the empty state shows no button.
+   */
+  openSources?: () => void;
 };
 
 function TabularSourcePicker({
@@ -70,6 +76,7 @@ export function DatasetsView({
   createVersion,
   chartThis,
   setError,
+  openSources,
 }: DatasetsViewProps) {
   const [openId, setOpenId] = useState("");
   const [preview, setPreview] = useState<DatasetQueryResult | null>(null);
@@ -164,12 +171,13 @@ export function DatasetsView({
       )}
 
       {datasets.length === 0 ? (
-        <div className="empty-state">
-          <p>
-            No datasets yet. Attach a CSV in chat — the popover offers to make
-            one — or create one here from an indexed source.
-          </p>
-        </div>
+        <EmptyState
+          icon={Table2}
+          title="No datasets yet"
+          line="Attach a CSV in chat or make one from an indexed source."
+          actionLabel="Go to Sources"
+          onAction={openSources}
+        />
       ) : (
         <div className="dataset-layout">
           <ul className="dataset-list" aria-label="Datasets">

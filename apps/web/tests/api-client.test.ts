@@ -383,6 +383,56 @@ describe("WorkspaceApi", () => {
     expect(bodies[1]).not.toHaveProperty("skill_args");
   });
 
+  it("carries a structured detail on the error instead of dropping it", async () => {
+    // The document 409 is the first consumer: the editor branches on
+    // `detail.code`, and the human sentence rides `detail.message` up into
+    // the error's own message rather than "Request failed (409)".
+    const detail = {
+      code: "document_version_conflict",
+      message: "This document was saved after you loaded it",
+      head_version_id: "v-head",
+      updated_at: "2026-09-20T10:00:00Z",
+      saved_by: "user-2",
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      new WorkspaceApi("http://example.test").saveDocument("doc-1", "text", "v-base"),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "This document was saved after you loaded it",
+      detail,
+    });
+  });
+
+  it("sends base_version_id only when a base is actually given", async () => {
+    // An omitted base is the legacy unconditional save — the attachment pane
+    // and every existing caller must keep a byte-identical body.
+    const bodies: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    });
+    const api = new WorkspaceApi("http://example.test");
+
+    await api.saveDocument("doc-1", "text");
+    await api.saveDocument("doc-1", "text", "v-base");
+    // "" is a real base — the never-saved document's honest token — and must
+    // go on the wire, not be dropped as falsy.
+    await api.saveDocument("doc-1", "text", "");
+
+    expect(bodies[0]).toEqual({ content: "text" });
+    expect(bodies[1]).toEqual({ content: "text", base_version_id: "v-base" });
+    expect(bodies[2]).toEqual({ content: "text", base_version_id: "" });
+  });
+
   it("parses ordered resumable SSE events", async () => {
     const body = [
       "id: 3",

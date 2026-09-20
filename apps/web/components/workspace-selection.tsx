@@ -14,6 +14,7 @@ import {
 import { api } from "./api";
 import { AuthSplash } from "./auth/auth-screen";
 import { DisclosureMenu } from "./disclosure-menu";
+import { clearWorkspaceUrl } from "./view-url";
 
 /**
  * Which of the user's workspaces the app is about, and the control that changes
@@ -131,6 +132,12 @@ export function WorkspaceSelection({ children }: { children: React.ReactNode }) 
       if (workspaceId === currentId) return;
       api.setWorkspaceId(workspaceId);
       persist(workspaceId);
+      // Before the remount reads it: the fresh shell re-parks whatever
+      // `?t=`/`?view=` still say, and the old workspace's thread id must not
+      // ride into the new one's address bar — the known-thread fence already
+      // refuses to OPEN it, but a URL that keeps naming it is a link that
+      // lies to whoever it is copied for.
+      clearWorkspaceUrl();
       setCurrentId(workspaceId);
     },
     [currentId],
@@ -139,11 +146,12 @@ export function WorkspaceSelection({ children }: { children: React.ReactNode }) 
   const create = useCallback(async (name: string) => {
     const made = await api.createWorkspace(name);
     setWorkspaces((held) => [...(held ?? []), made]);
-    // Same three steps as `select`, inlined rather than called: `select`
+    // Same steps as `select`, inlined rather than called: `select`
     // early-returns when the id already matches, and its `currentId`
     // dependency is a render behind the row we just added.
     api.setWorkspaceId(made.id);
     persist(made.id);
+    clearWorkspaceUrl();
     setCurrentId(made.id);
     return made;
   }, []);

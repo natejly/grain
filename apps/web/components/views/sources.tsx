@@ -1,9 +1,10 @@
 "use client";
 
-import { ExternalLink, File, Plus, Trash2, UploadCloud } from "lucide-react";
+import { ExternalLink, File, FileUp, Plus, Trash2, UploadCloud } from "lucide-react";
 import type { KnowledgeGraph, Source, Space } from "@workspace/api-client";
 import { useState } from "react";
 import { api } from "../api";
+import { EmptyState } from "./empty-state";
 import { describeError, formatBytes, formatRelative, statusLabel } from "./shared";
 import { spaceNameForId } from "./space-threads";
 import { useFocusReveal } from "./use-focus-reveal";
@@ -178,9 +179,15 @@ export function SourcesView({
           <span />
         </div>
         {sources.length === 0 ? (
-          <div className="table-empty">
-            <strong>No sources yet</strong>
-          </div>
+          <EmptyState
+            icon={FileUp}
+            title="No sources yet"
+            line="Upload a file and every chat can cite it."
+            actionLabel="Upload a file"
+            // The view's existing upload path — the same input the header's
+            // Add source button and the drop zone click through to.
+            onAction={() => fileInputRef.current?.click()}
+          />
         ) : (
           sources.map((source) => {
             // How far this file reached: the graph entities it projected into.

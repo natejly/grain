@@ -24,7 +24,12 @@ from .citations import summarize_citations, validate_citations
 from .conversation_index import update_conversation_index
 from .errors import user_facing_message
 from .events import append_event
-from .memory import recall, render_memory_context, write_conversation_memory
+from .memory import (
+    memory_opted_in,
+    recall,
+    render_memory_context,
+    write_conversation_memory,
+)
 from .model import stream_words
 from .retrieval import Evidence, search_evidence
 from .tools import ToolSecurityError, execute_read_only_get, parse_tool_prompt
@@ -523,7 +528,15 @@ def process_run(run_id: str) -> None:
         settings = get_settings()
         transcript = _transcript(db, run)
         memory_context = ""
-        if settings.memory_enabled:
+        # When the member opted out or the thread is incognito, memory_context
+        # stays "" and NO memory.recalled event is emitted: silence says memory
+        # did not run, where a count-0 event would say it did.
+        if settings.memory_enabled and memory_opted_in(
+            db,
+            workspace_id=run.workspace_id,
+            user_id=run.created_by,
+            conversation_id=run.conversation_id,
+        ):
             context = recall(
                 db,
                 workspace_id=run.workspace_id,

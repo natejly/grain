@@ -309,6 +309,21 @@
     ]
   },
   {
+    "match": "remember the atlas launch window",
+    "steps": [
+      {
+        "text": "Noted: the Atlas launch window is March."
+      }
+    ],
+    "memories": [
+      {
+        "kind": "fact",
+        "content": "The Atlas launch window is March.",
+        "entities": ["Atlas"]
+      }
+    ]
+  },
+  {
     "match": "track the guarded checklist",
     "steps": [
       {

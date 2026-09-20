@@ -111,6 +111,47 @@ def _visible_presences(
     ]
 
 
+def _event_visible(
+    db: Session, *, workspace_id: str, user_id: str, event: WorkspaceEvent
+) -> bool:
+    """Per-viewer filtering for durable events, the runs/presence doctrine.
+
+    Every durable event used to concern a workspace-shared board, so the relay
+    could be verbatim. `memory.updated` is sourced from possibly-personal
+    activity — a run in a personal thread, a manual add of a personal row —
+    and its payload names the conversation and the memory ids, which is
+    exactly the metadata `run_activity_visible` and `_presence_surface_visible`
+    exist to hide. The payload carries its own visibility: `owner_id` ("" is
+    shared — everyone) and `conversation_id`, checked with the same
+    `resolve_visible` rule the presence gate uses. Anything unparseable or
+    unmarked stays visible, which is the pre-existing behaviour for every
+    other event type.
+    """
+    if event.event_type != "memory.updated":
+        return True
+    try:
+        payload = json.loads(event.payload_json)
+    except ValueError:
+        return True
+    if not isinstance(payload, dict):
+        return True
+    owner_id = str(payload.get("owner_id") or "")
+    if owner_id and owner_id != user_id:
+        return False
+    conversation_id = str(payload.get("conversation_id") or "")
+    if not conversation_id:
+        return True
+    return (
+        conversations.resolve_visible(
+            db,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        is not None
+    )
+
+
 def _last_sequence(db: Session, workspace_id: str) -> int:
     return int(
         db.scalar(
@@ -322,7 +363,13 @@ async def _coworking_stream(
             for event in coworking.events_after(
                 db, workspace_id=workspace_id, after=cursor
             ):
+                # The cursor advances past invisible events too: skipped is
+                # skipped, not deferred, and a reconnect must not replay it.
                 cursor = event.sequence
+                if not _event_visible(
+                    db, workspace_id=workspace_id, user_id=user_id, event=event
+                ):
+                    continue
                 emitted = True
                 yield (
                     f"id: {event.sequence}\nevent: {event.event_type}\ndata: "

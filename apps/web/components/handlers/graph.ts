@@ -92,5 +92,57 @@ export function createGraphHandlers({
     }
   }
 
-  return { openChunk, openCitation, rebuildKnowledgeGraph, forgetMemory };
+  /**
+   * Add a memory by hand. The list is re-read rather than prepended because
+   * the server dedupes: posting a sentence an active row already holds
+   * reinforces that row, and an optimistic prepend would lie about which of
+   * the two outcomes happened.
+   *
+   * Resolves whether the server took it, because the form behind it keeps
+   * the typed draft open on a refusal — a swallowed failure used to close
+   * the form and discard the sentence while the error strip said it was
+   * never saved.
+   */
+  async function addMemory(input: {
+    content: string;
+    kind: "fact" | "preference";
+    shared: boolean;
+  }): Promise<boolean> {
+    setError("");
+    try {
+      await api.createMemory(input);
+      setMemories(await api.listMemory());
+      return true;
+    } catch (caught) {
+      setError(describeError(caught, "Could not add the memory"));
+      return false;
+    }
+  }
+
+  /** Rewrite one memory's sentence in place. A 409 ("Another memory already
+   *  says this") surfaces through describeError's detail path — and comes
+   *  back as `false`, so the inline editor keeps the draft for the user to
+   *  adjust instead of snapping back to the old sentence. */
+  async function editMemory(item: MemoryItem, content: string): Promise<boolean> {
+    setError("");
+    try {
+      const updated = await api.updateMemory(item.id, content);
+      setMemories((items) =>
+        items.map((row) => (row.id === updated.id ? updated : row)),
+      );
+      return true;
+    } catch (caught) {
+      setError(describeError(caught, "Could not edit the memory"));
+      return false;
+    }
+  }
+
+  return {
+    openChunk,
+    openCitation,
+    rebuildKnowledgeGraph,
+    forgetMemory,
+    addMemory,
+    editMemory,
+  };
 }

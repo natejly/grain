@@ -1,9 +1,11 @@
 "use client";
 
-import type { ShareLink, ShareLinkKind } from "@workspace/api-client";
-import { Check, Copy, Link2, Link2Off, X } from "lucide-react";
+import type { ShareLink, ShareLinkKind, WorkspaceMember } from "@workspace/api-client";
+import { Check, Copy, Link2, Link2Off, UserPlus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { actorHue } from "./live-cursors";
+import type { CoworkingState } from "./use-coworking";
 import {
   SHARE_EXPIRY_CHOICES,
   expiresAtFrom,
@@ -28,16 +30,46 @@ import { describeError, formatRelative } from "./views/shared";
  * and touches no shell state, so threading three callbacks through two views
  * and the workspace hook would be wiring for wiring's sake.
  */
+/**
+ * The collaboration half of the modal, present where the mounting view wired
+ * it: the workspace roster with presence dots, and the owner's deep-link to
+ * the Admin invites panel. Renders the workspace-shared model (ADR 0010) —
+ * everyone listed can already open the resource; nothing here changes access.
+ */
+export type SharePeople = {
+  coworking?: CoworkingState;
+  /** The surface the resource lives on, e.g. `document:<id>`. */
+  surface: string;
+  selfId: string;
+  canInvite: boolean;
+  openInvites: () => void;
+};
+
+/** How present one member is right now, for their row's dot. */
+function presenceOf(
+  member: WorkspaceMember,
+  people: SharePeople,
+): "here" | "online" | "away" {
+  const rows =
+    people.coworking?.presences.filter(
+      (presence) => presence.actor_id === member.user_id,
+    ) ?? [];
+  if (rows.some((presence) => presence.surface === people.surface)) return "here";
+  return rows.length > 0 ? "online" : "away";
+}
+
 export function ShareLinksModal({
   kind,
   resourceId,
   resourceName,
   close,
+  people,
 }: {
   kind: ShareLinkKind;
   resourceId: string;
   resourceName: string;
   close: () => void;
+  people?: SharePeople;
 }) {
   const [links, setLinks] = useState<ShareLink[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -48,6 +80,25 @@ export function ShareLinksModal({
   const [busy, setBusy] = useState("");
   /** Days until the next minted link expires; "" is "never" (revocable only). */
   const [expiryDays, setExpiryDays] = useState("");
+  /** The workspace roster, fetched on open only where `people` is wired. */
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+
+  useEffect(() => {
+    if (!people) return;
+    let cancelled = false;
+    api
+      .listMembers()
+      .then((rows) => {
+        if (!cancelled) setMembers(rows);
+      })
+      // The roster is an enrichment on a modal whose job is links; a failed
+      // fetch leaves the section empty rather than blocking the mint flow.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // `people` changes identity per render; the surface is its stable core.
+  }, [Boolean(people), people?.surface]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let cancelled = false;
@@ -142,6 +193,63 @@ export function ShareLinksModal({
           <p className="budget-problem" role="alert">
             {problem}
           </p>
+        )}
+
+        {people && (
+          <section className="share-people" aria-label="People with access">
+            <strong className="share-people-title">People with access</strong>
+            <ul className="share-people-list">
+              {members.map((member) => {
+                const state = presenceOf(member, people);
+                return (
+                  <li key={member.user_id} className="share-people-row">
+                    <span
+                      className={`share-presence-dot ${state}`}
+                      // Lit dots wear the member's cursor hue, so "the blue
+                      // dot" and "the blue cursor" are the same person.
+                      style={
+                        state === "away"
+                          ? undefined
+                          : {
+                              background: `hsl(${actorHue(member.user_id)} 70% 45%)`,
+                            }
+                      }
+                      title={
+                        state === "here"
+                          ? `${member.name} is in this ${kind}`
+                          : state === "online"
+                            ? `${member.name} is here now`
+                            : undefined
+                      }
+                      aria-hidden
+                    />
+                    <span className="share-people-name">
+                      {member.name}
+                      {member.user_id === people.selfId ? " (you)" : ""}
+                    </span>
+                    {state === "here" && (
+                      <span className="share-people-here">in this {kind}</span>
+                    )}
+                    <span className="admin-tag">{member.role}</span>
+                  </li>
+                );
+              })}
+            </ul>
+            {people.canInvite ? (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => {
+                  people.openInvites();
+                  close();
+                }}
+              >
+                <UserPlus size={13} /> Invite teammate
+              </button>
+            ) : (
+              <p className="field-hint">Ask a workspace owner to invite teammates.</p>
+            )}
+          </section>
         )}
 
         <label className="cron-field">

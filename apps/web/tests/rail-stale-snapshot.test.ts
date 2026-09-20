@@ -37,6 +37,7 @@ function conversation(seed: { id: string; title: string }): Conversation {
     subject_id: "",
     approval_mode: "auto_writes",
     shared: false,
+    incognito: false,
     owned: true,
     can_share: true,
     space_id: "",
@@ -61,6 +62,9 @@ function deferred<T>() {
 const listConversations = vi.fn();
 const deleteConversation = vi.fn();
 const createConversation = vi.fn();
+const listMemory = vi.fn();
+const deleteMemory = vi.fn();
+const updateMemory = vi.fn();
 
 vi.mock("../components/use-coworking", () => ({
   useCoworking: () => ({
@@ -83,6 +87,9 @@ vi.mock("../components/api", () => {
         if (name === "listConversations") return listConversations;
         if (name === "deleteConversation") return deleteConversation;
         if (name === "createConversation") return createConversation;
+        if (name === "listMemory") return listMemory;
+        if (name === "deleteMemory") return deleteMemory;
+        if (name === "updateMemory") return updateMemory;
         if (name === "bootstrap") {
           // Only the fields this hook dereferences without a guard: `identity`
           // and `model_provider` are reached through `bootstrap?.x.y`, which
@@ -219,5 +226,138 @@ describe("the rail and a snapshot that was overtaken", () => {
       view.result.current.conversations.map((row) => row.id),
       "the guard must not make the rail stop updating",
     ).toEqual(["c-gamma", ALPHA.id, BETA.id]);
+  });
+});
+
+// --- The same race, on the memory shelf --------------------------------------
+//
+// refreshMemories fires for every member's settled run (the memory.updated
+// SSE), so a slow reply can straddle a local Forget or an inline edit exactly
+// the way a conversations snapshot straddles a delete. Same epoch guard, same
+// tests: the overtaken snapshot is dropped, the innocent one still lands.
+
+function memoryRow(seed: { id: string; content: string }) {
+  return {
+    conversation_id: null,
+    space_id: "",
+    kind: "fact",
+    entity_names: [],
+    message_ids: [],
+    importance: 1,
+    shared: false,
+    created_at: "2026-08-27T00:00:00Z",
+    updated_at: "2026-08-27T00:00:00Z",
+    ...seed,
+  };
+}
+
+const MEM_A = memoryRow({ id: "m-a", content: "Deploys go out on Fridays." });
+const MEM_B = memoryRow({ id: "m-b", content: "The API deploys on Railway." });
+
+describe("the memory shelf and a snapshot that was overtaken", () => {
+  beforeEach(() => {
+    listConversations.mockReset().mockResolvedValue([conversation(ALPHA)]);
+    listMemory.mockReset();
+    deleteMemory.mockReset().mockResolvedValue(undefined);
+    updateMemory.mockReset();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  async function mountedWithMemories() {
+    const { useWorkspace } = await import("../components/use-workspace");
+    const view = renderHook(() => useWorkspace());
+    await waitFor(() => expect(view.result.current.memories).toHaveLength(2));
+    return view;
+  }
+
+  it("does not resurrect a just-forgotten memory from a slower refresh", async () => {
+    const held = deferred<unknown[]>();
+    listMemory
+      // The initial workspace load.
+      .mockResolvedValueOnce([MEM_A, MEM_B])
+      // The event-triggered refresh, held open across the forget.
+      .mockReturnValueOnce(held.promise);
+
+    const view = await mountedWithMemories();
+
+    let refreshing: Promise<void> = Promise.resolve();
+    act(() => {
+      refreshing = view.result.current.refreshMemories();
+    });
+
+    await act(async () => {
+      await view.result.current.forgetMemory(MEM_A as never);
+    });
+    expect(view.result.current.memories.map((row: { id: string }) => row.id)).toEqual([
+      MEM_B.id,
+    ]);
+
+    // The server answers the older question: the forgotten row still exists.
+    await act(async () => {
+      held.settle([MEM_A, MEM_B]);
+      await refreshing;
+    });
+
+    expect(
+      view.result.current.memories.map((row: { id: string }) => row.id),
+      "a stale snapshot resurrected the forgotten memory",
+    ).toEqual([MEM_B.id]);
+  });
+
+  it("does not revert a just-saved inline edit from a slower refresh", async () => {
+    const held = deferred<unknown[]>();
+    listMemory.mockResolvedValueOnce([MEM_A, MEM_B]).mockReturnValueOnce(held.promise);
+    const edited = { ...MEM_B, content: "The API deploys on Render." };
+    updateMemory.mockResolvedValue(edited);
+
+    const view = await mountedWithMemories();
+
+    let refreshing: Promise<void> = Promise.resolve();
+    act(() => {
+      refreshing = view.result.current.refreshMemories();
+    });
+
+    await act(async () => {
+      await view.result.current.editMemory(MEM_B as never, edited.content);
+    });
+
+    await act(async () => {
+      held.settle([MEM_A, MEM_B]);
+      await refreshing;
+    });
+
+    const row = view.result.current.memories.find(
+      (item: { id: string }) => item.id === MEM_B.id,
+    ) as { content: string };
+    expect(
+      row.content,
+      "a stale snapshot reverted an edit the server had already taken",
+    ).toBe("The API deploys on Render.");
+  });
+
+  it("still applies a refresh that nothing overtook", async () => {
+    listMemory
+      .mockResolvedValueOnce([MEM_A, MEM_B])
+      // A teammate's run taught it something new; no local change raced it.
+      .mockResolvedValueOnce([
+        memoryRow({ id: "m-c", content: "Standup moved to 9:30." }),
+        MEM_A,
+        MEM_B,
+      ]);
+
+    const view = await mountedWithMemories();
+    await act(async () => {
+      await view.result.current.refreshMemories();
+    });
+
+    expect(
+      view.result.current.memories.map((row: { id: string }) => row.id),
+      "the guard must not make the shelf stop updating",
+    ).toEqual(["m-c", MEM_A.id, MEM_B.id]);
   });
 });

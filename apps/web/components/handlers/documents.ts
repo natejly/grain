@@ -1,5 +1,6 @@
 "use client";
 
+import { ApiError } from "@workspace/api-client";
 import type {
   DocumentKind,
   DocumentSummary,
@@ -10,6 +11,28 @@ import type {
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { api } from "../api";
 import { describeError } from "../views/shared";
+
+/**
+ * A save the server refused because somebody else saved first: the 409's
+ * machine detail, mapped for the editor's banner. `headVersionId` is the
+ * base an "overwrite anyway" resend must carry to win against exactly the
+ * version the user was just shown.
+ */
+export type SaveConflict = {
+  headVersionId: string;
+  updatedAt: string;
+  savedBy: string;
+};
+
+/**
+ * What a save attempt came to, as a value: the server acknowledged it
+ * ("saved"), refused it over a newer head (the conflict, for the banner), or
+ * failed some other way ("failed" — network, 500, over-length 422). Three
+ * states, not two: "failed" used to be returned as the success `null`, so a
+ * blown "Overwrite anyway" cleared the conflict banner and relabelled the
+ * button "Saved" over a draft the server never stored.
+ */
+export type SaveOutcome = SaveConflict | "saved" | "failed";
 
 export type DocumentHandlerDeps = {
   setError: Dispatch<SetStateAction<string>>;
@@ -30,7 +53,9 @@ export function createDocumentHandlers({
   refreshArtifacts,
   activeDocumentRef,
 }: DocumentHandlerDeps) {
-  async function openDocument(documentId: string) {
+  /** Returns whether the document actually loaded, so "Reload theirs" can
+   *  keep its conflict banner up when the reload it promised never landed. */
+  async function openDocument(documentId: string): Promise<boolean> {
     setError("");
     try {
       const [document, versions] = await Promise.all([
@@ -39,8 +64,10 @@ export function createDocumentHandlers({
       ]);
       setActiveDocument(document);
       setDocumentVersions(versions);
+      return true;
     } catch (caught) {
       setError(describeError(caught, "Could not open that document"));
+      return false;
     }
   }
 
@@ -56,15 +83,53 @@ export function createDocumentHandlers({
     }
   }
 
-  async function saveDocument(documentId: string, content: string) {
+  /**
+   * Save, optionally under the precondition that `baseVersionId` is still the
+   * document's head. Returns the outcome instead of throwing: this is the one
+   * choke point the Save button, Cmd+S and "Overwrite anyway" all go through,
+   * and a returned value keeps the view's state machine explicit — the view
+   * marks the pane clean on "saved" and ONLY on "saved". A conflict
+   * deliberately skips `setError` — the banner is the error surface; every
+   * other failure raises the toast AND comes back as "failed" so the caller
+   * never mistakes it for the write having landed.
+   */
+  async function saveDocument(
+    documentId: string,
+    content: string,
+    baseVersionId?: string,
+  ): Promise<SaveOutcome> {
     setError("");
     try {
-      setActiveDocument(await api.saveDocument(documentId, content));
-      setDocuments(await api.listDocuments());
-      setDocumentVersions(await api.listDocumentVersions(documentId));
+      setActiveDocument(await api.saveDocument(documentId, content, baseVersionId));
     } catch (caught) {
+      const detail = caught instanceof ApiError ? (caught.detail as {
+        code?: string;
+        head_version_id?: string;
+        updated_at?: string;
+        saved_by?: string;
+      } | undefined) : undefined;
+      if (
+        caught instanceof ApiError &&
+        caught.status === 409 &&
+        detail?.code === "document_version_conflict"
+      ) {
+        return {
+          headVersionId: detail.head_version_id ?? "",
+          updatedAt: detail.updated_at ?? "",
+          savedBy: detail.saved_by ?? "",
+        };
+      }
       setError(describeError(caught, "Could not save that document"));
+      return "failed";
     }
+    // The write landed; these listings are bookkeeping. A hiccup refreshing
+    // them must not report the save as failed — the document set above
+    // already carries the new head, and the view's re-sync reads it.
+    await Promise.all([
+      api.listDocuments().then(setDocuments),
+      api.listDocumentVersions(documentId).then(setDocumentVersions),
+    ]).catch(() => undefined);
+    return "saved";
   }
 
   async function restoreDocumentVersion(documentId: string, versionId: string) {

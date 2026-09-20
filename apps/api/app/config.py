@@ -352,6 +352,21 @@ class Settings(BaseSettings):
     # claim never retires an older one. Measured on evals/memory_corpus.json,
     # off = 100% stale-served (5/5), on = 0% (0/5) at unchanged recall.
     memory_supersession: bool = True
+    # Weight on min(importance, 5) in recall's score. Lowered from the
+    # hard-coded 0.05 it replaces because `updated_at` is bumped on every
+    # re-touch, so importance and recency now measure the same re-touch signal
+    # and RESEARCH.md §5.3 says they pull against each other — the two weights
+    # were chosen together. Honesty about provenance: scripts/evaluate_memory.py
+    # cannot measure either weight (its corpus never lets score order bind —
+    # see the note above FLOORS there), so what pins them is the ordering
+    # tests in tests/test_memory_depth.py, not the eval's floors.
+    memory_importance_weight: float = 0.04
+    # Weight on the exponential recency-decay term, chosen with the importance
+    # weight above (same provenance caveat).
+    memory_recency_weight: float = 0.15
+    # Half-life of the recency decay, in days. <= 0 disables the recency term
+    # entirely; chosen alongside the two weights above.
+    memory_recency_half_life_days: float = 30.0
     # Ceiling on the vectors one recall scores, newest first. 0 means uncapped —
     # exact, but linear: a 100k-row workspace costs ~560ms and ~1.4GB of transient
     # RSS per turn. See services/memory.py.

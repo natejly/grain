@@ -1,6 +1,7 @@
 """Per-member preferences: the caller's own membership, nobody else's.
 
-Two routes — the daily digest opt-in, and Safe mode. Neither takes a resource
+Three routes — the daily digest opt-in, Safe mode, and the memory opt-out.
+None takes a resource
 id at all: the row each edits is the (workspace, user) membership the session
 already names, so there is nothing here for a foreign id to probe (the
 isolation sweep covers them as SCOPED). Natural upserts of one or two columns,
@@ -42,6 +43,14 @@ class SafeModePrefIn(ApiModel):
 
 
 class SafeModePrefOut(ApiModel):
+    enabled: bool
+
+
+class MemoryPrefIn(ApiModel):
+    enabled: bool
+
+
+class MemoryPrefOut(ApiModel):
     enabled: bool
 
 
@@ -94,6 +103,36 @@ def update_safe_mode(
     )
     db.commit()
     return SafeModePrefOut(enabled=membership.safe_mode)
+
+
+@router.put("/memory", response_model=MemoryPrefOut)
+def update_memory_pref(
+    payload: MemoryPrefIn,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> MemoryPrefOut:
+    """Turn memory on or off for the caller's future runs.
+
+    Off skips recall AND extraction on this member's runs, and takes effect on
+    the next run — nothing mid-flight is touched. The explicit remember/forget
+    tools still work: an explicit instruction outranks a default.
+
+    Audited on both edges, like Safe mode: off is the interesting direction,
+    and a trail that only recorded the cautious half would be no trail at all.
+    """
+    membership = _own_membership(db, actor)
+    membership.memory_enabled = payload.enabled
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="memory_pref.updated",
+        resource_type="membership",
+        resource_id=membership.id,
+        detail={"enabled": payload.enabled},
+    )
+    db.commit()
+    return MemoryPrefOut(enabled=membership.memory_enabled)
 
 
 @router.put("/digest", response_model=DigestPrefsOut)

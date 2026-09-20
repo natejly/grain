@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
 import pytest
@@ -17,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import DEV_SEED_USER_ID
+from app.clock import utcnow
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import Conversation, MemoryItem, Workspace
@@ -179,12 +181,17 @@ def test_recall_ranking_matches_the_full_scan_it_replaced(
             )
         # A blob from a different embedding model. The old code scored it 0.0 via
         # cosine_similarity's length guard; the new code must drop it rather than
-        # let np.reshape raise.
+        # let np.reshape raise. Its content deliberately shares no query term:
+        # the row exists to be SCANNED by the vector path, not admitted, and any
+        # overlap that ties another row's overlap count is a coin flip — the
+        # legacy scorer breaks such a tie on the random row id while IDF weighs
+        # the two overlap sets apart on purpose (that difference is pinned by
+        # test_idf_ranks_a_rare_shared_term_over_a_ubiquitous_one, not here).
         _seed(
             db,
             workspace,
-            "Atlas ring rotation, embedded by an older model.",
-            embedding=_fake_vector("Atlas ring rotation", dim=4),
+            "Rotation duties, embedded by an older model.",
+            embedding=_fake_vector("Rotation duties", dim=4),
         )
         db.commit()
 
@@ -512,9 +519,6 @@ def test_lexical_hit_outside_the_vector_shortlist_keeps_its_semantic_score(
         # term dropped the target ties with the filler and sorts by id instead.
         assert expected[0].id == target.id
         assert found.items[0].id == target.id
-        assert _score(target, query, query_blob) == pytest.approx(
-            _score(found.items[0], query, query_blob)
-        )
     finally:
         db.close()
 
@@ -571,26 +575,19 @@ def test_lexical_prefilter_truncates_by_relevance_not_by_popularity(
         db.close()
 
 
-def _score(item: MemoryItem, query: str, query_blob: bytes) -> float:
-    """The original scoring formula, for comparing two rankings by score."""
-    query_terms = set(tokenize(query))
-    item_terms = set(tokenize(item.content))
-    lexical = len(query_terms & item_terms) / max(1, len(query_terms))
-    semantic = max(
-        0.0, cosine_similarity(unpack_vector(query_blob), unpack_vector(item.embedding))
-    )
-    return lexical + semantic + min(item.importance, 5) * 0.05
-
-
 @pytest.mark.parametrize("corpus_size", [200, 1200])
-def test_recall_matches_the_full_scan_beyond_the_shortlist_and_prefilter_limits(
+def test_recall_stays_deterministic_and_relevant_beyond_the_candidate_bounds(
     workspace, monkeypatch, corpus_size
 ):
-    """The ranking comparison, run at sizes where the bounds actually bite.
+    """What must survive at sizes where the bounds actually bite.
 
-    The 5-row fixture above cannot see either cap: it is smaller than the vector
-    shortlist and the lexical LIMIT. These sizes are larger than both, which is
-    where a bounded candidate set stops being equivalent to the full scan.
+    This used to assert score-identity with the full scan the bounded
+    implementation replaced. That equivalence is deliberately gone: IDF is now
+    measured over the bounded candidate set (see recall()'s scoring comment),
+    so a full-scan transcription no longer produces the same numbers. What the
+    bounds must still deliver: the row that matches the whole query best wins,
+    and the ranking is reproducible call to call — no tie falls back to
+    backend scan order.
     """
     import random
 
@@ -614,38 +611,263 @@ def test_recall_matches_the_full_scan_beyond_the_shortlist_and_prefilter_limits(
         for query in (
             "atlas deployment ring schedule",
             "vault rotation quarterly hiring",
-            "canary release violet buffer platform",
         ):
+            # The planted row IS the query: full lexical overlap, cosine 1.0
+            # against the query vector, max importance — nothing random can
+            # strictly beat it, however the candidate set is truncated.
+            target = _seed(
+                db, workspace, query, importance=5, embedding=_fake_vector(query)
+            )
+            db.commit()
             query_blob = _fake_vector(query)
             monkeypatch.setattr(
                 memory_service,
                 "embed_batch",
                 as_batch(lambda texts, settings=None, blob=query_blob: [blob]),
             )
-            expected = _legacy_recall(
-                db,
-                workspace_id=workspace,
-                conversation_id="none",
-                query=query,
-                limit=settings.memory_recall_limit,
-                query_vector=unpack_vector(query_blob),
-            )
-            found = recall(
+            first = recall(
                 db,
                 workspace_id=workspace,
                 conversation_id="none",
                 query=query,
                 settings=settings,
             )
-            assert expected, "the fixture must actually match something"
-            # Exact score ties fell out of database scan order in the full scan
-            # and out of float32 rounding here, so compare the scores rather than
-            # the ids: the ranking must be score-identical, not merely close.
-            assert [
-                round(_score(item, query, query_blob), 9) for item in found.items
-            ] == [
-                round(_score(item, query, query_blob), 9) for item in expected
-            ], f"ranking moved for query {query!r} at {corpus_size} rows"
+            second = recall(
+                db,
+                workspace_id=workspace,
+                conversation_id="none",
+                query=query,
+                settings=settings,
+            )
+            assert first.items, "the fixture must actually match something"
+            assert first.items[0].id == target.id, (
+                f"the best row lost to a bounded candidate set for {query!r} "
+                f"at {corpus_size} rows"
+            )
+            assert [item.id for item in first.items] == [
+                item.id for item in second.items
+            ], f"ranking is not reproducible for {query!r} at {corpus_size} rows"
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------- #
+# The scoring terms themselves: recency decay, the importance knob, IDF, and
+# entity-name tokens. None of them may move the admission gate.
+# --------------------------------------------------------------------------- #
+
+
+def test_recency_decay_prefers_the_fresh_row_and_is_disableable(
+    workspace, monkeypatch
+):
+    """Two rows saying the same thing: the fresher one ranks first.
+
+    With `memory_recency_half_life_days <= 0` the term is disabled entirely and
+    the tie falls back to the id tie-break, exactly as before the decay existed.
+    """
+    monkeypatch.setattr(
+        memory_service, "embed_batch", as_batch(lambda texts, settings=None: None)
+    )
+    db = SessionLocal()
+    try:
+        # Same significant tokens (equal lexical score), distinct content
+        # hashes so the unique key does not collide.
+        fresh = _seed(db, workspace, "Atlas deploys on Fridays.")
+        stale = _seed(db, workspace, "Atlas deploys on Fridays!")
+        stale.updated_at = utcnow() - timedelta(days=90)
+        db.commit()
+
+        settings = get_settings()
+        found = recall(
+            db,
+            workspace_id=workspace,
+            conversation_id="none",
+            query="atlas deploys fridays",
+            settings=settings,
+        )
+        assert [item.id for item in found.items] == [fresh.id, stale.id]
+
+        disabled = settings.model_copy(
+            update={"memory_recency_half_life_days": 0.0}
+        )
+        found = recall(
+            db,
+            workspace_id=workspace,
+            conversation_id="none",
+            query="atlas deploys fridays",
+            settings=disabled,
+        )
+        assert [item.id for item in found.items] == sorted([fresh.id, stale.id])
+    finally:
+        db.close()
+
+
+def test_importance_weight_is_config_not_a_constant(workspace, monkeypatch):
+    """The importance bonus is min(importance, 5) * memory_importance_weight.
+
+    At the default weight a full extra query term outweighs the importance
+    spread; a Settings override large enough flips the ordering, which proves
+    the weight is read from config rather than hard-coded.
+    """
+    monkeypatch.setattr(
+        memory_service, "embed_batch", as_batch(lambda texts, settings=None: None)
+    )
+    db = SessionLocal()
+    try:
+        popular = _seed(db, workspace, "The atlas program.", importance=5)
+        precise = _seed(db, workspace, "The atlas ring program.", importance=1)
+        db.commit()
+
+        settings = get_settings()
+        found = recall(
+            db,
+            workspace_id=workspace,
+            conversation_id="none",
+            query="atlas ring",
+            settings=settings,
+        )
+        assert [item.id for item in found.items] == [precise.id, popular.id]
+
+        heavy = settings.model_copy(update={"memory_importance_weight": 0.5})
+        found = recall(
+            db,
+            workspace_id=workspace,
+            conversation_id="none",
+            query="atlas ring",
+            settings=heavy,
+        )
+        assert [item.id for item in found.items] == [popular.id, precise.id]
+    finally:
+        db.close()
+
+
+def test_idf_ranks_a_rare_shared_term_over_a_ubiquitous_one(
+    workspace, monkeypatch
+):
+    """The old overlap fraction tied one-term matches; IDF separates them.
+
+    A row sharing the query's rare term outranks one sharing the term half the
+    corpus contains — and admission is untouched: a zero-overlap row without a
+    strong semantic match is still excluded.
+    """
+    monkeypatch.setattr(
+        memory_service, "embed_batch", as_batch(lambda texts, settings=None: None)
+    )
+    db = SessionLocal()
+    try:
+        rare = _seed(db, workspace, "The marigold launch checklist.")
+        common = _seed(db, workspace, "The atlas launch checklist.")
+        _seed(db, workspace, "Atlas notes for the platform.")
+        _seed(db, workspace, "More atlas notes arrived today.")
+        excluded = _seed(db, workspace, "Completely unrelated gardening tips.")
+        db.commit()
+
+        found = recall(
+            db,
+            workspace_id=workspace,
+            conversation_id="none",
+            query="marigold atlas",
+            settings=get_settings(),
+        )
+        returned = [item.id for item in found.items]
+        assert returned[0] == rare.id, "the rare term must outrank the common one"
+        assert common.id in returned
+        assert excluded.id not in returned, "admission semantics moved"
+    finally:
+        db.close()
+
+
+def test_entity_name_tokens_admit_a_row_whose_sentence_lacks_the_term(
+    workspace, monkeypatch
+):
+    """entity_names_json is unioned into the item's terms before scoring.
+
+    The row's content never says "Visx", its entity list does; the row must be
+    admitted with a real lexical score. The control row — same embedding, no
+    entity names — stays out, which proves the admission came from the entity
+    token rather than from the vector path.
+    """
+    db = SessionLocal()
+    try:
+        blob = _fake_vector("chart library decision")
+        row = _seed(
+            db,
+            workspace,
+            "The chart library decision is final.",
+            embedding=blob,
+        )
+        row.entity_names_json = json.dumps(["Visx"])
+        control = _seed(
+            db,
+            workspace,
+            "The chart library decision is pending.",
+            embedding=blob,
+        )
+        db.commit()
+
+        query_blob = _fake_vector("visx")
+        # The fixture only proves what it claims while the vectors are genuinely
+        # unrelated: both rows must ride in on the shortlist, not the gate.
+        assert (
+            cosine_similarity(unpack_vector(query_blob), unpack_vector(blob)) <= 0.3
+        ), "pick tokens that do not collide in the fake embedder"
+        monkeypatch.setattr(
+            memory_service,
+            "embed_batch",
+            as_batch(lambda texts, settings=None: [query_blob]),
+        )
+
+        found = recall(
+            db,
+            workspace_id=workspace,
+            conversation_id="none",
+            query="visx",
+            settings=get_settings(),
+        )
+        returned = [item.id for item in found.items]
+        assert row.id in returned
+        assert control.id not in returned
+    finally:
+        db.close()
+
+
+def test_entity_name_terms_create_candidacy_in_lexical_only_mode(
+    workspace, monkeypatch
+):
+    """_lexical_candidates LIKEs entity_names_json, not only content.
+
+    The scoring union above is not enough on its own: it runs over rows that
+    are already candidates, and the sibling test's rows both ride in on the
+    64-row vector shortlist. Here no embeddings exist and embed_batch answers
+    None (the no-key, lexical-only mode recall explicitly degrades to), so the
+    prefilter is the ONLY door into the candidate set — recalling the row at
+    all proves a term found only in its entity list created candidacy. This is
+    also the reachability guarantee at scale: a row whose content vector is
+    dissimilar to the query falls out of the shortlist past 64 plausible rows,
+    and the lexical door is then all it has.
+    """
+    monkeypatch.setattr(
+        memory_service, "embed_batch", as_batch(lambda texts, settings=None: None)
+    )
+    db = SessionLocal()
+    try:
+        row = _seed(db, workspace, "The chart library decision is final.")
+        row.entity_names_json = json.dumps(["Visx"])
+        control = _seed(db, workspace, "The chart library decision is pending.")
+        db.commit()
+
+        found = recall(
+            db,
+            workspace_id=workspace,
+            conversation_id="none",
+            query="visx",
+            settings=get_settings(),
+        )
+        returned = [item.id for item in found.items]
+        assert row.id in returned, (
+            "an entity-only match is unreachable without the vector shortlist"
+        )
+        assert control.id not in returned, "admission must still require overlap"
     finally:
         db.close()
 

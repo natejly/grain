@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind, FavoriteKind } from "@workspace/api-client";
-import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, FolderInput, FolderMinus, Layers, LogOut, Menu, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, FolderInput, FolderMinus, Ghost, Layers, LogOut, Menu, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
@@ -18,6 +18,7 @@ import { CoworkingStrip } from "./coworking-strip";
 import { CreateMenu } from "./create-menu";
 import { DisclosureMenu } from "./disclosure-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
+import { ShortcutCheatSheet } from "./shortcut-cheatsheet";
 import { SystemStatus } from "./system-status";
 import { useWorkspace } from "./use-workspace";
 import { actionableApprovals } from "./views/approval-format";
@@ -47,6 +48,7 @@ import {
   CHORD_WINDOW_MS,
   chordEligible,
   chordTarget,
+  isTypingContext,
   parseChordsEnabled,
   serializeChordsEnabled,
 } from "./views/chords";
@@ -152,6 +154,10 @@ export function Workspace() {
     updateDigest,
     safeMode,
     updateSafeMode,
+    memoryEnabled,
+    updateMemoryPref,
+    pendingIncognito,
+    setPendingIncognito,
     createDatasetFromSource,
     createDatasetVersionFromSource,
     graph,
@@ -307,6 +313,8 @@ export function Workspace() {
     openCitation,
     rebuildKnowledgeGraph,
     forgetMemory,
+    addMemory,
+    editMemory,
     createDashboard,
     generateDashboard,
     runDashboard,
@@ -618,6 +626,24 @@ export function Workspace() {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [setView, setSidebarOpen, chordsEnabled]);
 
+  // "?" opens the shortcut cheat sheet. The same typing-context guard the
+  // chords use — a question mark typed into the composer is punctuation, not a
+  // request for help — but NOT the full chordEligible: "?" is shift+/ on most
+  // layouts, so shiftKey must not disqualify it, and the sheet opens even with
+  // the chords kill-switch off (it is where the switch's state is explained).
+  // Capture phase matches the chord listener so nothing below swallows it.
+  const [cheatOpen, setCheatOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "?" || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (isTypingContext(event.target)) return;
+      event.preventDefault();
+      setCheatOpen(true);
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, []);
+
   async function submitRename(conversation: Conversation) {
     const title = renameDraft.trim();
     setRenamingId(null);
@@ -659,6 +685,9 @@ export function Workspace() {
         className="thread-open"
         onClick={() => selectConversation(conversation.id)}
       >
+        {conversation.incognito && (
+          <Ghost size={12} aria-label="Temporary chat" className="thread-incognito" />
+        )}
         <span>{conversation.title}</span>
         {!inSpaceGroup && spaceNameOf(conversation, spaces) && (
           <span className="thread-space-chip">
@@ -1047,6 +1076,13 @@ export function Workspace() {
         togglePreference={togglePreference}
       />
 
+      {cheatOpen && (
+        <ShortcutCheatSheet
+          chordsEnabled={chordsEnabled}
+          close={() => setCheatOpen(false)}
+        />
+      )}
+
       {/* Band 1: the icon rail — four doors, always visible on desktop. The
           places you work and nothing else; creating and configuring live in
           the top-right, and everything deeper is summoned per destination in
@@ -1074,15 +1110,27 @@ export function Workspace() {
         <WorkspaceSwitcher />
 
         {activeGroup.id === "chat" && (
-          <button
-            className="chrome-button new-thread-button"
-            // Wrapped: newConversation takes an optional space id now, and a
-            // MouseEvent must not arrive in that slot.
-            onClick={() => void newConversation()}
-          >
-            <Plus size={16} />
-            New thread
-          </button>
+          <div className="new-thread-row">
+            <button
+              className="chrome-button new-thread-button"
+              // Wrapped: newConversation takes an optional space id now, and a
+              // MouseEvent must not arrive in that slot.
+              onClick={() => void newConversation()}
+            >
+              <Plus size={16} />
+              New thread
+            </button>
+            {/* Incognito is stamped at creation, so a temporary chat needs its
+                own door rather than a toggle on the thread it is too late for. */}
+            <button
+              className="chrome-button new-thread-button temporary"
+              title="New temporary chat — it won't read or write memory"
+              aria-label="New temporary chat"
+              onClick={() => void newConversation("", true)}
+            >
+              <Ghost size={16} />
+            </button>
+          </div>
         )}
 
         {/* This destination's own map: its views, under section headings that
@@ -1390,6 +1438,18 @@ export function Workspace() {
             selfId={bootstrap?.identity.user_id ?? ""}
           />
           <div className="topbar-actions">
+            {/* Visible from every group and on mobile — the sidebar's New
+                thread button is chat-group-only, and the drawer is closed.
+                newConversation already lands on the chat view itself.
+                Labelled, with its own glyph: beside the Create menu's "+" a
+                bare Plus here would read as the same control twice. */}
+            <button
+              className="chrome-button"
+              onClick={() => void newConversation()}
+            >
+              <MessageSquarePlus size={16} />
+              New chat
+            </button>
             <CreateMenu create={create} />
             <WorkspaceSettingsMenu
               activeGroup={activeGroup.id}
@@ -1398,6 +1458,8 @@ export function Workspace() {
               onDigestChange={(prefs) => void updateDigest(prefs)}
               safeMode={safeMode}
               onSafeModeChange={(enabled) => void updateSafeMode(enabled)}
+              memoryEnabled={memoryEnabled}
+              onMemoryEnabledChange={(enabled) => void updateMemoryPref(enabled)}
             />
             <ThemeToggle />
             {/* The screen and provider pills, folded into one popover: the
@@ -1428,6 +1490,19 @@ export function Workspace() {
         {notice && (
           <div className="notice-toast" role="status">
             <span>{notice.text}</span>
+            {/* One optional way IN beside the line ("View" on "Memory
+                updated"). role stays "status" — an offer, never an alarm. */}
+            {notice.action && (
+              <button
+                className="ghost-button notice-action"
+                onClick={() => {
+                  notice.action?.run();
+                  setNotice(null);
+                }}
+              >
+                {notice.action.label}
+              </button>
+            )}
             <button onClick={() => setNotice(null)} aria-label="Dismiss notice">
               <X size={14} />
             </button>
@@ -1548,6 +1623,25 @@ export function Workspace() {
                 }}
                 fork={forkThread}
                 undo={undoRun}
+                // The composer's "+" menu jump-offs. Only the shell owns
+                // setView, so only the primary mount gets them — the
+                // openMonitors prop pattern.
+                openView={setView}
+                // Incognito is creation-time state: with a thread open the
+                // chip only reports its flag; before one exists it toggles
+                // what `ensureConversation` will stamp on the first send.
+                incognito={
+                  activeThread
+                    ? { on: Boolean(activeThread.incognito) }
+                    : {
+                        on: pendingIncognito,
+                        toggle: () => setPendingIncognito(!pendingIncognito),
+                      }
+                }
+                // Shared-thread presence: pointer cursors over the transcript
+                // and the typing line. ChatView gates both on sharedThread.
+                coworking={coworking}
+                conversationId={activeConversation ?? undefined}
               />
             }
           />
@@ -1589,6 +1683,8 @@ export function Workspace() {
             }}
             focused={focusedMemory}
             setFocused={setFocusedMemory}
+            addMemory={addMemory}
+            editMemory={editMemory}
           />
         )}
 
@@ -1626,6 +1722,7 @@ export function Workspace() {
               setSidebarOpen(false);
             }}
             setError={setError}
+            openSources={() => setView("sources")}
           />
         )}
 
@@ -1726,6 +1823,12 @@ export function Workspace() {
             decidePendingEdit={decidePendingEdit}
             favorites={favorites}
             coworking={coworking}
+            // The Share popover's collaboration half: the roster it renders
+            // is workspace-shared reality, and the invites door is the
+            // existing Admin panel — "admin" is already a View.
+            openInvites={() => setView("admin")}
+            canInvite={bootstrap?.identity.role === "owner"}
+            selfId={bootstrap?.identity.user_id}
             chat={{
               agentId: bootstrap?.default_agent_id,
               sources,
@@ -1755,6 +1858,7 @@ export function Workspace() {
             todoOps={todoOps}
             favorites={favorites}
             selfId={bootstrap?.identity.user_id}
+            coworking={coworking}
           />
         )}
 
@@ -1833,7 +1937,9 @@ export function Workspace() {
 
         {/* Self-contained like SkillsView: what the marketplace holds is
             nobody's business until they browse it. */}
-        {view === "gallery" && <GalleryView setError={setError} />}
+        {view === "gallery" && (
+          <GalleryView setError={setError} openSkills={() => setView("skills")} />
+        )}
 
         {/* Self-contained: a workflow's run history is nobody's business until
             they open this, so it is fetched here rather than at page load. */}

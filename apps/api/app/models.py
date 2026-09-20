@@ -19,6 +19,7 @@ from sqlalchemy import (
     event,
     false,
     text,
+    true,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -367,6 +368,15 @@ class Membership(Base):
     safe_mode: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false()
     )
+    #: Whether the assistant remembers things from THIS member's runs: recall
+    #: injection and post-run extraction both consult it. Per membership, like
+    #: `safe_mode` above, because it governs what the assistant does on YOUR
+    #: runs only — one member opting out is not a reason to stop a colleague's
+    #: workspace from learning. The explicit remember/forget tools still work:
+    #: an explicit instruction outranks a default.
+    memory_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -425,6 +435,13 @@ class Conversation(Base):
     #: filter is never removed, so a shared thread is never visible cross-workspace
     #: and a personal thread is never visible to another member.
     shared: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    #: A temporary chat — recall injects nothing and the extractor writes
+    #: nothing (rolling summary included) for runs in this thread. Set at
+    #: creation only, because flipping it later would misdescribe turns that
+    #: already ran the other way.
+    incognito: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false()
     )
     #: The space this thread lives in; "" for an ordinary thread. A space is a

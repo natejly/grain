@@ -20,6 +20,7 @@ function thread(id: string, title: string, shared = false): Conversation {
     default_effort: "",
     approval_mode: "ask_writes",
     shared,
+    incognito: false,
     owned: true,
     can_share: true,
     created_at: "2026-08-19T00:00:00Z",

@@ -138,6 +138,13 @@ export type Bootstrap = {
    */
   safe_mode?: boolean;
   /**
+   * Whether this member's runs recall and store memories. A preference the
+   * same shape as `safe_mode`: it governs future runs only, and the explicit
+   * remember/forget tools keep working either way. Optional so a client built
+   * against an older server still boots.
+   */
+  memory_enabled?: boolean;
+  /**
    * The development agent bypass is on: every tool available, nothing parked.
    * The server refuses to boot with this outside development, so it is false
    * everywhere else — but where it IS on, the UI has to say so continuously,
@@ -199,6 +206,12 @@ export type Conversation = {
    * — it never exposes a thread cross-workspace.
    */
   shared: boolean;
+  /**
+   * A temporary chat: its runs neither recall nor store memories. Set at
+   * creation only — the server offers no way to flip it later, because a
+   * retroactive toggle would misdescribe turns that already ran the other way.
+   */
+  incognito: boolean;
   /** True when the caller authored this thread (the personal threads only they see). */
   owned: boolean;
   /** True when the caller may toggle `shared` (its creator, or a workspace owner).
@@ -784,6 +797,12 @@ export type WorkspaceDocument = {
   content: string;
   folder_id: string;
   updated_at: string;
+  /**
+   * The newest DocumentVersion id, "" for a never-saved-over document —
+   * handed back atomically with the content so a later save can send it as
+   * its `base_version_id` precondition.
+   */
+  head_version_id: string;
 };
 
 /**
@@ -2341,6 +2360,13 @@ export class ApiError extends Error {
     message: string,
     /** HTTP status, or 0 when the request never reached the API. */
     public readonly status: number,
+    /**
+     * The response's parsed `detail`, whatever shape the route gave it. A
+     * string detail is already the `message`; the structured ones (the
+     * document 409's conflict dict) ride here so a caller can branch on
+     * `detail.code` instead of parsing prose.
+     */
+    public readonly detail?: unknown,
   ) {
     super(message);
   }
@@ -2445,13 +2471,26 @@ export class WorkspaceApi {
     }
   }
 
-  private static async detailOf(response: Response): Promise<string> {
+  private static async detailOf(
+    response: Response,
+  ): Promise<{ message: string; detail: unknown }> {
     try {
       const body = (await response.clone().json()) as { detail?: unknown };
-      // Validation errors put a list here; only a string is meant for a human.
-      return typeof body.detail === "string" ? body.detail : "";
+      const detail = body.detail;
+      // A string detail is the human sentence itself; a structured detail
+      // (the document 409's conflict dict) may carry one under `message`.
+      // Validation-error lists carry neither and stay message-less.
+      if (typeof detail === "string") return { message: detail, detail };
+      if (
+        detail !== null &&
+        typeof detail === "object" &&
+        typeof (detail as { message?: unknown }).message === "string"
+      ) {
+        return { message: (detail as { message: string }).message, detail };
+      }
+      return { message: "", detail };
     } catch {
-      return "";
+      return { message: "", detail: undefined };
     }
   }
 
@@ -2468,9 +2507,11 @@ export class WorkspaceApi {
     const unsafe = !SAFE_METHODS.has((init.method || "GET").toUpperCase());
 
     let response = await this.dispatch(path, init, headers, unsafe);
-    let detail = response.ok ? "" : await WorkspaceApi.detailOf(response);
+    let parsed: { message: string; detail: unknown } = response.ok
+      ? { message: "", detail: undefined }
+      : await WorkspaceApi.detailOf(response);
 
-    if (unsafe && response.status === 403 && /csrf/i.test(detail)) {
+    if (unsafe && response.status === 403 && /csrf/i.test(parsed.message)) {
       // The token is per-session and rotates on login, so a stale one means the
       // page is holding a value from before a rotation. Re-read it and retry
       // exactly once; a second failure is a real refusal.
@@ -2480,13 +2521,19 @@ export class WorkspaceApi {
         // Leave the retry to produce the authoritative error.
       }
       response = await this.dispatch(path, init, headers, unsafe);
-      detail = response.ok ? "" : await WorkspaceApi.detailOf(response);
+      parsed = response.ok
+        ? { message: "", detail: undefined }
+        : await WorkspaceApi.detailOf(response);
     }
 
     if (response.status === 401 && !ownsItsOwn401(path)) this.signalUnauthorized();
 
     if (!response.ok) {
-      throw new ApiError(detail || `Request failed (${response.status})`, response.status);
+      throw new ApiError(
+        parsed.message || `Request failed (${response.status})`,
+        response.status,
+        parsed.detail,
+      );
     }
     if (response.status === 204) {
       return undefined as T;
@@ -2754,16 +2801,38 @@ export class WorkspaceApi {
     });
   }
 
+  /**
+   * Turn memory on or off for the caller's future runs.
+   *
+   * Off skips recall AND extraction; the explicit remember/forget tools keep
+   * working. Nothing mid-flight changes, so it is safe to call optimistically
+   * and safe to retry — same contract as `updateSafeMode`.
+   */
+  updateMemoryPref(enabled: boolean): Promise<{ enabled: boolean }> {
+    return this.request("/api/me/memory", {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
   listConversations(): Promise<Conversation[]> {
     return this.request("/api/conversations");
   }
 
-  createConversation(title = "New conversation", spaceId = ""): Promise<Conversation> {
+  createConversation(
+    title = "New conversation",
+    spaceId = "",
+    incognito = false,
+  ): Promise<Conversation> {
     return this.request(
       "/api/conversations",
       {
         method: "POST",
-        body: JSON.stringify({ title, ...(spaceId ? { space_id: spaceId } : {}) }),
+        body: JSON.stringify({
+          title,
+          ...(spaceId ? { space_id: spaceId } : {}),
+          ...(incognito ? { incognito: true } : {}),
+        }),
       },
       true,
     );
@@ -3097,9 +3166,11 @@ export class WorkspaceApi {
     const response = await this.dispatch(path, init, this.buildHeaders(init, false), false);
     if (response.status === 401) this.signalUnauthorized();
     if (!response.ok) {
+      const parsed = await WorkspaceApi.detailOf(response);
       throw new ApiError(
-        (await WorkspaceApi.detailOf(response)) || `Request failed (${response.status})`,
+        parsed.message || `Request failed (${response.status})`,
         response.status,
+        parsed.detail,
       );
     }
     return response.blob();
@@ -3519,10 +3590,23 @@ export class WorkspaceApi {
     });
   }
 
-  saveDocument(documentId: string, content: string): Promise<WorkspaceDocument> {
+  /**
+   * `baseVersionId` is the optimistic-concurrency precondition: the
+   * `head_version_id` the document was loaded with. Sent only when given —
+   * an omitted base keeps the legacy unconditional save — and a stale one
+   * answers 409 with a `document_version_conflict` detail.
+   */
+  saveDocument(
+    documentId: string,
+    content: string,
+    baseVersionId?: string,
+  ): Promise<WorkspaceDocument> {
     return this.request(`/api/documents/${documentId}`, {
       method: "PUT",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({
+        content,
+        ...(baseVersionId !== undefined ? { base_version_id: baseVersionId } : {}),
+      }),
     });
   }
 
@@ -3987,6 +4071,36 @@ export class WorkspaceApi {
 
   listMemory(): Promise<MemoryItem[]> {
     return this.request("/api/memory");
+  }
+
+  /**
+   * Add a memory by hand. `shared` false is the caller's own; `space_id` ""
+   * is the workspace-wide shelf. The server dedupes: posting a sentence an
+   * active row already holds reinforces that row rather than duplicating it,
+   * so the caller should re-read the list rather than prepend the response.
+   */
+  createMemory(body: {
+    content: string;
+    kind?: "fact" | "preference";
+    shared?: boolean;
+    space_id?: string;
+  }): Promise<MemoryItem> {
+    return this.request(
+      "/api/memory",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    );
+  }
+
+  /**
+   * Rewrite one memory's sentence — a new value, never a re-scope. No
+   * `Idempotency-Key`: replaying the same content lands on the same state.
+   */
+  updateMemory(memoryId: string, content: string): Promise<MemoryItem> {
+    return this.request(`/api/memory/${memoryId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content }),
+    });
   }
 
   deleteMemory(memoryId: string): Promise<void> {
@@ -4688,7 +4802,7 @@ export class WorkspaceApi {
     let response = await this.dispatch(path, init, headers, true);
     if (
       response.status === 403 &&
-      /csrf/i.test(await WorkspaceApi.detailOf(response))
+      /csrf/i.test((await WorkspaceApi.detailOf(response)).message)
     ) {
       try {
         await this.me();

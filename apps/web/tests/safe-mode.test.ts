@@ -183,3 +183,92 @@ describe("the Safe mode toggle", () => {
     expect(seen).toEqual([true]);
   });
 });
+
+describe("the Memory preference toggle", () => {
+  // The Safe-mode helper's shape, one preference over: same menu, same slot
+  // convention (per-member prefs beside the member's own controls).
+  function menu(
+    memoryEnabled: boolean | null,
+    onChange: (enabled: boolean) => void = () => undefined,
+  ) {
+    return render(
+      createElement(WorkspaceSettingsMenu, {
+        activeGroup: "chat" as never,
+        open: () => undefined,
+        digest: null,
+        onDigestChange: () => undefined,
+        safeMode: false,
+        onSafeModeChange: () => undefined,
+        memoryEnabled,
+        onMemoryEnabledChange: onChange,
+      }),
+    );
+  }
+
+  const LABEL = /Remember things from my chats/;
+
+  it("never renders before the preference has been read", () => {
+    // Null is "bootstrap has not landed", not "off": a checkbox shown with a
+    // guessed value would misreport what the assistant is learning, for the
+    // one preference where that is the whole subject.
+    menu(null);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    expect(screen.queryByRole("checkbox", { name: LABEL })).toBeNull();
+    expect(screen.queryByText("Memory")).toBeNull();
+  });
+
+  it("stays hidden on a bare mount, so older call sites stand unchanged", () => {
+    render(
+      createElement(WorkspaceSettingsMenu, {
+        activeGroup: "chat" as never,
+        open: () => undefined,
+        digest: null,
+        onDigestChange: () => undefined,
+        safeMode: false,
+        onSafeModeChange: () => undefined,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    expect(screen.queryByRole("checkbox", { name: LABEL })).toBeNull();
+  });
+
+  it("says what ON does — including the temporary-chat carve-out", () => {
+    menu(true);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    const checkbox = screen.getByRole("checkbox", { name: LABEL }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    expect(
+      screen.getByText(/Temporary chats never do either/),
+    ).toBeTruthy();
+  });
+
+  it("says what OFF keeps — the remember tool, and everything already learned", () => {
+    menu(false);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    // Off is not an erasure and not a muzzle: both boundaries are named, or a
+    // member flips it expecting a deletion this toggle does not perform.
+    expect(
+      screen.getByText(/Asking the assistant to remember something still works/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/keeps what it already learned/),
+    ).toBeTruthy();
+  });
+
+  it("reports the click", () => {
+    const seen: boolean[] = [];
+    menu(true, (enabled) => seen.push(enabled));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: LABEL }));
+    expect(seen).toEqual([false]);
+  });
+
+  it("renders in the preference slot, after Safe mode", () => {
+    menu(true);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    const notes = screen
+      .getAllByText(/^(Safe mode|Memory)$/)
+      .map((node) => node.textContent);
+    expect(notes).toEqual(["Safe mode", "Memory"]);
+  });
+});
