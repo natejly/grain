@@ -809,3 +809,19 @@ gone" signal sends immediately and cancels whatever was pending.
   silently repoints such a slice at a different part of the file, with nothing
   red to say so. Ask the structure for what you mean: the at-rule the rule sits
   inside, not the prose that happens to precede it.
+
+## 2026-09-20 — CI's verify chain caught what worktree agents missed, twice
+- The review-fix pass shipped two lines CI's mypy rejected (an ad-hoc attribute
+  write on a Mapped-style model; bare `.rowcount` on `Result[Any]`): the fixer
+  agents ran only ruff+pytest, and the env that DID run mypy was synced without
+  `--extra dev`, where `uv run mypy` resolves differently and stays silent.
+- The hotfix then traded the mypy error for ruff B010 (`setattr` with a constant
+  name) because it ran mypy+pytest but not ruff — the linters pull opposite ways
+  on that exact shape. The settled idiom: plain assignment plus a targeted
+  `# type: ignore[attr-defined]`; for rowcount, coworking.py's
+  `(getattr(result, "rowcount", 0) or 0) > 0`.
+- Rule: any change to apps/api finishes with the FULL chain from the worktree
+  root — `uv sync --extra dev`, `uv run --project apps/api ruff check apps/api`,
+  `uv run --project apps/api mypy apps/api/app`, pytest with the PYTHONPATH
+  pin — no matter how small the diff. "Suites green" without ruff AND
+  mypy-with-dev-extras is not green.
