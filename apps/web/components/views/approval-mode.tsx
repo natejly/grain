@@ -152,13 +152,13 @@ export function BypassIndicator({
     return (
       <div className="bypass-banner notice" role="status">
         <Zap size={14} aria-hidden="true" />
-        <div className="bypass-copy">
-          <span>
-            {approved.length === 0
-              ? "Acting without asking — anything it runs shows up here."
-              : `${approved.length} ${approved.length === 1 ? "call" : "calls"} ran without asking · ${summariseAutoApproved(approved)}`}
-          </span>
-        </div>
+        {approved.length > 0 && (
+          <div className="bypass-copy">
+            <span>
+              {approved.length} {approved.length === 1 ? "call" : "calls"} ran without asking · {summariseAutoApproved(approved)}
+            </span>
+          </div>
+        )}
         {approved.length > 0 && (
           <button
             type="button"

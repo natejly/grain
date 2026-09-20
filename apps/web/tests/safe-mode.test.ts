@@ -82,9 +82,9 @@ describe("the auto-approve banner's volume", () => {
     expect(screen.getByText(/1 call ran without asking/)).toBeTruthy();
   });
 
-  it("still shows the trail before anything has run", () => {
+  it("still shows the banner before anything has run", () => {
     render(createElement(ChatView, { ...BASE, approval: approval(false) }));
-    expect(screen.getByText(/Acting without asking/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask me first" })).toBeTruthy();
   });
 
   it("shouts when the member asked to be asked and is not being", () => {
