@@ -765,3 +765,29 @@ Gap audit vs Claude desktop (Sept 2026): 16 areas — 2 already full (space inst
   intends; wiring a page count is ingestion's later cycle.
 - Recap determinism hardened past the spec: GROUP BYs carry an id tiebreak
   so equal counts order identically on SQLite and Postgres.
+
+## Rail project groups (worktree-rail-project-groups, 2026-09-20)
+- [x] API: `list_conversations` lists PROJECT subject threads (workspace-wide,
+      mirroring `conversations.resolve_visible`); document/dashboard threads
+      still filtered out; `space_id` narrowing untouched
+- [x] `test_a_projects_thread_is_one_thread_and_is_listed_for_the_rail` flipped
+      and renamed; the dashboard test still pins exclusion
+- [x] Web: `projectThreadGroups` / `unfiledThreads` in views/space-threads.ts
+      (kind+id keyed, `""` matches nothing, orphans fall to the flat rail);
+      rail renders project groups after the space groups and before the
+      Personal/Shared split, reusing the space-group CSS with a
+      `thread-project-group` hook and the Projects view's Braces icon;
+      session-local `collapsedProjects`; both move-to-space rows gated on
+      `subject_id === ""`; `onThreadKnown` (ref-delivered through
+      use-subject-thread) refreshes the listing for an unknown thread;
+      Spaces "add a thread" filters `!subject_id`
+- [x] `removeProject` re-reads conversations — the server cascades the thread,
+      and the rail lists project threads now, so the stale row had to go
+- [x] Tests: 8 new vitest cases in tests/space-threads.test.ts; new e2e
+      apps/web/e2e/rail-project-group.spec.ts (group appears, folds, opens,
+      dies with the project)
+- [x] Verify: uv sync --extra dev; ruff clean; mypy clean (184 files); FULL
+      pytest exit 0 (PYTHONPATH pinned, `app` resolved to the worktree); tsc
+      clean; FULL vitest 104 files / 1086 tests; eslint 0 errors on touched
+      files; playwright run green — 112 passed, 1 skipped (the pre-existing
+      `test.fixme` dashboard-panel spec)

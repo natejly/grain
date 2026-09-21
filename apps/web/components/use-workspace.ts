@@ -1520,6 +1520,7 @@ export function useWorkspace() {
     setDbConnections,
     setProjects,
     setActiveProject,
+    refreshConversations,
   });
 
   const mcpHandlers = createMcpHandlers({ setError, setMcpServers });

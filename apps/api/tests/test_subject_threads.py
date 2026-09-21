@@ -103,8 +103,15 @@ def _subject_of(run_id: str) -> subjects.Subject | None:
 # 1. The association generalised
 
 
-def test_a_projects_thread_is_one_thread_and_stays_out_of_the_rail(client, project):
-    """The document contract, for a project: opening it twice is one thread."""
+def test_a_projects_thread_is_one_thread_and_is_listed_for_the_rail(client, project):
+    """The document contract, for a project: opening it twice is one thread.
+
+    And unlike a document's or a dashboard's, it IS in the rail listing — the
+    rail groups project threads under their project, the way a space's threads
+    group under their space. The row carries its `subject_kind`, which is what
+    the client groups on: a listing that returned it as an ordinary thread
+    would put it in the flat Personal/Shared split with no way to tell.
+    """
     first = client.post(f"/api/projects/{project['id']}/conversation")
     assert first.status_code == 200, first.text
     second = client.post(f"/api/projects/{project['id']}/conversation")
@@ -112,7 +119,9 @@ def test_a_projects_thread_is_one_thread_and_stays_out_of_the_rail(client, proje
     assert first.json()["subject_kind"] == "project"
     assert first.json()["subject_id"] == project["id"]
     listed = client.get("/api/conversations").json()
-    assert first.json()["id"] not in [row["id"] for row in listed]
+    row = next(row for row in listed if row["id"] == first.json()["id"])
+    assert row["subject_kind"] == "project"
+    assert row["subject_id"] == project["id"]
 
 
 def test_a_dashboards_thread_is_one_thread_and_stays_out_of_the_rail(client, dashboard):
