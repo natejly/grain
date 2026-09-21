@@ -21,6 +21,18 @@ history that crossed providers mid-run cannot replay them. The two tool-call
 item types are never dropped — silently losing one would desynchronise the
 tool_use/tool_result pairing the Messages API validates, so a malformed one
 raises instead.
+
+ON REASONING REPLAY, because the drop below reads like a gap and is not one.
+The OpenAI path gained `include=["reasoning.encrypted_content"]` so a
+tool-using turn can replay its own chain of thought under `store=False`. This
+path has had the equivalent since it was written, by a different mechanism and
+for a stronger reason: Anthropic returns its thinking blocks in the response
+with a `signature`, `_ThinkingItem` / `_RedactedThinkingItem` carry them
+through the loop's history, and `_anthropic_messages` translates them back —
+because with extended thinking on, the API *refuses* a continuation that does
+not replay them. So there is nothing to add here. What the translator drops is
+the OpenAI-shaped `reasoning` item, which is another provider's opaque blob
+and can only be replayed to the provider that issued it. That drop must stay.
 """
 
 from __future__ import annotations
@@ -35,7 +47,7 @@ from ...config import Settings
 from .. import usage
 from ..model import ModelConfigurationError, privacy_safe_identifier
 from ..retrieval import Evidence
-from .base import ModelStep
+from .base import ModelStep, ToolChoice
 
 
 def _client(settings: Settings) -> Anthropic:
@@ -358,15 +370,29 @@ class AnthropicHarness:
         model: Optional[str] = None,
         effort: Optional[str] = None,
         thinking: bool = False,
+        workspace_id: str = "",
+        run_id: str = "",
     ) -> ModelStep:
         client = _client(settings)
+        # Accepted and deliberately unused. Anthropic's prompt caching is
+        # declared with `cache_control` breakpoints ON THE CONTENT, not with a
+        # routing key on the request, so there is no field here for a
+        # workspace id to fill — the OpenAI-side `prompt_cache_key` has no
+        # counterpart. Placing cache breakpoints is a separate change with its
+        # own correctness question (where the stable prefix ends), and
+        # inventing a `metadata` entry for the id would export a tenant
+        # identifier to buy nothing.
         # Captured once so the usage record is keyed on the model actually
         # requested; a per-turn override must not be priced as the default.
         chosen_model = model or settings.anthropic_model
         chosen_effort = effort or settings.openai_reasoning_effort
 
         def step(
-            input_items: List[Any], tools: List[Dict[str, Any]], instructions: str
+            input_items: List[Any],
+            tools: List[Dict[str, Any]],
+            instructions: str,
+            *,
+            tool_choice: ToolChoice = "auto",
         ) -> Iterator[Tuple[str, Any]]:
             kwargs: Dict[str, Any] = {
                 "model": chosen_model,
@@ -380,6 +406,16 @@ class AnthropicHarness:
             translated_tools = _anthropic_tools(tools)
             if translated_tools:
                 kwargs["tools"] = translated_tools
+                # Translated, not passed through: Anthropic's tool_choice is an
+                # object, not a bare string. Sent only alongside tools — the
+                # Messages API rejects a tool_choice with no tools, which is
+                # exactly the request a turn with an empty registry makes — and
+                # only when it is "none", since "auto" is already the default
+                # and stating it would change the cached prefix for every
+                # ordinary round, which is the cost this whole change exists to
+                # avoid.
+                if tool_choice == "none":
+                    kwargs["tool_choice"] = {"type": "none"}
             with client.messages.stream(**kwargs) as stream:
                 for event in stream:
                     event_type = getattr(event, "type", "")

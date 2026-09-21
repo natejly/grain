@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "Hand-written fixture corpus for scripts/evaluate_research.py. Three things",
+    "are measured against it: whether an admitted follow-up chip points at a",
+    "passage that can actually answer it, whether the debate classifier tells a",
+    "two-sided question from a one-sided one, and whether a published page's",
+    "drift check reports exactly the passages that changed.",
+    "",
+    "THE TRAPS ARE THE POINT. A corpus the harness cannot fail measures nothing",
+    "— the mistake evaluate_retrieval.py was rebuilt to undo. Two are planted",
+    "here deliberately:",
+    "",
+    "1. 'the Best Practices doc' contains the word 'best' inside a proper noun",
+    "   and MUST classify plain. Space-padding does NOT save it — 'the Best",
+    "   Practices doc' really does contain ' best ' — so this trap is what took",
+    "   the superlatives out of DEBATE_MARKERS entirely. Every marker left is a",
+    "   comparative, which does not turn up inside proper nouns.",
+    "2. 'Do we keep Postgres or move to DuckDB' is genuinely two-sided and",
+    "   carries no marker word at all, so it classifies PLAIN. That is a known",
+    "   limit of a pure word test, recorded here rather than pretended away: the",
+    "   alternative is a model-written classifier, which would inherit exactly",
+    "   the one-sidedness the counter-evidence pass exists to catch. Its label",
+    "   below is therefore 'plain' — the label records what the classifier",
+    "   should say, and the limit is named in this comment."
+  ],
+  "documents": [
+    {
+      "filename": "retention.md",
+      "text": "# Retention policy\n\nThe retention window for raw event logs is ninety days. After ninety days the rows are aggregated into daily rollups and the raw rows are deleted. Finance asked for a longer window for billing events, so billing events are kept for seven years in a separate archive bucket.\n\nThe archive bucket is write-once. Nothing in the product deletes from it, and a deletion request is handled by a manual runbook that the compliance team owns."
+    },
+    {
+      "filename": "storage-engines.md",
+      "text": "# Storage engines\n\nPostgres is the primary store for every transactional table. It handles the workspace's own rows, the run ledger and the audit trail, and it is the only store that is backed up hourly.\n\nDuckDB is used for the analytics path only. It reads Parquet extracts and answers dashboard queries, and it holds no durable state of its own. A DuckDB file lost is a file we can rebuild from the extracts."
+    },
+    {
+      "filename": "best-practices.md",
+      "text": "# Best Practices doc\n\nThe Best Practices doc collects the conventions this team has agreed to. It covers naming, migration guards, and how a scoped resource is deleted.\n\nThe convention for deletion is that contents go with their container. A space's sources and memories are deleted with the space rather than relabelled, because relabelling them would widen what they are retrievable from."
+    },
+    {
+      "filename": "on-call.md",
+      "text": "# On-call rotation\n\nThe on-call rotation runs weekly and hands over on Monday morning. The primary handles pages; the secondary handles escalations and anything the primary cannot reach within fifteen minutes.\n\nPaging thresholds are reviewed each quarter. The last review moved the error-rate threshold from two percent to one percent."
+    }
+  ],
+  "answers": [
+    {
+      "text": "Raw event logs are kept for ninety days and then rolled up [1].\n\n## Retention window\n\nBilling events are the exception and are archived for seven years [1].\n\n## Archive bucket\n\nThe archive bucket is write-once, and deletions go through a manual runbook [1].",
+      "cited_source": "retention.md",
+      "gold_sources": ["retention.md"]
+    },
+    {
+      "text": "Postgres holds every transactional table [1].\n\n## Storage engines\n\nDuckDB serves the analytics path and holds no durable state [1].",
+      "cited_source": "storage-engines.md",
+      "gold_sources": ["storage-engines.md"]
+    },
+    {
+      "text": "The rotation hands over on Monday [1].\n\n## On-call rotation\n\nThe error-rate threshold moved from two percent to one percent at the last review [1].",
+      "cited_source": "on-call.md",
+      "gold_sources": ["on-call.md"]
+    }
+  ],
+  "questions": [
+    { "text": "How long are raw event logs kept?", "shape": "plain" },
+    { "text": "What does the Best Practices doc say about deletion?", "shape": "plain" },
+    { "text": "Who handles escalations on call?", "shape": "plain" },
+    { "text": "When does the on-call rotation hand over?", "shape": "plain" },
+    { "text": "What is in the archive bucket?", "shape": "plain" },
+    { "text": "Do we keep Postgres or move to DuckDB for the run ledger?", "shape": "plain" },
+    { "text": "Is Postgres better than DuckDB for the audit trail?", "shape": "debate" },
+    { "text": "Postgres versus DuckDB for analytics: which should we pick?", "shape": "debate" },
+    { "text": "What are the pros and cons of a ninety-day retention window?", "shape": "debate" },
+    { "text": "Should we shorten the retention window?", "shape": "debate" },
+    { "text": "Compare the weekly rotation with a daily one.", "shape": "debate" },
+    { "text": "Is a one percent error threshold worth it?", "shape": "debate" }
+  ]
+}

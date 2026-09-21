@@ -17,12 +17,12 @@ import {
   Plus,
   RefreshCw,
   ShieldAlert,
-  ShieldCheck,
   Sparkles,
   Square,
   Terminal,
   ThumbsDown,
   ThumbsUp,
+  ListChecks,
   Undo2,
   Wrench,
   X,
@@ -35,10 +35,10 @@ import type {
   ApprovalMode,
   Board,
   Citation,
-  CitationCheck,
   CoworkingPresence,
   GeneratedApp,
   Message,
+  RunPreset,
   Skill,
   Source,
   StylePreset,
@@ -71,7 +71,9 @@ import {
   type DictationState,
 } from "./dictation";
 import type { CoworkingState } from "../use-coworking";
-import { autoApprovedCalls, isBypass } from "./approval-format";
+import { autoApprovedCalls, describeGate, isBypass } from "./approval-format";
+import { CoverageDrawer } from "./coverage-drawer";
+import { describeFollowup, orderFollowups } from "./followup-format";
 import {
   commandDescription,
   matchCommands,
@@ -84,7 +86,8 @@ import {
 } from "./approval-mode";
 import { BudgetHold } from "./budget";
 import type { BudgetPark } from "./budget-format";
-import { describeCitationCheck } from "./citation-format";
+import { CitationVerdictNote, GroundingDrawer } from "./citation-note";
+import type { RunPlan } from "./plan-format";
 import { ProposalDiff } from "./proposal-diff";
 import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
 import {
@@ -195,6 +198,19 @@ export type ChatViewProps = {
   viewerId?: string;
   decideAgentCall: ToolDecision;
   openCitation: (citation: Citation) => Promise<void>;
+  /**
+   * Put a follow-up chip's question into THIS pane's composer. It SEEDS and
+   * never sends — a chip that sent would let a stray click spend a turn — and
+   * it appends to a draft already in flight rather than clobbering it. Absent
+   * on the panels that render no chips.
+   */
+  seedDraft?: (text: string) => void;
+  /**
+   * Offer the coverage drawer under each answer. Off for the panels beside a
+   * document or a dashboard, whose turns are not research runs and would show
+   * an empty drawer on every message.
+   */
+  showCoverage?: boolean;
   /**
    * Add a source without leaving the conversation. The paperclip used to
    * navigate to the Sources page — an attach button that teleported you away
@@ -308,9 +324,26 @@ export type ChatViewProps = {
      */
     thinking?: boolean;
     setThinking?: (value: boolean) => void;
+    /**
+     * The research-preset picker: the catalogue from bootstrap, the pick, and
+     * the setter that SEEDS the other controls from it. Optional like the
+     * Thinking toggle — a surface with no catalogue shows no picker.
+     */
+    presets?: RunPreset[];
+    preset?: string;
+    setPreset?: (value: string) => void;
+    /** Plan-then-execute for the next turn. A per-turn toggle, like Fast. */
+    stepPlan?: boolean;
+    setStepPlan?: (value: boolean) => void;
   };
   /** The live thinking trail streamed by the active run; "" between runs. */
   thinking?: string;
+  /**
+   * The live plan a step-plan turn is working through; null between runs and
+   * for every turn that is not planning. Narration, not transcript — see
+   * `views/plan-format`.
+   */
+  plan?: RunPlan;
   /**
    * The member's persistent response style, for the composer's picker. The
    * "· you" scope suffix mirrors effort's "· this thread": this one follows
@@ -481,10 +514,38 @@ function TurnControls({
   setFast,
   thinking,
   setThinking,
+  presets,
+  preset,
+  setPreset,
+  stepPlan,
+  setStepPlan,
   disabled,
 }: NonNullable<ChatViewProps["turnControls"]> & { disabled: boolean }) {
   return (
     <>
+      {/* First, because it SEEDS the controls after it: a user reads left to
+          right and a picker that silently rewrote the dropdown to its left
+          would look like a bug rather than a policy. */}
+      {presets && presets.length > 0 && setPreset && (
+        <select
+          className="composer-select"
+          value={preset || ""}
+          onChange={(event) => setPreset(event.target.value)}
+          disabled={disabled}
+          aria-label="Run preset · this thread"
+          title={
+            presets.find((row) => row.name === preset)?.description ||
+            "Pick how thoroughly this thread answers"
+          }
+        >
+          <option value="">No preset</option>
+          {presets.map((row) => (
+            <option key={row.name} value={row.name} title={row.description}>
+              {row.label}
+            </option>
+          ))}
+        </select>
+      )}
       {models.length > 0 && (
         <select
           className="composer-select"
@@ -542,7 +603,58 @@ function TurnControls({
           <Brain size={13} aria-hidden="true" /> Thinking
         </button>
       )}
+      {setStepPlan !== undefined && (
+        <button
+          type="button"
+          className={stepPlan ? "composer-toggle on" : "composer-toggle"}
+          onClick={() => setStepPlan(!stepPlan)}
+          disabled={disabled}
+          aria-pressed={Boolean(stepPlan)}
+          title="Plan: break the question into steps before answering"
+        >
+          <ListChecks size={13} aria-hidden="true" /> Plan
+        </button>
+      )}
     </>
+  );
+}
+
+/**
+ * The plan a step-plan turn committed to, filling in as it works.
+ *
+ * Rendered in the same slot as the thinking trail and for the same reason: it
+ * is narration for the person watching, not part of the transcript. `aria-live`
+ * is polite rather than assertive — a step finishing is worth announcing, and
+ * worth announcing without interrupting whatever the reader is on.
+ */
+function PlanTrail({ plan }: { plan: RunPlan }) {
+  if (!plan || !plan.steps.length) return null;
+  return (
+    <ol className="plan-trail" aria-live="polite" aria-label="Plan progress">
+      {plan.steps.map((step) => (
+        <li
+          key={step.index}
+          className={step.done ? "plan-trail-step done" : "plan-trail-step"}
+        >
+          <span className="plan-trail-question">
+            {step.done ? <Check size={12} aria-hidden="true" /> : null}
+            {step.question}
+          </span>
+          {step.queries.length > 0 && (
+            <span className="plan-trail-queries">
+              {step.queries.map((query) => (
+                <span className="plan-trail-query" key={query}>
+                  {query}
+                </span>
+              ))}
+            </span>
+          )}
+          {step.summary && (
+            <span className="plan-trail-summary">{step.summary}</span>
+          )}
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -1320,37 +1432,6 @@ function extractText(node: React.ReactNode): string {
 }
 
 /**
- * The citation validator's verdict on an answer, where the answer is.
- *
- * Not a decoration. `services/citations.py` is what backs the product's claim
- * that a `[n]` in an answer names a passage that really was retrieved, and its
- * report went to an audit row for a year — so a fabricated `[4]` in an answer
- * built from three passages reached the reader looking exactly like a real
- * citation, with the checker's objection filed where nobody looks.
- */
-function CitationVerdictNote({ report }: { report: CitationCheck }) {
-  const verdict = describeCitationCheck(report);
-  if (!verdict) return null;
-  const Icon = verdict.tone === "clean" ? ShieldCheck : ShieldAlert;
-  return (
-    <div
-      className={`citation-check ${verdict.tone}`}
-      // Announced only for the one tone that is a defect. An uncited passage
-      // is not a contract violation — the validator says so — and interrupting
-      // a screen reader for every tool-driven turn is how a real alert gets
-      // tuned out before it ever fires.
-      role={verdict.tone === "fabricated" ? "alert" : undefined}
-    >
-      <Icon size={14} aria-hidden="true" />
-      <div>
-        <strong>{verdict.title}</strong>
-        <span>{verdict.detail}</span>
-      </div>
-    </div>
-  );
-}
-
-/**
  * The prompt-injection screen's mark on a turn it flagged.
  *
  * Not a decoration and not tuned out like the clean citation case: it appears
@@ -1441,6 +1522,10 @@ function ToolCallCard({
   const args = prettyArguments(call.arguments_json);
   // A pending write shows what it will do; the raw arguments stay one click away.
   const preview = call.proposal_preview;
+  // Why the card exists at all, when the provenance gate is what raised it.
+  // Only on a call still waiting: once decided, "it is waiting for you" is
+  // past tense and the trail already records what happened.
+  const gateNote = pending && call.gate_reason ? describeGate(call.gate_reason) : "";
   /**
    * The list this call was about, once it has actually happened.
    *
@@ -1482,6 +1567,14 @@ function ToolCallCard({
         <span className="tool-name">{call.name}</span>
         <ToolStatus call={call} />
       </button>
+      {/* Above the preview, deliberately: the reason this is waiting has to be
+          read before the diff it is waiting on. */}
+      {gateNote && (
+        <p className="tool-gate-note">
+          <ShieldAlert size={12} aria-hidden="true" />
+          {gateNote}
+        </p>
+      )}
       {/* The plan-review card's preview IS the plan, written as markdown for a
           person to read — a diff renderer would strip its structure. */}
       {preview &&
@@ -1598,6 +1691,8 @@ export function ChatView({
   viewerId,
   decideAgentCall,
   openCitation,
+  seedDraft,
+  showCoverage = false,
   attach,
   approval,
   unrestricted,
@@ -1609,6 +1704,7 @@ export function ChatView({
   turnControls,
   skills,
   thinking,
+  plan,
   responseStyle,
   feedback,
   fork,
@@ -1962,7 +2058,13 @@ export function ChatView({
         {message.role === "assistant" &&
           flaggedRuns?.includes(message.run_id) && <ScreenFlagNote />}
         {message.citation_report && (
-          <CitationVerdictNote report={message.citation_report} />
+          <>
+            <CitationVerdictNote report={message.citation_report} />
+            {/* Under the plate, not inside the answer: the per-sentence
+                verdicts carry offsets, and decorating the prose in place would
+                mean re-parsing the markdown this render just produced. */}
+            <GroundingDrawer report={message.citation_report} />
+          </>
         )}
         {message.citations.length > 0 && (
           <div className="citations">
@@ -1971,6 +2073,31 @@ export function ChatView({
                 <FileText size={13} />
                 <span>[{index + 1}]</span>
                 {citation.filename}
+              </button>
+            ))}
+          </div>
+        )}
+        {/* Follow-up chips. An EMPTY list renders nothing at all rather than an
+            empty shelf: "no suggestion cleared the retrieval probe" is a real
+            and common answer for a thin corpus, and a labelled-but-empty row
+            would read as a failure. Each chip SEEDS the composer — see
+            `seedDraft` — because a chip that sent would make a stray click
+            spend a turn. */}
+        {/* What this run actually looked at. Collapsed and fetched on demand —
+            only a plan-mode run or a deliverable run records a ledger, so
+            asking eagerly would fire one 404 per message in the transcript. */}
+        {message.run_id && showCoverage && <CoverageDrawer runId={message.run_id} />}
+        {orderFollowups(message.followups ?? []).length > 0 && (
+          <div className="followups">
+            {orderFollowups(message.followups ?? []).map((followup) => (
+              <button
+                key={followup.text}
+                type="button"
+                className="followup-chip"
+                title={describeFollowup(followup)}
+                onClick={() => seedDraft?.(followup.text)}
+              >
+                {followup.text}
               </button>
             ))}
           </div>
@@ -2062,6 +2189,10 @@ export function ChatView({
                 </p>
               </details>
             )}
+            {/* The plan's own lane, in the same slot and for the same reason:
+                live narration of what this turn committed to doing, cleared
+                when the run settles. */}
+            {activeRun && <PlanTrail plan={plan ?? null} />}
             {activeRun && runStatus && (
               <div className="run-status">
                 <span className="thinking-dots">

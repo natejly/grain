@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
+import { GroundedReceiptsPanel } from "./grounded-receipts";
 import {
   WEBHOOK_EVENTS,
   deliveriesFor,
@@ -138,6 +139,12 @@ export function WebhooksView({ setError }: { setError: (message: string) => void
         endpoints={endpoints}
         onRedeliver={(id) => void redeliver(id)}
       />
+
+      {/* The record of what the bearer tokens above actually answered. It
+          belongs on this page rather than a View of its own: the machine
+          surface is one thing, and the panel renders nothing until the API has
+          been used. */}
+      <GroundedReceiptsPanel setError={setError} />
     </div>
   );
 }

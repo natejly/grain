@@ -1,6 +1,12 @@
 "use client";
 
-import type { PolicyScope, ToolPolicy } from "@workspace/api-client";
+import type {
+  PolicyScope,
+  TaintGatingMode,
+  TaintStatus,
+  ToolPolicy,
+} from "@workspace/api-client";
+import { ApiError } from "@workspace/api-client";
 import { RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
@@ -190,6 +196,149 @@ export function RulesTable() {
   );
 }
 
+/** The gated classes, in the words this page uses for them elsewhere. */
+const CLASS_WORDS: Record<string, string> = {
+  web_fetch: "pages fetched from the web",
+  mcp_result: "results from connected MCP servers",
+  sandbox_output: "output from the sandbox",
+  workspace_chunk: "passages from your library",
+  memory_item: "saved memories",
+  tool_result: "tool output",
+};
+
+const TAINT_CHOICES: { value: TaintGatingMode; label: string; detail: string }[] = [
+  {
+    value: "default",
+    label: "Follow the deployment",
+    detail: "Whatever this installation ships with. The usual choice.",
+  },
+  {
+    value: "on",
+    label: "Always on",
+    detail: "Keep the gate armed even if the deployment default changes.",
+  },
+  {
+    value: "off",
+    label: "Off",
+    detail:
+      "Outside content stops raising approvals. Standing denials and per-thread approval modes are unaffected.",
+  },
+];
+
+export type TaintGatingPanelProps = {
+  setError: (message: string) => void;
+};
+
+/**
+ * The gate that ADDS approval cards, in the stack of the ones that remove them.
+ *
+ * Rules & policies is already "the standing grants that skip the approval card,
+ * and the ceilings nothing here can loosen". This is the other direction: once
+ * the assistant has read something from outside this workspace, a write or a
+ * network call waits for a person for the rest of that turn — whatever the
+ * thread's approval mode says, and whatever a standing "always allow" says.
+ *
+ * Owner-only to change, readable by everyone. The posture governs every member,
+ * and a control hidden from the people it governs is how "why did that ask me?"
+ * becomes unanswerable; the disabled control is a courtesy, the 403 is the
+ * control.
+ */
+export function TaintGatingPanel({ setError }: TaintGatingPanelProps) {
+  const { session } = useSession();
+  const [status, setStatus] = useState<TaintStatus | null>(null);
+  // A member who cannot write still reads the posture; this only disables the
+  // radio, the same read-only branch RetrievalContractPanel takes on a 403.
+  const [readOnly, setReadOnly] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setStatus(await api.getTaintGating());
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 403) {
+        setReadOnly(true);
+        return;
+      }
+      setError(describeError(caught, "Could not load the content gate"));
+    }
+  }, [setError]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (!status) return null;
+
+  const owner = session?.role === "owner";
+  const locked = readOnly || !owner;
+  const current = (status.workspace_override || "default") as TaintGatingMode;
+
+  async function choose(mode: TaintGatingMode) {
+    if (mode === current) return;
+    setBusy(true);
+    try {
+      await api.setTaintGating(mode);
+      // Refetched, not patched locally: what the gate APPLIES is resolved
+      // server-side from this row plus the deployment, and a panel that
+      // rendered its own guess would disagree with the run path.
+      await load();
+    } catch (caught) {
+      setError(describeError(caught, "Could not change the content gate"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="admin-panel">
+      <div className="panel-title">
+        <div>
+          <strong>Outside content</strong>
+          <span>{status.enabled ? "Gating on" : "Not gating"}</span>
+        </div>
+      </div>
+
+      <p className="field-hint">
+        When the assistant reads something from outside this workspace, anything
+        it then does that changes something or reaches the network waits for a
+        person — for the rest of that turn, whatever the thread is set to. It is
+        decided by where the content came from, not by what it says.
+      </p>
+
+      <div className="policies-radio-group" role="group" aria-label="Outside content gate">
+        {TAINT_CHOICES.map((choice) => (
+          <label key={choice.value} className="approval-remember">
+            <input
+              type="radio"
+              name="taint-gating"
+              value={choice.value}
+              checked={current === choice.value}
+              disabled={locked || busy}
+              title={
+                locked
+                  ? "Only a workspace owner can change the content gate"
+                  : undefined
+              }
+              onChange={() => void choose(choice.value)}
+            />
+            <span>
+              <strong>{choice.label}</strong> — {choice.detail}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <p className="field-hint">
+        {status.classes.length > 0
+          ? `Gated right now: ${status.classes
+              .map((name) => CLASS_WORDS[name] ?? name)
+              .join(", ")}.`
+          : "Nothing is gated right now. What the assistant reads is still recorded."}
+      </p>
+    </section>
+  );
+}
+
 export type PoliciesViewProps = {
   setError: (message: string) => void;
 };
@@ -218,6 +367,10 @@ export function PoliciesView({ setError }: PoliciesViewProps) {
       </div>
       <div className="policies-stack">
         <RulesTable />
+        {/* Between the ledger and the ceilings, because that is where it sits
+            in the argument: the rules above remove approval cards, this adds
+            them, and the org panel below outranks both. */}
+        <TaintGatingPanel setError={setError} />
         <OrganizationPanel setError={setError} />
         <RetrievalContractPanel setError={setError} />
       </div>

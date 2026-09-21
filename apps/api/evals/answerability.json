@@ -1,0 +1,188 @@
+{
+  "readme": "Fixture corpus for scripts/evaluate_answerability.py. The documents are DUPLICATED from evals/corpus.json rather than imported: a change made to the retrieval corpus must not silently move this gate's floors, and the two harnesses measure different things over deliberately overlapping text. Each question carries the gold passage (source + must_contain, resolved to chunk ids at seed time) and an AUTHORED answer written to be supported by that passage — the thing being graded. `defects` are answers with a fault planted in them, each naming the class the grader must catch it as; `blind_spots` are faults the lexical method is documented NOT to catch, reported every run so the limitation stays visible instead of being inferred from a green gate.",
+  "documents": [
+    {
+      "source": "northstar.md",
+      "text": "The Northstar project launches in October. Maya Chen owns the launch. Its goal is to reduce customer onboarding time by forty percent."
+    },
+    {
+      "source": "juniper.md",
+      "text": "Project Juniper uses a violet deployment ring for canary releases. The rollback window is fifteen minutes."
+    },
+    {
+      "source": "payments-service.md",
+      "text": "The payments reconciliation service matches settlement files from our processors against ledger entries every night. Priya Shah is the service owner. When a nightly run reports a mismatch above five thousand dollars it pages the on-call engineer instead of retrying, because a silent retry can double-post a refund."
+    },
+    {
+      "source": "billing-runbook.md",
+      "text": "If a customer reports that they were charged twice, do not issue a refund from the admin console. Open the settlement report for the day in question, confirm the duplicate at the ledger level, and file a correction ticket. Refunds issued directly bypass reconciliation and will reappear as a mismatch the following night."
+    },
+    {
+      "source": "ingest-pipeline.md",
+      "text": "The ingestion pipeline splits uploaded documents into passages of roughly eight hundred tokens with a hundred token overlap. Overlap exists so that a sentence spanning a boundary is still retrievable from at least one passage. Daniel Okonkwo maintains the pipeline."
+    },
+    {
+      "source": "search-service.md",
+      "text": "Workspace search scores passages by term frequency against the query and returns the highest scoring five. It does not consider meaning, so a question phrased differently from the source text will often return nothing useful. Replacing it is tracked under the retrieval quality epic."
+    },
+    {
+      "source": "oncall-policy.md",
+      "text": "The primary on-call rotation runs Monday to Monday and hands over at ten in the morning. Anyone paged more than three times in a single night is automatically excused from the following rotation. Escalation goes to the service owner first and the platform lead second."
+    },
+    {
+      "source": "platform-team.md",
+      "text": "The platform team owns shared infrastructure: the message queue, the object store, and the deployment tooling. May Lin leads the team. The team does not own application databases, which stay with the service that writes to them."
+    },
+    {
+      "source": "vector-team.md",
+      "text": "The vector team builds the embedding and indexing services used by search and recommendations. Daniel Okonkwo and Priya Shah both sit on this team part time. Its charter explicitly excludes ranking, which belongs to the search service."
+    },
+    {
+      "source": "atlas-overview.md",
+      "text": "Atlas is the internal name for the customer data platform. It stores account records, subscription state, and entitlement flags. Every other service reads entitlements from Atlas rather than caching them, because a stale entitlement is how a cancelled customer keeps access."
+    }
+  ],
+  "questions": [
+    {
+      "kind": "lexical",
+      "question": "Who owns the Northstar launch?",
+      "source": "northstar.md",
+      "must_contain": "Maya Chen",
+      "answer": "Maya Chen owns the Northstar launch, which is scheduled for October [1].",
+      "defects": [
+        {
+          "expect": "cited_unsupported",
+          "why": "a claim taken from a different document, cited to this passage",
+          "answer": "The payments reconciliation service matches settlement files from our processors against ledger entries every night [1]."
+        },
+        {
+          "expect": "fabricated",
+          "why": "names a passage that was never supplied",
+          "answer": "Maya Chen owns the Northstar launch, which is scheduled for October [4]."
+        },
+        {
+          "expect": "uncited",
+          "why": "a factual claim taken from the passage and left unmarked",
+          "answer": "Maya Chen owns the Northstar launch, which is scheduled for October."
+        }
+      ]
+    },
+    {
+      "kind": "lexical",
+      "question": "What onboarding improvement is Northstar targeting?",
+      "source": "northstar.md",
+      "must_contain": "forty percent",
+      "answer": "Northstar targets a reduction in customer onboarding time of forty percent [1]."
+    },
+    {
+      "kind": "lexical",
+      "question": "What colour is the Juniper deployment ring?",
+      "source": "juniper.md",
+      "must_contain": "violet",
+      "answer": "Project Juniper uses a violet deployment ring for canary releases [1]."
+    },
+    {
+      "kind": "lexical",
+      "question": "How long is the Juniper rollback window?",
+      "source": "juniper.md",
+      "must_contain": "fifteen minutes",
+      "answer": "The Juniper rollback window is fifteen minutes [1].",
+      "defects": [
+        {
+          "expect": "cited_unsupported",
+          "why": "a figure the passage does not state — the one thing a paraphrase may never change",
+          "answer": "The Juniper rollback window is 45 minutes [1]."
+        }
+      ]
+    },
+    {
+      "kind": "lexical",
+      "question": "Who maintains the ingestion pipeline?",
+      "source": "ingest-pipeline.md",
+      "must_contain": "Daniel Okonkwo",
+      "answer": "Daniel Okonkwo maintains the ingestion pipeline [1]."
+    },
+    {
+      "kind": "lexical",
+      "question": "When does the on-call rotation hand over?",
+      "source": "oncall-policy.md",
+      "must_contain": "ten in the morning",
+      "answer": "The primary on-call rotation runs Monday to Monday and hands over at ten in the morning [1].",
+      "defects": [
+        {
+          "expect": "uncited",
+          "why": "the whole answer is taken from the passage and cites none of it",
+          "answer": "The primary on-call rotation runs Monday to Monday and hands over at ten in the morning."
+        }
+      ]
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Who should I talk to about invoices not matching what the bank sent us?",
+      "source": "payments-service.md",
+      "must_contain": "Priya Shah",
+      "answer": "Priya Shah is the owner of the payments reconciliation service, which matches settlement files against ledger entries every night [1].",
+      "defects": [
+        {
+          "expect": "cited_unsupported",
+          "why": "a claim from the on-call policy, cited to the payments passage",
+          "answer": "Anyone paged more than three times in a single night is automatically excused from the following rotation [1]."
+        }
+      ]
+    },
+    {
+      "kind": "paraphrase",
+      "question": "A subscriber says money left their account twice. What is the correct procedure?",
+      "source": "billing-runbook.md",
+      "must_contain": "correction ticket",
+      "answer": "Open the settlement report for the day in question, confirm the duplicate at the ledger level, and file a correction ticket rather than issuing a refund from the admin console [1]."
+    },
+    {
+      "kind": "paraphrase",
+      "question": "How big are the text fragments we store, and why do they overlap?",
+      "source": "ingest-pipeline.md",
+      "must_contain": "overlap",
+      "answer": "The pipeline splits uploaded documents into passages of roughly eight hundred tokens with a hundred token overlap, so a sentence spanning a boundary is still retrievable from at least one passage [1]."
+    },
+    {
+      "kind": "paraphrase",
+      "question": "Why does asking a question in my own words often return nothing useful?",
+      "source": "search-service.md",
+      "must_contain": "does not consider meaning",
+      "answer": "Workspace search scores passages by term frequency against the query and does not consider meaning, so a question phrased differently from the source text will often return nothing useful [1]."
+    },
+    {
+      "kind": "indirect",
+      "question": "Who do I ask about the deployment tooling?",
+      "source": "platform-team.md",
+      "must_contain": "May Lin",
+      "answer": "May Lin leads the platform team, which owns the shared message queue, the object store, and the deployment tooling [1].",
+      "blind_spots": [
+        {
+          "why": "a negation whose every word is in the passage. Lexical overlap cannot see it, and no floor in this gate certifies otherwise.",
+          "answer": "The platform team does not own the deployment tooling, the message queue or the object store [1]."
+        }
+      ]
+    },
+    {
+      "kind": "indirect",
+      "question": "Why must services not cache entitlement flags?",
+      "source": "atlas-overview.md",
+      "must_contain": "stale entitlement",
+      "answer": "Every other service reads entitlements from Atlas rather than caching them, because a stale entitlement is how a cancelled customer keeps access [1]."
+    },
+    {
+      "kind": "indirect",
+      "question": "Does the embedding team own ranking?",
+      "source": "vector-team.md",
+      "must_contain": "excludes ranking",
+      "answer": "No. The vector team builds the embedding and indexing services, and its charter explicitly excludes ranking, which belongs to the search service [1].",
+      "blind_spots": [
+        {
+          "why": "a misattribution assembled entirely from the passage's own words — the team and the thing are both named there, the relation between them is not.",
+          "answer": "The vector team builds the embedding and indexing services and owns ranking for the search service [1]."
+        }
+      ]
+    }
+  ]
+}

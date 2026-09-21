@@ -14,6 +14,7 @@ import type {
 import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
 import { api } from "../api";
 import type { BudgetPark } from "../views/budget-format";
+import type { RunPlan } from "../views/plan-format";
 import { describeActionError, describeError, type View } from "../views/shared";
 import { UNDO_CONFIRM, summarizeUndo } from "../views/undo-format";
 import { createThreadHandlers } from "./thread";
@@ -37,6 +38,9 @@ export type ChatHandlerDeps = {
   fast: boolean;
   /** The Thinking toggle: stream this turn's reasoning summaries as a trail. */
   thinking: boolean;
+  /** The picked research preset, "" for none, and the per-turn plan toggle. */
+  preset: string;
+  stepPlan: boolean;
   /** The skill attached to the next turn, its arg values, and the way to drop
    * it once the send lands. All three are per-turn, like the draft. */
   attachedSkill: Skill | null;
@@ -75,6 +79,8 @@ export type ChatHandlerDeps = {
   setRunStatus: Dispatch<SetStateAction<string>>;
   /** The live thinking trail the current run has streamed; "" between runs. */
   setRunThinking: Dispatch<SetStateAction<string>>;
+  /** The live plan a step-plan turn narrates; null between runs. */
+  setRunPlan: Dispatch<SetStateAction<RunPlan>>;
   setBudgetPark: Dispatch<SetStateAction<BudgetPark | null>>;
   /** Records a run the prompt-injection screen flagged, so the transcript can mark it. */
   onScreenFlag: (runId: string) => void;
@@ -113,6 +119,8 @@ export function createChatHandlers({
   selectedEffort,
   fast,
   thinking,
+  preset,
+  stepPlan,
   attachedSkill,
   skillArgs,
   clearAttachedSkill,
@@ -132,6 +140,7 @@ export function createChatHandlers({
   setActiveRun,
   setRunStatus,
   setRunThinking,
+  setRunPlan,
   setBudgetPark,
   onScreenFlag,
   setDraft,
@@ -232,6 +241,10 @@ export function createChatHandlers({
       effort: fast ? "" : selectedEffort,
       fast,
       thinking,
+      preset,
+      // Always sent, including `false`: the server distinguishes absent from
+      // explicitly-off, which is how a user declines a preset's plan mode.
+      stepPlan,
       skillId: attachedSkill?.id,
       skillArgs,
     },
@@ -245,6 +258,7 @@ export function createChatHandlers({
     setActiveRun,
     setRunStatus,
     setRunThinking,
+    setRunPlan,
     setBudgetPark,
     setDraft,
     restoreDraft,

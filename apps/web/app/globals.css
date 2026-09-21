@@ -1513,6 +1513,156 @@ label,
   color: inherit;
 }
 
+/* The per-sentence grounding drawer, directly under the citation plate it
+   extends. Same 31px gutter, so the two read as one column of verdict rather
+   than as a notice and a second notice. It is a disclosure, not a control: the
+   summary row is borderless and full width so it looks like part of the plate
+   above it, and the sentences only exist once someone asks for them. */
+.grounding-plate {
+  margin-top: 4px;
+  margin-left: 31px;
+}
+
+.grounding-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.grounding-summary:hover {
+  background: var(--surface);
+}
+
+.grounding-summary svg {
+  flex: none;
+}
+
+.grounding-summary[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+/* The three tones mirror the citation plate's, deliberately reusing its tokens
+   rather than inventing a palette: green for the expected outcome, amber for
+   "worth a glance", red for the one state that is a defect. */
+.grounding-summary.grounded {
+  color: var(--text-muted);
+}
+
+.grounding-summary.partial {
+  color: var(--amber);
+}
+
+.grounding-summary.ungrounded {
+  color: var(--red);
+}
+
+.grounding-detail {
+  padding: 4px 11px 8px;
+}
+
+/* The sentence that keeps "verified" from being read as "true". Quiet, and
+   always present when the drawer is open — it is not a tooltip. */
+.grounding-meaning,
+.grounding-repair {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.grounding-sentences {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grounding-sentence {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.grounding-sentence.verified {
+  border-left-color: var(--green);
+}
+
+.grounding-sentence.cited_unsupported {
+  border-left-color: var(--red);
+  background: var(--red-muted);
+}
+
+.grounding-sentence.uncited {
+  border-left-color: var(--amber);
+}
+
+/* Cited to a web page whose text never reached us: amber like `uncited`,
+   because the shared fact is that nothing here checked it — and deliberately
+   not the green of `verified`, which is the mistake this verdict exists to
+   undo. */
+.grounding-sentence.attributed {
+  border-left-color: var(--amber);
+}
+
+/* The tail past the grader's 120-sentence cap. Neutral, because no verdict was
+   reached about it at all. */
+.grounding-sentence.ungraded {
+  border-left-color: var(--border);
+}
+
+.grounding-badge {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.grounding-markers {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.grounding-text {
+  min-width: 0;
+}
+
+/* The expanded receipt on the API & Webhooks page. The verdict components
+   inside it carry their own 31px gutter, which is the transcript's; the
+   answer body sits at the same offset so the two line up here too. */
+.grounded-receipt-detail {
+  margin-top: 8px;
+}
+
+.grounded-receipt-detail > p {
+  margin: 0 0 4px 31px;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 /* The prompt-injection screen's mark on a flagged turn. Shares the citation
    check's plate geometry so the two verdicts stack cleanly under an answer, and
    the fabricated-citation red because a caught injection is likewise a defect
@@ -1582,6 +1732,144 @@ label,
   font-weight: 700;
 }
 
+/* Follow-up chips, under the citations they were derived from.
+
+   Tokens only, so both themes work by construction (theme-tokens.test.ts is
+   the check). A chip SEEDS the composer and never sends, so it is styled as a
+   quiet suggestion rather than a call to action — a primary-looking button
+   would invite the stray click the seed-not-send rule exists to make cheap. */
+.followups {
+  margin-top: 10px;
+  padding-left: 31px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.followup-chip {
+  max-width: 320px;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.followup-chip:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.followup-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The coverage ledger: collapsed by default and muted, because it describes
+   what a run LOOKED AT rather than what it concluded. */
+.coverage-ledger {
+  margin-top: 10px;
+  padding-left: 31px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.coverage-ledger > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.coverage-ledger > summary:hover {
+  color: var(--text);
+}
+
+.coverage-ledger-section {
+  margin-top: 20px;
+}
+
+/* A published page whose evidence has moved. The existing warning tokens, never
+   a raw amber. */
+.page-drift-banner {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  background: var(--amber-muted);
+  color: var(--amber);
+  font-size: 12px;
+}
+
+.page-drift-chip {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--amber-muted);
+  color: var(--amber);
+  font-size: 9px;
+}
+
+/* The per-citation status pip: what makes "frozen" visible rather than
+   claimed. Three states, three tokens already in the palette. */
+.page-citation {
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--green-muted);
+  color: var(--green);
+  font-size: 9px;
+}
+
+.page-citation[data-status="changed"] {
+  background: var(--amber-muted);
+  color: var(--amber);
+}
+
+.page-citation[data-status="missing"] {
+  background: var(--red-muted);
+  color: var(--red);
+}
+
+.page-citations {
+  margin-top: 20px;
+}
+
+.page-citations blockquote {
+  margin: 4px 0 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.page-citation-head {
+  display: block;
+  font-size: 12px;
+}
+
+.page-subtitle {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.watch-shared span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .run-status {
   display: flex;
   align-items: center;
@@ -1589,6 +1877,60 @@ label,
   margin: -10px 0 28px 31px;
   color: var(--text-dim);
   font-size: 10px;
+}
+
+/* The plan trail: a step-plan turn's live narration, in the same quiet lane
+   as the thinking trail above the status line. Existing tokens only, and the
+   query chips reuse the composer-chip metrics so the two read as one system. */
+.plan-trail {
+  margin: -6px 0 20px 31px;
+  padding: 0 0 0 16px;
+  list-style: decimal;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.plan-trail-step {
+  margin: 0 0 8px;
+}
+
+.plan-trail-step.done {
+  color: var(--text-muted);
+}
+
+.plan-trail-question {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+}
+
+.plan-trail-step.done .plan-trail-question {
+  color: var(--text-muted);
+}
+
+.plan-trail-queries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.plan-trail-query {
+  padding: 0 7px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.plan-trail-summary {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
 }
 
 .thinking-dots {
@@ -5017,6 +5359,28 @@ label,
   border-top: 1px solid var(--border);
 }
 
+/* Why this card exists, above the preview rather than inside the disclosure —
+   the reason has to be read before the diff, and anything behind a closed
+   triangle is as invisible as something never rendered. Clay is already the
+   needs-approval tone; a new colour literal would fail the theme-token guard
+   and break dark mode besides. */
+.tool-gate-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--clay-muted);
+  color: var(--clay);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.tool-gate-note svg {
+  flex-shrink: 0;
+}
+
 .tool-card-approval .remember {
   display: inline-flex;
   align-items: center;
@@ -7342,6 +7706,21 @@ label,
   gap: 14px;
   width: min(1060px, 100%);
   margin: 0 auto;
+}
+
+/* Three stacked choices, each with its consequence beside it. Stacked rather
+   than inline because the labels are sentences: a row of radios would clip the
+   one that matters most, which is the one that turns the gate off. */
+.policies-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policies-radio-group .approval-remember {
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.5;
 }
 
 .admin-panel {

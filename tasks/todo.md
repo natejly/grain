@@ -632,6 +632,15 @@ Gap audit vs Claude desktop (Sept 2026): 16 areas — 2 already full (space inst
 - [x] Attachment previews in chat (image/PDF/CSV cards)
 - [x] Reflect recap view (GET /api/me/recap, deterministic aggregates)
 - [x] Voice dictation (Web Speech API, feature-detected)
+### Cluster E — harness quick wins (digest shortlist; adopted verdicts, none built)
+- [ ] Widen Harness.build_step seam (workspace/run identity) then prompt_cache_key=workspace_id
+- [ ] Encrypted reasoning replay (include reasoning.encrypted_content under store=False)
+- [ ] tool_choice="none" on the final round (keep the cached prefix)
+- [ ] Prompt fingerprint column on Run (sha256 of instruction constants + model + effort)
+- [ ] Cross-run denial memory (denial -> preference MemoryItem at the decision endpoint, capped)
+- [ ] web_fetch ToolSpec (readability pass + fetched-page screen kind over the existing SSRF fetcher)
+- [ ] search_sources `limit` param; query_dataset real nested schema + example
+- [ ] Relevance-gated evidence preload (fused-score floor, read not derived)
 ### Gates before push
 - [x] e2e QA specs for every feature; full Playwright suite green (111 passed, 1 pre-existing fixme skip)
 - [x] Adversarial review workflow; 21 confirmed findings (5 major) all fixed, 1 refuted
@@ -827,3 +836,142 @@ Gap audit vs Claude desktop (Sept 2026): 16 areas — 2 already full (space inst
 - Machine-sleep artifact: overnight sweeps stall for hours unless caffeinate
   holds the lid; the ERR_NETWORK_IO_SUSPENDED console error came from that,
   not the app.
+---
+
+# Perplexity-harness cycle (worktree-perplexity-harness, 2026-09-21)
+
+Implement all 13 ideas from docs/PERPLEXITY-IDEAS.md (web-verified Perplexity research).
+Ultracode: digest → 4 cluster designs → staged implement → QA → adversarial review → gates → merge.
+
+## Plan
+### Cluster A — verification (ideas 1, 8, 13)
+- [x] Verified-grounding score: per-sentence validator verdicts, badges, targeted regen pass
+- [x] Answerability eval harness as merge gate (recall@k, grounding score, validator pass rate)
+- [x] Grounded-answer API with verification receipts + receipt viewer web surface
+### Cluster B — orchestration (ideas 2, 6, 3, 12)
+- [x] Retrieval tool parameter parity (scope filters, date filters, token budgets, stable ids)
+- [x] Plan-then-execute retrieval mode with live plan rendering + step traces
+- [x] Council delegate: frozen retrieval set, agree/disagree/unique synthesis, validator-demoted candidates
+- [x] Run presets as policy bundles + auto complexity router
+### Cluster C — trust (idea 9)
+- [x] Taint-labeled context blocks; guardian gates risky actions on untrusted-provenance triggers
+### Cluster D — research surfaces (ideas 4, 5, 7, 10, 11)
+- [x] Corpus-grounded follow-up chips (retrieval-probe filtered, KG-seeded)
+- [x] Provenance-frozen Pages + re-validation sweep
+- [x] Coverage ledger + counter-evidence pass for deep research
+- [x] Deliverable runs with output manifest
+- [x] Watch-and-brief primitive (scheduled diff + extraction + standing brief)
+### Deferred, deliberately (not shipped this cycle)
+- [ ] Plan replay after a page reload (`plan_steps` table) — the live plan is a
+      run-event stream only, so a reload loses the step trace
+- [ ] Preset model tiers (a preset narrows tools and approval posture, not the
+      model or its effort)
+### Gates before push
+- [x] e2e QA specs; full Playwright green
+- [x] Adversarial review; confirmed findings fixed (see Review)
+- [x] Full verify chain (ruff, mypy dev-extras, pytest, memory+answerability
+      +research eval gates, tsc, vitest, build) — the research gate is now wired
+      into CI beside the other three, which was the omission this line recorded
+- [ ] Merge to main + push (auto-deploys UAT)
+
+## Review
+
+Everything in Cluster A–D landed: migration 0073, the five new routers
+(`answers`, `coverage`, `deliverables`, `pages`, `watches`), the services behind
+them (`grounded`, `step_plan`, `run_presets`, `provenance`, `followups`,
+`coverage`, `deliverables`, `watches`, `denial_memory`, `web_fetch`), both eval
+scripts, and the web surfaces for each. Two plan items were deliberately
+deferred and are now listed as such above rather than left ambiguous.
+
+### The adversarial review
+
+A multi-agent review of the whole cycle confirmed **40 findings, 2 of them
+critical**, each with a reproduction against this branch's own code. They were
+fixed in two parallel waves. This section records the wave covering TRUST
+(`provenance`, `denial_memory`, `sandbox`) and SURFACES (`deliverables`,
+`pages`, `watches`, `followups`); the grounding/receipt wave
+(`citations`, `grounded`, `runs`, `delegation`, `llm_tools`, `model`,
+`run_presets`, `coverage`) is recorded by its own author.
+
+Trust — what the gate was letting through:
+
+- **Workflow agent-node prompts were labelled `user_direct`.** The executor
+  resolves `{{ fetch.output }}` into the prompt and writes it onto the shared
+  backing run, so a compromised MCP server's text arrived as the one TRUSTED
+  class: unscreened, arming nothing, in the unattended setting the gate exists
+  for. The executor now classes the prompt by the ACTUAL source of each
+  reference (the upstream tool's own `ToolSpec.provenance`, a webhook payload
+  as external, a manual node's typed values as trusted) and threads it through
+  `run_agent_turn(prompt_classes=...)`. A reference-free prompt stays
+  `user_direct`, so ordinary automations are unchanged.
+- **`turn_taint` read the OLDEST 200 taint events**, so a `web_fetch` or
+  `mcp_result` arriving after the bound silently disarmed the gate for the rest
+  of the run — and a workflow accumulates those across every node of one run.
+  The window now keeps the NEWEST rows, and a SATURATED read answers with the
+  whole gating set: the only safe thing to say about ingests you did not look
+  at is "assume they were there".
+- **The workspace "Always on" override was stored, audited, re-displayed and
+  inert.** `gating_classes` resolved the deployment flag before ever reading
+  the column. The override is now read first, three-value: `off` disarms, `on`
+  arms (falling back to the two external classes if the deployment cleared the
+  list), everything else follows the deployment.
+- **Denial memory wrote attacker-controlled preview text into durable,
+  unscreened, non-gating memory.** Denying a taint-gated card was the injection's
+  write primitive. The note now describes the call's SHAPE — argument names and
+  sizes, server-derived — and quotes nothing the model wrote; denying `remember`
+  or `forget` writes nothing at all.
+- Minors: networked sandboxes (builtin and workspace-authored) now REPORT
+  `web_fetch` so egress-capable output arms the default gate; `gate_reason`
+  announces a dropped class as `+N` and `describeGate` renders it ("and 2 other
+  kinds of source") instead of printing a short list as a complete sentence.
+
+Surfaces — what the receipts were claiming:
+
+- **Deliverable budgets were collected, validated, displayed and never read.**
+  They are now enforced between nodes by the executor (`budget_exhausted` halts
+  into the existing partial-manifest path) and recorded on BOTH manifest paths;
+  `spent_tool_calls` counts executed calls only, so a denied approval no longer
+  bills against the budget; and the web copy names the reason from the numbers
+  instead of calling every halt "budget exhausted".
+- **Manifest files were attributed to the wrong sandbox session** whenever a
+  download produced no checkpoint (denied, failed, or simply no file), because
+  the join was positional. It is keyed on `RunCheckpoint.tool_call_id` now, and
+  reads the schema's real `session` argument (the fixture that only ever wrote
+  the `session_id` alias was hiding it). An unresolvable row records `""` — a
+  blank is honest, a shifted id is not.
+- **A page past 200 citations kept the markers and dropped the rows.** Past the
+  ceiling a citation now freezes as `missing` rather than vanishing, which is
+  what the module docstring always promised.
+- **Toggling a watch's `shared` flag orphaned every claim it had written** —
+  supersession matches owner and space exactly, so the rows left behind could
+  never be corrected. The flip now retires them through `memory.retire_items`
+  and the audit row records the scope it left.
+- **Watch fields that would not slugify lost supersession entirely**, making
+  memory growth fires x values ("price (USD)" is the ordinary way to hit it).
+  `claim_key` is total now (a stable digest when the name will not slugify) and
+  the boundary 422s the name while the person still holds the form.
+- Minors: watch checks moved off the shared tick onto background tasks (claim
+  inline, check async — the split subscriptions and digests already make); the
+  follow-up candidate build is lazy and capped at four distinct cited chunks, so
+  it can no longer scale with evidence count on the completion path; the page
+  drift sweep takes a conditional-UPDATE claim, so overlapping ticks cannot
+  double-notify the publisher.
+
+### One finding NOT fixed here
+
+`delegation._record_council` writes its run event from a delegate worker thread,
+breaking `_delegate_parallel_batch`'s stated "workers write no events"
+invariant. The fix belongs inside `delegation.py`, which the other wave owns, so
+this wave left the invariant as an executable specification:
+`apps/api/tests/test_council_events.py` is `xfail(strict=True)` and turns red the
+moment the write is marshalled back to the coordinator — at which point the
+marker comes off.
+
+### Verify
+
+`uv sync --extra dev`; `ruff check apps/api` clean; `mypy apps/api/app` clean
+over the files in this wave; FULL `pytest` with `PYTHONPATH=apps/api` pinned
+(the worktree import trap); `APP_ENV=development` research and memory eval gates
+green; `tsc --noEmit` clean; FULL vitest green. Every fix above carries a
+regression test that fails on the code as it shipped. The scripted provider is
+the only one any injection-shaped fixture touches.

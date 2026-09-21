@@ -75,6 +75,16 @@ PUBLIC_UNSAFE_ROUTES = {
     # workspace, and the isolation sweep pins the 401 for cookie callers.
     "/api/hooks/workflows/{workflow_id}/trigger",
     "/api/hooks/conversations/{conversation_id}/messages",
+    # The grounded-answer API, the same class as the hooks above and for the
+    # same reasons: it resolves identity through `get_token_actor` — an
+    # `Authorization: Bearer grain_…` workspace token, sha256-at-rest, acting as
+    # the member who minted it — not through `get_actor`, which is what this
+    # tripwire looks for. A bearer header cannot be attached by an attacker's
+    # page, so there is no CSRF to enforce, and a missing or dead token is a
+    # uniform 401. Its two *read* routes are ordinary owner-gated cookie routes
+    # and are deliberately absent from this list. Targeted tests in
+    # test_answers_api.py.
+    "/api/answers/grounded",
     # The email provider's delivery webhook — the tick posture exactly: a mail
     # provider holds no session, so the route authenticates a shared bearer
     # (`settings.inbound_email_webhook_secret`) with compare_digest inside the

@@ -54,6 +54,15 @@ export type WorkspaceSettingsMenuProps = {
   stylePreset?: string | null;
   customStyleText?: string;
   onStyleChange?: (preset: StylePreset, customText: string) => void;
+  /**
+   * The provenance gate's posture, for a NOTE beside Safe mode — not a second
+   * toggle. The setting is workspace-wide and owner-only, so a per-member
+   * checkbox here would promise authority the member does not have; the note
+   * says what happens and where it is changed.
+   *
+   * Optional and guarded, so every existing mount renders byte-identically.
+   */
+  taint?: { enabled: boolean };
 };
 
 /** The preset rows the style select offers, in menu order. */
@@ -167,6 +176,7 @@ export function WorkspaceSettingsMenu({
   stylePreset = null,
   customStyleText = "",
   onStyleChange,
+  taint,
 }: WorkspaceSettingsMenuProps) {
   const inSettings = SETTINGS_GROUPS.some((group) => group.id === activeGroup);
 
@@ -225,6 +235,17 @@ export function WorkspaceSettingsMenu({
               ? "New threads start in “Ask before writes”. Threads already open keep the mode they are in."
               : "New threads act on their own and show you what ran. Denied tools stay denied, and anything flagged still asks."}
           </p>
+          {/* The gate's boundary, where the setting it overrides lives. It
+              says "whatever this is set to" on purpose: a member reading the
+              checkbox above needs to know it is not the last word. */}
+          {taint?.enabled && (
+            <p className="disclosure-hint">
+              Content the assistant reads from outside this workspace — web
+              pages, connected MCP servers — makes writes and network calls ask
+              first for the rest of that turn, whatever this is set to. Your
+              workspace owner sets that on Rules &amp; policies.
+            </p>
+          )}
           {memoryEnabled !== null && (
             <>
               <p className="disclosure-note">Memory</p>

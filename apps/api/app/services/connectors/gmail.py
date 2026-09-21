@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from ...models import IntegrationAccount, SyncJob
+from .. import provenance
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
 from .base import ConnectorError, ensure_access_token, http_client
 from .landing import create_text_source, upsert_dataset
@@ -217,6 +218,11 @@ def gmail_tools(account: IntegrationAccount) -> Dict[str, ToolSpec]:
                 "required": ["query"],
             },
             executor=_search_executor(account.id),
+            # A message body is attacker-authored text arriving over the
+            # network under the user's own credential — the exact shape the
+            # taint gate exists for — and reaching the provider is egress.
+            provenance=provenance.WEB_FETCH,
+            networked=True,
         ),
         "gmail_get_message": ToolSpec(
             name="gmail_get_message",
@@ -227,6 +233,11 @@ def gmail_tools(account: IntegrationAccount) -> Dict[str, ToolSpec]:
                 "required": ["message_id"],
             },
             executor=_get_message_executor(account.id),
+            # A message body is attacker-authored text arriving over the
+            # network under the user's own credential — the exact shape the
+            # taint gate exists for — and reaching the provider is egress.
+            provenance=provenance.WEB_FETCH,
+            networked=True,
         ),
     }
 

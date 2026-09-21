@@ -138,6 +138,50 @@ def test_the_knowledge_graph_is_shared_over_mcp(client):
         _cleanup_tokens()
 
 
+def test_the_grounded_answer_tool_rides_the_registry_and_leaves_no_receipt(client):
+    """`grounded_answer` is read-only and not force_ask, so it reaches the MCP
+    surface with no change to mcp_server.py at all.
+
+    Two things worth pinning beyond that it is offered. The result must stay
+    inside MAX_RESULT_CHARS, because `_call_tool` appends up to eight passages
+    AFTER `bounded_content()` clips — so an answer allowed to fill the budget
+    would push its own evidence out of the payload. And the tool writes NO
+    receipt: receipts are the REST surface's record, and a tool call that left
+    one behind would turn the ledger into a transcript.
+    """
+    from app.models import GroundedReceipt
+    from app.services.llm_tools import MAX_RESULT_CHARS
+
+    secret = _mint(client)
+    db = SessionLocal()
+    try:
+        before = db.query(GroundedReceipt).count()
+    finally:
+        db.close()
+    try:
+        listed = _rpc(client, secret, "tools/list")
+        names = {tool["name"] for tool in listed.json()["result"]["tools"]}
+        assert "grounded_answer" in names
+
+        response = _rpc(
+            client,
+            secret,
+            "tools/call",
+            {"name": "grounded_answer", "arguments": {"question": "who owns the launch"}},
+        )
+        assert response.status_code == 200
+        result = response.json()["result"]
+        assert result["isError"] is False
+        assert len(result["content"][0]["text"]) <= MAX_RESULT_CHARS + 4000
+    finally:
+        _cleanup_tokens()
+    db = SessionLocal()
+    try:
+        assert db.query(GroundedReceipt).count() == before
+    finally:
+        db.close()
+
+
 def test_an_unknown_tool_is_an_rpc_tool_error_not_a_crash(client):
     secret = _mint(client)
     try:

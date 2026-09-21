@@ -12,6 +12,7 @@ from .api import (
     admin,
     agents,
     analytics,
+    answers,
     api_tokens,
     artifacts,
     attachments,
@@ -20,11 +21,13 @@ from .api import (
     board_ops,
     chat,
     comments,
+    coverage,
     coworking,
     crons,
     dashboard_subscriptions,
     dashboards,
     dbconnect,
+    deliverables,
     doc_pending,
     favorites,
     folders,
@@ -42,6 +45,7 @@ from .api import (
     memory,
     monitors,
     org,
+    pages,
     projects,
     sandbox,
     sandbox_secrets,
@@ -54,6 +58,7 @@ from .api import (
     templates,
     todos,
     tools,
+    watches,
     webhooks,
     workflows,
 )
@@ -151,7 +156,13 @@ app.include_router(dashboards.router)
 app.include_router(favorites.router)
 app.include_router(dashboard_subscriptions.router)
 app.include_router(share_links.router)
+# One family with share links: a page is another resource kind on the same
+# public surface, and the two routers are read together.
+app.include_router(pages.router)
 app.include_router(api_tokens.router)
+# Beside the tokens it authenticates with: the bearer surface and the owner-read
+# ledger of what that bearer surface answered.
+app.include_router(answers.router)
 app.include_router(webhooks.router)
 app.include_router(hooks.router)
 app.include_router(inbound_email.router)
@@ -159,6 +170,9 @@ app.include_router(generated_apps.router)
 app.include_router(workflows.router)
 app.include_router(templates.router)
 app.include_router(crons.router)
+app.include_router(coverage.router)
+app.include_router(deliverables.router)
+app.include_router(watches.router)
 app.include_router(monitors.router)
 app.include_router(admin.router)
 app.include_router(org.router)

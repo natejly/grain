@@ -19,6 +19,7 @@ from app.database import SessionLocal
 from app.models import Message, Run, RunEvent
 from app.services.agent_loop import LoopState, _tool_payload, run_agent_turn
 from app.services.citations import validate_citations
+from app.services.grounded import compose_report, verdict_line
 from app.services.llm_tools import ToolContext, build_registry
 from app.services.retrieval import Evidence
 from app.services.runs import _citations, _finish_run
@@ -738,3 +739,81 @@ def test_max_results_is_a_budget_for_the_turn_not_for_each_step():
     )
     assert second.evidence == ()
     assert second.anchors == ()
+
+
+# --- what a web citation can and cannot certify ------------------------------
+
+
+def test_a_web_cited_sentence_is_attributed_rather_than_verified():
+    """The tautology this path would otherwise certify.
+
+    `_evidence` stores `text[span[0]:span[1]]` as the excerpt — a slice of the
+    ANSWER, because the hosted tool returns no page text — and
+    `anchor_citations` writes the `[n]` at that same span. Grading the sentence
+    against that excerpt compares it with a substring of itself: coverage is
+    ~1.0 by construction and every numeral matches, so a fabricated claim the
+    provider happened to annotate rendered exactly like a checked one. It is
+    the one place the evidence is weakest, and it read strongest.
+    """
+    claim = "The Martian colony reported 4.2 million residents in August 2031."
+    answer = anchor_citations(claim, [(len(claim), 1)])
+    evidence = [
+        WebEvidence(
+            url="https://example.com/colony",
+            chunk_id="web:1",
+            source_id="",
+            filename="Colony report",
+            ordinal=0,
+            # Exactly what `_evidence` stores: the answer's own words.
+            excerpt=claim,
+            score=0.0,
+        )
+    ]
+
+    report = compose_report(answer, evidence, floor=0.6)
+
+    assert report["grounding"]["attributed"] == 1
+    assert report["grounding"]["verified"] == 0
+    assert report["grounding"]["scored"] == 0
+    assert report["grounding"]["score"] == 0.0
+    # And the line a model reads says so rather than claiming a check.
+    line = verdict_line(report)
+    assert "unchecked here" in line
+    assert "verified" not in line
+
+
+def test_an_indexed_passage_beside_a_web_source_is_still_graded():
+    """One web citation must not silently exempt the rest of the answer, and
+    must not be folded into its percentage either."""
+    indexed = (
+        "The Northstar project launches in October and Maya Chen owns the launch."
+    )
+    web_claim = "The Martian colony reported 4.2 million residents."
+    answer = (
+        "Maya Chen owns the Northstar launch in October [1]. " + web_claim + " [2]"
+    )
+    evidence = [
+        Evidence(
+            chunk_id="chunk-1",
+            source_id="source-1",
+            filename="northstar.md",
+            ordinal=0,
+            excerpt=indexed,
+            score=0.9,
+        ),
+        WebEvidence(
+            url="https://example.com/colony",
+            chunk_id="web:1",
+            source_id="",
+            filename="Colony report",
+            ordinal=0,
+            excerpt=web_claim,
+            score=0.0,
+        ),
+    ]
+
+    grounding = compose_report(answer, evidence, floor=0.6)["grounding"]
+    assert grounding["scored"] == 1
+    assert grounding["verified"] == 1
+    assert grounding["attributed"] == 1
+    assert grounding["score"] == 1.0

@@ -340,5 +340,90 @@
         "denied_text": "Understood \u2014 not tracking that."
       }
     ]
+  },
+  {
+    "match": "audit the meridian rollout",
+    "steps": [
+      {
+        "text": "The Meridian rollout reduces onboarding time by forty percent [1]. Meridian shipped to fourteen thousand Lisbon customers in the first hour [1]. The platform team publishes a weekly changelog for every release."
+      }
+    ]
+  },
+  {
+    "match": "map the meridian dependencies",
+    "steps": [
+      {
+        "call": {
+          "name": "submit_plan",
+          "arguments": {
+            "steps": [
+              {
+                "question": "What does the Meridian rollout change?",
+                "queries": ["meridian rollout onboarding"]
+              },
+              {
+                "question": "Who owns Meridian?",
+                "queries": ["meridian platform team"]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "call": {
+          "name": "complete_step",
+          "arguments": {
+            "step": 1,
+            "summary": "The rollout reduces onboarding time by forty percent."
+          }
+        }
+      },
+      {
+        "call": {
+          "name": "complete_step",
+          "arguments": {
+            "step": 2,
+            "summary": "The platform team owns Meridian."
+          }
+        }
+      },
+      {
+        "call": {
+          "name": "ask_user",
+          "arguments": {
+            "question": "Should the dependency map name the platform team?",
+            "options": ["yes", "no"]
+          }
+        }
+      },
+      {
+        "text": "Mapped the Meridian dependencies.",
+        "denied_text": "Understood \u2014 I left the map alone."
+      }
+    ]
+  },
+  {
+    "match": "read the partner briefing",
+    "steps": [
+      {
+        "call": {
+          "name": "mcp__e2e-taint__briefing",
+          "arguments": {}
+        }
+      },
+      {
+        "call": {
+          "name": "add_todo",
+          "arguments": {
+            "list": "Escalation checklist",
+            "title": "Ship without review"
+          }
+        }
+      },
+      {
+        "text": "Read the briefing and filed the item.",
+        "denied_text": "Understood \u2014 I added nothing."
+      }
+    ]
   }
 ]

@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from sqlalchemy.orm import Session
 
 from ...models import IntegrationAccount, SyncJob
+from .. import provenance
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
 from .base import ConnectorError, ensure_access_token, http_client
 from .landing import upsert_dataset
@@ -120,6 +121,11 @@ def strava_tools(account: IntegrationAccount) -> Dict[str, ToolSpec]:
                 "properties": {"per_page": {"type": "integer"}},
             },
             executor=_list_executor(account.id),
+            # Activity data fetched over the network from a third party. Not
+            # a Gmail-style attack surface, but the same two facts hold: the
+            # bytes are not this workspace's, and reaching them is egress.
+            provenance=provenance.WEB_FETCH,
+            networked=True,
         ),
         "strava_get_activity": ToolSpec(
             name="strava_get_activity",
@@ -130,5 +136,10 @@ def strava_tools(account: IntegrationAccount) -> Dict[str, ToolSpec]:
                 "required": ["activity_id"],
             },
             executor=_get_executor(account.id),
+            # Activity data fetched over the network from a third party. Not
+            # a Gmail-style attack surface, but the same two facts hold: the
+            # bytes are not this workspace's, and reaching them is egress.
+            provenance=provenance.WEB_FETCH,
+            networked=True,
         ),
     }

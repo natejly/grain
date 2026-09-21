@@ -48,6 +48,56 @@ export async function newThread(page: Page) {
   await expect(page.locator(".message-scroll.empty")).toBeVisible();
 }
 
+/**
+ * Put a prompt in the composer and make sure it is really in the composer.
+ *
+ * A bare `fill()` is not enough right after `newThread`, and that is a product
+ * race rather than a test one: the draft store in `use-workspace` is keyed by
+ * the active conversation through a ref that is assigned during render
+ * (`draftKeyRef.current = draftKey`). An onChange that lands between the switch
+ * to the new thread and the re-render that re-keys it files the text under the
+ * PREVIOUS key, so the controlled textarea re-renders empty and the words are
+ * gone. Enter then sends nothing, and the failure reads as "no messages" rather
+ * than as a lost draft — which is exactly how it presented in a full-suite run.
+ *
+ * Retrying the typing is what a person does, and it is honest here: the
+ * assertion below is that the composer HOLDS the prompt, so a spec can never go
+ * on to press Enter against an empty draft.
+ */
+export async function typePrompt(page: Page, text: string) {
+  const composer = page.getByRole("textbox", { name: "Message" });
+  await expect(async () => {
+    await composer.fill(text);
+    await expect(composer).toHaveValue(text, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+}
+
+/**
+ * Type a prompt and send it, retrying until the turn is actually in the
+ * transcript.
+ *
+ * The same race as `typePrompt`, one step further on: the draft can be re-keyed
+ * between the moment the composer is seen holding the text and the Enter that
+ * follows, and Enter against an empty draft is a no-op. The failure then reads
+ * as a transcript that never grew, which is how it presented under a full-suite
+ * run — a spec waiting 45s for a message nobody ever sent.
+ *
+ * It cannot double-send: the landed user message is checked BEFORE anything is
+ * typed, so a retry whose first Enter did work returns without touching the
+ * composer.
+ */
+export async function sendPrompt(page: Page, text: string) {
+  const composer = page.getByRole("textbox", { name: "Message" });
+  const sent = page.locator(".message.user").filter({ hasText: text });
+  await expect(async () => {
+    if (await sent.count()) return;
+    await composer.fill(text);
+    await expect(composer).toHaveValue(text, { timeout: 1_000 });
+    await composer.press("Enter");
+    await expect(sent).toHaveCount(1, { timeout: 5_000 });
+  }).toPass({ timeout: 30_000 });
+}
+
 export const tabs = (page: Page, group: string) =>
   page.getByRole("navigation", { name: `${group} views` });
 

@@ -161,6 +161,139 @@ def test_the_evidence_block_restates_the_citation_rule():
     assert prompt.index("[n]", header) > header
 
 
+def _openai_settings(**overrides) -> Settings:
+    return Settings(
+        _env_file=None,
+        model_provider="openai",
+        openai_api_key=SecretStr("test-key"),
+        openai_model="test-model",
+        **overrides,
+    )
+
+
+def _capturing_client(response) -> tuple[SimpleNamespace, dict[str, object]]:
+    captured: dict[str, object] = {}
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return response
+
+    return SimpleNamespace(responses=FakeResponses()), captured
+
+
+def test_the_grounded_answer_and_repair_calls_carry_a_hashed_identifier(monkeypatch):
+    """Every site in this file that RECEIVES a user id passes it on, hashed.
+
+    These two were the first that had one available and dropped it — and they
+    carry the most caller-controlled text on the surface: a 4,000-character
+    question plus an arbitrary JSON Schema, through a bearer door any workspace
+    token can drive. Without the identifier a policy signal attributes to the
+    whole account instead of the member whose token drove it, which is the
+    posture the standing no-live-provider-abuse rule exists to keep.
+    """
+    settings = _openai_settings()
+
+    client, captured = _capturing_client(
+        SimpleNamespace(output_text="Maya owns the launch [1].", status="completed")
+    )
+    monkeypatch.setattr(model, "_openai_client", lambda _settings: client)
+
+    text, schema_error = model.answer_from_passages(
+        "Who owns the launch?", evidence(), None, user_id="user-1", settings=settings
+    )
+    assert text and not schema_error
+    assert captured["safety_identifier"] == model.privacy_safe_identifier("user-1")
+    assert "user-1" not in str(captured["safety_identifier"])
+
+    repair_client, repair_captured = _capturing_client(
+        SimpleNamespace(output_text="Maya owns the launch [1].", status="completed")
+    )
+    monkeypatch.setattr(model, "_openai_client", lambda _settings: repair_client)
+    assert model.regenerate_unsupported(
+        "Ravi owns the launch [1].",
+        evidence(),
+        ("Ravi owns the launch [1].",),
+        user_id="user-1",
+        settings=settings,
+    )
+    assert repair_captured["safety_identifier"] == model.privacy_safe_identifier(
+        "user-1"
+    )
+
+
+def test_a_repair_that_came_back_incomplete_is_discarded(monkeypatch):
+    """A partial rewrite is not a rewrite.
+
+    The Responses API carries the text it managed to produce on an `incomplete`
+    response, and returning it hands the caller a fragment that grades BETTER
+    than the full answer — fewer sentences, so fewer unsupported ones. Nothing
+    downstream could tell that apart from a genuine correction.
+    """
+    settings = _openai_settings()
+    client, _captured = _capturing_client(
+        SimpleNamespace(
+            output_text="Maya owns the launch [1]. And then the answer stops mid-",
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        )
+    )
+    monkeypatch.setattr(model, "_openai_client", lambda _settings: client)
+
+    assert (
+        model.regenerate_unsupported(
+            "Ravi owns the launch [1].",
+            evidence(),
+            ("Ravi owns the launch [1].",),
+            user_id="user-1",
+            settings=settings,
+        )
+        == ""
+    )
+
+
+def test_the_repair_budget_follows_the_answer_and_refuses_an_unrepairable_one(
+    monkeypatch,
+):
+    """The fixed 2,000-token ceiling could not return the answer it was handed.
+
+    The instruction is "return the complete corrected answer", so any answer
+    over roughly 8,000 characters came back cut off — on exactly the long
+    research answers this pass was built for.
+    """
+    settings = _openai_settings()
+    client, captured = _capturing_client(
+        SimpleNamespace(output_text="rewritten [1].", status="completed")
+    )
+    monkeypatch.setattr(model, "_openai_client", lambda _settings: client)
+
+    long_answer = "Maya owns the October launch [1]. " * 400
+    model.regenerate_unsupported(
+        long_answer,
+        evidence(),
+        ("Maya owns the October launch [1].",),
+        user_id="user-1",
+        settings=settings,
+    )
+    assert captured["max_output_tokens"] >= len(long_answer) // 4
+
+    # Past the ceiling the stage declines rather than asking for a rewrite it
+    # cannot receive; the caller keeps the original answer.
+    captured.clear()
+    unrepairable = "Maya owns the October launch [1]. " * 4000
+    assert (
+        model.regenerate_unsupported(
+            unrepairable,
+            evidence(),
+            ("Maya owns the October launch [1].",),
+            user_id="user-1",
+            settings=settings,
+        )
+        == ""
+    )
+    assert captured == {}
+
+
 def test_local_web_origin_accepts_both_loopback_names():
     settings = Settings(
         _env_file=None,

@@ -33,7 +33,7 @@ ever added without one.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -80,6 +80,13 @@ class Actor:
     # None only for the DEV_AUTO_LOGIN fallback, which has no session row.
     session_id: Optional[str] = None
     user_email: str = ""
+    #: The `api_tokens` row this identity was resolved from, "" for every cookie
+    #: caller. Set only by `get_token_actor`, and read only where a machine
+    #: call's record has to name the credential that made it — a receipt that
+    #: said "the member" and not "which token" could not answer "revoke the one
+    #: that did this". It is an identifier, never a credential: the secret
+    #: itself exists only in the mint response.
+    token_id: str = ""
 
 
 def seed_dev_workspace(db: Session, settings: Optional[Settings] = None) -> None:
@@ -333,7 +340,11 @@ def get_token_actor(
     )
     if membership is None:
         raise _unauthenticated()
-    return _actor_for(db, user, workspace, membership, session_id=None)
+    actor = _actor_for(db, user, workspace, membership, session_id=None)
+    # The only place `token_id` is ever set. `replace` rather than a parameter
+    # on `_actor_for`, because every cookie caller shares that builder and none
+    # of them has a token.
+    return replace(actor, token_id=resolved.token_id)
 
 
 def require_owner(actor: Actor = Depends(get_actor)) -> Actor:

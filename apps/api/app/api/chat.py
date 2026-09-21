@@ -43,6 +43,7 @@ from ..schemas import (
     ConversationShareRequest,
     ConversationSpaceRequest,
     ConversationTitleRequest,
+    Followup,
     MessageFeedbackIn,
     MessageFeedbackOut,
     MessageOut,
@@ -52,7 +53,14 @@ from ..schemas import (
     SteerRequest,
 )
 from ..services import attachments as attachments_service
-from ..services import checkpoints, conversation_index, conversations, orgs, subjects
+from ..services import (
+    checkpoints,
+    conversation_index,
+    conversations,
+    orgs,
+    run_presets,
+    subjects,
+)
 from ..services import share_links as share_links_service
 from ..services import skills as skills_service
 from ..services import spaces as spaces_service
@@ -85,6 +93,28 @@ def _citation_report(raw: str) -> Optional[CitationCheck]:
         return None
 
 
+def _followups(raw: str) -> List[Followup]:
+    """The stored chips, or none. Never raises, for `_citation_report`'s reason.
+
+    '' is "never computed" and '[]' is "computed and nothing admitted"; both
+    render as no shelf, so both come back as an empty list here. A corrupt row
+    must render an answer, not a 500 — the chips are the least important thing
+    on the message.
+    """
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    try:
+        return [Followup.model_validate(item) for item in parsed]
+    except ValidationError:
+        return []
+
+
 def _message_out(
     message: Message, sender_name: str = "", my_feedback: str = ""
 ) -> MessageOut:
@@ -95,6 +125,7 @@ def _message_out(
         content=message.content,
         citations=json.loads(message.citations_json),
         citation_report=_citation_report(message.citation_report_json),
+        followups=_followups(message.followups_json),
         sender_id=message.created_by,
         sender_name=sender_name,
         my_feedback=my_feedback,
@@ -155,6 +186,7 @@ def _conversation_out(conversation: Conversation, actor: Actor) -> ConversationO
         default_agent_id=conversation.default_agent_id,
         default_model=conversation.default_model,
         default_effort=conversation.default_effort,
+        default_preset=conversation.default_preset,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -667,7 +699,8 @@ def set_conversation_defaults(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> ConversationOut:
-    """Remember the composer's choices — agent, model, effort — on the thread.
+    """Remember the composer's choices — agent, model, effort, preset — on the
+    thread.
 
     A PATCH of preferences, not policy: the run path never reads these (every
     turn still names its controls explicitly), so there is nothing here to
@@ -690,6 +723,14 @@ def set_conversation_defaults(
         conversation.default_model = payload.default_model
     if payload.default_effort is not None:
         conversation.default_effort = payload.default_effort
+    if payload.default_preset is not None:
+        # Validated, unlike the three above: the catalogue is code rather than
+        # a deployment allow-list, so an unknown name here cannot be a value
+        # some other deployment offers. "" clears it and "auto" is a real,
+        # storable pick (the routing happens at send time).
+        if payload.default_preset not in ("", run_presets.AUTO, *run_presets.PRESETS):
+            raise HTTPException(status_code=422, detail="Preset is not available")
+        conversation.default_preset = payload.default_preset
     db.commit()
     db.refresh(conversation)
     return _conversation_out(conversation, actor)
@@ -1168,6 +1209,36 @@ def _stage_turn(
     # `fast` maps to "low", not "none" — the honest lowest-latency effort every
     # model accepts — and an explicit `effort` always wins over it.
     requested_effort = payload.effort or ("low" if payload.fast else "")
+    # SEND TIME is where a preset stops being a label and becomes explicit,
+    # auditable facts on a row — the `Space.default_agent_id` doctrine applied
+    # to policy. Nothing downstream resolves a preset; the loop reads the three
+    # columns below and never asks which preset a workspace is "on".
+    #
+    # `auto` is routed here too, so `Run.preset` records the answer rather than
+    # the question. An unknown name is a 422 and not a silent fallback: the
+    # catalogue is code the composer was handed at bootstrap, so a name it
+    # cannot have offered is a client bug.
+    policy = None
+    if payload.preset:
+        policy = run_presets.resolve(run_presets.route(payload.preset, payload.content))
+        if policy is None:
+            raise HTTPException(status_code=422, detail="Preset is not available")
+    # Explicit wins, every time: a preset only fills in what the sender left
+    # blank. `step_plan` is Optional precisely so an explicit False can outrank
+    # a preset that pins it on. The conversation's approval mode is NEVER
+    # written from here — that control is the user's, and a preset that quietly
+    # changed it would be the hidden run-path layer presets exist not to be.
+    # A plain `str` rather than the `ReasoningEffort` Literal above: a preset's
+    # effort is a catalogue constant, not a request field, and the column it
+    # lands in is a string. The values it can hold are still on the ladder —
+    # `run_presets` pins only "", "low" and "high".
+    turn_effort: str = requested_effort or (policy.effort if policy else "")
+    retrieval_budget = payload.retrieval_budget or (policy.budget if policy else "")
+    step_plan_on = (
+        payload.step_plan
+        if payload.step_plan is not None
+        else bool(policy and policy.step_plan)
+    )
     # A skill invoked for this turn must be visible to the caller (own or shared,
     # same-workspace) and its args must validate now, so the refusal lands at send
     # time rather than inside the turn. The resolved args are stored on the run and
@@ -1197,7 +1268,7 @@ def _stage_turn(
         status="queued",
         prompt=payload.content,
         requested_model=payload.model or "",
-        requested_effort=requested_effort,
+        requested_effort=turn_effort,
         skill_id=skill_id,
         skill_args_json=skill_args_json,
         skill_version=skill_version,
@@ -1208,6 +1279,12 @@ def _stage_turn(
         # back to the file it was asked about rather than to whatever is open an
         # hour later.
         subject_focus=(payload.subject_focus or "")[:400],
+        # The expanded preset, never the literal "auto". "" throughout means
+        # "no preset", which is byte-identical to the turn this endpoint staged
+        # before presets existed.
+        preset=policy.name if policy else "",
+        retrieval_budget=retrieval_budget,
+        step_plan=step_plan_on,
     )
     message = Message(
         id=new_id(),
@@ -1236,7 +1313,15 @@ def _stage_turn(
         workspace_id=actor.workspace_id,
         run_id=run.id,
         event_type="run.queued",
-        payload={"status": "queued", "message_id": message.id},
+        payload={
+            "status": "queued",
+            "message_id": message.id,
+            # Legible in the live stream and in `run_events` afterwards: which
+            # policy this turn actually ran under, and — when the sender asked
+            # for "auto" — that a router chose it rather than a person.
+            **({"preset": policy.name} if policy else {}),
+            **({"routed_from": "auto"} if payload.preset == run_presets.AUTO else {}),
+        },
     )
     return run, message
 

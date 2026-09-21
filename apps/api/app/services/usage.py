@@ -65,6 +65,24 @@ SCREEN = "screen"
 # The guardian approval reviewer (services/guardian.py) — the cheap-model triage
 # a `guardian`-mode conversation runs before a write parks.
 GUARDIAN = "guardian"
+# The bounded rewrite of cited-but-unsupported sentences (services/runs.py).
+# Its own operation rather than CHAT so "what does grading cost us" is a query
+# and not an estimate.
+GROUNDING_REPAIR = "grounding_repair"
+# The machine grounded-answer API (api/answers.py) and the MCP tool behind the
+# same path. Billing the whole synchronous call — query embedding and answer —
+# under one operation is what makes "what did the grounded API cost" a
+# `model_usage` query, which is why a receipt stores no usage row id.
+GROUNDED_ANSWER = "grounded_answer"
+# The rewrite-only pass over already-admitted follow-up chips
+# (services/followups.py). Its own operation because "what do the chips cost"
+# is a question an operator will ask, and a chip is the cheapest thing here.
+FOLLOWUP_POLISH = "followup_polish"
+# The structured extraction a watch runs over the delta of its target
+# (services/watches.py). Billed separately from MEMORY_EXTRACTION: one is a
+# post-turn hook a person is waiting on, the other is unattended work on a
+# schedule, and an operator reading an invoice needs to tell them apart.
+WATCH_EXTRACTION = "watch_extraction"
 
 OPERATIONS = (
     CHAT,
@@ -79,6 +97,10 @@ OPERATIONS = (
     SCHEDULE_COMPILE,
     SCREEN,
     GUARDIAN,
+    GROUNDING_REPAIR,
+    GROUNDED_ANSWER,
+    FOLLOWUP_POLISH,
+    WATCH_EXTRACTION,
 )
 
 TOKENS_PER_MILLION = 1_000_000

@@ -154,7 +154,7 @@ def run_activity_visible(
     )
 
 
-def run_activity_predicate(*, actor_user_id: str):  # type: ignore[no-untyped-def]
+def run_activity_predicate(*, actor_user_id: str):
     """The SQL half of `run_activity_visible`, for the LIST surfaces.
 
     Keeps a listing one query: apply it with a LEFT JOIN of `Conversation` onto

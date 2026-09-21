@@ -37,18 +37,31 @@ sources inline keeps the answer and its support attached to each other.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
 from ..models import Agent, Run
-from . import budget, screen
+from . import budget, grounded, provenance, screen
 from .audit import record_audit
+from .citations import grade_grounding, split_sentences, validate_citations
 from .harness import ModelStep, resolve_harness
-from .llm_tools import ToolContext, ToolResult, ToolSpec, build_registry
-from .retrieval import Evidence
+from .llm_tools import (
+    FROZEN_WITHHELD,
+    MAX_RESULT_CHARS,
+    ToolContext,
+    ToolResult,
+    ToolSpec,
+    build_registry,
+)
+
+# Module-level names on purpose: the council's "retrieve exactly once" property
+# is only testable if a test can count the calls, and it can only count them if
+# they go through a name it can replace.
+from .retrieval import Evidence, budget_for, search_evidence
 
 #: A child gets fewer iterations than a parent (6): it exists to answer one
 #: focused question, and a question that needs more than three tool rounds and
@@ -88,10 +101,19 @@ def _child_step(
     user_id: str,
     model: Optional[str],
     effort: Optional[str],
+    workspace_id: str = "",
+    run_id: str = "",
 ) -> ModelStep:
     """The model behind one child turn. A module-level seam, like
     `agent_loop._default_model_step`, so tests can replace the model without
-    replacing the loop around it."""
+    replacing the loop around it.
+
+    A child carries the PARENT's workspace and run, which is the truth: it
+    bills to the parent's usage scope and runs inside the parent's turn. That
+    also puts it on the parent's prompt cache shard, where its instructions and
+    tool payload — drawn from the same workspace's agents — actually share a
+    prefix with the parent's.
+    """
     return resolve_harness(settings).build_step(
         settings,
         prompt=prompt,
@@ -99,19 +121,29 @@ def _child_step(
         evidence=[],
         model=model,
         effort=effort,
+        workspace_id=workspace_id,
+        run_id=run_id,
     )
 
 
 def _child_registry(
-    db: Session, context: ToolContext, agent: Agent
+    db: Session, context: ToolContext, agent: Agent, *, run: Optional[Run] = None
 ) -> Dict[str, ToolSpec]:
-    """What a child may see: the agent's provisioned subset, read-only half.
+    """What a child may see: the agent's provisioned subset, read-only half,
+    narrowed by the turn's preset.
 
     `force_ask` tools are excluded even though they are read-only, because
     their authors demanded a human look at every call — a child has no way to
     ask one. `delegate` and `ask_user` are excluded by the same rule that
     excludes writes: a child that could recurse or park would re-import the
     complexity this narrowing exists to remove.
+
+    `run` carries the preset, and the preset has to reach here for `Run.preset`
+    to mean anything: `deep-research` pins `families={core, graph, delegation,
+    memory}` — `web` deliberately absent, `delegation` deliberately present —
+    so without this the parent has no `web_fetch` and its child does, and the
+    run row records a tool policy the turn did not run under. `None` keeps the
+    old behaviour for a call with no run in hand.
     """
     allowed: Optional[frozenset[str]] = None
     raw = agent.allowed_tools_json
@@ -122,6 +154,16 @@ def _child_registry(
             parsed = None
         if isinstance(parsed, list):
             allowed = frozenset(str(item) for item in parsed)
+    if run is not None and run.preset:
+        # Imported here rather than at module scope: run_presets imports
+        # llm_tools, which this module also imports, and the cycle only stays
+        # broken if the import stays local (the `from .agent_loop import ...`
+        # pattern below, for the same reason).
+        from . import run_presets, subjects
+
+        allowed = subjects.narrow(
+            allowed, run_presets.allowed_tools_for_preset(db, context, run.preset)
+        )
     full = build_registry(db, context, allowed=allowed)
     return {
         name: spec
@@ -196,12 +238,20 @@ def run_child_agent(
     prompt: str,
     settings: Optional[Settings] = None,
     step: Optional[ModelStep] = None,
+    frozen_evidence: Optional[List[Evidence]] = None,
 ) -> ToolResult:
     """One delegated turn: a bounded, read-only, non-parking agent loop.
 
     `db` may be a worker thread's own session — everything here must stay on
     it. Raises nothing: every failure becomes an error `ToolResult` the parent
     model can read and route around.
+
+    `frozen_evidence`, when non-empty, makes this a COUNCIL child: the parent
+    retrieved once for every candidate, spliced the numbered block into this
+    child's prompt, and withholds `search_sources` here. Seeding the child's
+    own evidence list with those passages is what keeps its ``[n]`` markers
+    pointing at the block it was given — a child that numbered from 1 against
+    an empty list would cite passage 1 meaning something else entirely.
     """
     settings = settings or get_settings()
     run = db.get(Run, context.run_id) if context.run_id else None
@@ -211,7 +261,23 @@ def run_child_agent(
     from .agent_loop import _serialize_item, policy_scope_for_run
 
     scope_unattended = policy_scope_for_run(db, run) == "workflow"
-    registry = _child_registry(db, context, agent)
+    registry = _child_registry(db, context, agent, run=run)
+    if frozen_evidence:
+        # What makes "frozen" true rather than aspirational: candidates that
+        # read different passages are not candidates, they are separate
+        # answers. EVERY retrieval tool goes, not just `search_sources` —
+        # `grounded_answer` runs its own search and `list_sources` hands the
+        # child ids to aim one with, and both are read-only, so both survived
+        # the old one-name filter. Withheld HERE rather than inside
+        # `_child_registry` so that function stays about the agent's own
+        # provisioned subset — and the removal is conditional on a NON-EMPTY
+        # list, so an empty corpus degrades to today's independent attempts
+        # instead of to N children with no way to learn anything at all.
+        registry = {
+            name: spec
+            for name, spec in registry.items()
+            if name not in FROZEN_WITHHELD
+        }
     instructions = _child_instructions(agent)
     tools_payload: List[Dict[str, Any]] = [
         {
@@ -228,14 +294,26 @@ def run_child_agent(
         user_id=context.user_id,
         model=run.requested_model or None,
         effort=run.requested_effort or None,
+        workspace_id=run.workspace_id,
+        run_id=run.id,
     )
     input_items: List[Any] = [{"role": "user", "content": prompt}]
-    evidence: List[Evidence] = []
+    # Pre-seeded for a council child (see the docstring): the frozen block is
+    # already [1..n] in its prompt, so anything it retrieves — it cannot —
+    # or is quoted back would number after it.
+    evidence: List[Evidence] = list(frozen_evidence or [])
     #: Passages the screen flagged in shadow mode. Shadow means "record, never
     #: enforce", and the record is made by handing the excerpts back to the
     #: parent's serial screening — dropping them here would make shadow mode
     #: blind to exactly the source class it exists to measure.
     shadow_hits: List[str] = []
+    #: Provenance classes this child actually pulled in — every executed tool's
+    #: own class, plus the class of every evidence item it ends up quoting. A
+    #: child writes NO run events by construction (delegation.py:126-130), so
+    #: this set is the parent's only way to learn that its sub-agent read a web
+    #: page or an MCP result. It rides home on `ToolResult.provenance`; without
+    #: it, delegation is a hole straight through the taint gate.
+    classes: set[str] = {provenance.classify_evidence(item) for item in evidence}
 
     try:
         for iteration in range(MAX_CHILD_ITERATIONS):
@@ -276,13 +354,22 @@ def run_child_agent(
                 answer = ("".join(text_parts) or response.output_text or "").strip()
                 if not answer:
                     raise ChildAborted("the delegated agent returned nothing")
-                return _answer_result(answer, evidence, agent, shadow_hits)
+                return _answer_result(
+                    answer, evidence, agent, shadow_hits, sorted(classes)
+                )
             input_items.extend(_serialize_item(item) for item in response.output)
             for call in calls:
                 name = str(getattr(call, "name", "") or "")
                 raw_arguments = getattr(call, "arguments", "") or "{}"
                 result = _execute_child_call(
                     db, context, registry, name=name, raw_arguments=str(raw_arguments)
+                )
+                child_spec = registry.get(name)
+                if child_spec is not None:
+                    classes.add(child_spec.provenance)
+                classes.update(result.provenance)
+                classes.update(
+                    provenance.classify_evidence(item) for item in result.evidence
                 )
                 record_audit(
                     db,
@@ -315,7 +402,13 @@ def run_child_agent(
                         "output": _render_child_output(result, offset=len(evidence)),
                     }
                 )
-                evidence.extend(result.evidence)
+                if not frozen_evidence:
+                    evidence.extend(result.evidence)
+                # Belt and braces behind the withheld registry above: with a
+                # frozen block, the child's [n] space IS the block, and a tool
+                # that somehow returned passages must not be able to extend it.
+                # `classes` above still records what it read, so the taint gate
+                # is unaffected by the numbering staying pinned.
         raise ChildAborted(
             "the delegated agent ran out of iterations without answering"
         )
@@ -328,7 +421,13 @@ def run_child_agent(
         hits = list(shadow_hits)
         if exc.flagged:
             hits.append(exc.flagged)
-        return ToolResult(content=_notice_first(f"Error: {exc}.", hits))
+        # An abort still reports what it read. A child stopped mid-way has
+        # already folded untrusted content into its own transcript, and the
+        # parent's gate has to hear about it whether or not an answer came back.
+        return ToolResult(
+            content=_notice_first(f"Error: {exc}.", hits),
+            provenance=sorted(classes),
+        )
 
 
 def _notice_first(body: str, shadow_hits: List[str]) -> str:
@@ -382,6 +481,7 @@ def _answer_result(
     evidence: List[Evidence],
     agent: Agent,
     shadow_hits: Optional[List[str]] = None,
+    classes: Optional[List[str]] = None,
 ) -> ToolResult:
     """The child's findings, with its sources quoted inline rather than
     renumbered into the parent's evidence list (see module docstring)."""
@@ -396,7 +496,14 @@ def _answer_result(
     # Shadow-mode hits lead the content (see `_notice_first`): the parent's
     # serial screen re-classifies `result.content`, and best-of-N clipping
     # keeps the front, so the record survives both.
-    return ToolResult(content=_notice_first("\n\n".join(parts), list(shadow_hits or [])))
+    return ToolResult(
+        content=_notice_first("\n\n".join(parts), list(shadow_hits or [])),
+        provenance=list(classes or []),
+        # The answer on its own, for anything that SCORES this result. The
+        # quoted-passage block below it is the child's sources, not its claims;
+        # grading it measures the quoting. See `ToolResult.answer_text`.
+        answer_text=answer,
+    )
 
 
 #: Best-of-N ceiling — same bound as the batch pool, for the same reason: it
@@ -411,6 +518,270 @@ def _attempt_prompt(prompt: str, index: int, total: int) -> str:
         f"{prompt}\n\n(This is attempt {index} of {total} running in "
         "parallel; take a genuinely distinct approach from the other attempts.)"
     )
+
+
+#: Prepended to the frozen block in every council child's prompt. The block is
+#: the child's whole world for this question — it has no `search_sources` — so
+#: the instruction has to say what to do about a gap in it, or the model fills
+#: the gap from memory and the council compares two answers and one invention.
+COUNCIL_EVIDENCE_HEADER = (
+    "These numbered passages are the ONLY evidence available to you. Cite them "
+    "as [n]. Do not assert anything they do not support; say so instead.\n\n"
+)
+
+#: Below this a candidate is ordered last and labelled. A floor, not a filter:
+#: the parent still sees every candidate, because the judge with the full
+#: conversation is better placed than this number to decide what an
+#: unsupported-heavy answer was right about.
+DEMOTION_FLOOR = 0.5
+
+#: The council's retrieval budget. Deliberately the widest one: it is retrieved
+#: ONCE for N children, so the per-candidate cost of breadth is 1/N of a normal
+#: turn's, and a council is asked for exactly when the question is hard.
+COUNCIL_BUDGET = "high"
+
+
+def _evidence_block(evidence: Sequence[Evidence]) -> str:
+    """The frozen passages, numbered exactly as `_render_child_output` numbers
+    a tool result's — so a council child's citation habit is the same habit it
+    has in every other turn."""
+    return "\n\n".join(
+        f"[{index}] {item.filename}, passage {item.ordinal + 1}\n{item.excerpt}"
+        for index, item in enumerate(evidence, start=1)
+    )
+
+
+def _citation_proxy(answer: str, evidence: Sequence[Evidence]) -> float:
+    """COVERAGE, not entailment: the share of sentences carrying a usable [n].
+
+    The deterministic fallback for `_grounding_score`. It says how much of an
+    answer bothered to cite, and nothing whatsoever about whether the citation
+    supports the sentence — which is why it is the fallback and not the
+    measure. An answer with a fabricated or malformed marker scores 0: a
+    citation that points nowhere is worse evidence of grounding than none.
+    """
+    if not evidence or not answer.strip():
+        return 0.0
+    report = validate_citations(answer, evidence)
+    if report.out_of_range or report.malformed:
+        return 0.0
+    spans = split_sentences(answer)
+    if not spans:
+        return 0.0
+    cited = 0
+    for start, end, _text in spans:
+        if any(
+            not marker.malformed
+            and marker.start >= start
+            and marker.end <= end
+            and any(1 <= number <= len(evidence) for number in marker.numbers)
+            for marker in report.markers
+        ):
+            cited += 1
+    return cited / len(spans)
+
+
+def _grounding_score(
+    answer: str, evidence: Sequence[Evidence], *, floor: float
+) -> float:
+    """How much of a candidate its own frozen passages support, 0..1.
+
+    `citations.grade_grounding` is the real measure — a lexical support test,
+    sentence by sentence, against the passages each sentence named. It is used
+    whenever it has anything to grade.
+
+    DIVERGENCE FROM THE SPEC, on purpose: the spec named an adapter over a
+    `services/grounding.py::score_answer` that does not exist. What landed is
+    `citations.grade_grounding(answer, passages, floor=...) -> GroundingReport`,
+    and calling the thing that exists beats importing the thing that was
+    planned. The fallback below survives for the case the report itself calls
+    out — `scored == 0` means "no claim here to check", which is not a score of
+    zero — and for any failure at all, because a council must not be able to
+    fail on the way to ranking its own candidates.
+
+    `floor` is the DEPLOYMENT's `grounding_floor`, passed rather than
+    defaulted. Defaulting was invisible only because the library default and
+    the config default are both 0.6 today: raise GROUNDING_FLOOR to 0.85 and
+    identical text scores 1.00 here and 0.00 on every other surface, and the
+    stored `council.scored` event records the number without the scale.
+    """
+    if not evidence or not answer.strip():
+        return 0.0
+    try:
+        report = grade_grounding(
+            answer,
+            [item.excerpt for item in evidence],
+            floor=floor,
+            checkable=grounded.checkable_flags(evidence),
+        )
+        if report.scored:
+            return float(report.score)
+    except Exception:  # noqa: BLE001 - scoring must never fail the council
+        pass
+    return _citation_proxy(answer, evidence)
+
+
+def _convergence(cited: Sequence[Tuple[int, Tuple[int, ...]]], total: int) -> str:
+    """Which passages the candidates agreed on, contested, or found alone.
+
+    Pure set arithmetic over what each candidate cited — no model call, so the
+    parent's synthesis headings are grounded in the evidence rather than in the
+    judge's impression of consensus. `unique` names the candidate, because "one
+    of them found this" is only useful if you can go read that one.
+    """
+    if not cited:
+        return ""
+    sets = [set(numbers) for _index, numbers in cited]
+    everything = sorted(set().union(*sets)) if sets else []
+    unanimous = sorted(set.intersection(*sets)) if sets else []
+    unique: List[str] = []
+    for number in everything:
+        holders = [index for index, numbers in cited if number in set(numbers)]
+        if len(holders) == 1:
+            unique.append(f"[{number}] (candidate {holders[0]})")
+    contested = [
+        f"[{number}]"
+        for number in everything
+        if number not in unanimous
+        and not any(part.startswith(f"[{number}] ") for part in unique)
+    ]
+    lines = [
+        f"Citation convergence across {total} candidates:",
+        "- Cited by all: "
+        + (", ".join(f"[{number}]" for number in unanimous) or "none"),
+        "- Cited by some: " + (", ".join(contested) or "none"),
+        "- Cited by one: " + (", ".join(unique) or "none"),
+    ]
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """One council candidate, scored. Computed once and read by both the result
+    the parent sees and the event a triager reads later — two numbers that
+    could disagree would be two different stories about the same council."""
+
+    index: int
+    result: ToolResult
+    grounding: float
+    cited: Tuple[int, ...]
+    demoted: bool
+
+
+def _scored_text(result: ToolResult) -> str:
+    """What a candidate actually CLAIMED, for grading and citation extraction.
+
+    `_answer_result` wraps a child's answer in a header plus one quoted line
+    per passage it read ("- [3] handbook.md, passage 4: …"). Those lines are
+    the child's SOURCES, and grading them measures the quoting: `split_sentences`
+    breaks on every newline, so each quoted passage becomes a graded sentence
+    citing its own [n] and stating the numeral "passage N" that its excerpt
+    does not contain — CITED_UNSUPPORTED, every time, for every candidate. With
+    the council's own `high` budget (ten passages) a perfectly grounded answer
+    envelope scores about 0.21, below `DEMOTION_FLOOR`, so demotion never fires
+    and `validate_citations` reports every frozen marker for every candidate,
+    which is why the convergence table read "Cited by all" unanimously whatever
+    the candidates said.
+    """
+    return result.answer_text or result.content or ""
+
+
+def _score_candidates(
+    results: List[ToolResult], frozen: List[Evidence], *, floor: float
+) -> List[Candidate]:
+    """Every candidate's grounding score, citations and demotion, deterministic.
+
+    Never hand the judge an empty council: when EVERY candidate is below the
+    floor, none is demoted. Labelling the whole field "the bad ones" tells the
+    parent nothing it can act on, and the scores are shown either way.
+    """
+    scores = [
+        (index, result, _grounding_score(_scored_text(result), frozen, floor=floor))
+        for index, result in enumerate(results, start=1)
+    ]
+    demote_any = any(score >= DEMOTION_FLOOR for _index, _result, score in scores)
+    return [
+        Candidate(
+            index=index,
+            result=result,
+            grounding=score,
+            cited=validate_citations(_scored_text(result), frozen).cited,
+            demoted=demote_any and score < DEMOTION_FLOOR,
+        )
+        for index, result, score in scores
+    ]
+
+
+def _council_result(
+    results: List[ToolResult],
+    agent: Agent,
+    frozen: List[Evidence],
+    *,
+    floor: float,
+) -> ToolResult:
+    """The council's candidates, scored, ordered and tabulated for the parent.
+
+    Everything here is deterministic. The scores order the sections and label
+    the weak ones; the convergence table says what the candidates actually
+    agreed on; the parent — which holds the conversation, and is therefore the
+    better judge — does the judging under headings the table can support.
+    """
+    candidates = _score_candidates(results, frozen, floor=floor)
+    ordered = sorted(
+        candidates,
+        key=lambda row: (row.demoted, -row.grounding, row.index),
+    )
+    cited = [(candidate.index, candidate.cited) for candidate in candidates]
+    header = (
+        f"Council: sub-agent “{agent.name}” ran {len(results)} candidates over "
+        f"the same {len(frozen)} frozen passages."
+    )
+    directive = (
+        "Write your answer under exactly three headings — Agreed, Disagreed, "
+        "Unique findings — and say which candidates you relied on. Grounding "
+        "scores are lexical support against the frozen passages, not a verdict "
+        "on which answer is right."
+    )
+    table = _convergence(cited, len(results))
+    labels: List[str] = []
+    for candidate in ordered:
+        label = f"=== Candidate {candidate.index} (grounding {candidate.grounding:.2f}"
+        if candidate.demoted:
+            label += " — demoted, unsupported-heavy"
+        labels.append(label + ") ===")
+    fixed = [part for part in (header, table, directive) if part]
+    # The candidates share what the framing leaves, rather than a guessed
+    # constant: header, table, labels and separators are all known here, so the
+    # budget below is arithmetic and the assert at the end cannot fire.
+    overhead = sum(len(part) + 2 for part in (*fixed, *labels)) + len(labels)
+    per_attempt = max(300, (MAX_RESULT_CHARS - overhead) // max(1, len(results)))
+    sections = [
+        f"{label}\n{(candidate.result.content or '(empty)')[:per_attempt]}"
+        for label, candidate in zip(labels, ordered, strict=True)
+    ]
+    parts = [header]
+    if table:
+        parts.append(table)
+    parts.extend(sections)
+    parts.append(directive)
+    content = "\n\n".join(parts)
+    # The payload-must-fit invariant: every section above is clipped by
+    # `per_attempt`, so an overflow here would be a bug in that bound.
+    assert len(content) <= MAX_RESULT_CHARS, "council result exceeded the tool budget"
+    return ToolResult(content=content, provenance=_merged_provenance(results))
+
+
+def _merged_provenance(results: List[ToolResult]) -> List[str]:
+    """Every class the attempts between them pulled in.
+
+    A union, never a vote: one of four council children reading a web page is
+    enough to taint the turn, and an aggregate that reported only what the
+    majority read would launder exactly the attempt worth gating on.
+    """
+    merged: set[str] = set()
+    for result in results:
+        merged.update(result.provenance)
+    return sorted(merged)
 
 
 def _combined_attempts(results: List[ToolResult], agent: Agent) -> ToolResult:
@@ -432,7 +803,8 @@ def _combined_attempts(results: List[ToolResult], agent: Agent) -> ToolResult:
             f"Sub-agent “{agent.name}” ran {len(results)} parallel attempts. "
             "Judge them yourself, use the strongest (or combine them), and say "
             "which you relied on:\n\n" + "\n\n".join(sections)
-        )
+        ),
+        provenance=_merged_provenance(results),
     )
 
 
@@ -464,11 +836,57 @@ def _delegate(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolRe
     if attempts == 1:
         return run_child_agent(db, context, agent=agent, prompt=prompt)
 
-    # Best-of-N: the children fan out exactly like a parallel batch of
-    # delegate calls — each worker gets its own session (`db` is not
-    # thread-safe) and a `contextvars` copy so its model calls bill to the
-    # turn. Failures degrade per attempt: one blown attempt is an error
-    # SECTION the parent reads past, never a lost fan-out.
+    # THE COUNCIL. Everything down to the fan-out happens here, in the parent
+    # thread on the parent session, and the order is the design:
+    #
+    # 1. Retrieve ONCE. Candidates that read different passages are not
+    #    candidates, they are separate answers, and comparing them says
+    #    nothing. One retrieval for N children is also why the widest budget
+    #    is affordable here.
+    # 2. Screen the block ONCE, serially, BEFORE it is multiplied. A frozen
+    #    block is spliced into N prompts in N parallel threads that cannot
+    #    write the flag themselves — classify it while it is still one string
+    #    and one writer, never after the fan-out for latency.
+    settings = get_settings()
+    council_budget = budget_for(COUNCIL_BUDGET)
+    frozen: List[Evidence] = list(
+        search_evidence(
+            db,
+            workspace_id=context.workspace_id,
+            query=prompt,
+            space_id=context.space_id,
+            conversation_id=context.conversation_id,
+            limit=council_budget.limit,
+            token_budget=council_budget.token_budget,
+            per_passage_tokens=council_budget.per_passage_tokens,
+        )
+    )
+    shared_hits: List[str] = []
+    if frozen:
+        flagged = _screen_excerpt(
+            "\n\n".join(item.excerpt for item in frozen), settings
+        )
+        if flagged is not None:
+            if settings.screen_mode == "enforce":
+                return ToolResult(
+                    content=_notice_first(
+                        "Error: the council could not run: its shared evidence "
+                        "failed the safety screen.",
+                        [flagged],
+                    )
+                )
+            shared_hits.append(flagged)
+    # With an empty corpus there is nothing to freeze, so the children keep
+    # their own retrieval and this degrades to today's independent attempts.
+    block = (
+        f"{COUNCIL_EVIDENCE_HEADER}{_evidence_block(frozen)}" if frozen else ""
+    )
+
+    # The children fan out exactly like a parallel batch of delegate calls —
+    # each worker gets its own session (`db` is not thread-safe) and a
+    # `contextvars` copy so its model calls bill to the turn. Failures degrade
+    # per attempt: one blown attempt is an error SECTION the parent reads past,
+    # never a lost fan-out.
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
 
@@ -482,11 +900,13 @@ def _delegate(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolRe
             child_agent = session.get(Agent, agent_id)
             if child_agent is None:
                 return ToolResult(content="Error: the agent was retired mid-call.")
+            attempt_prompt = _attempt_prompt(prompt, index, attempts)
             return run_child_agent(
                 session,
                 context,
                 agent=child_agent,
-                prompt=_attempt_prompt(prompt, index, attempts),
+                prompt=f"{attempt_prompt}\n\n{block}" if block else attempt_prompt,
+                frozen_evidence=list(frozen),
             )
         except Exception as exc:
             session.rollback()
@@ -500,7 +920,82 @@ def _delegate(db: Session, context: ToolContext, args: Dict[str, Any]) -> ToolRe
             for index in range(1, attempts + 1)
         ]
         results = [future.result() for future in futures]
-    return _combined_attempts(results, agent)
+    if not frozen:
+        return _combined_attempts(results, agent)
+    result = _council_result(results, agent, frozen, floor=settings.grounding_floor)
+    # COMPUTED here, WRITTEN by the coordinator. `_delegate` runs on a worker
+    # thread whenever the model issues several delegate calls in one round
+    # (`agent_loop._delegate_parallel_batch`), and that function's stated
+    # invariant is that workers write no events — two councils in one round
+    # otherwise race `run_events`' unique (run_id, sequence). The record rides
+    # home on the result, exactly as a screen hit and a child's provenance do.
+    result.deferred_events.extend(
+        _council_events(
+            agent=agent,
+            results=results,
+            frozen=frozen,
+            floor=settings.grounding_floor,
+        )
+    )
+    if shared_hits:
+        # Shadow-mode hits ride the parent's own serial screen of this content,
+        # exactly as a child's do (see `_notice_first`). The rebuild carries
+        # `provenance` forward: dropping it here would silently untaint a
+        # council whose evidence the screen had just flagged.
+        return ToolResult(
+            content=_notice_first(result.content, shared_hits),
+            provenance=result.provenance,
+            deferred_events=result.deferred_events,
+        )
+    return result
+
+
+def _council_events(
+    *,
+    agent: Agent,
+    results: List[ToolResult],
+    frozen: List[Evidence],
+    floor: float,
+) -> List[Dict[str, Any]]:
+    """The `council.scored` record, as data for someone else to append.
+
+    NOT written here, and the distinction is the whole point. `_delegate` runs
+    on a ThreadPoolExecutor worker whenever the model issues several delegate
+    calls in one round, and `agent_loop._delegate_parallel_batch` states the
+    rule that makes that safe: "`run_events` is unique on (run_id, sequence),
+    so worker threads write NO events — every row and event is written serially
+    on the parent session." Appending from here put two councils in one round
+    in a race for the next sequence, which `append_event`'s retry hid as
+    contention rather than as the broken invariant it was. The event rides home
+    on `ToolResult.deferred_events` and the coordinator writes it beside
+    `tool.completed`, in queue order.
+
+    Pure, so it cannot fail the turn: the council already has its answer, and a
+    triage record that could swallow one would be a bad trade.
+    """
+    return [
+        {
+            "event_type": "council.scored",
+            "payload": {
+                "agent": agent.name,
+                "frozen_chunk_ids": [item.chunk_id for item in frozen],
+                # The scale the scores were measured at, beside them, for the
+                # same reason `GroundingReport.floor` exists: a stored verdict
+                # that does not say what it was measured at cannot be compared
+                # with one measured later under a different setting.
+                "floor": floor,
+                "candidates": [
+                    {
+                        "index": candidate.index,
+                        "grounding": round(candidate.grounding, 4),
+                        "demoted": candidate.demoted,
+                        "cited": list(candidate.cited),
+                    }
+                    for candidate in _score_candidates(results, frozen, floor=floor)
+                ],
+            },
+        }
+    ]
 
 
 def _preview_delegate(db: Session, context: ToolContext, args: Dict[str, Any]) -> str:
@@ -533,8 +1028,10 @@ def delegation_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "returns its findings as text; it cannot change anything. Use "
                 "it to investigate independent sub-questions — several "
                 "delegate calls made together run in parallel. For a single "
-                "hard question, set `attempts` to run best-of-N parallel "
-                "tries and judge the answers yourself. Available "
+                "hard question, set `attempts` to convene a council: the "
+                "attempts all read one shared, frozen set of passages and come "
+                "back with grounding scores and a citation-convergence table "
+                "for you to judge. Available "
                 f"agents: {roster}."
             ),
             parameters={
@@ -557,9 +1054,10 @@ def delegation_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                         "minimum": 1,
                         "maximum": 4,
                         "description": (
-                            "Run the same task this many times in parallel "
-                            "(best-of-N) and receive every labelled answer "
-                            "to judge. Default 1."
+                            "Convene a council of this many parallel attempts "
+                            "over one frozen evidence set, and receive every "
+                            "labelled answer with its grounding score. "
+                            "Default 1 (a single ordinary delegation)."
                         ),
                     },
                 },
@@ -572,5 +1070,10 @@ def delegation_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             # what plan mode is for).
             read_only=True,
             preview=_preview_delegate,
+            # Explicit, and the DEFAULT is the deliberate answer: a child's
+            # summary is a tool's output. What the child actually *read* rides
+            # home on `ToolResult.provenance` instead, because a spec cannot
+            # know that in advance — it depends on which tools the child chose.
+            provenance=provenance.TOOL_RESULT,
         )
     }

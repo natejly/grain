@@ -55,6 +55,34 @@ class ScreenStatus(BaseModel):
     backend: Literal["builtin", "proxy"]
 
 
+class TaintStatus(ApiModel):
+    """The provenance gate's posture, as the run path actually applies it.
+
+    The screen's deterministic sibling, and `ScreenStatus` is the precedent it
+    mirrors: a deployment posture the client renders and cannot set from here.
+    `enabled` is False whenever nothing is gated — the flag off, or the
+    workspace forced it off — so a client never has to re-derive the
+    resolution.
+
+    `classes` are the machine names; turning them into prose is the web's job,
+    the same split every other status on this response follows.
+    """
+
+    enabled: bool
+    classes: List[str] = []
+    #: The workspace's own override: "" follows the deployment, "on" forces it
+    #: on, "off" forces it off. Sent so the owner's control renders what is
+    #: stored rather than what was resolved — the two differ, and a radio that
+    #: showed the resolution would move under an owner who changed nothing.
+    workspace_override: str = ""
+
+
+class TaintGatingRequest(ApiModel):
+    """The owner-only write behind `PUT /api/taint-gating`."""
+
+    mode: Literal["default", "on", "off"]
+
+
 class DigestStatus(ApiModel):
     """The caller's daily-digest preference, as their membership row holds it.
 
@@ -66,12 +94,35 @@ class DigestStatus(ApiModel):
     hour_utc: int
 
 
+class RunPresetOut(ApiModel):
+    """One row of the run-preset picker.
+
+    The policy a preset pins, sent whole so the composer can *show* what it
+    will do and then let the user override any part of it.
+
+    No approval mode rides here. A preset pins retrieval and effort, which are
+    per-turn facts; approval mode is the user's own containment control, lives
+    on the conversation, and outlives the turn — see `services/run_presets.py`
+    for what happened when this model carried one.
+    """
+
+    name: str
+    label: str
+    description: str
+    effort: str
+    budget: str
+    step_plan: bool
+
+
 class BootstrapResponse(ApiModel):
     identity: Identity
     feature_flags: Dict[str, bool]
     default_agent_id: str
     model_provider: ModelProviderStatus
     screen: ScreenStatus
+    #: The provenance gate's posture, beside the screen it is the deterministic
+    #: sibling of. Defaulted so a client built against an older server boots.
+    taint: TaintStatus = TaintStatus(enabled=False)
     #: The daily "items waiting on you" mail opt-in for this member.
     digest: DigestStatus
     #: Safe mode: this member's new threads start by asking before they write.
@@ -100,6 +151,10 @@ class BootstrapResponse(ApiModel):
     #: developer's machine; `config._guard_dev_unrestricted` makes that
     #: structural rather than advisory.
     unrestricted_agent: bool = False
+    #: The research presets the composer can offer, `auto` first. Code
+    #: constants, so the list is deployment-independent and the scripted
+    #: provider gets exactly the same one.
+    run_presets: List[RunPresetOut] = []
 
 
 #: The five response styles a member can hold. "normal" injects nothing —
@@ -639,6 +694,10 @@ class ConversationOut(ApiModel):
     default_agent_id: str = ""
     default_model: str = ""
     default_effort: str = ""
+    #: The remembered research preset, "" for none. A composer seed like the
+    #: three above — the run path resolves a turn's preset from the send
+    #: request and never from this column.
+    default_preset: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -657,6 +716,11 @@ class ConversationDefaultsRequest(BaseModel):
     default_agent_id: Optional[str] = Field(default=None, max_length=36)
     default_model: Optional[str] = Field(default=None, max_length=120)
     default_effort: Optional[str] = Field(default=None, max_length=24)
+    #: A catalogue name, "auto", or "" to clear. Unlike the three above this one
+    #: IS validated in the endpoint: the catalogue is deployment-independent
+    #: code, so an unknown name here is a client bug rather than a value some
+    #: other deployment might offer.
+    default_preset: Optional[str] = Field(default=None, max_length=32)
 
 
 class ConversationTitleRequest(BaseModel):
@@ -731,15 +795,127 @@ class Citation(BaseModel):
     #: the citation becomes unverifiable, which is the one thing this product
     #: promises its citations never are.
     url: Optional[str] = None
+    #: Fingerprint of the chunk CONTENT that was quoted, so a stored citation
+    #: can be re-verified later against the exact text it cited and a passage
+    #: rewritten since the answer is detectable rather than silently re-read.
+    #: "" for a web passage, which has no indexed chunk, and "" for citations
+    #: stored before this field existed. Declared here for the same reason
+    #: `url` is, three lines up: `runs._citations` emits it and FastAPI strips
+    #: every key this model does not name, so an undeclared field is a field
+    #: the server can never send however faithfully it writes it to the
+    #: database.
+    fingerprint: str = ""
+
+
+class SentenceGrounding(ApiModel):
+    """One sentence of an answer, and what the lexical support test made of it.
+
+    `verified` is the narrowest claim in this file: the words this sentence uses
+    are present in the passage it cites. It is NOT entailment — a negated or
+    misattributed claim whose vocabulary all appears in the passage passes, and
+    a correct paraphrase with different words fails. Anything rendering this
+    must say "supported by the words of the passage", never "true".
+    """
+
+    #: Offsets into the answer as stored, so a client can highlight the span
+    #: without re-parsing. `text` is clipped for storage; the offsets are not.
+    start: int
+    end: int
+    text: str
+    #: "verified" | "cited_unsupported" | "uncited" | "ignored" |
+    #: "attributed". A plain string rather than an enum, so an older client
+    #: meets a future verdict as an unknown label instead of a validation
+    #: error.
+    verdict: str
+    #: Passage numbers this sentence cited that exist.
+    citations: List[int] = []
+    #: Passage numbers it cited that do not exist.
+    fabricated: List[int] = []
+    #: Share of the sentence's content words found in the passages it cited.
+    coverage: float = 0.0
+    #: Numbers the sentence states that its cited passages do not. One of these
+    #: fails a sentence outright, however high its word coverage: a paraphrase
+    #: may change the words and may not change the figure.
+    missing_numerals: List[str] = []
+
+
+class GroundingCheck(ApiModel):
+    """Per-sentence support for one answer, and the one number over it.
+
+    `score` is verified / scored, where `scored` leaves out sentences that made
+    no checkable claim. `scored == 0` means nothing was gradable here — which is
+    not "ungrounded", and must not be rendered as a 0%.
+    """
+
+    score: float
+    scored: int
+    verified: int
+    cited_unsupported: int
+    uncited: int
+    ignored: int
+    #: Sentences every one of whose citations names a passage nothing here can
+    #: check — today, a provider-executed web result, whose only available
+    #: "excerpt" is a slice of the answer itself. Out of `scored`, because
+    #: grading a sentence against a substring of itself scores ~1.0 by
+    #: construction: the publisher asserts it, and we did not verify it. A
+    #: renderer that folds these into the percentage is reporting a check that
+    #: never happened.
+    attributed: int = 0
+    #: The coverage threshold this grading used (`settings.grounding_floor`),
+    #: recorded so a stored verdict says what it was measured at.
+    floor: float
+    #: True when the sentence list or a sentence's text was cut to its cap.
+    #: Overloaded on purpose for backwards compatibility; use
+    #: `sentences_truncated` to ask the question that matters.
+    truncated: bool
+    #: How many sentences the answer HAS. `sentences` is capped, so this is
+    #: the only field that can say "120 of 300 were graded".
+    n_sentences: int = 0
+    #: True when the answer had more sentences than the grader's cap, i.e. a
+    #: tail of it was never looked at — and therefore never counted, never
+    #: flagged and never repaired. A surface that shows the score without
+    #: showing this is reporting 100% on an answer it only read the front of.
+    sentences_truncated: bool = False
+    sentences: List[SentenceGrounding] = []
+
+
+class RepairCheck(ApiModel):
+    """What the bounded rewrite of unsupported sentences did, if anything.
+
+    `attempted` without `applied` is the ordinary outcome, not a failure: the
+    rewrite is discarded unless re-grading says it is strictly better.
+    """
+
+    attempted: bool
+    applied: bool
+    #: "" when applied; otherwise one of "disabled", "nothing_to_repair",
+    #: "no_provider", "rejected_not_better", "rejected_fabricated", "failed".
+    reason: str
+    score_before: float
+    score_after: float
+    unsupported_before: int
+    unsupported_after: int
+    #: True when the graded report this pass worked from stopped at the
+    #: sentence cap, so "nothing to repair" means "nothing in the part that was
+    #: read". Declared here because `runs._validated_answer` emits it and
+    #: FastAPI strips every key this model does not name — the failure `url`
+    #: and `fingerprint` both had on `Citation`.
+    tail_ungraded: bool = False
 
 
 class CitationCheck(ApiModel):
     """The citation validator's verdict on one answer.
 
-    Exactly `services.citations.CitationReport.to_dict()` plus its one-line
-    summary. Nothing is added here: the validator is deliberately a pure
-    function with its own tests, and a field invented at the API boundary would
-    be a claim no test covers.
+    `services.citations.CitationReport.to_dict()`, its one-line summary, and —
+    when the answer was graded — the per-sentence grounding report and the
+    record of the repair pass. Each of those three is composed in exactly one
+    place (`services.grounded.compose_report` and `services.runs.
+    _validated_answer`) and each is produced by a pure function with its own
+    tests, so nothing is invented at this boundary.
+
+    `grounding` and `repair` are None when the answer was never graded — an
+    older message, a run whose grader raised — which is a different fact from
+    "graded and clean", exactly as `citation_report` itself already is.
     """
 
     #: How many passages the model was actually handed.
@@ -757,6 +933,27 @@ class CitationCheck(ApiModel):
     #: False when anything was fabricated or malformed. Uncited does not fail.
     valid: bool
     summary: str
+    grounding: Optional[GroundingCheck] = None
+    repair: Optional[RepairCheck] = None
+
+
+class Followup(ApiModel):
+    """One suggested next question, and the evidence that it is answerable.
+
+    Derived from the knowledge graph's neighbours of the cited passages and
+    from the answer's own headings, then admitted only when a dense probe at
+    the generation's own floor returned something. `chunk_ids` are what that
+    probe found — carried so the chip's grounding is visible rather than
+    claimed.
+    """
+
+    text: str
+    #: "kg" (a graph neighbour, i.e. a claim about the corpus) or "heading"
+    #: (a claim about the answer). A plain string, so an older client meets a
+    #: future origin as an unknown label rather than a validation error.
+    origin: str
+    probe_score: float
+    chunk_ids: List[str] = []
 
 
 class MessageOut(ApiModel):
@@ -768,6 +965,14 @@ class MessageOut(ApiModel):
     #: None means this answer was never checked — a denied tool call, a budget
     #: park — which is a different fact from "checked and found clean".
     citation_report: Optional[CitationCheck] = None
+    #: The follow-up chips this answer earned. An EMPTY LIST means no
+    #: suggestion cleared the retrieval probe — a real and common answer for a
+    #: thin corpus, and NOT "the feature is off". The same distinction
+    #: `citation_report: None` draws between "unchecked" and "clean", drawn
+    #: here between "nothing admitted" and "never computed" (which is also the
+    #: empty list at this boundary, because a client has nothing to render for
+    #: either and inventing a third state would only invite a wrong badge).
+    followups: List[Followup] = []
     #: The member this message is attributed to; "" for pre-column messages.
     sender_id: str = ""
     #: That member's display name, resolved server-side (the members list is
@@ -821,6 +1026,21 @@ class SendMessageRequest(BaseModel):
     #: request, so a turn that parks on an approval resumes against the file it
     #: was asked about. Ignored for a thread whose subject has no parts.
     subject_focus: Optional[str] = Field(default=None, max_length=400)
+    #: A named policy bundle for this turn, from `GET /api/bootstrap`'s
+    #: `run_presets`. Free string here for the same reason `model` is (pydantic
+    #: cannot see the catalogue), validated in the endpoint; "auto" is accepted
+    #: and routed server-side into a concrete name before the row is written.
+    #: A preset only ever SEEDS the fields below — an explicit one wins.
+    preset: Optional[str] = Field(default=None, max_length=32)
+    #: Run this turn in plan-then-execute mode. Optional rather than `bool`
+    #: on purpose: it is the only way an explicit "no plan mode" can outrank a
+    #: preset that pins it on, because absent and explicitly-false have to be
+    #: two different statements here.
+    step_plan: Optional[bool] = None
+    #: How much evidence this turn retrieves. A Literal, so an off-ladder value
+    #: is a 422 from pydantic with no endpoint code, exactly as `effort` is.
+    #: Absent resolves to medium, which is numerically today's retrieval.
+    retrieval_budget: Optional[Literal["low", "medium", "high"]] = None
     #: An aside ("/btw"): record the message in the transcript without starting
     #: an agent turn. It is read as context by whichever turn comes next. When
     #: set, every per-turn field above is ignored and the response carries no
@@ -1023,6 +1243,10 @@ class AgentToolCallOut(ApiModel):
     #: The member this approval is routed to, "" for anyone. Routing only —
     #: `decided_by` still records who answered.
     assigned_to: str = ""
+    #: Why the provenance gate raised this call to an approval; "" when it did
+    #: not. A machine string (`taint:<classes>:<action>`) the client renders as
+    #: prose — and renders as nothing at all if it cannot parse it.
+    gate_reason: str = ""
     created_at: datetime
 
 

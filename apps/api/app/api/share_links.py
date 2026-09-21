@@ -19,6 +19,10 @@ link row, never from the request, and a dashboard's answer is re-run LIVE
 against its dataset at request time: a share link is a window, not a snapshot,
 and must never leak a stale copy of data the workspace has since corrected
 (nor reuse a frozen release manifest, which answers a different question).
+A PAGE is the one deliberate exception to that rule and the reason to state it
+here: a page is a snapshot on purpose, because its whole value is that a reader
+following a marker sees the passage the answer was written from. Its staleness
+is reported (`page_drifted`), never papered over.
 It is also rate limited per source address (the shared `public_rate_limit`
 dependency, public tier): every hit on a shared dashboard runs a live DuckDB
 query, so an anonymous surface with no budget would be a compute amplifier for
@@ -49,7 +53,16 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..database import get_db
-from ..models import Conversation, Dashboard, Document, Message, ShareLink, User
+from ..models import (
+    Conversation,
+    Dashboard,
+    Document,
+    Message,
+    Page,
+    PageCitation,
+    ShareLink,
+    User,
+)
 from ..schemas import ApiModel, DashboardSpec
 from ..services import conversations as conversations_service
 from ..services import share_links as service
@@ -69,7 +82,7 @@ PUBLIC_ROW_CAP = 1000
 
 class ShareLinkOut(ApiModel):
     id: str
-    #: 'dashboard' | 'document' | 'conversation'
+    #: 'dashboard' | 'document' | 'conversation' | 'page'
     resource_kind: str
     resource_id: str
     created_by: str
@@ -96,7 +109,7 @@ class ShareLinkCreatedOut(ApiModel):
 
 
 class ShareLinkCreateRequest(BaseModel):
-    resource_kind: Literal["dashboard", "document", "conversation"]
+    resource_kind: Literal["dashboard", "document", "conversation", "page"]
     resource_id: str = Field(min_length=1, max_length=36)
     #: Optional self-destruct: when set, `load_active` refuses the link from
     #: this moment on — the mitigation for a link that leaks and is forgotten.
@@ -122,12 +135,28 @@ class SharedMessageOut(ApiModel):
     is_aside: bool = False
 
 
+class SharedPageCitationOut(ApiModel):
+    """One frozen marker as the anonymous reader sees it.
+
+    No chunk id and no source id: a reader outside the workspace cannot open
+    either, and naming rows they cannot reach is a leak with no upside. The
+    excerpt is the author's words at publish time, which is the whole point.
+    """
+
+    marker: int
+    filename: str
+    ordinal: int
+    frozen_excerpt: str
+    #: "frozen" | "changed" | "missing" — this marker's own drift verdict.
+    status: str
+
+
 class SharedResourceOut(ApiModel):
     """What an anonymous holder of a working link sees. One model for all
     kinds — the unset halves stay at their empty defaults — so the public page
     has one response shape to render."""
 
-    #: 'dashboard' | 'document' | 'conversation'
+    #: 'dashboard' | 'document' | 'conversation' | 'page'
     kind: str
     title: str
     # The dashboard half: the stored spec (how to draw) plus a live answer.
@@ -145,6 +174,13 @@ class SharedResourceOut(ApiModel):
     #: window is served — the dashboard branch's public-ceiling rule applied
     #: to transcripts, surfaced so the page can say earlier turns are omitted.
     truncated: bool = False
+    # The page half. FROZEN, unlike every other half of this model.
+    page_body: str = ""
+    page_citations: List[SharedPageCitationOut] = []
+    #: True once the drift sweep found a cited passage edited or gone. The
+    #: reader still sees the published text; this is how they are told it is no
+    #: longer what the workspace holds.
+    page_drifted: bool = False
 
 
 def _out(link: ShareLink) -> ShareLinkOut:
@@ -170,7 +206,23 @@ def _resolve_resource(
     visibility chokepoint instead: only the creator can reach — and therefore
     mint for — a personal thread, any member can for a shared one, and a
     foreign workspace 404s before either question is asked.
+
+    A PAGE resolves flat, like a dashboard, and that is deliberate rather than
+    an oversight: the personal-thread question was already asked and answered
+    at PUBLISH time by `conversations.resolve_visible`, and what exists now is
+    a frozen copy somebody made on purpose — not a window into a thread whose
+    visibility can change under it afterwards.
     """
+    if resource_kind == "page":
+        found = db.scalar(
+            select(Page.id).where(
+                Page.id == resource_id,
+                Page.workspace_id == actor.workspace_id,
+            )
+        )
+        if found is None:
+            raise HTTPException(status_code=404, detail="Page not found")
+        return
     if resource_kind == "conversation":
         conversation = conversations_service.resolve_visible(
             db,
@@ -422,6 +474,50 @@ def read_shared_resource(
             columns=result.columns,
             rows=result.rows[:PUBLIC_ROW_CAP],
             generated_at=utcnow(),
+        )
+    if link.resource_kind == "page":
+        # SNAPSHOT DECISION: every other kind here is a live window — this one
+        # is not, and that is the whole product. A page's evidence is pinned at
+        # publish time; staleness is told by `page_drifted`, which the sweep
+        # sets, not by quietly serving text the reader never saw cited. A
+        # future reader "fixing the inconsistency" by making pages live would
+        # silently destroy the feature; test_page_share.py's "serves the frozen
+        # body after the chunk is rewritten" assertion is the real guard.
+        page = db.scalar(
+            select(Page).where(
+                Page.id == link.resource_id,
+                Page.workspace_id == link.workspace_id,
+            )
+        )
+        if page is None:
+            raise _shared_not_found()
+        citations = list(
+            db.scalars(
+                select(PageCitation)
+                .where(
+                    PageCitation.page_id == page.id,
+                    PageCitation.workspace_id == link.workspace_id,
+                )
+                .order_by(PageCitation.marker)
+                .limit(PUBLIC_ROW_CAP)
+            )
+        )
+        return SharedResourceOut(
+            kind="page",
+            title=page.title,
+            page_body=page.body_md,
+            page_citations=[
+                SharedPageCitationOut(
+                    marker=citation.marker,
+                    filename=citation.filename,
+                    ordinal=citation.ordinal,
+                    frozen_excerpt=citation.frozen_excerpt,
+                    status=citation.status,
+                )
+                for citation in citations
+            ],
+            page_drifted=page.status == "drifted",
+            updated_at=page.updated_at,
         )
     if link.resource_kind == "conversation":
         # LIVE-WINDOW DECISION: documents and dashboards serve current content

@@ -3,12 +3,15 @@
 import {
   AtSign,
   Bell,
+  BookOpen,
   Check,
   CircleDollarSign,
   Clock,
   ExternalLink,
+  Eye,
   Inbox as InboxIcon,
   RefreshCw,
+  ShieldAlert,
   TrendingUp,
   X,
 } from "lucide-react";
@@ -21,7 +24,7 @@ import type {
   InboxMention,
   WorkspaceMember,
 } from "@workspace/api-client";
-import { assigneeName, partitionApprovals } from "./approval-format";
+import { assigneeName, describeGate, partitionApprovals } from "./approval-format";
 import type { ToolDecision } from "./chat";
 import { RulesTable } from "./policies";
 import { ProposalDiff } from "./proposal-diff";
@@ -89,6 +92,12 @@ export type InboxViewProps = {
   /** Jump to where this reader can act on spend: the admin usage panel for an
    * owner, the Agents view for everyone else. */
   openSpending: () => void;
+  /**
+   * Jump to the surface a research notice is about — Pages or Watches. The
+   * notice itself carries no decision, so this is the whole of its action.
+   * Optional, so the view still mounts bare in tests.
+   */
+  openNotice?: (view: "pages" | "watches") => void;
   /** The signed-in member's user id — what splits the queue into "assigned to
    * you" vs the rest. "" until bootstrap's first read lands. */
   identityId: string;
@@ -106,6 +115,7 @@ type Section =
   | "mentions"
   | "alerts"
   | "anomalies"
+  | "notices"
   | "runs"
   | "history"
   | "rules";
@@ -264,6 +274,14 @@ function ApprovalRow({
           </button>
         )}
       </div>
+      {/* Parity with the chat card: the same approval decided from two
+          surfaces must carry the same reason, above the same diff. */}
+      {describeGate(row.gate_reason ?? "") && (
+        <p className="tool-gate-note">
+          <ShieldAlert size={12} aria-hidden="true" />
+          {describeGate(row.gate_reason ?? "")}
+        </p>
+      )}
       {row.proposal_preview && (
         <div className="approval-proposal">
           <ProposalDiff preview={row.proposal_preview} />
@@ -397,6 +415,7 @@ export function InboxView({
   openMonitors,
   resolveAnomaly,
   openSpending,
+  openNotice,
   identityId,
   loadMembers,
   assignApproval,
@@ -440,6 +459,7 @@ export function InboxView({
   const mentions = feed?.mentions ?? [];
   const alerts = feed?.alerts ?? [];
   const anomalies = feed?.anomalies ?? [];
+  const notices = feed?.notices ?? [];
   const runs = feed?.recent_runs ?? [];
 
   /**
@@ -524,6 +544,10 @@ export function InboxView({
     { id: "mentions", label: "Mentions", count: mentions.length },
     { id: "alerts", label: "Alerts", count: alerts.length },
     { id: "anomalies", label: "Spend", count: anomalies.length },
+    // Research notices carry no decision, so the tab reads as a shelf rather
+    // than a queue: a page whose evidence moved, or a watch that found a
+    // change, is something to read and then act on elsewhere.
+    { id: "notices", label: "Research", count: notices.length },
     { id: "runs", label: "Runs" },
     { id: "history", label: "History" },
     // The ledger the "always allow" checkbox above writes into — one
@@ -831,6 +855,65 @@ export function InboxView({
                   >
                     <Check size={15} />
                     Resolve
+                  </button>
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      )}
+
+      {section === "notices" && (
+        <div className="approval-panel inbox-queue">
+          {notices.length === 0 ? (
+            <div className="approval-empty">
+              <div>
+                <Check size={18} />
+              </div>
+              <strong>Nothing has moved</strong>
+            </div>
+          ) : (
+            notices.map((notice) => (
+              <article key={notice.id} className="approval-card">
+                <div className="approval-card-top">
+                  <div className="tool-glyph">
+                    {notice.kind === "page_drift" ? (
+                      <BookOpen size={17} />
+                    ) : (
+                      <Eye size={17} />
+                    )}
+                  </div>
+                  <div>
+                    <span>
+                      {notice.kind === "page_drift"
+                        ? "Page evidence changed"
+                        : "Watch found a change"}{" "}
+                      ·{" "}
+                      {formatRelative(notice.created_at).replace(" ago", "")}
+                    </span>
+                    <strong>{notice.title}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-button approval-open"
+                    onClick={() =>
+                      openNotice?.(
+                        notice.kind === "page_drift" ? "pages" : "watches",
+                      )
+                    }
+                  >
+                    <ExternalLink size={13} />
+                    {notice.kind === "page_drift" ? "Open Pages" : "Open Watches"}
+                  </button>
+                </div>
+                {notice.body && <p className="inbox-hold-note">{notice.body}</p>}
+                <div className="decision-buttons">
+                  <button
+                    className="approve"
+                    onClick={() => void resolveAnomaly(notice.id)}
+                  >
+                    <Check size={15} />
+                    Clear
                   </button>
                 </div>
               </article>

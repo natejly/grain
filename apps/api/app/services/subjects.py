@@ -354,4 +354,8 @@ def tool_context(
         dashboard_id=subject.id if subject and kind == DASHBOARD else "",
         space_id=space_id,
         run_id=run.id,
+        # The turn's retrieval allowance, off the row the same way `space_id`
+        # comes off the conversation: resolved once, here, and never from a
+        # tool's own arguments. "" is the MEDIUM budget, which is today's.
+        retrieval_budget=run.retrieval_budget,
     )

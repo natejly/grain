@@ -2,11 +2,13 @@ import {
   Activity,
   BarChart3,
   Blocks,
+  BookOpen,
   Bot,
   Braces,
   Brain,
   Clock,
   Database,
+  Eye,
   FileText,
   Gauge,
   Inbox,
@@ -18,6 +20,7 @@ import {
   LibraryBig,
   MessageSquare,
   Network,
+  PackageCheck,
   Plug,
   ShieldCheck,
   Sparkles,
@@ -183,6 +186,13 @@ const GROUP_SPECS: NavGroupSpec[] = [
         label: "",
         items: [
           { view: "documents", label: "Documents", icon: FileText },
+          /**
+           * A published page is a document, and belongs beside them — but a
+           * different KIND of document, so it gets its own glyph. Reusing
+           * FileText would make the two rows read as one destination split in
+           * half for no reason a reader could see.
+           */
+          { view: "pages", label: "Pages", icon: BookOpen },
           { view: "projects", label: "Projects", icon: Braces },
         ],
       },
@@ -293,6 +303,13 @@ const GROUP_SPECS: NavGroupSpec[] = [
           { view: "workflows", label: "Workflows", icon: Workflow },
           { view: "crons", label: "Schedules", icon: Clock },
           { view: "monitors", label: "Monitors", icon: Gauge },
+          /**
+           * Both ride the tick this group is already about: a watch is
+           * dispatched by the same claim a cron is, and a deliverable run is
+           * an ordinary workflow run with a manifest at the end.
+           */
+          { view: "watches", label: "Watches", icon: Eye },
+          { view: "deliverables", label: "Deliverables", icon: PackageCheck },
         ],
       },
     ],

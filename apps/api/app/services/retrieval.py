@@ -17,6 +17,7 @@ import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import delete, func, select
@@ -98,6 +99,76 @@ class Evidence:
     ordinal: int
     excerpt: str
     score: float
+    #: Fingerprint of the chunk's CONTENT — the text this excerpt was cut from,
+    #: not `indexed_text`. Content is what gets quoted and what a validator has
+    #: to re-verify against, so a situating blurb changing under a passage must
+    #: not move the fingerprint, and the passage's own words changing must.
+    #:
+    #: A trailing DEFAULTED field on purpose: `WebEvidence` inherits from this
+    #: class and adds its own defaulted `url` after it, and
+    #: `web_search.revive_evidence` rebuilds both with `**item`.
+    chunk_fingerprint: str = ""
+
+
+#: How much evidence one call may gather, as a named bundle rather than three
+#: integers a caller has to keep in step. `limit` is passages, `token_budget`
+#: words across all of them, `per_passage_tokens` the cap on any single one
+#: (0 = off).
+@dataclass(frozen=True)
+class RetrievalBudget:
+    name: str
+    limit: int
+    token_budget: int
+    per_passage_tokens: int
+
+
+#: MEDIUM is exactly `search_evidence`'s own defaults, and its
+#: `per_passage_tokens` is 0 ON PURPOSE: a per-passage cap on the default path
+#: would change every existing answer and every eval number, so the cap only
+#: exists on a budget a caller explicitly asked for.
+BUDGETS: Dict[str, RetrievalBudget] = {
+    "low": RetrievalBudget("low", 3, 400, 150),
+    "medium": RetrievalBudget("medium", 5, 1200, 0),
+    "high": RetrievalBudget("high", 10, 2400, 400),
+}
+
+
+def budget_for(name: str) -> RetrievalBudget:
+    """The budget by name; anything unknown (including "") is MEDIUM.
+
+    Degrades rather than raises, the same rule `styles.py` applies to an
+    unknown preset: a run row holding a retired budget name must behave like
+    today, never fail the turn.
+    """
+    return BUDGETS.get(name) or BUDGETS["medium"]
+
+
+@dataclass(frozen=True)
+class SourceFilter:
+    """An extra, caller-supplied narrowing of what a search may see.
+
+    THE ONE RULE: a `SourceFilter` can only NARROW what `_live_sources`
+    already permits. It can never widen scope. Naming a space the thread
+    cannot see yields an empty `IN ()` that matches nothing rather than
+    reaching into that space, and there is no field here that removes a
+    predicate `_live_sources` added.
+    """
+
+    source_ids: Tuple[str, ...] = ()
+    exclude_source_ids: Tuple[str, ...] = ()
+    space_ids: Tuple[str, ...] = ()
+    ingested_after: Optional[datetime] = None
+    ingested_before: Optional[datetime] = None
+
+    @property
+    def empty(self) -> bool:
+        return not (
+            self.source_ids
+            or self.exclude_source_ids
+            or self.space_ids
+            or self.ingested_after
+            or self.ingested_before
+        )
 
 
 @dataclass(frozen=True)
@@ -346,7 +417,10 @@ def embed_chunks(
 
 
 def _live_sources(
-    space_id: str = "", conversation_id: str = ""
+    space_id: str = "",
+    conversation_id: str = "",
+    *,
+    filters: Optional[SourceFilter],
 ) -> Tuple[ColumnElement[bool], ...]:
     """The filter every arm shares: only ready, undeleted sources are citable —
     and only sources in scope.
@@ -365,13 +439,109 @@ def _live_sources(
     and without this predicate it would permanently change what every other
     thread retrieves — which is precisely the "general knowledge base" outcome
     attachments exist to avoid.
+
+    `filters` is keyword-only AND required — no default — precisely so that
+    every call site has to decide, and so mypy fails on a ranking arm added
+    later that forgets. A filter applied to three arms out of four is a
+    bypass with extra steps. When it is None or empty the tuple returned is
+    byte-identical to the one this function returned before filters existed:
+    no always-true padding, because identical SQL is what keeps the eval
+    numbers comparable.
     """
-    return (
+    base = (
         Source.deleted_at.is_(None),
         Source.status == "ready",
         Source.space_id.in_(("", space_id)),
         Source.conversation_id.in_(("", conversation_id)),
     )
+    if filters is None or filters.empty:
+        return base
+    extra: List[ColumnElement[bool]] = []
+    if filters.source_ids:
+        extra.append(Source.id.in_(tuple(filters.source_ids)))
+    if filters.exclude_source_ids:
+        extra.append(Source.id.not_in(tuple(filters.exclude_source_ids)))
+    if filters.space_ids:
+        # Intersected with the thread's OWN scope, which is what makes the
+        # space axis narrow-only: naming a foreign space yields an empty
+        # IN () that matches nothing rather than widening.
+        extra.append(
+            Source.space_id.in_(
+                tuple(sorted(set(filters.space_ids) & {"", space_id}))
+            )
+        )
+    if filters.ingested_after is not None:
+        extra.append(Source.created_at >= filters.ingested_after)
+    if filters.ingested_before is not None:
+        extra.append(Source.created_at <= filters.ingested_before)
+    return base + tuple(extra)
+
+
+def live_source_predicates(
+    space_id: str = "",
+    conversation_id: str = "",
+    *,
+    filters: Optional[SourceFilter],
+) -> Tuple[ColumnElement[bool], ...]:
+    """`_live_sources` for callers outside this module.
+
+    A thin public seam on purpose. Anything that lists or counts sources — the
+    `list_sources` tool, say — has to be scoped by the SAME predicate the
+    ranking arms use, and a second hand-written copy of it is how a listing
+    comes to name ids the search cannot reach.
+    """
+    return _live_sources(space_id, conversation_id, filters=filters)
+
+
+def in_scope_source_count(
+    db: Session,
+    *,
+    workspace_id: str,
+    space_id: str = "",
+    conversation_id: str = "",
+    filters: Optional[SourceFilter] = None,
+) -> int:
+    """How many SOURCES this scope could have consulted, i.e. documents.
+
+    The companion to `in_scope_chunk_count`, and the one a coverage ledger
+    wants: `coverage.close_ledger` counts distinct `Evidence.source_id` values,
+    which are documents, so a denominator counted in chunks made the report say
+    "6 of 4,000 sources consulted" about a forty-document corpus. Same
+    predicate as the ranking arms, for `in_scope_chunk_count`'s reason.
+    """
+    total = db.scalar(
+        select(func.count(func.distinct(Source.id))).where(
+            Source.workspace_id == workspace_id,
+            *_live_sources(space_id, conversation_id, filters=filters),
+        )
+    )
+    return int(total or 0)
+
+
+def in_scope_chunk_count(
+    db: Session,
+    *,
+    workspace_id: str,
+    space_id: str = "",
+    conversation_id: str = "",
+) -> int:
+    """How many passages this scope could have consulted.
+
+    It lives here, beside `_live_sources`, because a count computed anywhere
+    else would be a second answer to "what is in scope" that could disagree
+    with the one retrieval actually uses — and a coverage report whose
+    denominator disagrees with its numerator is worse than no report.
+    """
+    total = db.scalar(
+        select(func.count(Chunk.id))
+        .join(Source, Source.id == Chunk.source_id)
+        .where(
+            Chunk.workspace_id == workspace_id,
+            Source.workspace_id == workspace_id,
+            *_live_sources(space_id, conversation_id, filters=None),
+        )
+    )
+    return int(total or 0)
 
 
 def legacy_lexical_ranking(
@@ -381,6 +551,7 @@ def legacy_lexical_ranking(
     query: str,
     space_id: str = "",
     conversation_id: str = "",
+    filters: Optional[SourceFilter] = None,
 ) -> List[Tuple[str, float]]:
     """The pre-BM25 scorer, kept as the ablation arm for `RETRIEVAL_BM25=0`.
 
@@ -397,7 +568,7 @@ def legacy_lexical_ranking(
         .where(
             Chunk.workspace_id == workspace_id,
             Source.workspace_id == workspace_id,
-            *_live_sources(space_id, conversation_id),
+            *_live_sources(space_id, conversation_id, filters=filters),
         )
     ).all()
     scored: List[Tuple[str, float]] = []
@@ -484,6 +655,7 @@ def bm25_ranking(
     space_id: str = "",
     conversation_id: str = "",
     settings: Optional[Settings] = None,
+    filters: Optional[SourceFilter] = None,
 ) -> List[Tuple[str, float]]:
     """Okapi BM25 over the portable inverted index.
 
@@ -502,7 +674,11 @@ def bm25_ranking(
     live = (
         Chunk.workspace_id == workspace_id,
         Source.workspace_id == workspace_id,
-        *_live_sources(space_id, conversation_id),
+        # Into the shared `live` tuple, which is what `_document_frequencies`
+        # and `_selective_terms` already receive: IDF has to be computed over
+        # the same corpus the postings are drawn from, or a term that is rare
+        # in the filtered set is weighted as if it were common.
+        *_live_sources(space_id, conversation_id, filters=filters),
     )
     totals = db.execute(
         select(func.count(Chunk.id), func.coalesce(func.sum(Chunk.lexical_length), 0))
@@ -614,6 +790,7 @@ def dense_ranking(
     space_id: str = "",
     conversation_id: str = "",
     settings: Optional[Settings] = None,
+    filters: Optional[SourceFilter] = None,
 ) -> List[Tuple[str, float]]:
     """Cosine ranking over chunk vectors, or an empty ranking when there are none.
 
@@ -658,7 +835,7 @@ def dense_ranking(
             EmbeddingVector.workspace_id == workspace_id,
             Chunk.workspace_id == workspace_id,
             Source.workspace_id == workspace_id,
-            *_live_sources(space_id, conversation_id),
+            *_live_sources(space_id, conversation_id, filters=filters),
         )
         .order_by(Chunk.created_at.desc(), Chunk.id)
         .limit(settings.retrieval_vector_candidate_cap)
@@ -691,8 +868,14 @@ def rank_arms(
     space_id: str = "",
     conversation_id: str = "",
     settings: Optional[Settings] = None,
+    filters: Optional[SourceFilter] = None,
 ) -> ArmRankings:
-    """Both arms, unfused. The eval harness calls this for per-arm attribution."""
+    """Both arms, unfused. The eval harness calls this for per-arm attribution.
+
+    `filters` goes to EVERY arm. A filter applied to three arms out of four is
+    a bypass with extra steps: fusion would happily rank a passage the filter
+    excluded, because the arm that found it never saw the filter.
+    """
     settings = settings or get_settings()
     if settings.retrieval_bm25:
         # Anything unindexed ranks nowhere at all, which is a worse failure than a
@@ -702,17 +885,20 @@ def rank_arms(
             db, workspace_id=workspace_id, query=query, space_id=space_id,
             conversation_id=conversation_id,
             settings=settings,
+            filters=filters,
         )
     else:
         lexical = legacy_lexical_ranking(
             db, workspace_id=workspace_id, query=query, space_id=space_id,
             conversation_id=conversation_id,
+            filters=filters,
         )
     dense = (
         dense_ranking(
             db, workspace_id=workspace_id, query=query, space_id=space_id,
             conversation_id=conversation_id,
             settings=settings,
+            filters=filters,
         )
         if settings.retrieval_hybrid
         else []
@@ -753,9 +939,34 @@ def search_evidence(
     conversation_id: str = "",
     limit: int = 5,
     token_budget: int = 1200,
+    per_passage_tokens: int = 0,
     settings: Optional[Settings] = None,
+    fused_floor: Optional[float] = None,
+    filters: Optional[SourceFilter] = None,
 ) -> List[Evidence]:
-    """The passages worth citing for this query, best first."""
+    """The passages worth citing for this query, best first.
+
+    `per_passage_tokens` caps any SINGLE excerpt; 0 (the default) is off. Off
+    on the default path on purpose — a cap here would change every existing
+    answer and every eval number — so it only bites for a caller that asked
+    for a budget by name.
+
+    `filters` is an optional extra narrowing; see `SourceFilter`. It can only
+    ever remove sources from what this thread could already see.
+
+    `fused_floor` is the minimum RRF score a passage must reach to be handed
+    to a turn at all. None reads `settings.retrieval_fused_floor` — READ, never
+    derived: an RRF score is a sum of 1/(k + rank) terms and a cosine is a
+    similarity, so computing one floor from the other would be a unit error
+    with no symptom except quietly wrong retrieval. The parameter exists so an
+    eval can sweep the floor without mutating settings, not so a caller can
+    invent one.
+
+    Applied HERE rather than at the callers, so the preload and the
+    `search_sources` tool cannot come to disagree about what counts as
+    relevant — a thread that was handed nothing at turn start and everything a
+    tool call later would look like a bug in the answer, not in the floor.
+    """
     settings = settings or get_settings()
     if not query_terms(query):
         # Nothing but stopwords: no term to look up and nothing a vector could
@@ -767,6 +978,7 @@ def search_evidence(
         db, workspace_id=workspace_id, query=query, space_id=space_id,
         conversation_id=conversation_id,
         settings=settings,
+        filters=filters,
     )
     fused = reciprocal_rank_fusion(
         [arms.lexical, arms.dense],
@@ -775,6 +987,22 @@ def search_evidence(
     )
     if not fused:
         return []
+    floor = settings.retrieval_fused_floor if fused_floor is None else fused_floor
+    if floor > 0:
+        # Sorted descending by construction (`reciprocal_rank_fusion` sorts on
+        # -score), so the first entry under the floor ends the list — the same
+        # shape as the dense arm's own floor, for the same reason.
+        for position, (_chunk_id, score) in enumerate(fused):
+            if score < floor:
+                fused = fused[:position]
+                break
+        if not fused:
+            # A question this corpus has no answer to. Returning nothing is the
+            # point of the floor: five confident-looking citations that support
+            # nothing are worse than an honest "the sources do not cover this",
+            # and the model is instructed to say exactly that when handed no
+            # passages.
+            return []
 
     # Enough candidates that the (source, ordinal) tiebreak below has something to
     # sort, without materialising a ranking the caller cannot use.
@@ -788,7 +1016,7 @@ def search_evidence(
             Chunk.workspace_id == workspace_id,
             Source.workspace_id == workspace_id,
             Chunk.id.in_(list(candidates)),
-            *_live_sources(space_id, conversation_id),
+            *_live_sources(space_id, conversation_id, filters=filters),
         )
     ).all()
     ordered = sorted(
@@ -806,7 +1034,10 @@ def search_evidence(
             break
         # `content`, never `indexed_text`: the excerpt is what the answer quotes.
         words = chunk.content.split()
-        excerpt = " ".join(words[:remaining])
+        # With the cap off (`per_passage_tokens == 0`) this is exactly the old
+        # `words[:remaining]`, which is what keeps the default path byte-identical.
+        allowance = min(remaining, per_passage_tokens) if per_passage_tokens > 0 else remaining
+        excerpt = " ".join(words[:allowance])
         used_tokens += len(excerpt.split())
         evidence.append(
             Evidence(
@@ -816,6 +1047,34 @@ def search_evidence(
                 ordinal=chunk.ordinal,
                 excerpt=excerpt,
                 score=round(candidates[chunk.id], 6),
+                # Over `content`, not over the (possibly truncated) excerpt and
+                # not over `indexed_text`: a validator re-verifying this citation
+                # has to be able to fetch the chunk and get the same fingerprint,
+                # whatever budget the call that cited it happened to run under.
+                chunk_fingerprint=content_fingerprint(chunk.content),
             )
         )
     return evidence
+
+
+def evidence_manifest(evidence: Sequence[Evidence]) -> List[Dict[str, object]]:
+    """The [n] -> stable-id mapping, written down in ONE place.
+
+    Every surface that persists a citation — the run's citation payload, a
+    frozen page, a council's scored event — needs the same answer to "what does
+    [2] point at", and three hand-rolled comprehensions would be three chances
+    to disagree about whether the numbering starts at 0.
+
+    It starts at 1, because that is what the model is told to write.
+    """
+    return [
+        {
+            "n": index,
+            "chunk_id": item.chunk_id,
+            "source_id": item.source_id,
+            "filename": item.filename,
+            "ordinal": item.ordinal,
+            "fingerprint": item.chunk_fingerprint,
+        }
+        for index, item in enumerate(evidence, start=1)
+    ]

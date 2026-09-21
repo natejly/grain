@@ -162,6 +162,8 @@ def test_openai_harness_forwards_the_turn_arguments_to_the_stream(monkeypatch):
         effort=None,
         thinking=False,
         operation="",
+        prompt_cache_key="",
+        tool_choice="auto",
     ):
         captured.update(
             client=client,
@@ -316,6 +318,8 @@ def test_a_real_turn_forwards_show_thinking_through_the_loops_call_site(monkeypa
             model: Optional[str] = None,
             effort: Optional[str] = None,
             thinking: bool = False,
+            workspace_id: str = "",
+            run_id: str = "",
         ) -> ModelStep:
             seen.update(
                 prompt=prompt,
@@ -323,6 +327,8 @@ def test_a_real_turn_forwards_show_thinking_through_the_loops_call_site(monkeypa
                 model=model,
                 effort=effort,
                 thinking=thinking,
+                workspace_id=workspace_id,
+                run_id=run_id,
             )
             return lambda items, tools, instructions: iter(())
 
@@ -332,6 +338,8 @@ def test_a_real_turn_forwards_show_thinking_through_the_loops_call_site(monkeypa
     monkeypatch.setattr(agent_loop, "resolve_harness", lambda settings: Recorder())
 
     run = Run(
+        id="run-identity",
+        workspace_id="ws-identity",
         prompt="who owns the launch?",
         created_by="alice",
         requested_model="",
@@ -348,4 +356,8 @@ def test_a_real_turn_forwards_show_thinking_through_the_loops_call_site(monkeypa
         "model": None,
         "effort": None,
         "thinking": True,
+        # The turn's identity, which is what a per-workspace request field
+        # (the prompt cache key) is derived from one layer down.
+        "workspace_id": "ws-identity",
+        "run_id": "run-identity",
     }

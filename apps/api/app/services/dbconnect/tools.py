@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...models import DbConnection
+from .. import provenance
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
 from . import engine as db
 
@@ -171,6 +172,12 @@ def registry_tools(db_session: Session, context: ToolContext) -> Dict[str, ToolS
             ),
             parameters={"type": "object", "properties": {}},
             executor=_list,
+            # A connected database holds the workspace's OWN data, so its
+            # rows are workspace_chunk rather than web — but reaching it is
+            # egress, which is what puts every one of these above the risk
+            # tier once a turn is tainted.
+            provenance=provenance.WORKSPACE_CHUNK,
+            networked=True,
         ),
         "describe_schema": ToolSpec(
             name="describe_schema",
@@ -191,6 +198,12 @@ def registry_tools(db_session: Session, context: ToolContext) -> Dict[str, ToolS
                 },
             },
             executor=_describe,
+            # A connected database holds the workspace's OWN data, so its
+            # rows are workspace_chunk rather than web — but reaching it is
+            # egress, which is what puts every one of these above the risk
+            # tier once a turn is tainted.
+            provenance=provenance.WORKSPACE_CHUNK,
+            networked=True,
         ),
         "sql_query": ToolSpec(
             name="sql_query",
@@ -216,6 +229,12 @@ def registry_tools(db_session: Session, context: ToolContext) -> Dict[str, ToolS
                 "required": ["sql"],
             },
             executor=_query,
+            # A connected database holds the workspace's OWN data, so its
+            # rows are workspace_chunk rather than web — but reaching it is
+            # egress, which is what puts every one of these above the risk
+            # tier once a turn is tainted.
+            provenance=provenance.WORKSPACE_CHUNK,
+            networked=True,
         ),
         "sql_execute": ToolSpec(
             name="sql_execute",
@@ -235,6 +254,12 @@ def registry_tools(db_session: Session, context: ToolContext) -> Dict[str, ToolS
             executor=_execute,
             read_only=False,
             preview=_preview_execute,
+            # A connected database holds the workspace's OWN data, so its
+            # rows are workspace_chunk rather than web — but reaching it is
+            # egress, which is what puts every one of these above the risk
+            # tier once a turn is tainted.
+            provenance=provenance.WORKSPACE_CHUNK,
+            networked=True,
         ),
     }
 

@@ -22,18 +22,21 @@ from ..models import (
     ToolCall,
     ToolPolicy,
     WorkflowRun,
+    Workspace,
 )
 from ..schemas import (
     AgentApprovalRequest,
     AgentToolCallOut,
     ApprovalRequest,
+    TaintGatingRequest,
+    TaintStatus,
     ToolArtifact,
     ToolCallOut,
     ToolInfoOut,
     ToolPolicyOut,
     ToolPolicyRequest,
 )
-from ..services import conversations
+from ..services import conversations, denial_memory, provenance
 from ..services.agent_loop import PLAN, policy_scope_for_run
 from ..services.artifacts import documents, proposals
 from ..services.audit import record_audit
@@ -98,6 +101,7 @@ def _agent_tool_call_out(call: AgentToolCall, conversation_id: str) -> AgentTool
         artifacts=_artifacts(call.artifacts_json),
         approved_by_mode=call.approved_by_mode,
         assigned_to=call.assigned_to,
+        gate_reason=call.gate_reason,
         created_at=call.created_at,
     )
 
@@ -459,6 +463,77 @@ def set_tool_policy(
     )
     db.commit()
     return _policy_out(row)
+
+
+def _taint_status(db: Session, workspace_id: str) -> TaintStatus:
+    """What the run path applies for this workspace, plus what it stores.
+
+    Resolved through `provenance.gating_classes` rather than re-read off the
+    settings, so the note beside Safe mode and the control on Rules & policies
+    say what the gate actually does — the same missing-row honesty rule
+    `safe_mode` and `memory_enabled` already follow on bootstrap.
+    """
+    gating = provenance.gating_classes(db, workspace_id=workspace_id)
+    override = db.scalar(
+        select(Workspace.taint_gating).where(Workspace.id == workspace_id)
+    )
+    return TaintStatus(
+        enabled=bool(gating),
+        classes=sorted(gating),
+        workspace_override=override or "",
+    )
+
+
+@router.get("/taint-gating", response_model=TaintStatus)
+def read_taint_gating(
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> TaintStatus:
+    """The provenance gate's posture. Readable by any member.
+
+    Not owner-gated, and for the reason `policies.tsx` already makes about the
+    organization panel: this is a posture everyone in the workspace is governed
+    by, and hiding it from the people it governs is how "why did that ask me?"
+    becomes unanswerable.
+    """
+    return _taint_status(db, actor.workspace_id)
+
+
+@router.put("/taint-gating", response_model=TaintStatus)
+def set_taint_gating(
+    payload: TaintGatingRequest,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> TaintStatus:
+    """Override the deployment default for this workspace. Owners only.
+
+    A security posture covering every member, so it is an owner's call — the
+    same gate `PUT /api/tool-policies` puts on a shared grant. Audited on BOTH
+    edges, like Safe mode: "off" is the interesting direction, and a trail that
+    recorded only the cautious half would be no trail at all.
+    """
+    if actor.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only a workspace owner can change the provenance gate",
+        )
+    # A scoped select, never `db.get`: the workspace here is the actor's own,
+    # read off the session, which is what keeps DB_GET_ALLOWLIST untouched.
+    workspace = db.scalar(select(Workspace).where(Workspace.id == actor.workspace_id))
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    workspace.taint_gating = "" if payload.mode == "default" else payload.mode
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="taint_gating.updated",
+        resource_type="workspace",
+        resource_id=actor.workspace_id,
+        detail={"mode": payload.mode},
+    )
+    db.commit()
+    return _taint_status(db, actor.workspace_id)
 
 
 @router.delete("/tool-policies/{tool_name}", status_code=204)
@@ -929,6 +1004,27 @@ def decide_agent_tool_call(
         },
     )
     db.commit()
+    if payload.decision == "denied" and call.name not in (
+        # The same three sentinels the standing-grant branch above excludes,
+        # for the same reason each time. `__manual__` is a workflow pause, not
+        # a tool; `exit_plan_mode` denial means "revise the plan", which is
+        # about this plan and not about a capability; and `ask_user` denial is
+        # a person declining to answer a question, which says nothing about
+        # any tool at all.
+        workflow_executor.MANUAL_TOOL_NAME,
+        EXIT_PLAN_MODE,
+        ASK_USER,
+    ):
+        # A denial states a preference, and it is recorded as one — personal to
+        # the denier, capped per day, no model call, and with no power to grant
+        # or refuse anything. Distinct from the `remember` tick above, which is
+        # a standing POLICY and stays the only thing that can gate a call.
+        #
+        # AFTER the commit, deliberately. The decision is the thing the user
+        # asked for; a note about it must not share its transaction, where a
+        # failed flush would take the decision down with it. `record_denial`
+        # commits its own work and rolls only that back if it cannot.
+        denial_memory.record_denial(db, call=call, run=run, actor_id=actor.user_id)
     # Denied calls resume too: the loop feeds the denial back as the tool's
     # output so the model can answer around it instead of the run dying.
     background_tasks.add_task(

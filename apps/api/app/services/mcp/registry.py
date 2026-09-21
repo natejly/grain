@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ...clock import utcnow
 from ...config import Settings, get_settings
 from ...models import McpServer, McpTool
+from .. import provenance
 from ..crypto import EncryptionNotConfiguredError, decrypt_secret, encrypt_secret
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
 from .client import (
@@ -217,5 +218,12 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             # An MCP server's tools are arbitrary and may write, so they default
             # to prompting; a workspace ToolPolicy row can promote them to allow.
             read_only=False,
+            # The canonical untrusted-external content of this threat model,
+            # and `networked` regardless of what the server claims to do: a
+            # call to it is egress. `read_only=False` already parks under
+            # ask_writes; `networked` is what makes a workspace ToolPolicy
+            # *allow* row still gate once the turn is tainted.
+            provenance=provenance.MCP_RESULT,
+            networked=True,
         )
     return specs

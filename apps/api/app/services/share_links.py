@@ -29,7 +29,12 @@ from ..models import ShareLink
 #: Conversations joined the tuple with the transcript share: the mint gate and
 #: the personal-leak rule live in `api/share_links.py`, not here — issue,
 #: load_active and revoke stay kind-agnostic.
-RESOURCE_KINDS = ("dashboard", "document", "conversation")
+#: Pages joined it with the frozen-snapshot publish, on the same terms: the
+#: mint gate lives in `api/share_links.py`, and issue/load_active/revoke still
+#: know nothing about kinds. A page is also the one kind this module's "a link
+#: is a window, not a snapshot" header does NOT describe — see
+#: `services/pages.py` for why that inversion is the product.
+RESOURCE_KINDS = ("dashboard", "document", "conversation", "page")
 
 
 def hash_token(raw_token: str) -> str:

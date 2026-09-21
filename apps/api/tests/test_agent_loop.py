@@ -152,18 +152,33 @@ def test_agent_loop_surfaces_unknown_tool_as_result(client):
 
 
 def test_agent_loop_iteration_budget(client):
+    """A model that only ever calls tools runs out of iterations, and says so.
+
+    The step takes `tool_choice` because this is the one test that reaches the
+    FINAL round, which is the round the loop tells what it may do about tools.
+    Every other double in the suite stops before it and keeps the three-argument
+    shape — that is exactly what the keyword-only default is protecting.
+    """
     run_id = _make_run(client)
     db = SessionLocal()
     try:
         run = db.get(Run, run_id)
+        seen: list[str] = []
 
-        def model_step(input_items, tools, instructions):
+        def model_step(input_items, tools, instructions, *, tool_choice="auto"):
+            seen.append(tool_choice)
+            # Tools stay in the request on every round, the last one included:
+            # the point of `tool_choice="none"` is that the prefix does not
+            # change, so an empty array here would be the bug under test.
+            assert tools, "the tools array must survive the final round"
             return _completed(
                 output=[_function_call("list_datasets", {}, call_id="loop")]
             )
 
         with pytest.raises(RuntimeError):
             run_agent_turn(db, run, evidence=[], model_step=model_step)
+        assert seen[:-1] == ["auto"] * (len(seen) - 1)
+        assert seen[-1] == "none"
     finally:
         db.close()
 

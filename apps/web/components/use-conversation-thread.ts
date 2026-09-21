@@ -6,12 +6,16 @@ import type {
   Conversation,
   ConversationDefaults,
   Message,
+  RunPreset,
   Skill,
 } from "@workspace/api-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { createThreadHandlers } from "./handlers/thread";
+import { seededDraft } from "./views/followup-format";
 import type { BudgetPark } from "./views/budget-format";
+import type { RunPlan } from "./views/plan-format";
+import { applyPreset } from "./views/preset-format";
 import { describeError } from "./views/shared";
 
 export type ConversationThreadDeps = {
@@ -27,7 +31,15 @@ export type ConversationThreadDeps = {
    * `setConversationDefaults`, so the pane and the rail remember the same
    * thing. Absent means "seed nothing", which is the old per-pane behaviour.
    */
-  threadDefaults?: { agentId: string; model: string; effort: string };
+  threadDefaults?: {
+    agentId: string;
+    model: string;
+    effort: string;
+    /** The thread's remembered research preset, "" for none. */
+    preset?: string;
+  };
+  /** The run-preset catalogue from bootstrap, so a pick can apply its policy. */
+  presets?: RunPreset[];
   /**
    * The pane's own run finished. It refreshes its own transcript and tool cards
    * itself; this is only the workspace-wide catch-up it cannot do alone — a
@@ -60,6 +72,7 @@ export function useConversationThread({
   defaultAgentId,
   defaultEffort,
   threadDefaults,
+  presets,
   onSettled,
   onApprovalChanged,
 }: ConversationThreadDeps) {
@@ -94,6 +107,15 @@ export function useConversationThread({
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedEffort, setSelectedEffort] = useState("");
   const [fast, setFast] = useState(false);
+  // The picked preset is remembered on the thread like model/effort; the plan
+  // toggle is per-turn session state like `fast`, because planning is a choice
+  // about this question rather than about this thread.
+  const [selectedPreset, setSelectedPreset] = useState("");
+  const [stepPlan, setStepPlan] = useState(false);
+  // Live narration, cleared by the handler when a run ends — the plan is not
+  // transcript, and a finished plan left over the composer would read as a turn
+  // still in flight.
+  const [runPlan, setRunPlan] = useState<RunPlan>(null);
   const [attachedSkill, setAttachedSkill] = useState<Skill | null>(null);
   const [skillArgs, setSkillArgs] = useState<Record<string, unknown>>({});
 
@@ -134,6 +156,9 @@ export function useConversationThread({
       setSelectedModel(remembered.model);
       setSelectedEffort(remembered.effort || defaultEffortRef.current || "");
       setFast(false);
+      setSelectedPreset(remembered.preset || "");
+      setStepPlan(false);
+      setRunPlan(null);
     }
     // The run belonged to the id we just left; leaving it set would wire this
     // pane's Stop to somebody else's run and strand a budget hold on screen.
@@ -216,6 +241,11 @@ export function useConversationThread({
       fast,
       skillId: attachedSkill?.id,
       skillArgs,
+      preset: selectedPreset,
+      // Always sent, including `false`: the server treats absent and
+      // explicitly-off differently, and off is how a user declines a preset
+      // that would otherwise turn plan mode on.
+      stepPlan,
     },
     messages,
     draft,
@@ -226,6 +256,7 @@ export function useConversationThread({
     setAgentCalls,
     setActiveRun,
     setRunStatus,
+    setRunPlan,
     setBudgetPark,
     setDraft,
     activeConversationRef: conversationRef,
@@ -294,12 +325,59 @@ export function useConversationThread({
     },
     [rememberThreadDefault],
   );
+  /**
+   * Pick a preset: remember it, then SEED the visible controls from it.
+   *
+   * The seeding is the doctrine made literal — the picker sets effort and the
+   * plan toggle in the UI the user can then override, rather than hiding a
+   * policy the run path would apply behind their back. The mapping itself
+   * lives in `views/preset-format.applyPreset` because the shell composer
+   * applies the identical rules, and two copies of it would drift invisibly
+   * while both still looked like they worked.
+   *
+   * It does NOT touch the thread's approval mode. That is the user's own
+   * containment control, it lives on the conversation and outlives the turn,
+   * and a picker advertising retrieval and effort was quietly moving threads
+   * out of `plan` and `ask_all` — see `views/preset-format.ts`.
+   */
+  const pickPreset = useCallback(
+    (name: string) => {
+      setSelectedPreset(name);
+      rememberThreadDefault({ default_preset: name });
+      const policy = (presets || []).find((row) => row.name === name);
+      if (!policy) return;
+      const seeded = applyPreset(policy, {
+        effort: selectedEffort,
+        stepPlan,
+      });
+      if (seeded.effort !== selectedEffort) {
+        setSelectedEffort(seeded.effort);
+        rememberThreadDefault({ default_effort: seeded.effort });
+      }
+      setStepPlan(seeded.stepPlan);
+    },
+    [presets, rememberThreadDefault, selectedEffort, stepPlan],
+  );
+
+  /**
+   * Put a suggested question into THIS pane's composer, without sending it.
+   *
+   * Seeding, never sending: a chip that sent would let a stray click spend a
+   * turn. And APPENDING rather than clobbering, because the drafts here are
+   * per-thread AND remembered across a thread switch — the text being replaced
+   * could be minutes old and not on screen, and losing typed work to a chip
+   * click is the failure mode that would get the feature turned off.
+   */
+  const seedDraft = useCallback((text: string) => {
+    setDraft((current) => seededDraft(current, text));
+  }, []);
 
   return {
     messages,
     agentCalls,
     draft,
     setDraft,
+    seedDraft,
     activeRun,
     runStatus,
     budgetPark,
@@ -313,6 +391,11 @@ export function useConversationThread({
     setSelectedEffort: pickEffort,
     fast,
     setFast,
+    selectedPreset,
+    setSelectedPreset: pickPreset,
+    stepPlan,
+    setStepPlan,
+    runPlan,
     attachedSkill,
     skillArgs,
     attachSkill,

@@ -114,10 +114,15 @@ describe("navigation model", () => {
     // timer. It lives here — not under Library's Data shelf — because a
     // monitor is something that runs without you, and the person looking for
     // "why did this alert fire" thinks "automation", not "dataset".
+    // Watches and Deliverables joined the same shelf because they ride the
+    // same tick: a watch is dispatched by the cron ticker's own claim, and a
+    // deliverable run is an ordinary workflow run with a manifest at the end.
     expect(automations?.items.map((item) => item.label)).toEqual([
       "Workflows",
       "Schedules",
       "Monitors",
+      "Watches",
+      "Deliverables",
     ]);
   });
 
@@ -143,7 +148,9 @@ describe("navigation model", () => {
         section.items.map((item) => item.view),
       ]),
     ).toEqual([
-      ["main", "", ["documents", "projects"]],
+      // Pages sit beside Documents because a published page IS a document —
+      // a frozen one, with its citations pinned to what was checked.
+      ["main", "", ["documents", "pages", "projects"]],
       // One destination for both: a list is a board with one column, and that
       // is an implementation detail nobody should have to know to find their
       // checklist. Two entries here used to make a list teleport the moment it

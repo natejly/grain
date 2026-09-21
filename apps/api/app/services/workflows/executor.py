@@ -78,6 +78,7 @@ from ...models import (
     WorkflowNodeRun,
     WorkflowRun,
 )
+from .. import provenance
 from ..agent_loop import (
     PAUSED_FOR_APPROVAL,
     PAUSED_FOR_BUDGET,
@@ -97,7 +98,7 @@ from ..events import append_event
 from ..llm_tools import ToolContext, ToolSpec, build_registry
 from ..webhooks import emit as emit_webhook
 from . import inputs, refs
-from .dag import InputSpec, NodeSpec, WorkflowGraph
+from .dag import INPUT_NAMESPACE, REFERENCE_RE, InputSpec, NodeSpec, WorkflowGraph
 from .guards import evaluate_guard
 from .inputs import InputBindingError
 from .validate import parse_graph, topological_order, validate_graph
@@ -426,6 +427,12 @@ def _prepare(
         workspace_id=workflow_run.workspace_id,
         user_id=run.created_by,
         conversation_id=run.conversation_id,
+        # The backing run every node of this graph shares. Not a scope —
+        # nothing narrows on it — but the handle a tool node needs to observe
+        # its own run: `record_manifest` reads this run's tool calls and
+        # checkpoints to learn what the graph produced, and without it a tool
+        # node would have no honest way to name the run it is inside.
+        run_id=run.id,
     )
     tools = registry if registry is not None else build_registry(db, context)
 
@@ -541,6 +548,7 @@ def _walk(db: Session, workflow_run: WorkflowRun, state: _State) -> None:
         state.run.lease_expires_at = utcnow() + timedelta(
             seconds=state.settings.run_lease_seconds
         )
+        _enforce_budget(db, workflow_run, state, node_key=node_key)
         row = _begin_node(db, workflow_run, node, row)
         parked = _execute_node(db, workflow_run, node, row, state)
         if parked:
@@ -548,6 +556,55 @@ def _walk(db: Session, workflow_run: WorkflowRun, state: _State) -> None:
         state.outputs[node_key] = _stored_output(row)
 
     _succeed(db, workflow_run, state)
+
+
+def _enforce_budget(
+    db: Session, workflow_run: WorkflowRun, state: _State, *, node_key: str
+) -> None:
+    """Halt the run when it has spent what it was given. No budget, no check.
+
+    THE BUDGET IS A RUN INPUT, not a workflow concept: a graph whose declared
+    inputs include `budget_seconds` / `budget_tool_calls` gets them enforced,
+    which today is the deliverable preset and tomorrow is anything that
+    declares them. 0 (the schema's own floor) means no limit.
+
+    Measured BETWEEN NODES, which is the boundary this executor owns: a node
+    already dispatched runs to its end, and an agent node's inner tool loop is
+    `agent_loop`'s seam rather than this one, so an overrun is bounded by one
+    node rather than by one tool call. That is the honest description of what
+    this enforces — and it is what makes "partial" mean what the module
+    docstring and the web copy have always said it means, because `_terminate`
+    ships the partial manifest for exactly this halt.
+    """
+    # Deferred: `services/deliverables` imports llm_tools, which imports this
+    # package back. Same reason `_ship_partial_deliverable` defers its import.
+    from ..deliverables import budgets, executed_tool_calls, spent_seconds
+
+    budget_seconds, budget_tool_calls = budgets(workflow_run)
+    if not budget_seconds and not budget_tool_calls:
+        return
+    if budget_seconds:
+        elapsed = spent_seconds(workflow_run)
+        if elapsed >= budget_seconds:
+            raise _Halt(
+                "failed",
+                "budget_exhausted",
+                f"this run's time budget ({budget_seconds}s) ran out after "
+                f"{elapsed}s",
+                node_key,
+            )
+    if budget_tool_calls:
+        spent = executed_tool_calls(
+            db, workspace_id=workflow_run.workspace_id, run_id=state.run.id
+        )
+        if spent >= budget_tool_calls:
+            raise _Halt(
+                "failed",
+                "budget_exhausted",
+                f"this run's tool-call budget ({budget_tool_calls}) ran out "
+                f"after {spent} call(s)",
+                node_key,
+            )
 
 
 def _skip_node(
@@ -905,6 +962,61 @@ def _park(
 # --------------------------------------------------------------------------
 
 
+#: Triggers whose payload is a PERSON's input rather than a machine's. A manual
+#: start is somebody filling in the run's form and a schedule carries whatever
+#: the author saved; a webhook body is unauthenticated HTTP from outside the
+#: deployment, and an inbound email is a stranger's text.
+_TRUSTED_TRIGGERS = frozenset({"manual", "schedule"})
+
+
+def _prompt_classes(node: NodeSpec, state: _State, *, trigger: str) -> List[str]:
+    """Where an agent node's resolved prompt actually came from.
+
+    `{{ fetch.output }}` in a node prompt is a tool's words. Handing that to
+    `run_agent_turn` as the user's own prompt would launder a compromised MCP
+    server, a fetched page or a webhook body through `user_direct` — the one
+    TRUSTED class, which is neither screened nor able to arm the taint gate —
+    in the unattended setting the gate exists for.
+
+    So each reference is classed by its SOURCE: a tool node by that tool's own
+    `ToolSpec.provenance`, an upstream agent node by the fail-closed catch-all
+    (its answer is model text written over whatever it read), a manual node by
+    the person who filled it in, and `{{ input.* }}` by whether the trigger is
+    a person or the open internet.
+
+    A prompt with no references at all returns [] — a static workflow prompt is
+    the author's own words and stays `user_direct`, so an ordinary automation
+    does not start parking every write.
+    """
+    classes: List[str] = []
+
+    def add(name: str) -> None:
+        if name and name not in classes:
+            classes.append(name)
+
+    for match in REFERENCE_RE.finditer(node.prompt or ""):
+        namespace = match.group(1)
+        if namespace == INPUT_NAMESPACE:
+            if trigger not in _TRUSTED_TRIGGERS:
+                add(provenance.WEB_FETCH)
+            continue
+        source = state.nodes.get(namespace)
+        if source is None:
+            # Compile time proved the node exists; a graph that disagrees with
+            # its run is exactly when to assume the worst.
+            add(provenance.TOOL_RESULT)
+            continue
+        if source.kind == "manual":
+            # A person typed it into the pause form. Trusted, like a prompt.
+            continue
+        if source.kind == "agent":
+            add(provenance.TOOL_RESULT)
+            continue
+        spec = state.registry.get(source.tool)
+        add(spec.provenance if spec is not None else provenance.TOOL_RESULT)
+    return classes
+
+
 def _execute_agent_node(
     db: Session,
     workflow_run: WorkflowRun,
@@ -919,6 +1031,12 @@ def _execute_agent_node(
     node that reads a poisoned document and decides to email somebody parks,
     even in a workspace that clicked "always allow" on the mail tool in chat.
     That is ADR 0007's injection scenario, contained.
+
+    The prompt itself is the other half of that containment: it is a TEMPLATE
+    this function resolves, so whatever the upstream tool node returned is now
+    inside it. `_prompt_classes` classes it honestly before the turn starts,
+    which is what lets the taint gate see an MCP result that arrived through a
+    reference rather than through a tool call of the agent's own.
     """
     try:
         prompt = refs.resolve(
@@ -965,6 +1083,9 @@ def _execute_agent_node(
         evidence=[],
         settings=state.settings,
         workflow_node=True,
+        # The prompt is a template this executor resolved, not something a
+        # person typed. `_prompt_classes` says whose words are now in it.
+        prompt_classes=_prompt_classes(node, state, trigger=workflow_run.trigger),
     )
     if result is None:
         # The turn parked or was cancelled; `agent_loop` already wrote the
@@ -1415,6 +1536,7 @@ def _terminate(db: Session, workflow_run: WorkflowRun, halt: _Halt) -> None:
     current.finished_at = utcnow()
     _mark_skipped(db, current, halt)
     _close_backing_run(db, current, "cancelled" if halt.status == "cancelled" else "failed")
+    _ship_partial_deliverable(db, current, halt)
     record_audit(
         db,
         workspace_id=current.workspace_id,
@@ -1438,6 +1560,46 @@ def _terminate(db: Session, workflow_run: WorkflowRun, halt: _Halt) -> None:
         },
     )
     db.commit()
+
+
+def _ship_partial_deliverable(
+    db: Session, workflow_run: WorkflowRun, halt: _Halt
+) -> None:
+    """A halted deliverable run still owes somebody the half it produced.
+
+    One guarded call, not a restructuring: only a run of the deliverable
+    preset reaches `finalize_partial`, and only to record the files that did
+    land plus the coverage ledger id. Everything else about a halt is
+    unchanged.
+
+    Fail-soft on purpose. A manifest is a receipt for work already done; a
+    receipt that could turn a recorded failure into an unrecorded one would be
+    strictly worse than no receipt (the same contract `_close_backing_run`
+    already keeps).
+    """
+    # Deferred: `services/deliverables` imports llm_tools, which imports the
+    # workflow package back.
+    from ..deliverables import PRESET_NAME, finalize_partial
+
+    try:
+        # A workspace-scoped select, never `db.get`: the allowlist is for the
+        # handful of fetches that genuinely cannot be scoped, and this one
+        # trivially can (api/memory.py and services/styles.py record the rule).
+        name = db.scalar(
+            select(Workflow.name).where(
+                Workflow.id == workflow_run.workflow_id,
+                Workflow.workspace_id == workflow_run.workspace_id,
+            )
+        )
+        if name != PRESET_NAME:
+            return
+        finalize_partial(db, workflow_run=workflow_run, reason=halt.code)
+    except Exception:
+        logger.warning(
+            "partial manifest failed for workflow run %s",
+            workflow_run.id,
+            exc_info=True,
+        )
 
 
 def _mark_skipped(db: Session, workflow_run: WorkflowRun, halt: _Halt) -> None:

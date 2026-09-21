@@ -3,11 +3,17 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from garminconnect import Garmin  # type: ignore[import-untyped]
+# Two codes, because whether the ignore is NEEDED depends on the environment:
+# with `garminconnect` installed mypy reports import-untyped, and without it
+# `ignore_missing_imports` swallows that error while `warn_unused_ignores`
+# objects to the ignore instead. Listing `unused-ignore` alongside keeps one
+# line green either way.
+from garminconnect import Garmin  # type: ignore[import-untyped,unused-ignore]
 from sqlalchemy.orm import Session
 
 from ...config import Settings, get_settings
 from ...models import IntegrationAccount, SyncJob
+from .. import provenance
 from ..crypto import decrypt_secret, encrypt_secret
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
 from .base import ConnectorError
@@ -147,5 +153,10 @@ def garmin_tools(account: IntegrationAccount) -> Dict[str, ToolSpec]:
                 "properties": {"limit": {"type": "integer"}},
             },
             executor=_list_executor(account.id),
+            # Activity data fetched over the network from a third party. Not
+            # a Gmail-style attack surface, but the same two facts hold: the
+            # bytes are not this workspace's, and reaching them is egress.
+            provenance=provenance.WEB_FETCH,
+            networked=True,
         ),
     }
