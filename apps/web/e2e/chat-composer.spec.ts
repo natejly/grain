@@ -48,7 +48,11 @@ async function namedThread(page: Page, prompt: string) {
   await composer(page).press("Enter");
   // The prompt and its answer: the turn is over, so the next click is a
   // thread switch rather than a race with a run that is still starting.
-  await expect(page.locator(".message")).toHaveCount(2);
+  // A real turn goes through the whole run loop, and under one worker the
+  // API is still digesting whatever the previous spec left behind — at the
+  // default 5s this was the suite's one flake, failing under full-suite
+  // load and passing every rerun in isolation.
+  await expect(page.locator(".message")).toHaveCount(2, { timeout: 15_000 });
   await settled(page);
   await expect(row(page, prompt)).toBeVisible();
 }

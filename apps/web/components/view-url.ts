@@ -2,38 +2,44 @@ import type { View } from "./views/shared";
 
 /**
  * The runtime mirror of the `View` union in `shared.ts`. TypeScript can't
- * enumerate a string union at runtime, so a set is the cheapest way to fence a
- * `?view=` value that names something which is not a real view. Keep this in
- * sync with `View` when a view is added or retired.
+ * enumerate a string union at runtime, so a record keyed by `View` is the
+ * fence: a view added to the union without a row here fails typecheck, and a
+ * retired one becomes an excess key. "Keep this in sync by hand" already
+ * failed once — `recap` and `profile` reached the union but not the old set,
+ * so reloading either page silently fell back to chat.
  */
-const VIEWS: ReadonlySet<string> = new Set<View>([
-  "chat",
-  "agents",
-  "skills",
-  "sources",
-  "memory",
-  "graph",
-  "dashboards",
-  "apps",
-  "datasets",
-  "integrations",
-  "documents",
-  "boards",
-  "data",
-  "projects",
-  "mcp",
-  "sandbox-tools",
-  "sandbox-secrets",
-  "webhooks",
-  "activity",
-  "policies",
-  "admin",
-  "workflows",
-  "crons",
-  "monitors",
-  "spaces",
-  "gallery",
-]);
+const VIEW_ROWS = {
+  chat: true,
+  agents: true,
+  skills: true,
+  sources: true,
+  memory: true,
+  graph: true,
+  dashboards: true,
+  apps: true,
+  datasets: true,
+  integrations: true,
+  documents: true,
+  boards: true,
+  data: true,
+  projects: true,
+  mcp: true,
+  "sandbox-tools": true,
+  "sandbox-secrets": true,
+  webhooks: true,
+  activity: true,
+  policies: true,
+  admin: true,
+  workflows: true,
+  crons: true,
+  monitors: true,
+  spaces: true,
+  gallery: true,
+  recap: true,
+  profile: true,
+} satisfies Record<View, true>;
+
+const VIEWS: ReadonlySet<string> = new Set(Object.keys(VIEW_ROWS));
 
 export function isView(value: string | null | undefined): value is View {
   return Boolean(value && VIEWS.has(value));

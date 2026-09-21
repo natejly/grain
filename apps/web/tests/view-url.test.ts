@@ -17,6 +17,18 @@ describe("isView", () => {
     expect(isView("")).toBe(false);
     expect(isView("Chat")).toBe(false);
   });
+
+  it("accepts the views that reached the union after the set was written", () => {
+    // Regression pin: `recap` and `profile` joined the View union without
+    // joining the runtime fence, so pushWorkspaceUrl wrote ?view=recap and a
+    // reload silently fell back to chat. isView is now derived from a record
+    // the compiler checks against the union, but the two survivors of the
+    // original drift stay pinned by name.
+    expect(isView("recap")).toBe(true);
+    expect(isView("profile")).toBe(true);
+    expect(viewFromUrl("?view=recap")).toBe("recap");
+    expect(viewFromUrl("?view=profile")).toBe("profile");
+  });
 });
 
 describe("viewFromUrl", () => {

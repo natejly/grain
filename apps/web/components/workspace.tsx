@@ -1544,8 +1544,10 @@ export function Workspace() {
           </div>
           <div>
             <strong>{session?.user_name || "Connecting…"}</strong>
-            <span>
-              {session?.user_email || session?.workspace_name || ""}
+            <span className="identity-line">
+              <span className="identity-email">
+                {session?.user_email || session?.workspace_name || ""}
+              </span>
               {/* The one place the verification state is legible. It is not a
                   sign-in requirement on purpose (gating login on delivered mail
                   turns an SMTP outage into a lockout with no way back in), but
