@@ -1,4 +1,5 @@
 import {
+  Activity,
   BarChart3,
   Blocks,
   Bot,
@@ -23,6 +24,7 @@ import {
   Store,
   Table2,
   Terminal,
+  UserRound,
   Webhook,
   Workflow,
   type LucideIcon,
@@ -61,6 +63,7 @@ export type GroupId =
   | "inbox"
   | "files"
   | "workflows"
+  | "profile"
   | "connections"
   | "admin";
 
@@ -241,6 +244,18 @@ const GROUP_SPECS: NavGroupSpec[] = [
       },
       {
         /**
+         * The member's own month, counted: threads, runs, memories, top
+         * spaces and agents. In Library — a recap is a thing you *visit*,
+         * not configure, and nothing that a person comes looking for should
+         * need the settings menu. The id is stable per the grain.section
+         * persistence contract, like every id in this table.
+         */
+        id: "you",
+        label: "You",
+        items: [{ view: "recap", label: "Recap", icon: Activity }],
+      },
+      {
+        /**
          * The marketplace. In Library because it is a shelf you take things
          * from — browse what teammates published, read the whole of it, and
          * install a copy that becomes an ordinary local skill. Publishing
@@ -279,6 +294,25 @@ const GROUP_SPECS: NavGroupSpec[] = [
           { view: "crons", label: "Schedules", icon: Clock },
           { view: "monitors", label: "Monitors", icon: Gauge },
         ],
+      },
+    ],
+  },
+  /**
+   * The person, not the workspace: display name and password. First among the
+   * settings groups because it is the one every member has, owner or not —
+   * and the settings menu maps SETTINGS_GROUPS, so this entry alone is the
+   * whole door (no menu code changes).
+   */
+  {
+    id: "profile",
+    label: "Profile",
+    icon: UserRound,
+    surface: "settings",
+    sections: [
+      {
+        id: "main",
+        label: "",
+        items: [{ view: "profile", label: "Profile", icon: UserRound }],
       },
     ],
   },

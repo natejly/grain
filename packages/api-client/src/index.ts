@@ -108,6 +108,24 @@ export type DigestPrefs = {
   hour_utc: number;
 };
 
+/** The five response styles a member can hold; "normal" injects nothing. */
+export type StylePreset = "normal" | "concise" | "explanatory" | "formal" | "custom";
+
+/** What `POST /api/memory/import` did with each row of the file. */
+export type MemoryImportSummary = {
+  added: number;
+  reinforced: number;
+  skipped: number;
+};
+
+/** One member's thumbs verdict on one assistant message, as the server holds it. */
+export type MessageFeedback = {
+  message_id: string;
+  verdict: "up" | "down";
+  note: string;
+  created_at: string;
+};
+
 export type Bootstrap = {
   identity: Identity;
   default_agent_id: string;
@@ -144,6 +162,14 @@ export type Bootstrap = {
    * against an older server still boots.
    */
   memory_enabled?: boolean;
+  /**
+   * The member's response style — "normal" (the default, meaning no style
+   * instruction at all), a fixed preset, or "custom" with the member's own
+   * text in `custom_style_text`. Optional so a client built against an older
+   * server still boots.
+   */
+  style_preset?: string;
+  custom_style_text?: string;
   /**
    * The development agent bypass is on: every tool available, nothing parked.
    * The server refuses to boot with this outside development, so it is false
@@ -327,6 +353,12 @@ export type Message = {
   sender_id: string;
   /** That member's display name, resolved server-side; "" for pre-column messages. */
   sender_name: string;
+  /**
+   * The VIEWER'S own thumbs verdict on this message. Only ever the caller's —
+   * a colleague's verdict and everybody's notes never ride the transcript.
+   * Optional so a client built against an older server still renders.
+   */
+  my_feedback?: "" | "up" | "down";
   created_at: string;
 };
 
@@ -435,6 +467,15 @@ export type ChatAttachment = {
   /** The Document or Source id, per `kind`. */
   target_id: string;
   filename: string;
+  /**
+   * The server-decided mime and size of the underlying Source — populated
+   * only for `kind === "source"` (the list route joins them in); a document
+   * attachment carries ""/0 and keeps its chip, the editor being its preview.
+   * The preview branch reads these, never the filename's extension, for the
+   * same reason it reads `kind`.
+   */
+  media_type: string;
+  byte_size: number;
   created_at: string;
 };
 
@@ -822,6 +863,41 @@ export type DocumentVersion = {
   id: string;
   summary: string;
   created_at: string;
+};
+
+/**
+ * One version with its full snapshot. Split from `DocumentVersion` because
+ * version bodies are unbounded and the history list is hot: the stepper
+ * fetches a body only when that version is selected.
+ */
+export type DocumentVersionContent = {
+  id: string;
+  summary: string;
+  created_at: string;
+  content: string;
+};
+
+/** One ranked recap row — a space or an agent. A deleted one keeps its id
+ *  and answers "" for the name (stale-id-stays-an-id). */
+export type RecapGroup = {
+  id: string;
+  name: string;
+  count: number;
+};
+
+/**
+ * The caller's own month so far — `GET /api/me/recap`. Deterministic
+ * aggregates only (UTC month-to-date, member-scoped), no LLM anywhere.
+ */
+export type MeRecap = {
+  since: string;
+  threads_started: number;
+  runs_started: number;
+  /** Currently-active memories learned in the window: supersession lowers
+   *  this retroactively, exactly as it removes the claim from recall. */
+  memories_learned: number;
+  top_spaces: RecapGroup[];
+  top_agents: RecapGroup[];
 };
 
 export type BoardCard = {
@@ -1566,8 +1642,8 @@ export type DashboardLayoutTile = {
   grid_h: number;
 };
 
-/** What a share link points at — the two kinds with no public surface of their own. */
-export type ShareLinkKind = "dashboard" | "document";
+/** What a share link points at — the kinds with no public surface of their own. */
+export type ShareLinkKind = "dashboard" | "document" | "conversation";
 
 /**
  * One revocable public URL onto a dashboard or document. No token appears here
@@ -1597,10 +1673,27 @@ export type ShareLinkCreated = {
   url_path: string;
 };
 
+/** One turn of a publicly shared transcript, as the anonymous reader sees it. */
+export type SharedTranscriptMessage = {
+  role: string;
+  sender_name: string;
+  content: string;
+  created_at: string;
+  /**
+   * A "/btw" context note, never a prompt — the share page labels it so the
+   * transcript does not read as an ask the assistant ignored (the Markdown
+   * export's exact rationale). Optional so a payload from an older API
+   * renders unlabelled rather than breaking.
+   */
+  is_aside?: boolean;
+};
+
 /**
  * What an anonymous holder of a working link sees at `GET /shared/{token}`.
- * One shape for both kinds; the half that does not apply stays at its empty
- * default. A dashboard's rows are re-queried live at request time.
+ * One shape for all kinds; the halves that do not apply stay at their empty
+ * defaults. A dashboard's rows are re-queried live at request time, and a
+ * conversation's transcript is served as it stands now — a window, not a
+ * snapshot, like the document half.
  */
 export type SharedResource = {
   kind: ShareLinkKind;
@@ -1612,6 +1705,13 @@ export type SharedResource = {
   document_kind: string;
   content: string;
   updated_at: string | null;
+  messages: SharedTranscriptMessage[];
+  /**
+   * True when the conversation half serves only the newest PUBLIC_ROW_CAP
+   * messages — the page says earlier turns are omitted rather than passing
+   * a tail off as the whole thread. Optional for older API payloads.
+   */
+  truncated?: boolean;
 };
 
 /**
@@ -2815,6 +2915,94 @@ export class WorkspaceApi {
     });
   }
 
+  /**
+   * Set the caller's response style for their future turns. "normal" means no
+   * style instruction at all; "custom" requires non-blank text (the server
+   * 422s an empty custom block). A PUT of the whole preference — safe to
+   * retry, same contract as `updateSafeMode`.
+   */
+  updateStylePref(
+    preset: StylePreset,
+    customStyleText = "",
+  ): Promise<{ preset: string; custom_style_text: string }> {
+    return this.request("/api/me/style", {
+      method: "PUT",
+      body: JSON.stringify({ preset, custom_style_text: customStyleText }),
+    });
+  }
+
+  /**
+   * Rename the caller. Edits `users.name` in place — the attribution source
+   * everywhere — so live surfaces pick the new name up on their next read,
+   * while labels stamped into past events keep the old one (records are
+   * records). The email is read-only here and never sent.
+   */
+  updateProfile(name: string): Promise<{ user_id: string; email: string; name: string }> {
+    return this.request("/api/me/profile", {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  /**
+   * The caller's own month so far — deterministic, member-scoped aggregates.
+   * No parameters: the window is always UTC month-to-date.
+   */
+  getRecap(): Promise<MeRecap> {
+    return this.request("/api/me/recap");
+  }
+
+  /**
+   * Change the caller's password, proving the current one first. Every OTHER
+   * session is revoked; the session making the change survives. The server
+   * answers 403 (generic) for a wrong current password, 422 for a
+   * policy-failing new one or a passwordless (federated) account.
+   */
+  changePassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<{ status: string; detail: string }> {
+    return this.request("/api/me/password", {
+      method: "POST",
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    });
+  }
+
+  /**
+   * Batch-import memories — a memory export's items, or plain text lines.
+   * Rows land personal (the importer's own) on the global shelf; a replay
+   * converges through the server's dedupe, so no Idempotency-Key rides along.
+   */
+  importMemories(payload: {
+    items?: { content: string; kind?: string; entities?: string[] }[];
+    text?: string;
+  }): Promise<MemoryImportSummary> {
+    return this.request("/api/memory/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
+   * Thumbs up or down on an assistant message. A natural upsert — one row per
+   * (message, member), replaying a verdict is that verdict — so no
+   * Idempotency-Key. The note rides only a "down" popover and is never echoed
+   * back in any transcript.
+   */
+  sendMessageFeedback(
+    messageId: string,
+    verdict: "up" | "down",
+    note = "",
+  ): Promise<MessageFeedback> {
+    return this.request(`/api/messages/${messageId}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ verdict, note }),
+    });
+  }
+
   listConversations(): Promise<Conversation[]> {
     return this.request("/api/conversations");
   }
@@ -3162,6 +3350,36 @@ export class WorkspaceApi {
    */
   async sourceContent(sourceId: string): Promise<Blob> {
     const path = `/api/sources/${sourceId}/content`;
+    const init: RequestInit = {};
+    const response = await this.dispatch(path, init, this.buildHeaders(init, false), false);
+    if (response.status === 401) this.signalUnauthorized();
+    if (!response.ok) {
+      const parsed = await WorkspaceApi.detailOf(response);
+      throw new ApiError(
+        parsed.message || `Request failed (${response.status})`,
+        response.status,
+        parsed.detail,
+      );
+    }
+    return response.blob();
+  }
+
+  /**
+   * One conversation's whole transcript as a downloadable file.
+   *
+   * Fetched here and handed back as a Blob for `sourceContent`'s exact
+   * reasons: a bare `<a href>` download carries no `X-Workspace-Id` (so the
+   * API would fall back to the caller's oldest membership), and the API is a
+   * different site whose third-party cookies Safari blocks and Chrome is
+   * removing. The bytes come back over the same credentialed, workspace-scoped
+   * `dispatch` every other call uses, and the caller hands them to an `<a>`
+   * via a blob: URL.
+   */
+  async exportConversation(
+    conversationId: string,
+    format: "md" | "json",
+  ): Promise<Blob> {
+    const path = `/api/conversations/${conversationId}/export?format=${format}`;
     const init: RequestInit = {};
     const response = await this.dispatch(path, init, this.buildHeaders(init, false), false);
     if (response.status === 401) this.signalUnauthorized();
@@ -3612,6 +3830,14 @@ export class WorkspaceApi {
 
   listDocumentVersions(documentId: string): Promise<DocumentVersion[]> {
     return this.request(`/api/documents/${documentId}/versions`);
+  }
+
+  /** One version's full snapshot, fetched lazily when the stepper selects it. */
+  getDocumentVersion(
+    documentId: string,
+    versionId: string,
+  ): Promise<DocumentVersionContent> {
+    return this.request(`/api/documents/${documentId}/versions/${versionId}`);
   }
 
   restoreDocumentVersion(

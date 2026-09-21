@@ -49,8 +49,9 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..clock import utcnow
 from ..database import get_db
-from ..models import Dashboard, Document, ShareLink
+from ..models import Conversation, Dashboard, Document, Message, ShareLink, User
 from ..schemas import ApiModel, DashboardSpec
+from ..services import conversations as conversations_service
 from ..services import share_links as service
 from ..services.analytics import AnalyticsValidationError, execute_dataset_query
 from ..services.audit import record_audit
@@ -68,7 +69,7 @@ PUBLIC_ROW_CAP = 1000
 
 class ShareLinkOut(ApiModel):
     id: str
-    #: 'dashboard' | 'document'
+    #: 'dashboard' | 'document' | 'conversation'
     resource_kind: str
     resource_id: str
     created_by: str
@@ -95,7 +96,7 @@ class ShareLinkCreatedOut(ApiModel):
 
 
 class ShareLinkCreateRequest(BaseModel):
-    resource_kind: Literal["dashboard", "document"]
+    resource_kind: Literal["dashboard", "document", "conversation"]
     resource_id: str = Field(min_length=1, max_length=36)
     #: Optional self-destruct: when set, `load_active` refuses the link from
     #: this moment on — the mitigation for a link that leaks and is forgotten.
@@ -103,12 +104,30 @@ class ShareLinkCreateRequest(BaseModel):
     expires_at: Optional[datetime] = None
 
 
-class SharedResourceOut(ApiModel):
-    """What an anonymous holder of a working link sees. One model for both
-    kinds — the unset half stays at its empty default — so the public page has
-    one response shape to render."""
+class SharedMessageOut(ApiModel):
+    """One transcript turn as the anonymous reader sees it: who spoke (by
+    display name — the mint is an explicit act by someone who can read the
+    thread, and a multi-person transcript without attribution misreads who
+    said what), what they said, and when."""
 
-    #: 'dashboard' | 'document'
+    role: str
+    sender_name: str = ""
+    content: str
+    created_at: datetime
+    #: True for a "/btw" aside (role "user", run_id "") — recorded in the
+    #: thread and read by later turns, but never a prompt. The Markdown export
+    #: labels these "(aside)" for exactly this reason (chat.py
+    #: `_render_markdown`: unmarked, the transcript reads as an unanswered
+    #: ask), and the strictly-more-public surface must not say less.
+    is_aside: bool = False
+
+
+class SharedResourceOut(ApiModel):
+    """What an anonymous holder of a working link sees. One model for all
+    kinds — the unset halves stay at their empty defaults — so the public page
+    has one response shape to render."""
+
+    #: 'dashboard' | 'document' | 'conversation'
     kind: str
     title: str
     # The dashboard half: the stored spec (how to draw) plus a live answer.
@@ -120,6 +139,12 @@ class SharedResourceOut(ApiModel):
     document_kind: str = ""
     content: str = ""
     updated_at: Optional[datetime] = None
+    # The conversation half.
+    messages: List[SharedMessageOut] = []
+    #: True when the thread outgrew `PUBLIC_ROW_CAP` and only the newest
+    #: window is served — the dashboard branch's public-ceiling rule applied
+    #: to transcripts, surfaced so the page can say earlier turns are omitted.
+    truncated: bool = False
 
 
 def _out(link: ShareLink) -> ShareLinkOut:
@@ -135,15 +160,43 @@ def _out(link: ShareLink) -> ShareLinkOut:
 
 
 def _resolve_resource(
-    db: Session, *, workspace_id: str, resource_kind: str, resource_id: str
+    db: Session, *, actor: Actor, resource_kind: str, resource_id: str
 ) -> None:
     """The thing being shared must exist in the caller's own workspace — a
-    foreign id 404s here, uniformly, before anything else can answer."""
+    foreign id 404s here, uniformly, before anything else can answer.
+
+    Dashboards and documents resolve on the workspace alone (flat share-link
+    authority, per the module docstring). A conversation resolves through the
+    visibility chokepoint instead: only the creator can reach — and therefore
+    mint for — a personal thread, any member can for a shared one, and a
+    foreign workspace 404s before either question is asked.
+    """
+    if resource_kind == "conversation":
+        conversation = conversations_service.resolve_visible(
+            db,
+            workspace_id=actor.workspace_id,
+            user_id=actor.user_id,
+            conversation_id=resource_id,
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if conversation.subject_id:
+            raise HTTPException(
+                status_code=409,
+                detail="A subject thread belongs to its subject — share the "
+                "document or dashboard instead",
+            )
+        if conversation.incognito:
+            raise HTTPException(
+                status_code=409,
+                detail="A temporary chat cannot get a public link",
+            )
+        return
     if resource_kind == "dashboard":
         found = db.scalar(
             select(Dashboard.id).where(
                 Dashboard.id == resource_id,
-                Dashboard.workspace_id == workspace_id,
+                Dashboard.workspace_id == actor.workspace_id,
             )
         )
         if found is None:
@@ -152,7 +205,7 @@ def _resolve_resource(
     found = db.scalar(
         select(Document.id).where(
             Document.id == resource_id,
-            Document.workspace_id == workspace_id,
+            Document.workspace_id == actor.workspace_id,
         )
     )
     if found is None:
@@ -208,7 +261,7 @@ def create_share_link(
     expires_at = _validated_expiry(payload.expires_at)
     _resolve_resource(
         db,
-        workspace_id=actor.workspace_id,
+        actor=actor,
         resource_kind=payload.resource_kind,
         resource_id=payload.resource_id,
     )
@@ -369,6 +422,75 @@ def read_shared_resource(
             columns=result.columns,
             rows=result.rows[:PUBLIC_ROW_CAP],
             generated_at=utcnow(),
+        )
+    if link.resource_kind == "conversation":
+        # LIVE-WINDOW DECISION: documents and dashboards serve current content
+        # at request time ("a share link is a window, not a snapshot" — this
+        # module's own header), so a conversation serves the transcript as it
+        # stands now. Edits, message-edit truncations and deletion all
+        # propagate, and a purged conversation fail-closes to the same 404.
+        conversation = db.scalar(
+            select(Conversation).where(
+                Conversation.id == link.resource_id,
+                Conversation.workspace_id == link.workspace_id,
+            )
+        )
+        if conversation is None:
+            raise _shared_not_found()
+        # THE PERSONAL-LEAK GATE: a thread unshared after a colleague minted
+        # goes dark through their link, while the creator's own link on their
+        # personal thread keeps serving. The anonymous caller learns nothing
+        # from the uniform 404.
+        if not conversation.shared and link.created_by != conversation.created_by:
+            raise _shared_not_found()
+        # The public payload states its own ceiling, exactly like the
+        # dashboard branch's row cap above: an anonymous GET must not become
+        # a bulk export, and the per-address rate limit prices requests, not
+        # bytes. A tail window — the newest PUBLIC_ROW_CAP turns, served
+        # oldest-first — with one extra row fetched only to learn whether
+        # anything was cut.
+        newest_first = list(
+            db.scalars(
+                select(Message)
+                .where(
+                    Message.conversation_id == conversation.id,
+                    Message.workspace_id == link.workspace_id,
+                )
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(PUBLIC_ROW_CAP + 1)
+            )
+        )
+        truncated = len(newest_first) > PUBLIC_ROW_CAP
+        messages = list(reversed(newest_first[:PUBLIC_ROW_CAP]))
+        # Sender names, the one-query pattern list_messages uses (chat.py's
+        # _sender_names precedent): resolved only for this workspace's rows.
+        sender_ids = {message.created_by for message in messages if message.created_by}
+        names: Dict[str, str] = {}
+        if sender_ids:
+            names = {
+                user_id: name
+                for user_id, name in db.execute(
+                    select(User.id, User.name).where(User.id.in_(sender_ids))
+                )
+            }
+        return SharedResourceOut(
+            kind="conversation",
+            title=conversation.title,
+            messages=[
+                SharedMessageOut(
+                    role=message.role,
+                    sender_name=names.get(message.created_by, ""),
+                    content=message.content,
+                    created_at=message.created_at,
+                    # The export's aside rule, verbatim (chat.py
+                    # _render_markdown): role "user" with no run is a "/btw"
+                    # note, not a prompt the assistant ignored.
+                    is_aside=message.role == "user" and message.run_id == "",
+                )
+                for message in messages
+            ],
+            updated_at=conversation.updated_at,
+            truncated=truncated,
         )
     document = db.scalar(
         select(Document).where(

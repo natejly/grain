@@ -14,7 +14,7 @@ import type {
 import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
 import { api } from "../api";
 import type { BudgetPark } from "../views/budget-format";
-import { describeError, type View } from "../views/shared";
+import { describeActionError, describeError, type View } from "../views/shared";
 import { UNDO_CONFIRM, summarizeUndo } from "../views/undo-format";
 import { createThreadHandlers } from "./thread";
 
@@ -166,6 +166,15 @@ export function createChatHandlers({
         setMessages(rows);
       }
     } catch (caught) {
+      // A failed open (a search hit for a thread deleted in another tab, a
+      // 404 from a lagging index) must not leave the PREVIOUS thread's
+      // transcript rendered under this dead selection — the header resolves
+      // no title and the composer would target the dead id, so an empty
+      // pane is the honest state. Same still-active guard as the success
+      // path: if the user already clicked away, their thread stands.
+      if (activeConversationRef.current === id) {
+        setMessages([]);
+      }
       setError(describeError(caught, "Could not open conversation"));
     }
   }
@@ -278,6 +287,53 @@ export function createChatHandlers({
       }
     },
   });
+
+  /**
+   * The ⌘K compose: one atomic gesture — a fresh thread, the first message
+   * sent, and the user standing in it. pendingIncognito rides it exactly as
+   * it rides ensureConversation, for the same stamped-at-creation reason.
+   *
+   * The try is split so the create failure and the send failure restore the
+   * words correctly: a failed create has no conversation id yet, so the words
+   * go back to the active composer; a failed send lands them in the NEW
+   * thread's remembered draft (the per-thread-drafts contract — never a
+   * wrong one).
+   */
+  async function composeNewThread(content: string): Promise<void> {
+    const text = content.trim();
+    if (!text) return;
+    let conversation: Conversation;
+    try {
+      conversation = await api.createConversation(undefined, "", pendingIncognito);
+    } catch (caught) {
+      // The words need a home, but the ACTIVE composer may already hold a
+      // half-typed paragraph the compose gesture explicitly was not about —
+      // overwriting it would trade one lost message for another. An occupied
+      // draft stays put (the functional form sees the live value, not this
+      // closure's) and the palette's words ride the error line instead.
+      const occupied = Boolean(draft);
+      setDraft((current) => (current ? current : text));
+      const base = describeActionError(caught, "Could not send that message");
+      setError(occupied ? `${base} — your message: “${text}”` : base);
+      return;
+    }
+    clearPendingIncognito();
+    setConversations((items) => [conversation, ...items]);
+    setActiveConversation(conversation.id);
+    setMessages([]);
+    setView("chat");
+    setSidebarOpen(false);
+    try {
+      // Not per-turn: a skill attached in a thread's composer governs THAT
+      // composer's next turn, and the palette never displayed it — so the
+      // quick-composed first message neither carries nor consumes it.
+      await thread.sendPrompt(text, conversation.id, { perTurn: false });
+    } catch (caught) {
+      if (restoreDraft) restoreDraft(conversation.id, text);
+      else setDraft(text);
+      setError(describeActionError(caught, "Could not send that message"));
+    }
+  }
 
   /**
    * Branch a new personal thread from everything said up to one message, and
@@ -405,6 +461,7 @@ export function createChatHandlers({
   return {
     selectConversation,
     newConversation,
+    composeNewThread,
     // Exposed because attaching a file needs a thread the same way sending a
     // message does: you can drop a file into an empty composer, and the row
     // has to exist before anything can be attached to it.

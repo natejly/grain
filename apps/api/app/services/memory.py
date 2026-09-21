@@ -7,6 +7,7 @@ import math
 import operator
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import reduce, wraps
 from typing import (
     Any,
@@ -21,7 +22,7 @@ from typing import (
     TypeVar,
 )
 
-from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy import Select, and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, defer
 
@@ -879,6 +880,57 @@ def _active(
     if space_id is not ALL_SPACES:
         stmt = stmt.where(MemoryItem.space_id.in_({SHARED_SPACE, space_id}))
     return stmt
+
+
+def count_learned(
+    db: Session,
+    *,
+    workspace_id: str,
+    viewer_id: str,
+    since: datetime,
+) -> int:
+    """How many currently-active memories THIS member learned since `since` —
+    across every shelf, for the recap's month-to-date number.
+
+    Member-scoped the way the recap's sibling counts are, because that is the
+    promise `MeRecapOut` makes for every count: the member's own personal
+    rows, plus shared rows whose originating run (`run_id`) the member
+    themself started. A teammate's activity — their runs' shared extractions,
+    their manual shared adds — never inflates the number. One honest gap by
+    schema: a manual add straight to the shared shelf carries no run and so
+    no learner, and counts for nobody.
+
+    Liveness still routes through `_active()` (the module's ONLY status
+    filter — see its docstring and test_memory_depth.py) with the explicit
+    `ALL_SPACES` widening; the learner predicate NARROWS that scope, from
+    "what the viewer can recall" to "what the viewer learned". A claim
+    superseded after it was learned drops out of the recap the same way it
+    drops out of recall — retroactively. That is the intended semantics, not
+    a bug to fix with a second status predicate.
+    """
+    learned_by_viewer = or_(
+        MemoryItem.owner_id == viewer_id,
+        and_(
+            MemoryItem.run_id != "",
+            MemoryItem.run_id.in_(
+                select(Run.id).where(
+                    Run.workspace_id == workspace_id,
+                    Run.created_by == viewer_id,
+                )
+            ),
+        ),
+    )
+    stmt = (
+        _active(
+            select(func.count(MemoryItem.id)),
+            workspace_id,
+            viewer_id,
+            space_id=ALL_SPACES,
+        )
+        .where(MemoryItem.created_at >= since)
+        .where(learned_by_viewer)
+    )
+    return int(db.scalar(stmt) or 0)
 
 
 def _like_pattern(term: str) -> str:

@@ -17,7 +17,9 @@ export const dynamic = "force-dynamic";
  * route (the token is the whole credential, so no cookies are needed or
  * sent), and a 404 for every way a link can not-work. A dashboard's numbers
  * are re-queried live by the server on every load; a document is its current
- * content — a share link is a window, not a snapshot.
+ * content — a share link is a window, not a snapshot. A conversation is the
+ * same live window a document is: the transcript as it stands at request
+ * time, never a frozen copy.
  */
 async function loadShared(token: string): Promise<SharedResource> {
   const apiUrl =
@@ -33,6 +35,23 @@ async function loadShared(token: string): Promise<SharedResource> {
     throw new Error("This shared page is temporarily unavailable");
   }
   return (await response.json()) as SharedResource;
+}
+
+/**
+ * Render an API timestamp as explicit UTC — what the Markdown export does.
+ *
+ * The API serializes naive-UTC datetimes; `new Date(naive).toLocaleString()`
+ * would parse them as LOCAL time (wrong by the viewer's whole offset), and
+ * this is a server component besides, so "local" would be the server's zone,
+ * not the reader's. A labelled UTC instant is the honest, deterministic
+ * rendering. Tolerates an offset-suffixed stamp too, in case the API grows
+ * one.
+ */
+function formatUtc(stamp: string): string {
+  const explicit = /(?:Z|[+-]\d{2}:?\d{2})$/.test(stamp) ? stamp : `${stamp}Z`;
+  const date = new Date(explicit);
+  if (Number.isNaN(date.getTime())) return stamp;
+  return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
 /** The stored spec says how to draw; the live result says what. Adapt both to
@@ -82,9 +101,7 @@ export default async function SharedResourcePage({
         <span>
           Shared read-only
           {stamp
-            ? ` · ${resource.kind === "dashboard" ? "queried" : "updated"} ${new Date(
-                stamp,
-              ).toLocaleString()}`
+            ? ` · ${resource.kind === "dashboard" ? "queried" : "updated"} ${formatUtc(stamp)}`
             : ""}
         </span>
       </header>
@@ -92,6 +109,43 @@ export default async function SharedResourcePage({
         <section className="published-card">
           {resource.kind === "dashboard" ? (
             <Snapshot dashboard={asSnapshot(resource)} />
+          ) : resource.kind === "conversation" ? (
+            <div className="shared-transcript">
+              {/* A capped payload says so — a tail passed off as the whole
+                  thread would misread as the conversation's beginning. */}
+              {resource.truncated && (
+                <p className="shared-truncated">
+                  Earlier messages in this conversation are not shown.
+                </p>
+              )}
+              {resource.messages.map((message, index) => (
+                <article key={index} className={`shared-turn ${message.role}`}>
+                  <header>
+                    <strong>
+                      {/* An aside is labelled, exactly as the Markdown export
+                          labels it: unmarked, a "/btw" context note reads as
+                          a prompt the assistant then appears to ignore. */}
+                      {message.role === "assistant"
+                        ? "Assistant"
+                        : `${message.sender_name || "User"}${
+                            message.is_aside ? " (aside)" : ""
+                          }`}
+                    </strong>
+                    <time>{formatUtc(message.created_at)}</time>
+                  </header>
+                  {message.role === "assistant" ? (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkMath]}
+                      rehypePlugins={[rehypeKatex]}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  ) : (
+                    <p>{message.content}</p>
+                  )}
+                </article>
+              ))}
+            </div>
           ) : resource.document_kind === "text" ? (
             <pre className="document-plain">{resource.content}</pre>
           ) : (

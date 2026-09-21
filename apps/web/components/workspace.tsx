@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind, FavoriteKind } from "@workspace/api-client";
-import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, FolderInput, FolderMinus, Ghost, Layers, LogOut, Menu, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, Download, FolderInput, FolderMinus, Ghost, Layers, Link2, LogOut, Menu, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
@@ -15,6 +15,8 @@ import {
 } from "./collapsible-pane";
 import { CommandPalette } from "./command-palette";
 import { CoworkingStrip } from "./coworking-strip";
+import { RailSearch } from "./rail-search";
+import { ShareLinksModal } from "./share-links-modal";
 import { CreateMenu } from "./create-menu";
 import { DisclosureMenu } from "./disclosure-menu";
 import { WorkspaceSettingsMenu } from "./settings-menu";
@@ -43,6 +45,8 @@ import { IntegrationsView } from "./views/integrations";
 import { McpView } from "./views/mcp";
 import { WebhooksView } from "./views/webhooks";
 import { MemoryView } from "./views/memory";
+import { ProfileView } from "./views/profile";
+import { RecapView } from "./views/recap";
 import {
   CHORDS_KEY,
   CHORD_WINDOW_MS,
@@ -79,9 +83,11 @@ import { SandboxSecretsView } from "./views/sandbox-secrets";
 import { SandboxToolsView } from "./views/sandbox-tools";
 import {
   PAGE_TITLES,
+  describeActionError,
   formatRelative,
   groupThreads,
   shareControl,
+  slugify,
   type View,
 } from "./views/shared";
 import { GalleryView } from "./views/gallery";
@@ -156,6 +162,11 @@ export function Workspace() {
     updateSafeMode,
     memoryEnabled,
     updateMemoryPref,
+    stylePreset,
+    customStyleText,
+    updateStylePref,
+    sendMessageFeedback,
+    importMemories,
     pendingIncognito,
     setPendingIncognito,
     createDatasetFromSource,
@@ -298,6 +309,7 @@ export function Workspace() {
     removeSandboxSecret,
     selectConversation,
     newConversation,
+    composeNewThread,
     forkThread,
     undoRun,
     removeConversation,
@@ -340,7 +352,9 @@ export function Workspace() {
     assignApproval,
   } = useWorkspace();
   // Always present: this component only renders inside the authenticated gate.
-  const { session, signOut } = useSession();
+  // `refresh` re-reads /api/auth/me — the Profile pane calls it after a rename
+  // so presence chips and attribution show the new name without a reload.
+  const { session, signOut, refresh } = useSession();
 
   // The one health loop the shell runs: the red banner and the system-status
   // dot both read it, so they cannot disagree for a poll cycle.
@@ -451,6 +465,38 @@ export function Workspace() {
   // for all three surfaces (thread, document, dashboard) because one drawer
   // serves them all — the subject pair is the server's own shape.
   const [commentSubject, setCommentSubject] = useState<CommentSubject | null>(null);
+
+  // The thread whose public-link modal is open, or null. The generic
+  // ShareLinksModal carries the mint/revoke machinery; this only names the
+  // resource it is about.
+  const [shareLinkThread, setShareLinkThread] = useState<Conversation | null>(null);
+
+  // Schedule-from-chat: the draft handed to the Crons composer, on the
+  // workflowRequested precedent. The CronsView lowers it once consumed.
+  const [cronSeed, setCronSeed] = useState("");
+
+  /** Download the open thread's transcript as a file. Through the API client
+   *  (a bare <a href> carries no X-Workspace-Id and no cross-site cookie),
+   *  then out via a transient blob: URL. */
+  async function exportThread(conversation: Conversation, format: "md" | "json") {
+    try {
+      const blob = await api.exportConversation(conversation.id, format);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${slugify(conversation.title) || "conversation"}.${format}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      // Deferred, per the sources.tsx precedent: Safari reads the blob
+      // asynchronously after click(), and a same-tick revoke silently
+      // aborts the save. A minute far outlasts any read and still bounds
+      // the leak to one click.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (caught) {
+      setError(describeActionError(caught, "Could not export that conversation"));
+    }
+  }
 
   // ⌘K / Ctrl+K, from anywhere — inputs included, which is why this handler
   // exists at the window and preventDefaults: the browser wants the shortcut
@@ -767,6 +813,30 @@ export function Workspace() {
                   {share.shared ? "Unshare" : "Share with the workspace"}
                 </button>
               )}
+              {/* Directly under Share/Unshare so the two sharing surfaces sit
+                  together. Open-thread-only like its neighbours, and gated to
+                  mirror the server's mint gate: any member for a shared
+                  thread, the creator for a personal one, and never a
+                  temporary chat — the server categorically 409s an incognito
+                  mint, so the row would be a door onto a modal that can only
+                  fail. `can_share` is deliberately NOT the gate — that is the
+                  visibility toggle's owner-or-creator rule, a different
+                  question. */}
+              {activeConversation === conversation.id &&
+                !conversation.incognito &&
+                (conversation.shared || conversation.owned) && (
+                  <button
+                    className="disclosure-option thread-public-link"
+                    aria-label={`Public link for ${conversation.title}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      close();
+                      setShareLinkThread(conversation);
+                    }}
+                  >
+                    <Link2 size={13} /> Public link…
+                  </button>
+                )}
               <button
                 className="disclosure-option thread-split"
                 aria-label={`Open ${conversation.title} in a new pane`}
@@ -797,6 +867,35 @@ export function Workspace() {
                 >
                   <MessageSquareText size={13} /> Comments
                 </button>
+              )}
+              {/* Export rides only the OPEN thread, the same open-thread-only
+                  precedent every non-filing row above follows. Two formats,
+                  two rows — a submenu would be ceremony for a pair. */}
+              {activeConversation === conversation.id && (
+                <>
+                  <button
+                    className="disclosure-option thread-export"
+                    aria-label={`Export ${conversation.title} as Markdown`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      close();
+                      void exportThread(conversation, "md");
+                    }}
+                  >
+                    <Download size={13} /> Export as Markdown
+                  </button>
+                  <button
+                    className="disclosure-option thread-export"
+                    aria-label={`Export ${conversation.title} as JSON`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      close();
+                      void exportThread(conversation, "json");
+                    }}
+                  >
+                    <Download size={13} /> Export as JSON
+                  </button>
+                </>
               )}
               {/* Filing rides every row, not just the open one: moving a
                   thread into a space is the rail's organizing gesture — the
@@ -1061,6 +1160,7 @@ export function Workspace() {
         openThreadInSplit={openInNewPane}
         create={create}
         searchTranscripts={(q) => api.searchConversations(q)}
+        compose={composeNewThread}
         // The Phase-6 rows: saved layouts by name, and the two preference
         // toggles. All of it exists only through here — zero resident chrome
         // is the point — so an unwired palette would make the whole feature
@@ -1131,6 +1231,20 @@ export function Workspace() {
               <Ghost size={16} />
             </button>
           </div>
+        )}
+
+        {/* The rail's own door onto the transcript index — the same
+            api.searchConversations the ⌘K palette queries. Results render
+            above the Recent-threads list, additively; the list stays below,
+            unconditionally. */}
+        {activeGroup.id === "chat" && (
+          <RailSearch
+            search={(q) => api.searchConversations(q)}
+            openThread={(id) => {
+              setSidebarOpen(false);
+              void selectConversation(id);
+            }}
+          />
         )}
 
         {/* This destination's own map: its views, under section headings that
@@ -1460,6 +1574,11 @@ export function Workspace() {
               onSafeModeChange={(enabled) => void updateSafeMode(enabled)}
               memoryEnabled={memoryEnabled}
               onMemoryEnabledChange={(enabled) => void updateMemoryPref(enabled)}
+              stylePreset={stylePreset}
+              customStyleText={customStyleText}
+              onStyleChange={(preset, customText) =>
+                void updateStylePref(preset, customText)
+              }
             />
             <ThemeToggle />
             {/* The screen and provider pills, folded into one popover: the
@@ -1621,12 +1740,36 @@ export function Workspace() {
                   detach: detachSkill,
                   setArg: setSkillArg,
                 }}
+                // The persistent style picker: hidden until bootstrap lands
+                // (null), then the same handler the settings menu writes
+                // through — one preference, two doors.
+                responseStyle={
+                  stylePreset !== null
+                    ? {
+                        preset: stylePreset,
+                        customText: customStyleText,
+                        onChange: (preset, customText) =>
+                          void updateStylePref(preset, customText),
+                      }
+                    : undefined
+                }
+                // Thumbs on assistant messages; the handler owns the POST
+                // and the optimistic my_feedback patch.
+                feedback={sendMessageFeedback}
                 fork={forkThread}
                 undo={undoRun}
                 // The composer's "+" menu jump-offs. Only the shell owns
                 // setView, so only the primary mount gets them — the
                 // openMonitors prop pattern.
                 openView={setView}
+                // Schedule-from-chat: hand the draft to the Crons composer.
+                // The draft is deliberately not cleared — navigating to
+                // Schedules must not eat the words.
+                scheduleDraft={(text) => {
+                  setCronSeed(text);
+                  setView("crons");
+                  setSidebarOpen(false);
+                }}
                 // Incognito is creation-time state: with a thread open the
                 // chip only reports its flag; before one exists it toggles
                 // what `ensureConversation` will stamp on the first send.
@@ -1685,6 +1828,18 @@ export function Workspace() {
             setFocused={setFocusedMemory}
             addMemory={addMemory}
             editMemory={editMemory}
+            importMemories={importMemories}
+          />
+        )}
+
+        {view === "profile" && (
+          <ProfileView
+            userEmail={session?.user_email ?? ""}
+            userName={session?.user_name ?? ""}
+            // Refresh the session provider's cached copy so presence chips
+            // and attribution show the new name without a reload. Labels
+            // stamped into past events keep the old name by design.
+            onRenamed={() => void refresh()}
           />
         )}
 
@@ -1935,6 +2090,10 @@ export function Workspace() {
             until they open this or type "/" in the composer. */}
         {view === "skills" && <SkillsView setError={setError} />}
 
+        {/* Self-contained like SkillsView: the member's month-to-date counts
+            are nobody's business until they open this page. */}
+        {view === "recap" && <RecapView setError={setError} />}
+
         {/* Self-contained like SkillsView: what the marketplace holds is
             nobody's business until they browse it. */}
         {view === "gallery" && (
@@ -1956,7 +2115,14 @@ export function Workspace() {
         {/* Self-contained like WorkflowsView: a cron's schedule and last-fired
             state are nobody's business until they open this, so the list is
             fetched here rather than at page load. */}
-        {view === "crons" && <CronsView setError={setError} favorites={favorites} />}
+        {view === "crons" && (
+          <CronsView
+            setError={setError}
+            favorites={favorites}
+            composeSeed={cronSeed}
+            onComposeSeedHandled={() => setCronSeed("")}
+          />
+        )}
 
         {/* Self-contained like CronsView, but the dataset picker reads the
             shell's datasets list — the same rows the Datasets page shows. */}
@@ -2071,6 +2237,17 @@ export function Workspace() {
           onCreated={setEditing}
           onClose={() => setEditing(null)}
           setError={setError}
+        />
+      )}
+
+      {/* The generic share-link modal, aimed at a thread. No `people` prop —
+          the in-workspace audience is the existing share toggle's job. */}
+      {shareLinkThread && (
+        <ShareLinksModal
+          kind="conversation"
+          resourceId={shareLinkThread.id}
+          resourceName={shareLinkThread.title}
+          close={() => setShareLinkThread(null)}
         />
       )}
 

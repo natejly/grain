@@ -129,4 +129,19 @@ describe("linksFor", () => {
       "a",
     ]);
   });
+
+  it("is kind-agnostic: a conversation's links filter like any other kind", () => {
+    const rows = [
+      link({ id: "conv-link", resource_kind: "conversation", resource_id: "conv-1" }),
+      link({ id: "dash-link" }),
+      link({
+        id: "other-conv",
+        resource_kind: "conversation",
+        resource_id: "conv-2",
+      }),
+    ];
+    expect(linksFor(rows, "conversation", "conv-1").map((row) => row.id)).toEqual([
+      "conv-link",
+    ]);
+  });
 });

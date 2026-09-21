@@ -11,6 +11,7 @@ import {
   EyeOff,
   FileText,
   GitFork,
+  Mic,
   Paperclip,
   Pencil,
   Plus,
@@ -20,6 +21,8 @@ import {
   Sparkles,
   Square,
   Terminal,
+  ThumbsDown,
+  ThumbsUp,
   Undo2,
   Wrench,
   X,
@@ -38,16 +41,35 @@ import type {
   Message,
   Skill,
   Source,
+  StylePreset,
 } from "@workspace/api-client";
-import { type CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  FormEvent,
+  type SetStateAction,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { api } from "../api";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChatDashboardEmbeds } from "../chat-dashboard-embed";
+import { CsvPeek, ImageThumb, PdfCard } from "../attachment-previews";
 import { LiveCursorLayer } from "../live-cursors";
 import { ArtifactImages } from "../source-image";
+import { previewKindOf } from "./attachment-preview";
+import {
+  applyResult,
+  beginDictation,
+  composedDraft,
+  resultWrite,
+  supportsDictation,
+  type DictationResult,
+  type DictationState,
+} from "./dictation";
 import type { CoworkingState } from "../use-coworking";
 import { autoApprovedCalls, isBypass } from "./approval-format";
 import {
@@ -65,7 +87,15 @@ import type { BudgetPark } from "./budget-format";
 import { describeCitationCheck } from "./citation-format";
 import { ProposalDiff } from "./proposal-diff";
 import { DashboardPinBar, type DashboardPinning } from "./dashboard-pin-bar";
-import { baseName, isTabular, senderInitial, senderIsViewer, senderLabel, type View } from "./shared";
+import {
+  baseName,
+  isStreamingMessage,
+  isTabular,
+  senderInitial,
+  senderIsViewer,
+  senderLabel,
+  type View,
+} from "./shared";
 import { TODO_TOOLS, listForTodoCall } from "./todo-format";
 import { TodoChecklist, type TodoOps } from "./todos";
 
@@ -120,7 +150,9 @@ export type ChatViewProps = {
    */
   apps: GeneratedApp[];
   draft: string;
-  setDraft: (value: string) => void;
+  /** Accepts the functional form — every mount passes a real state setter,
+   *  and the mic button's race guard depends on it (see MicButton). */
+  setDraft: (value: SetStateAction<string>) => void;
   activeRun: string | null;
   runStatus: string;
   /**
@@ -280,6 +312,29 @@ export type ChatViewProps = {
   /** The live thinking trail streamed by the active run; "" between runs. */
   thinking?: string;
   /**
+   * The member's persistent response style, for the composer's picker. The
+   * "· you" scope suffix mirrors effort's "· this thread": this one follows
+   * the MEMBER across every thread, and a picker that did not say so would
+   * read as per-thread state. `onChange` is the same persistent handler the
+   * settings menu uses. Optional like `turnControls`: the side-panel mounts
+   * omit it and render no picker.
+   */
+  responseStyle?: {
+    preset: string;
+    customText: string;
+    onChange: (preset: StylePreset, customText: string) => void;
+  };
+  /**
+   * Thumbs up/down on an assistant message. Optional like `fork`: only the
+   * mounts that wire it show the icons, so side-panel mounts stand unchanged.
+   * The caller owns the POST and the optimistic `my_feedback` patch.
+   */
+  feedback?: (
+    messageId: string,
+    verdict: "up" | "down",
+    note: string,
+  ) => Promise<void>;
+  /**
    * The composer's slash-command picker: the skill attached to the next turn,
    * the values for its declared args, and the ways to change them. Optional and
    * grouped like `approval`/`turnControls` — the document panel mounts ChatView
@@ -313,6 +368,14 @@ export type ChatViewProps = {
    * omit it and the menu simply shows no navigation rows.
    */
   openView?: (view: View) => void;
+  /**
+   * Hand the current draft to the Schedules composer — the "+" menu's
+   * "Do this on a schedule…" row. Only the shell owns view navigation, so
+   * only the primary rail chat passes it; the side-panel mounts show no such
+   * row. The draft is deliberately NOT cleared from the composer — navigating
+   * to Schedules must not eat the words.
+   */
+  scheduleDraft?: (draft: string) => void;
   /**
    * The thread's temporary-chat state: its runs neither recall nor store
    * memories. `toggle` is present only while it can still do anything — the
@@ -822,7 +885,7 @@ function PlusMenu({
   rows,
   close,
 }: {
-  rows: { label: string; run: () => void }[];
+  rows: { label: string; run: () => void; disabled?: boolean; title?: string }[];
   close: () => void;
 }) {
   return (
@@ -832,6 +895,8 @@ function PlusMenu({
           key={row.label}
           type="button"
           className="ghost-button plus-menu-row"
+          disabled={row.disabled}
+          title={row.title}
           onClick={() => {
             row.run();
             close();
@@ -841,6 +906,160 @@ function PlusMenu({
         </button>
       ))}
     </div>
+  );
+}
+
+/** The slice of the Web Speech API the mic adapter touches — typed
+ *  structurally because lib.dom has no SpeechRecognition declarations. */
+type RecognitionEventLike = {
+  resultIndex: number;
+  results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+};
+type RecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: RecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+/**
+ * Voice dictation: a thin adapter over the pure reducer in dictation.ts,
+ * which is where the behaviour is tested — the API itself cannot be
+ * exercised in CI (headless Chrome exposes the constructor and then fails
+ * recognition with a network error at runtime).
+ *
+ * Rendered only after a MOUNTED feature detect, never at SSR, so the server
+ * and first client render agree. Recording stops on: the button, a manual
+ * draft edit (which includes send clearing the draft), recognition's own
+ * error or end (no toast — see above), and unmount. Everything is
+ * browser-local; no audio or transcript leaves the page.
+ */
+function MicButton({
+  draft,
+  setDraft,
+}: {
+  draft: string;
+  /** SetStateAction-capable: onresult's manual-edit guard needs the
+   *  functional form to see a keystroke's still-queued write. */
+  setDraft: (value: SetStateAction<string>) => void;
+}) {
+  const [supported, setSupported] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const recognitionRef = useRef<RecognitionLike | null>(null);
+  const stateRef = useRef<DictationState | null>(null);
+  // The last draft THIS button wrote; anything else on the wire is a manual
+  // edit and ends the session.
+  const composedRef = useRef("");
+
+  useEffect(() => {
+    setSupported(supportsDictation(typeof window === "undefined" ? null : window));
+  }, []);
+
+  const stop = () => {
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    stateRef.current = null;
+    setRecording(false);
+    if (recognition) {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.stop();
+      } catch {
+        // Already stopped; idle is idle.
+      }
+    }
+  };
+
+  // A manual edit while recording stops recognition — the person took the
+  // keyboard back, and finals arriving after that would fight their typing.
+  useEffect(() => {
+    if (recording && draft !== composedRef.current) stop();
+  }, [draft, recording]);
+
+  // Unmount (switching threads, closing a pane) must not leave a hot mic.
+  useEffect(() => stop, []);
+
+  const start = () => {
+    const host = window as unknown as Record<string, unknown>;
+    const Ctor = (host.SpeechRecognition ?? host.webkitSpeechRecognition) as
+      | (new () => RecognitionLike)
+      | undefined;
+    if (!Ctor) return;
+    stateRef.current = beginDictation(draft);
+    composedRef.current = draft;
+    let recognition: RecognitionLike;
+    try {
+      recognition = new Ctor();
+    } catch {
+      return;
+    }
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = navigator.language;
+    recognition.onresult = (event) => {
+      const state = stateRef.current;
+      if (!state) return;
+      // The resultIndex contract: everything from there on is new or
+      // revised; earlier entries were already folded in.
+      const fresh: DictationResult[] = [];
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        fresh.push({
+          transcript: result[0]?.transcript ?? "",
+          isFinal: Boolean(result.isFinal),
+        });
+      }
+      const next = applyResult(state, fresh);
+      stateRef.current = next;
+      const composed = composedDraft(next);
+      // A keystroke can land between the last commit and this event, its
+      // setDraft still queued where only a functional updater can see it —
+      // so the write goes through `resultWrite`: speech only ever replaces
+      // the draft dictation itself last wrote, never typed text. On a
+      // mismatch the typed draft survives and the stop-on-edit effect above
+      // ends the session (draft ≠ the composed ref advanced here).
+      const previous = composedRef.current;
+      composedRef.current = composed;
+      setDraft((current) => resultWrite(current, previous, composed));
+    };
+    // No toast on error, deliberately: CI Chrome's recognizer fails with a
+    // network error while the constructor exists, and a user-facing alarm
+    // for "your browser half-supports this" helps nobody. Idle says it all.
+    recognition.onerror = () => stop();
+    recognition.onend = () => stop();
+    recognitionRef.current = recognition;
+    setRecording(true);
+    try {
+      recognition.start();
+    } catch {
+      stop();
+    }
+  };
+
+  if (!supported) return null;
+  return (
+    <button
+      type="button"
+      className={
+        recording ? "composer-chip mic-button recording" : "composer-chip mic-button"
+      }
+      aria-pressed={recording}
+      aria-label={recording ? "Stop dictation" : "Dictate"}
+      title={
+        recording
+          ? "Stop dictation"
+          : "Dictate into the composer — speech stays in your browser"
+      }
+      onClick={() => (recording ? stop() : start())}
+    >
+      <Mic size={14} />
+    </button>
   );
 }
 
@@ -871,9 +1090,60 @@ function AttachmentStrip({
     <div className="attachment-strip" aria-label="Files attached to this chat">
       {attachments.map((attachment) => {
         const editable = attachment.kind === "document" && Boolean(openFile);
+        // The preview branch reads the server-decided mime the list route
+        // joined in — never the filename's extension (the `kind` doctrine).
+        // A document arrives as ""/0 and lands on "chip": its preview is the
+        // editor the chip already opens.
+        const preview = previewKindOf(attachment.media_type, attachment.byte_size);
+        const remove = detach && (
+          <button
+            type="button"
+            className="attachment-chip-remove"
+            onClick={() => void detach(attachment)}
+            aria-label={`Remove ${attachment.filename} from this chat`}
+          >
+            <X size={12} />
+          </button>
+        );
+        if (preview === "image") {
+          return (
+            <span
+              className="attachment-chip attachment-preview"
+              key={attachment.id}
+              title={attachment.filename}
+            >
+              <ImageThumb
+                sourceId={attachment.target_id}
+                filename={attachment.filename}
+              />
+              {remove}
+            </span>
+          );
+        }
+        if (preview === "pdf") {
+          return (
+            <span
+              className="attachment-chip attachment-preview"
+              key={attachment.id}
+              title={attachment.filename}
+            >
+              <PdfCard
+                filename={attachment.filename}
+                byteSize={attachment.byte_size}
+              />
+              {remove}
+            </span>
+          );
+        }
         return (
           <span
-            className={editable ? "attachment-chip editable" : "attachment-chip"}
+            className={
+              preview === "csv"
+                ? "attachment-chip with-peek"
+                : editable
+                  ? "attachment-chip editable"
+                  : "attachment-chip"
+            }
             key={attachment.id}
           >
             {editable ? (
@@ -892,15 +1162,15 @@ function AttachmentStrip({
                 {attachment.filename}
               </span>
             )}
-            {detach && (
-              <button
-                type="button"
-                className="attachment-chip-remove"
-                onClick={() => void detach(attachment)}
-                aria-label={`Remove ${attachment.filename} from this chat`}
-              >
-                <X size={12} />
-              </button>
+            {remove}
+            {/* The peek renders under the chip and disappears silently on
+                any fetch or parse failure — the chip above stays either way,
+                so a preview is décor, never an error surface. */}
+            {preview === "csv" && (
+              <CsvPeek
+                sourceId={attachment.target_id}
+                filename={attachment.filename}
+              />
             )}
           </span>
         );
@@ -926,6 +1196,85 @@ function CopyButton({ value, label }: { value: string; label: string }) {
       {copied ? <Check size={13} /> : <Copy size={13} />}
       {copied ? "Copied" : "Copy"}
     </button>
+  );
+}
+
+/**
+ * The thumbs beside an assistant message's Copy button. Up posts at once;
+ * down opens a small anchored popover collecting an optional note first. The
+ * note state lives HERE, inside the leaf, so closing the popover (or the
+ * message re-rendering) never greets the next open half-typed. Active state
+ * reads from `myFeedback` — the transcript's own field — so a reload shows
+ * the same verdict the click did.
+ */
+function FeedbackButtons({
+  messageId,
+  myFeedback,
+  feedback,
+}: {
+  messageId: string;
+  myFeedback: "" | "up" | "down";
+  feedback: (
+    messageId: string,
+    verdict: "up" | "down",
+    note: string,
+  ) => Promise<void>;
+}) {
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [note, setNote] = useState("");
+  return (
+    <span className="feedback-buttons">
+      <button
+        type="button"
+        className={
+          myFeedback === "up" ? "copy-button feedback-active" : "copy-button"
+        }
+        aria-label="Good answer"
+        aria-pressed={myFeedback === "up"}
+        onClick={() => {
+          setNoteOpen(false);
+          void feedback(messageId, "up", "");
+        }}
+      >
+        <ThumbsUp size={13} />
+      </button>
+      <button
+        type="button"
+        className={
+          myFeedback === "down" ? "copy-button feedback-active" : "copy-button"
+        }
+        aria-label="Bad answer"
+        aria-pressed={myFeedback === "down"}
+        aria-expanded={noteOpen}
+        onClick={() => setNoteOpen((value) => !value)}
+      >
+        <ThumbsDown size={13} />
+      </button>
+      {noteOpen && (
+        <div className="feedback-note-pop">
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            rows={2}
+            maxLength={2000}
+            aria-label="What went wrong? (optional)"
+            placeholder="What went wrong? (optional)"
+            autoFocus
+          />
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => {
+              void feedback(messageId, "down", note.trim());
+              setNoteOpen(false);
+              setNote("");
+            }}
+          >
+            Send
+          </button>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -1260,9 +1609,12 @@ export function ChatView({
   turnControls,
   skills,
   thinking,
+  responseStyle,
+  feedback,
   fork,
   undo,
   openView,
+  scheduleDraft,
   incognito,
   coworking,
   conversationId,
@@ -1489,6 +1841,20 @@ export function ChatView({
           {message.role === "assistant" && message.content && (
             <CopyButton value={message.content} label="Copy message" />
           )}
+          {/* Never on the streaming placeholder: its `streaming-<runId>` id
+              names a row no server has, so a thumb clicked before
+              message.completed would POST a fake id, 404, and roll back
+              with the red toast. The real row takes its place on settle. */}
+          {feedback &&
+            message.role === "assistant" &&
+            message.id &&
+            !isStreamingMessage(message.id) && (
+              <FeedbackButtons
+                messageId={message.id}
+                myFeedback={message.my_feedback ?? ""}
+                feedback={feedback}
+              />
+            )}
           {/* Disabled rather than hidden while a run streams: the
               server would 409 an edit over a live turn, and a control
               that vanishes and reappears reads as a bug. The name
@@ -1845,6 +2211,23 @@ export function ChatView({
                       },
                     ]
                   : []),
+                // Always rendered, DISABLED without text — a row that
+                // appears only when text exists is a moving menu, but an
+                // empty draft has nothing to schedule (the Crons composer
+                // opens only over a seed), so the row says why instead of
+                // silently navigating to a closed composer.
+                ...(scheduleDraft
+                  ? [
+                      {
+                        label: "Do this on a schedule…",
+                        run: () => scheduleDraft(draft),
+                        disabled: !draft.trim(),
+                        title: draft.trim()
+                          ? undefined
+                          : "Type the prompt to schedule first",
+                      },
+                    ]
+                  : []),
                 ...(openView
                   ? [
                       { label: "Sources", run: () => openView("sources") },
@@ -1935,6 +2318,9 @@ export function ChatView({
                 Attach
               </button>
             )}
+            {/* Feature-detected on mount, so it renders nowhere the API is
+                absent (and never at SSR). Dictation is client-only. */}
+            <MicButton draft={draft} setDraft={setDraft} />
             {onSelectAgent && (
               <AgentSelect
                 selectedAgentId={selectedAgentId ?? ""}
@@ -1960,6 +2346,34 @@ export function ChatView({
             )}
             {turnControls && (
               <TurnControls {...turnControls} disabled={Boolean(activeRun)} />
+            )}
+            {responseStyle && (
+              /* "· you" mirrors effort's "· this thread": this preference
+                 follows the member across every thread, and the scope is part
+                 of the name (the Foyer trust rule). "Custom" is offered only
+                 once custom text exists — the composer picker selects, it
+                 does not author (that stays in the settings menu). */
+              <select
+                className="composer-select"
+                value={responseStyle.preset}
+                onChange={(event) =>
+                  responseStyle.onChange(
+                    event.target.value as StylePreset,
+                    responseStyle.customText,
+                  )
+                }
+                aria-label="Response style · you"
+                title="Your response style — applies to your turns in every thread"
+              >
+                <option value="normal">Normal</option>
+                <option value="concise">Concise</option>
+                <option value="explanatory">Explanatory</option>
+                <option value="formal">Formal</option>
+                {(responseStyle.customText.trim() !== "" ||
+                  responseStyle.preset === "custom") && (
+                  <option value="custom">Custom</option>
+                )}
+              </select>
             )}
             {approval && (
               <ApprovalModeControl mode={approval.mode} setMode={approval.setMode} />

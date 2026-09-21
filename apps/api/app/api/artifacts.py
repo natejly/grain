@@ -16,6 +16,7 @@ from ..schemas import (
     DocumentOut,
     DocumentRequest,
     DocumentSummaryOut,
+    DocumentVersionContentOut,
     DocumentVersionOut,
 )
 from ..services import conversations, subjects
@@ -178,6 +179,43 @@ def list_versions(
             db, workspace_id=actor.workspace_id, document_id=document_id
         )
     ]
+
+
+@router.get(
+    "/documents/{document_id}/versions/{version_id}",
+    response_model=DocumentVersionContentOut,
+)
+def get_version_content(
+    document_id: str,
+    version_id: str,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> DocumentVersionContentOut:
+    """One version's full snapshot, for the history stepper's diffs.
+
+    The document is resolved first, like `list_versions`: a foreign or missing
+    document answers the same 404 every other /documents route gives, and a
+    version id that is not this document's answers 404 through the service's
+    (workspace, document, version) scoping. Read-only, no `db.get`.
+    """
+    try:
+        documents.get_document(
+            db, workspace_id=actor.workspace_id, document_id=document_id
+        )
+        version = documents.get_version(
+            db,
+            workspace_id=actor.workspace_id,
+            document_id=document_id,
+            version_id=version_id,
+        )
+    except documents.DocumentError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return DocumentVersionContentOut(
+        id=version.id,
+        summary=version.summary,
+        created_at=version.created_at,
+        content=version.content,
+    )
 
 
 @router.post(

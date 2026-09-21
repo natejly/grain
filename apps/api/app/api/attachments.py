@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
@@ -54,16 +55,61 @@ def list_attachments(
     conversation_id: str,
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
-) -> List[ChatAttachment]:
+) -> List[ChatAttachmentOut]:
     _conversation(db, actor, conversation_id)
     # Scoped to the viewer: a shared thread shows everyone the files that were
     # sent, but a member's own not-yet-sent staging is theirs alone.
-    return attachments_service.list_for_conversation(
+    rows = attachments_service.list_for_conversation(
         db,
         workspace_id=actor.workspace_id,
         conversation_id=conversation_id,
         actor_id=actor.user_id,
     )
+    # Enrich source-kind rows with the server-decided mime and size, so the
+    # client's preview branch reads a routing decision rather than re-deriving
+    # one from a filename. One bounded IN query, workspace-scoped; a document
+    # attachment — and a source whose row is gone — keeps ""/0 and its chip.
+    # The 201 create response deliberately stays unenriched: the client
+    # refreshes the strip after every upload, so the enriched row arrives at
+    # once. (This is the migration-free alternative to denormalizing mime onto
+    # chat_attachments.)
+    source_ids = [
+        row.target_id for row in rows if row.kind == attachments_service.SOURCE
+    ]
+    sources = (
+        {
+            source.id: source
+            for source in db.scalars(
+                select(Source).where(
+                    Source.id.in_(source_ids),
+                    Source.workspace_id == actor.workspace_id,
+                )
+            )
+        }
+        if source_ids
+        else {}
+    )
+    out: List[ChatAttachmentOut] = []
+    for row in rows:
+        source = (
+            sources.get(row.target_id)
+            if row.kind == attachments_service.SOURCE
+            else None
+        )
+        out.append(
+            ChatAttachmentOut(
+                id=row.id,
+                conversation_id=row.conversation_id,
+                message_id=row.message_id,
+                kind=row.kind,
+                target_id=row.target_id,
+                filename=row.filename,
+                media_type=source.media_type if source is not None else "",
+                byte_size=source.byte_size if source is not None else 0,
+                created_at=row.created_at,
+            )
+        )
+    return out
 
 
 @router.post(

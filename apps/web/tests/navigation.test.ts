@@ -93,8 +93,13 @@ describe("navigation model", () => {
       ["policies", "Rules"],
     ]);
     // And the settings surface holds only what really is configuration — no
-    // group behind it may contain a surface that waits on a person.
-    expect(SETTINGS_GROUPS.map((group) => group.label)).toEqual(["Connections", "Admin"]);
+    // group behind it may contain a surface that waits on a person. Profile
+    // leads: it is the one settings door every member has, owner or not.
+    expect(SETTINGS_GROUPS.map((group) => group.label)).toEqual([
+      "Profile",
+      "Connections",
+      "Admin",
+    ]);
   });
 
   it("keeps Automations on the rail rather than behind settings", () => {
@@ -151,6 +156,9 @@ describe("navigation model", () => {
       // Inside Library, one always-visible click from anywhere in it — nearer
       // than the old rail seat, which existed only to outrun a Settings menu.
       ["knowledge", "Knowledge", ["sources", "memory", "graph"]],
+      // The member's month, counted. A recap is a thing you visit, not
+      // configure, so it shelves here rather than behind the settings menu.
+      ["you", "You", ["recap"]],
       // The marketplace: a shelf you take things from, so it lives with the
       // shelves. Publishing happens on the Skills page, where the things live.
       ["gallery", "Gallery", ["gallery"]],

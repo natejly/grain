@@ -377,6 +377,48 @@ class Membership(Base):
     memory_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=true()
     )
+    #: The response style THIS member's turns are answered in — a working
+    #: preference per membership, like `safe_mode` and `memory_enabled` above:
+    #: one member wanting terse answers is not a reason to change a colleague's.
+    #: "normal" means NO style block is injected at all — the byte-identity
+    #: contract: a member who never touched the setting gets instructions
+    #: byte-identical to today's (`services.styles.style_block` returns "" for
+    #: it). One of normal | concise | explanatory | formal | custom.
+    style_preset: Mapped[str] = mapped_column(
+        String(16), default="normal", server_default="normal"
+    )
+    #: The member's own directive, read only while `style_preset` is
+    #: "custom". It PERSISTS across a switch to a fixed preset — only an
+    #: explicit custom payload rewrites it (api/me.py `update_style_pref`) —
+    #: so flipping back to Custom finds the prose waiting. Trusted like
+    #: `Agent.instructions` — authored through an authenticated PUT, never
+    #: model-writable.
+    custom_style_text: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MessageFeedback(Base):
+    """One member's thumbs verdict on one assistant message.
+
+    The unique constraint is the upsert's concurrency control — the Membership
+    invite-acceptance doctrine: two clicks racing both try to insert, the
+    constraint decides, and the loser re-selects and updates. One row per
+    (message, member); a change of heart updates the row rather than adding a
+    second opinion from the same person.
+    """
+
+    __tablename__ = "message_feedback"
+    __table_args__ = (UniqueConstraint("message_id", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    #: "up" | "down".
+    verdict: Mapped[str] = mapped_column(String(8))
+    #: The optional note a thumbs-down collects. Never serialized back into the
+    #: transcript — it is feedback about the answer, not part of it.
+    note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -697,6 +739,10 @@ class Source(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued")
     error: Mapped[str] = mapped_column(Text, default="")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    #: Page count for paginated formats (PDF), recorded by ingestion; 0 for
+    #: everything else and for rows predating the column. Requested by the
+    #: surfaces cluster (its PDF card) as an optional 0072 column.
+    page_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     #: The space whose threads this source informs; "" means the workspace
     #: library. A thread in space S retrieves from `IN ("", S)` and an ordinary
     #: thread from `== ""` alone, so a space's files never surface in general

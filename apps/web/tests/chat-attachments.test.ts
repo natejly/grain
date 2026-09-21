@@ -44,6 +44,10 @@ function attachment(overrides: Partial<ChatAttachment> = {}): ChatAttachment {
     kind: "document",
     target_id: "doc-1",
     filename: "notes.md",
+    // ""/0 is what a document-kind row carries on the wire; a source-kind
+    // fixture that wants a preview overrides both.
+    media_type: "",
+    byte_size: 0,
     created_at: "2026-08-27T00:00:00Z",
     ...overrides,
   };

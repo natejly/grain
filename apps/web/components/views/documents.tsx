@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  ChevronLeft,
+  ChevronRight,
   FileText,
   GitPullRequestArrow,
   History,
@@ -26,7 +28,10 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { api } from "../api";
 import type { SaveConflict, SaveOutcome } from "../handlers/documents";
+import { unifiedDiffLines } from "./diff-lines";
+import { ProposalDiff } from "./proposal-diff";
 import { PaneToggle, useCollapsiblePane } from "../collapsible-pane";
 import { LiveCursorLayer } from "../live-cursors";
 import { ShareLinksModal } from "../share-links-modal";
@@ -151,6 +156,192 @@ export function DocumentBody({
     return <pre className="document-plain">{content}</pre>;
   }
   return <MathMarkdown content={content} />;
+}
+
+/**
+ * The History panel as a stepper: versions oldest-to-newest, Prev/Next plus
+ * the flat list for direct selection, and the selected version shown as the
+ * line diff of the save it NAMES. The diff renders through `ProposalDiff` —
+ * the one way a proposed change is drawn — fed by the pure differ in
+ * diff-lines.ts, so history does not grow a second renderer.
+ *
+ * The pairing follows the rows' snapshot semantics: a DocumentVersion is the
+ * PRE-save snapshot carrying the summary of the save that replaced it
+ * (documents.py stores `content=document.content` before overwriting), so
+ * "what the save named by v_i changed" is v_i.content → the NEXT row's
+ * content — or the live saved document for the newest row, which is the only
+ * place the most recent save's changes exist to diff against.
+ *
+ * Content is fetched lazily per selection through `api.getDocumentVersion`
+ * (bodies are unbounded; the list ships none of them) and cached in a Map
+ * for the panel's lifetime — the parent keys this component by document id,
+ * so a document switch resets cache and selection by unmount.
+ *
+ * Deliberately confined to the panel: nothing here touches save, proposals
+ * or the editor — `editingPaused` still gates Restore exactly as before,
+ * and the pending-edit interlock is somebody else's contract.
+ */
+function HistoryStepper({
+  documentId,
+  versions,
+  currentContent,
+  editingPaused,
+  restore,
+}: {
+  documentId: string;
+  versions: DocumentVersion[];
+  /** The saved head — the newest version's after-endpoint. */
+  currentContent: string;
+  editingPaused: boolean;
+  restore: (versionId: string) => void;
+}) {
+  // Sorted here, not trusted from the wire: the list route answers newest
+  // first today, and the stepper's whole vocabulary is "older/newer".
+  const sorted = [...versions].sort((a, b) =>
+    a.created_at < b.created_at
+      ? -1
+      : a.created_at > b.created_at
+        ? 1
+        : a.id < b.id
+          ? -1
+          : 1,
+  );
+  const [selectedId, setSelectedId] = useState("");
+  const [diff, setDiff] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const cacheRef = useRef(new Map<string, string>());
+  // A newer click invalidates an older fetch — the two-fetch pair must land
+  // for the version still selected, or a slow older diff overwrites a new one.
+  const ticketRef = useRef(0);
+
+  const contentOf = async (versionId: string): Promise<string> => {
+    const hit = cacheRef.current.get(versionId);
+    if (hit !== undefined) return hit;
+    const payload = await api.getDocumentVersion(documentId, versionId);
+    cacheRef.current.set(versionId, payload.content);
+    return payload.content;
+  };
+
+  const select = (versionId: string) => {
+    setSelectedId(versionId);
+    const index = sorted.findIndex((version) => version.id === versionId);
+    if (index < 0) return;
+    const version = sorted[index];
+    // The selected row is the BEFORE endpoint of its own save; the after
+    // endpoint is the next row's snapshot, or the live saved document when
+    // this row is the newest — otherwise the diff shown under a version's
+    // summary would be the PREVIOUS save's changes (off by one), and the
+    // most recent save's changes would be viewable nowhere.
+    const next = index < sorted.length - 1 ? sorted[index + 1] : null;
+    ticketRef.current += 1;
+    const ticket = ticketRef.current;
+    setLoading(true);
+    setFailed(false);
+    setDiff(null);
+    void Promise.all([
+      contentOf(version.id),
+      next ? contentOf(next.id) : Promise.resolve(currentContent),
+    ])
+      .then(([before, after]) => {
+        if (ticket !== ticketRef.current) return;
+        setDiff(
+          unifiedDiffLines(before, after, {
+            from:
+              index > 0
+                ? sorted[index - 1].summary || "earlier version"
+                : "original document",
+            to: version.summary || "this version",
+          }),
+        );
+      })
+      .catch(() => {
+        if (ticket === ticketRef.current) setFailed(true);
+      })
+      .finally(() => {
+        if (ticket === ticketRef.current) setLoading(false);
+      });
+  };
+
+  const index = sorted.findIndex((version) => version.id === selectedId);
+  const restoreTitle = editingPaused
+    ? "Editing is paused while proposed changes are pending"
+    : undefined;
+
+  return (
+    <div className="document-history">
+      {sorted.length === 0 ? (
+        <p>No earlier versions yet.</p>
+      ) : (
+        <>
+          <div className="document-history-stepper">
+            <button
+              className="ghost-button"
+              disabled={index <= 0}
+              onClick={() => select(sorted[index - 1].id)}
+              aria-label="Older version"
+            >
+              <ChevronLeft size={13} /> Prev
+            </button>
+            <span className="field-hint" aria-live="polite">
+              {index >= 0
+                ? `Version ${index + 1} of ${sorted.length}`
+                : "Select a version to see what changed"}
+            </span>
+            <button
+              className="ghost-button"
+              disabled={index < 0 || index >= sorted.length - 1}
+              onClick={() =>
+                select(sorted[index < 0 ? 0 : index + 1].id)
+              }
+              aria-label="Newer version"
+            >
+              Next <ChevronRight size={13} />
+            </button>
+          </div>
+          <ul>
+            {sorted.map((version) => (
+              <li
+                key={version.id}
+                className={version.id === selectedId ? "selected" : undefined}
+              >
+                <button
+                  type="button"
+                  className="ghost-button document-history-pick"
+                  aria-pressed={version.id === selectedId}
+                  onClick={() => select(version.id)}
+                >
+                  {version.summary}
+                </button>
+                <button
+                  className="ghost-button"
+                  disabled={editingPaused}
+                  title={restoreTitle}
+                  onClick={() => restore(version.id)}
+                >
+                  <RotateCcw size={13} /> Restore
+                </button>
+              </li>
+            ))}
+          </ul>
+          {index >= 0 && (
+            <div className="document-history-diff">
+              {loading && <p className="field-hint">Comparing…</p>}
+              {failed && (
+                <p className="field-hint" role="alert">
+                  This version could not be loaded.
+                </p>
+              )}
+              {!loading && !failed && diff === "" && (
+                <p className="field-hint">No changes in this version.</p>
+              )}
+              {!loading && !failed && diff && <ProposalDiff preview={diff} />}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 export function DocumentsView({
@@ -581,31 +772,20 @@ export function DocumentsView({
           </header>
 
           {showHistory && (
-            <div className="document-history">
-              {versions.length === 0 ? (
-                <p>No earlier versions yet.</p>
-              ) : (
-                <ul>
-                  {versions.map((version) => (
-                    <li key={version.id}>
-                      <span>{version.summary}</span>
-                      <button
-                        className="ghost-button"
-                        disabled={editingPaused}
-                        title={
-                          editingPaused
-                            ? "Editing is paused while proposed changes are pending"
-                            : undefined
-                        }
-                        onClick={() => void restoreVersion(active.id, version.id)}
-                      >
-                        <RotateCcw size={13} /> Restore
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            /* Keyed per document, so switching files unmounts the stepper and
+               resets its selection and content cache for free — panel state
+               belongs in the panel (the popover-form rule). */
+            <HistoryStepper
+              key={active.id}
+              documentId={active.id}
+              versions={versions}
+              // The SAVED head, not the draft: the newest version's diff is
+              // "what that save changed", and unsaved keystrokes are not yet
+              // anybody's save.
+              currentContent={active.content}
+              editingPaused={editingPaused}
+              restore={(versionId) => void restoreVersion(active.id, versionId)}
+            />
           )}
 
           {approvals}

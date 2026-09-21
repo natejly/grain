@@ -113,6 +113,49 @@ describe("the handler rows", () => {
     expect(setDraft).toHaveBeenCalledWith("/");
   });
 
+  it("offers 'Do this on a schedule…' only when scheduleDraft is wired, passing the draft verbatim", () => {
+    view({ openView: () => undefined });
+    const bare = openMenu();
+    expect(
+      bare.queryByRole("button", { name: "Do this on a schedule…" }),
+    ).toBeNull();
+    cleanup();
+
+    const scheduleDraft = vi.fn();
+    view({ draft: "Summarise yesterday's PRs", scheduleDraft });
+    const menu = openMenu();
+    fireEvent.click(menu.getByRole("button", { name: "Do this on a schedule…" }));
+    expect(scheduleDraft).toHaveBeenCalledWith("Summarise yesterday's PRs");
+    // Closes on pick, like every other row.
+    expect(screen.queryByRole("group", { name: "Tools" })).toBeNull();
+    cleanup();
+
+    // Still rendered with an empty draft — a row that appears only when
+    // text exists is a moving menu — but DISABLED, with the title saying
+    // why: the Crons composer only opens over a seed, so a click here
+    // would navigate to a page with the composer closed and nothing
+    // saying what happened.
+    const blank = vi.fn();
+    view({ draft: "", scheduleDraft: blank });
+    const row = openMenu().getByRole("button", {
+      name: "Do this on a schedule…",
+    }) as HTMLButtonElement;
+    expect(row.disabled).toBe(true);
+    expect(row.title).toBe("Type the prompt to schedule first");
+    fireEvent.click(row);
+    expect(blank).not.toHaveBeenCalled();
+    // A whitespace-only draft is an empty draft.
+    cleanup();
+    view({ draft: "   ", scheduleDraft: blank });
+    expect(
+      (
+        openMenu().getByRole("button", {
+          name: "Do this on a schedule…",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
   it("hides 'Use a skill' while a run streams — same gate as the chip", () => {
     view({
       activeRun: "run-1",

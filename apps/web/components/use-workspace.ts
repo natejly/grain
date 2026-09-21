@@ -22,6 +22,7 @@ import type {
   IntegrationProvider,
   KnowledgeGraph,
   McpServer,
+  MemoryImportSummary,
   MemoryItem,
   Message,
   PendingDocumentEdit,
@@ -33,6 +34,7 @@ import type {
   Source,
   Space,
   SpaceTemplate,
+  StylePreset,
   WorkspaceDocument,
   WorkspaceProject,
 } from "@workspace/api-client";
@@ -74,7 +76,13 @@ import { createSourceHandlers } from "./handlers/sources";
 import { createTodoHandlers } from "./handlers/todos";
 import type { BudgetPark } from "./views/budget-format";
 import type { DashboardResultState } from "./views/dashboard-grid";
-import { baseName, describeError, isTabular, type View } from "./views/shared";
+import {
+  baseName,
+  describeActionError,
+  describeError,
+  isTabular,
+  type View,
+} from "./views/shared";
 import { graduationNotice, isTodoList, todoListsFrom } from "./views/todo-format";
 
 /**
@@ -178,6 +186,11 @@ export function useWorkspace() {
   // default it might contradict — the toggle governs what the assistant
   // learns about you, which is not a thing to misreport for even a second.
   const [memoryEnabled, setMemoryEnabled] = useState<boolean | null>(null);
+  // The member's response style. `string | null` like the digest: the
+  // settings section and the composer picker both hide until the bootstrap
+  // read lands, rather than show "Normal" for a member it might contradict.
+  const [stylePreset, setStylePreset] = useState<string | null>(null);
+  const [customStyleText, setCustomStyleText] = useState("");
   // The composer's incognito toggle before any thread exists: consumed by the
   // creation `ensureConversation`/`newConversation` perform, because the
   // server sets Conversation.incognito at creation only.
@@ -882,6 +895,116 @@ export function useWorkspace() {
   }, []);
 
   /**
+   * Set the member's response style — the safe-mode pattern: optimistic so
+   * both pickers (settings menu, composer) answer the click, replaced with
+   * the server's copy, rolled back with the error on a refusal. It shapes
+   * future turns only, so the optimistic second cannot have mis-styled
+   * anything mid-flight.
+   *
+   * SEQUENCED, unlike its siblings, because one gesture can issue two calls:
+   * clicking the preset select while the custom textarea has focus fires the
+   * textarea's blur-save and then the pick. The queue sends the PUTs in
+   * gesture order (so the server's last write is the last thing the user
+   * did), and the ticket drops every response and rollback but the newest
+   * call's — otherwise a slow earlier reply lands last and both pickers snap
+   * back to a style the server is no longer applying.
+   */
+  const styleTicketRef = useRef(0);
+  const styleQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const updateStylePref = useCallback(
+    async (preset: StylePreset, customText: string) => {
+      setError("");
+      const ticket = ++styleTicketRef.current;
+      let previousPreset: string | null = null;
+      let previousText = "";
+      setStylePreset((currentValue) => {
+        previousPreset = currentValue;
+        return preset;
+      });
+      setCustomStyleText((currentValue) => {
+        previousText = currentValue;
+        // The text survives a switch to a fixed preset: the picker passes
+        // the existing prose along, so flipping back to Custom keeps it.
+        return customText;
+      });
+      const run = async () => {
+        try {
+          const saved = await api.updateStylePref(preset, customText);
+          if (ticket !== styleTicketRef.current) return;
+          setStylePreset(saved.preset);
+          setCustomStyleText(saved.custom_style_text);
+        } catch (caught) {
+          if (ticket !== styleTicketRef.current) return;
+          setStylePreset(previousPreset);
+          setCustomStyleText(previousText);
+          setError(describeError(caught, "Could not update the response style"));
+        }
+      };
+      // `run` never rejects, so the chain cannot wedge on a failed call.
+      styleQueueRef.current = styleQueueRef.current.then(run);
+      await styleQueueRef.current;
+    },
+    [],
+  );
+
+  /**
+   * Thumbs on an assistant message: optimistic `my_feedback` patch so the
+   * icon answers the click, rolled back with the error on a refusal. Only
+   * the viewer's own verdict is ever touched — the transcript never carries
+   * anyone else's.
+   */
+  const sendMessageFeedback = useCallback(
+    async (messageId: string, verdict: "up" | "down", note: string) => {
+      setError("");
+      let previous: Message["my_feedback"] = "";
+      setMessages((current) =>
+        current.map((message) => {
+          if (message.id !== messageId) return message;
+          previous = message.my_feedback ?? "";
+          return { ...message, my_feedback: verdict };
+        }),
+      );
+      try {
+        await api.sendMessageFeedback(messageId, verdict, note);
+      } catch (caught) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === messageId
+              ? { ...message, my_feedback: previous }
+              : message,
+          ),
+        );
+        setError(describeActionError(caught, "The feedback was not recorded"));
+      }
+    },
+    [],
+  );
+
+  /**
+   * Batch-import memories, then re-read the shelf so the new rows render
+   * with their server ids. Errors surface as the shared toast AND rethrow,
+   * so the Memory view never renders a summary line for an import that did
+   * not happen.
+   */
+  const importMemories = useCallback(
+    async (payload: {
+      items?: { content: string; kind?: string; entities?: string[] }[];
+      text?: string;
+    }): Promise<MemoryImportSummary> => {
+      setError("");
+      try {
+        const summary = await api.importMemories(payload);
+        await refreshMemories();
+        return summary;
+      } catch (caught) {
+        setError(describeActionError(caught, "The import did not run"));
+        throw caught;
+      }
+    },
+    [refreshMemories],
+  );
+
+  /**
    * File a thread into a space — "" moves it back to the plain rail — and
    * replace its row, so the rail's space grouping and the space page's thread
    * list both read the one authoritative copy. The spaces list is re-fetched
@@ -1072,6 +1195,10 @@ export function useWorkspace() {
       // reading as opted out, and the null start keeps the toggle hidden
       // until this line has run.
       setMemoryEnabled(boot.memory_enabled ?? true);
+      // "normal" for an older server, matching the run path's default; the
+      // null start keeps both style controls hidden until this line has run.
+      setStylePreset(boot.style_preset ?? "normal");
+      setCustomStyleText(boot.custom_style_text ?? "");
       if (conversationEpoch.current === epochAtStart) {
         setConversationList(chats);
       } else {
@@ -1628,6 +1755,11 @@ export function useWorkspace() {
     updateSafeMode,
     memoryEnabled,
     updateMemoryPref,
+    stylePreset,
+    customStyleText,
+    updateStylePref,
+    sendMessageFeedback,
+    importMemories,
     pendingIncognito,
     setPendingIncognito,
     refreshMemories,

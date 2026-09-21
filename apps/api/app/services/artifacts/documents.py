@@ -534,6 +534,24 @@ def list_versions(
     )
 
 
+def get_version(
+    db: Session, *, workspace_id: str, document_id: str, version_id: str
+) -> DocumentVersion:
+    """One version row, scoped exactly the way `restore_version` scopes its
+    lookup — (workspace, document, version) — so a version id belonging to
+    another document, this workspace or not, is a miss and never a leak."""
+    version = db.scalar(
+        select(DocumentVersion).where(
+            DocumentVersion.id == version_id,
+            DocumentVersion.document_id == document_id,
+            DocumentVersion.workspace_id == workspace_id,
+        )
+    )
+    if version is None:
+        raise DocumentError("No such version")
+    return version
+
+
 def restore_version(
     db: Session,
     *,

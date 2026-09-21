@@ -23,10 +23,12 @@ import { api } from "../api";
 import { DisclosureMenu } from "../disclosure-menu";
 import {
   describeError,
+  formatBytes,
   formatRelative,
   groupThreads,
   statusLabel,
 } from "./shared";
+import { knowledgeUsage } from "./space-knowledge";
 import { sourcesInSpace, threadsInSpace, unspacedThreads } from "./space-threads";
 import { nextTemplateName, templateBaseName } from "./template-format";
 
@@ -523,6 +525,34 @@ export function SpacesView({
 
               <div className="space-knowledge">
                 <h2>Knowledge</h2>
+                {(() => {
+                  // Summed by the same helper family that lists the rows
+                  // below (`sourcesInSpace`), so the bar and the list can
+                  // never disagree. The ceiling is cosmetic — nothing is
+                  // enforced; the percent only says how full the shelf looks.
+                  const usage = knowledgeUsage(sources, selected.id);
+                  return (
+                    <div className="capacity-meter-block">
+                      <div
+                        className="capacity-meter"
+                        role="meter"
+                        aria-label="Knowledge capacity"
+                        aria-valuenow={usage.percent}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                      >
+                        <div
+                          className="capacity-meter-fill"
+                          style={{ width: `${usage.percent}%` }}
+                        />
+                      </div>
+                      <span className="capacity-meter-line">
+                        {usage.files} file{usage.files === 1 ? "" : "s"},{" "}
+                        {formatBytes(usage.bytes)}
+                      </span>
+                    </div>
+                  );
+                })()}
                 <div
                   className={`drop-zone ${dragging ? "dragging" : ""}`}
                   onDragEnter={(event) => {

@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import List, Optional, cast
+from typing import List, Literal, Optional, cast
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth import Actor, get_actor
+from ..clock import utcnow
 from ..config import Settings, get_settings
 from ..database import SessionLocal, get_db
 from ..models import (
@@ -20,9 +23,11 @@ from ..models import (
     Conversation,
     Dashboard,
     Message,
+    MessageFeedback,
     Run,
     RunCheckpoint,
     RunEvent,
+    ShareLink,
     User,
     new_id,
 )
@@ -38,6 +43,8 @@ from ..schemas import (
     ConversationShareRequest,
     ConversationSpaceRequest,
     ConversationTitleRequest,
+    MessageFeedbackIn,
+    MessageFeedbackOut,
     MessageOut,
     RunOut,
     SendMessageRequest,
@@ -46,6 +53,7 @@ from ..schemas import (
 )
 from ..services import attachments as attachments_service
 from ..services import checkpoints, conversation_index, conversations, orgs, subjects
+from ..services import share_links as share_links_service
 from ..services import skills as skills_service
 from ..services import spaces as spaces_service
 from ..services.artifacts import documents
@@ -77,7 +85,9 @@ def _citation_report(raw: str) -> Optional[CitationCheck]:
         return None
 
 
-def _message_out(message: Message, sender_name: str = "") -> MessageOut:
+def _message_out(
+    message: Message, sender_name: str = "", my_feedback: str = ""
+) -> MessageOut:
     return MessageOut(
         id=message.id,
         run_id=message.run_id,
@@ -87,8 +97,32 @@ def _message_out(message: Message, sender_name: str = "") -> MessageOut:
         citation_report=_citation_report(message.citation_report_json),
         sender_id=message.created_by,
         sender_name=sender_name,
+        my_feedback=my_feedback,
         created_at=message.created_at,
     )
+
+
+def _own_feedback(
+    db: Session, messages: List[Message], user_id: str
+) -> dict[str, str]:
+    """`{message_id: verdict}` for the VIEWER'S own feedback on these rows.
+
+    One query for the page, like `_sender_names`. Only the caller's verdict
+    ever serializes — a colleague's thumbs, and everybody's notes, stay out of
+    the transcript payload entirely.
+    """
+    ids = [message.id for message in messages]
+    if not ids:
+        return {}
+    return {
+        message_id: verdict
+        for message_id, verdict in db.execute(
+            select(MessageFeedback.message_id, MessageFeedback.verdict).where(
+                MessageFeedback.user_id == user_id,
+                MessageFeedback.message_id.in_(ids),
+            )
+        )
+    }
 
 
 def _can_share(conversation: Conversation, actor: Actor) -> bool:
@@ -703,6 +737,14 @@ def set_conversation_shared(
     creator-or-owner gate (a 403). Sharing changes visibility ONLY within the
     workspace; the `workspace_id` filter in `resolve_visible` is never removed,
     so this can never expose a thread cross-workspace.
+
+    Unsharing REVOKES every colleague-minted public link on the thread,
+    one-way like every other revoke. The read-time personal-leak gate alone
+    would merely suspend them: the anonymous 404 teaches everyone a leaked
+    URL is dead, and a later re-share would silently revive it — serving the
+    live transcript, additions included. The creator's own links are left
+    alone on purpose; they keep the existing gate semantics (a creator's link
+    serves their personal thread regardless of the shared flag).
     """
     conversation = conversations.resolve_visible(
         db,
@@ -719,6 +761,34 @@ def set_conversation_shared(
         )
     previous = bool(conversation.shared)
     conversation.shared = payload.shared
+    if previous and not payload.shared:
+        # The True→False transition: kill colleague-minted links now (see the
+        # docstring). Audited per link like the explicit revoke route, so the
+        # trail says which links this unshare took down.
+        colleague_links = db.scalars(
+            select(ShareLink).where(
+                ShareLink.workspace_id == actor.workspace_id,
+                ShareLink.resource_kind == "conversation",
+                ShareLink.resource_id == conversation.id,
+                ShareLink.created_by != conversation.created_by,
+                ShareLink.revoked_at.is_(None),
+            )
+        )
+        for link in colleague_links:
+            if share_links_service.revoke(link):
+                record_audit(
+                    db,
+                    workspace_id=actor.workspace_id,
+                    actor_id=actor.user_id,
+                    action="share_link.revoked",
+                    resource_type="share_link",
+                    resource_id=link.id,
+                    detail={
+                        "resource_kind": link.resource_kind,
+                        "resource_id": link.resource_id,
+                        "reason": "conversation_unshared",
+                    },
+                )
     record_audit(
         db,
         workspace_id=actor.workspace_id,
@@ -890,9 +960,26 @@ def list_messages(
             .order_by(Message.created_at.asc())
         )
     )
-    # One query for the distinct senders, so a shared thread shows who said what
-    # without an N+1. Restricted to this workspace's users — a name is only ever
-    # resolved for a member of the same workspace, never leaked across one.
+    names = _sender_names(db, messages)
+    feedback = _own_feedback(db, messages, actor.user_id)
+    return [
+        _message_out(
+            message,
+            names.get(message.created_by, ""),
+            feedback.get(message.id, ""),
+        )
+        for message in messages
+    ]
+
+
+def _sender_names(db: Session, messages: List[Message]) -> dict[str, str]:
+    """One query for the distinct senders, so a shared thread shows who said
+    what without an N+1. Restricted to this workspace's users — a name is only
+    ever resolved for a member of the same workspace, never leaked across one.
+
+    Shared by `list_messages` and `export_conversation`, so the transcript a
+    member reads and the transcript they export cannot drift in attribution.
+    """
     sender_ids = {message.created_by for message in messages if message.created_by}
     names: dict[str, str] = {}
     if sender_ids:
@@ -902,10 +989,129 @@ def list_messages(
                 select(User.id, User.name).where(User.id.in_(sender_ids))
             )
         }
-    return [
-        _message_out(message, names.get(message.created_by, ""))
-        for message in messages
+    return names
+
+
+class ConversationExportOut(ApiModel):
+    """The JSON export: the thread's wire view plus its full transcript,
+    exactly the shapes `GET /conversations/{id}` and `/messages` serve."""
+
+    conversation: ConversationOut
+    messages: List[MessageOut]
+
+
+def _export_stem(title: str) -> str:
+    """A filesystem-friendly stem for the download's filename: lowercased,
+    non-alphanumerics collapsed to '-', trimmed, capped — 'conversation' when
+    nothing survives."""
+    collapsed = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return collapsed[:64].strip("-") or "conversation"
+
+
+def _render_markdown(
+    conversation: Conversation, messages: List[Message], names: dict[str, str]
+) -> str:
+    """The transcript as a readable Markdown document — pure, so the tests pin
+    the format without a route in the way."""
+    lines = [
+        f"# {conversation.title}",
+        "",
+        f"_Exported {utcnow().isoformat()}Z · {len(messages)} messages_",
     ]
+    for message in messages:
+        if message.role == "assistant":
+            label = "Assistant"
+        else:
+            label = names.get(message.created_by) or "User"
+            # A "/btw" aside: recorded in the thread, read by later turns, but
+            # never a prompt — say so, or the export reads as an unanswered ask.
+            if message.role == "user" and message.run_id == "":
+                label += " (aside)"
+        lines.append("")
+        # Stored datetimes are naive UTC (the clock.utcnow doctrine); the 'Z'
+        # says so, matching the header — an unmarked stamp reads as the
+        # consumer's local wall clock.
+        lines.append(f"## {label} · {message.created_at.isoformat()}Z")
+        lines.append("")
+        lines.append(message.content)
+        citations = json.loads(message.citations_json)
+        if citations:
+            sources = " · ".join(
+                f"[{index + 1}] {citation.get('filename', '')}"
+                for index, citation in enumerate(citations)
+            )
+            lines.append("")
+            lines.append(f"> Sources: {sources}")
+    return "\n".join(lines) + "\n"
+
+
+@router.get(
+    "/conversations/{conversation_id}/export",
+    # The JSON arm's body shape, declared so the contract carries it —
+    # `ConversationExportOut` is a machine-readable artifact other tools will
+    # parse, and the spec is the one place its shape can be discovered. The
+    # route still returns a raw Response (Content-Disposition, and the md arm
+    # is not JSON at all), so this is documentation, not serialization.
+    responses={200: {"model": ConversationExportOut}},
+)
+def export_conversation(
+    conversation_id: str,
+    format: Literal["md", "json"] = Query("md"),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> Response:
+    """The whole transcript as one downloadable file, Markdown or JSON.
+
+    Resolved through the same visibility chokepoint and serialized with the
+    same message shape `list_messages` uses, so what a member exports is
+    exactly what they can read — a colleague's personal thread is
+    indistinguishable from absent here as everywhere. A bad `format` is a 422
+    from the Literal query param; no hand-rolled validation. Deliberately no
+    audit row and no Idempotency-Key: a read, matching
+    GET /api/sources/{id}/content, and no rate-limit dependency for the same
+    reason every other authenticated read carries none.
+    """
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = list(
+        db.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.workspace_id == actor.workspace_id,
+            )
+            .order_by(Message.created_at.asc())
+        )
+    )
+    names = _sender_names(db, messages)
+    stem = _export_stem(conversation.title)
+    if format == "json":
+        payload = ConversationExportOut(
+            conversation=_conversation_out(conversation, actor),
+            messages=[
+                _message_out(message, names.get(message.created_by, ""))
+                for message in messages
+            ],
+        )
+        return Response(
+            content=payload.model_dump_json(),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="{stem}.json"'
+            },
+        )
+    text = _render_markdown(conversation, messages, names)
+    return Response(
+        content=text,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{stem}.md"'},
+    )
 
 
 def _stage_turn(
@@ -1272,6 +1478,99 @@ def edit_message(
     return SendMessageResponse(
         message=_message_out(message, actor.user_name),
         run=RunOut.model_validate(run),
+    )
+
+
+@router.post("/messages/{message_id}/feedback", response_model=MessageFeedbackOut)
+def send_message_feedback(
+    message_id: str,
+    payload: MessageFeedbackIn,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> MessageFeedbackOut:
+    """Thumbs up or down on an assistant message — one row per member, upserted.
+
+    Visibility FIRST: the message resolves through the same
+    `conversations.resolve_visible` chokepoint the transcript uses, so a
+    foreign workspace's message and a colleague's personal thread are both a
+    404 before the role gate can reveal anything. Only assistant messages take
+    feedback — a person's words are not the assistant's answer to rate.
+
+    No Idempotency-Key: the (message, user) unique row makes this a natural
+    upsert — replaying "down" is "down". Two clicks racing both insert; the
+    constraint decides and the loser updates in place.
+    """
+    message = db.scalar(
+        select(Message).where(
+            Message.id == message_id,
+            Message.workspace_id == actor.workspace_id,
+        )
+    )
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    conversation = conversations.resolve_visible(
+        db,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        conversation_id=message.conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message.role != "assistant":
+        raise HTTPException(
+            status_code=422, detail="Feedback applies to assistant messages"
+        )
+    row = db.scalar(
+        select(MessageFeedback).where(
+            MessageFeedback.message_id == message.id,
+            MessageFeedback.user_id == actor.user_id,
+        )
+    )
+    if row is not None:
+        row.verdict = payload.verdict
+        row.note = payload.note
+    else:
+        row = MessageFeedback(
+            workspace_id=actor.workspace_id,
+            message_id=message.id,
+            user_id=actor.user_id,
+            verdict=payload.verdict,
+            note=payload.note,
+        )
+        db.add(row)
+        try:
+            db.flush()
+        except IntegrityError:
+            # Two clicks raced; the unique constraint decided. Re-select the
+            # winner and update it in place.
+            db.rollback()
+            row = db.scalar(
+                select(MessageFeedback).where(
+                    MessageFeedback.message_id == message.id,
+                    MessageFeedback.user_id == actor.user_id,
+                )
+            )
+            if row is None:
+                raise HTTPException(
+                    status_code=409, detail="Feedback could not be recorded"
+                ) from None
+            row.verdict = payload.verdict
+            row.note = payload.note
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="message.feedback",
+        resource_type="message",
+        resource_id=message.id,
+        detail={"verdict": payload.verdict, "has_note": bool(payload.note)},
+    )
+    db.commit()
+    return MessageFeedbackOut(
+        message_id=message.id,
+        verdict=row.verdict,
+        note=row.note,
+        created_at=row.created_at,
     )
 
 

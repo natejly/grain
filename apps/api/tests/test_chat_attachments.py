@@ -395,3 +395,55 @@ def test_an_attached_csv_cannot_become_a_workspace_dataset(client) -> None:
         json={"name": "Egret", "source_id": attachment["target_id"]},
     )
     assert refused.status_code == 404, refused.text
+
+
+# --------------------------------------------------------------------------
+# What the strip is told about each file
+
+
+def test_listing_enriches_source_rows_with_the_servers_mime_and_size(client) -> None:
+    """The preview branch reads a server-decided mime, never a filename
+    extension: the list route joins the Source rows in. A document keeps ""/0
+    — the editor is its preview — and a source whose row is gone degrades to
+    the same chip rather than a 500."""
+    conversation_id = _conversation(client)
+    body = b"a,b\n1,2\n3,4\n"
+    uploaded = client.post(
+        f"/api/conversations/{conversation_id}/attachments",
+        headers=key(),
+        files={"file": ("heron.csv", io.BytesIO(body), "text/csv")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.json()["kind"] == "source"
+    doc = _attach(client, conversation_id, "notes.md", b"# Notes\n")
+    assert doc.json()["kind"] == "document"
+
+    rows = {
+        row["filename"]: row
+        for row in client.get(
+            f"/api/conversations/{conversation_id}/attachments"
+        ).json()
+    }
+    assert rows["heron.csv"]["media_type"] == "text/csv"
+    assert rows["heron.csv"]["byte_size"] == len(body)
+    assert rows["notes.md"]["media_type"] == ""
+    assert rows["notes.md"]["byte_size"] == 0
+
+    # A vanished Source row (swept outside the detach path) answers ""/0, not
+    # an error: the strip falls back to the plain chip.
+    db = SessionLocal()
+    try:
+        source = db.get(Source, rows["heron.csv"]["target_id"])
+        assert source is not None
+        db.delete(source)
+        db.commit()
+    finally:
+        db.close()
+    after = {
+        row["filename"]: row
+        for row in client.get(
+            f"/api/conversations/{conversation_id}/attachments"
+        ).json()
+    }
+    assert after["heron.csv"]["media_type"] == ""
+    assert after["heron.csv"]["byte_size"] == 0
