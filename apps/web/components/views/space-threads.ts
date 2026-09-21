@@ -1,4 +1,9 @@
-import type { Conversation, Source, Space } from "@workspace/api-client";
+import type {
+  Conversation,
+  ProjectSummary,
+  Source,
+  Space,
+} from "@workspace/api-client";
 
 /**
  * Which of a space's things are on screen — pure, DOM-free, exhaustively
@@ -66,6 +71,72 @@ export function unspacedThreads(
   return conversations.filter(
     (conversation) =>
       !conversation.space_id || !known.has(conversation.space_id),
+  );
+}
+
+/** One rail group: a project and the threads that hang off it. */
+export type ProjectThreadGroup = {
+  project: ProjectSummary;
+  threads: Conversation[];
+};
+
+/**
+ * The project a thread is about, or "" when it is about no project.
+ *
+ * The KIND is checked first and is not optional: `subject_id` is a bare uuid
+ * shared across three independent tables, so a dashboard thread whose id
+ * happened to equal a project's would otherwise group under that project —
+ * the same collision `conversations.for_subject` keys on the pair to avoid.
+ */
+function projectIdOf(conversation: Conversation): string {
+  return conversation.subject_kind === "project" ? conversation.subject_id : "";
+}
+
+/**
+ * The rail's project groups: every project that holds at least one visible
+ * thread, in the projects list's own order, each with its threads in the
+ * server's recency order. Empty groups are dropped for the same reason a
+ * space's are — the project's home is the Projects page, and a header with
+ * nothing under it is sidebar noise.
+ *
+ * A project whose id is "" (and a thread whose `subject_id` is "") matches
+ * nothing, the same refusal `threadsInSpace` makes: "" is the wire spelling of
+ * "no subject", and letting it match would file every ordinary rail thread
+ * under the first project in the list.
+ */
+export function projectThreadGroups(
+  projects: ProjectSummary[],
+  conversations: Conversation[],
+): ProjectThreadGroup[] {
+  return projects
+    .map((project) => ({
+      project,
+      threads: project.id
+        ? conversations.filter(
+            (conversation) => projectIdOf(conversation) === project.id,
+          )
+        : [],
+    }))
+    .filter((group) => group.threads.length > 0);
+}
+
+/**
+ * What the flat Personal/Shared rail still shows once the space groups AND the
+ * project groups have taken theirs: `unspacedThreads` minus every thread that
+ * belongs to a project the caller's list holds.
+ *
+ * A thread whose project is not in `projects` (deleted between fetches, or the
+ * list not yet loaded) stays here, so the three renderings partition the list
+ * between them whatever state the fetches are in and no row can vanish.
+ */
+export function unfiledThreads(
+  spaces: Space[],
+  projects: ProjectSummary[],
+  conversations: Conversation[],
+): Conversation[] {
+  const known = new Set(projects.map((project) => project.id).filter(Boolean));
+  return unspacedThreads(spaces, conversations).filter(
+    (conversation) => !known.has(projectIdOf(conversation)),
   );
 }
 

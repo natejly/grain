@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind, FavoriteKind } from "@workspace/api-client";
-import { BarChart3, ChevronDown, ChevronRight, CircleDot, Columns2, Download, FolderInput, FolderMinus, Ghost, Layers, Link2, LogOut, Menu, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
+import { BarChart3, Braces, ChevronDown, ChevronRight, CircleDot, Columns2, Download, FolderInput, FolderMinus, Ghost, Layers, Link2, LogOut, Menu, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
@@ -29,7 +29,12 @@ import { AdminView } from "./views/admin";
 import { DatasetsView } from "./views/datasets";
 import { AgentsView } from "./views/agents";
 import { SpacesView } from "./views/spaces";
-import { spaceNameOf, spaceThreadGroups, unspacedThreads } from "./views/space-threads";
+import {
+  projectThreadGroups,
+  spaceNameOf,
+  spaceThreadGroups,
+  unfiledThreads,
+} from "./views/space-threads";
 import { AppsView } from "./views/apps";
 import { BoardView } from "./views/board";
 import { ChatView } from "./views/chat";
@@ -425,16 +430,19 @@ export function Workspace() {
     askForChart: (seed) => setDraft((current) => (current ? `${current}\n${seed}` : seed)),
   };
 
-  // The rail's groups, ChatGPT-Projects-style: first a collapsible group per
-  // space that holds threads, then the flat rail for everything unspaced. The
-  // flat half keeps its two audiences — a thread is shared with the whole
-  // workspace or it is the caller's own; the server never returns another
-  // member's personal thread, so `shared` alone tells them apart. The two
-  // helpers partition `conversations` between them (a thread whose space is
-  // gone from the list falls back to the flat rail), so no row can vanish.
+  // The rail's groups, ChatGPT-Projects-style: a collapsible group per space
+  // that holds threads, then one per project that holds threads, then the flat
+  // rail for everything left. The flat half keeps its two audiences — a thread
+  // is shared with the whole workspace or it is the caller's own; the server
+  // never returns another member's personal thread, so `shared` alone tells
+  // them apart, and it is only ever asked about threads that have no subject.
+  // The three helpers partition `conversations` between them (a thread whose
+  // space or project is gone from the list falls back to the flat rail), so no
+  // row can vanish.
   const railSpaceGroups = spaceThreadGroups(spaces, conversations);
+  const railProjectGroups = projectThreadGroups(projects, conversations);
   const { personal: personalThreads, shared: sharedThreads } = groupThreads(
-    unspacedThreads(spaces, conversations),
+    unfiledThreads(spaces, projects, conversations),
   );
 
   /**
@@ -458,6 +466,20 @@ export function Workspace() {
       const next = new Set(current);
       if (next.has(spaceId)) next.delete(spaceId);
       else next.add(spaceId);
+      return next;
+    });
+  // The same, for the project groups, and deliberately a second Set rather
+  // than one keyed on a prefixed id: a space and a project are different
+  // things to fold, and one store would make "collapse this project" depend on
+  // ids from two tables never colliding.
+  const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const toggleProjectCollapsed = (projectId: string) =>
+    setCollapsedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
       return next;
     });
 
@@ -697,9 +719,11 @@ export function Workspace() {
     await renameConversation(conversation.id, title);
   }
 
-  // `inSpaceGroup` suppresses the space chip: a row under its space's own rail
-  // header would name the space twice.
-  const renderThread = (conversation: Conversation, inSpaceGroup = false) => {
+  // `inGroup` suppresses the space chip: a row under a group header that
+  // already names its container would name it twice. (A project group's rows
+  // carry no space chip either way — a project thread has no space — but the
+  // flag says what it means: this row is already filed under a header.)
+  const renderThread = (conversation: Conversation, inGroup = false) => {
     const share = shareControl(conversation, activeConversation);
     if (renamingId === conversation.id) {
       return (
@@ -735,7 +759,7 @@ export function Workspace() {
           <Ghost size={12} aria-label="Temporary chat" className="thread-incognito" />
         )}
         <span>{conversation.title}</span>
-        {!inSpaceGroup && spaceNameOf(conversation, spaces) && (
+        {!inGroup && spaceNameOf(conversation, spaces) && (
           <span className="thread-space-chip">
             {spaceNameOf(conversation, spaces)}
           </span>
@@ -900,26 +924,29 @@ export function Workspace() {
               {/* Filing rides every row, not just the open one: moving a
                   thread into a space is the rail's organizing gesture — the
                   space groups above are built from nothing else — and the
-                  menu already isolates it from the row's width. The server
-                  proves the space against the workspace and refuses subject
-                  threads, which the rail never lists anyway. */}
-              {spaces
-                .filter((space) => space.id !== conversation.space_id)
-                .map((space) => (
-                  <button
-                    key={space.id}
-                    className="disclosure-option thread-move"
-                    aria-label={`Move ${conversation.title} to ${space.name}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      close();
-                      void moveConversationToSpace(conversation.id, space.id);
-                    }}
-                  >
-                    <FolderInput size={13} /> Move to “{space.name}”
-                  </button>
-                ))}
-              {conversation.space_id !== "" && (
+                  menu already isolates it from the row's width. Subject
+                  threads are the exception and the gate is explicit now that
+                  the rail lists project threads: a project thread belongs to
+                  its project, the server 409s any attempt to file one, and a
+                  row whose only outcome is an error is worse than no row. */}
+              {conversation.subject_id === "" &&
+                spaces
+                  .filter((space) => space.id !== conversation.space_id)
+                  .map((space) => (
+                    <button
+                      key={space.id}
+                      className="disclosure-option thread-move"
+                      aria-label={`Move ${conversation.title} to ${space.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        close();
+                        void moveConversationToSpace(conversation.id, space.id);
+                      }}
+                    >
+                      <FolderInput size={13} /> Move to “{space.name}”
+                    </button>
+                  ))}
+              {conversation.subject_id === "" && conversation.space_id !== "" && (
                 <button
                   className="disclosure-option thread-move"
                   aria-label={`Remove ${conversation.title} from its space`}
@@ -1443,6 +1470,43 @@ export function Workspace() {
                           )}
                           <Layers size={12} aria-hidden />
                           <span className="thread-space-name">{space.name}</span>
+                          <span className="thread-space-count">
+                            {threads.length}
+                          </span>
+                        </button>
+                        {open &&
+                          threads.map((thread) => renderThread(thread, true))}
+                      </div>
+                    );
+                  })}
+                  {/* Then the projects, in the same shape as the spaces above
+                      — a project is the other thing a thread can hang off, and
+                      two arrangements for one idea would be two things to
+                      learn. The header is the collapse toggle and nothing
+                      else: a "open this project" door inside it would be a
+                      button inside a button, which is invalid HTML and
+                      unreachable by keyboard. The project's own page is one
+                      click away in the rail. */}
+                  {railProjectGroups.map(({ project, threads }) => {
+                    const open = !collapsedProjects.has(project.id);
+                    return (
+                      <div
+                        key={project.id}
+                        className="thread-space-group thread-project-group"
+                      >
+                        <button
+                          className="thread-space-toggle"
+                          aria-expanded={open}
+                          aria-label={`${project.name} threads`}
+                          onClick={() => toggleProjectCollapsed(project.id)}
+                        >
+                          {open ? (
+                            <ChevronDown size={12} aria-hidden />
+                          ) : (
+                            <ChevronRight size={12} aria-hidden />
+                          )}
+                          <Braces size={12} aria-hidden />
+                          <span className="thread-space-name">{project.name}</span>
                           <span className="thread-space-count">
                             {threads.length}
                           </span>
@@ -2047,6 +2111,17 @@ export function Workspace() {
               // so an approved write reaches the tree, the editor and the
               // preview. Nothing else in the shell is refreshed from here.
               reloadProject: reloadOpenProject,
+              // The panel resolved this project's thread. If the rail has
+              // never heard of it — the panel just created it — the listing is
+              // re-read, or the project's rail group would not appear until
+              // something else refreshed it. Guarded on the id rather than
+              // fired every time the panel opens: the callback runs on every
+              // subject load, and an unconditional refetch would put a
+              // conversations GET behind every click on a project.
+              onThreadKnown: (conversation) => {
+                if (conversations.some((row) => row.id === conversation.id)) return;
+                void refreshConversations().catch(() => undefined);
+              },
               unrestricted: bootstrap?.unrestricted_agent,
               safeMode,
             }}

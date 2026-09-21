@@ -17,6 +17,14 @@ export type InfraHandlerDeps = {
   setDbConnections: Dispatch<SetStateAction<DbConnection[]>>;
   setProjects: Dispatch<SetStateAction<ProjectSummary[]>>;
   setActiveProject: Dispatch<SetStateAction<WorkspaceProject | null>>;
+  /**
+   * Re-read the rail's threads after a project is deleted. The server cascades
+   * over a project's thread (`conversations.purge_for_subject`) and the rail
+   * LISTS project threads, so a client that only refreshed the project list
+   * would keep showing a row whose thread no longer exists — under no header,
+   * because its project is gone — and clicking it would 404.
+   */
+  refreshConversations: () => Promise<void>;
 };
 
 export function createInfraHandlers({
@@ -24,6 +32,7 @@ export function createInfraHandlers({
   setDbConnections,
   setProjects,
   setActiveProject,
+  refreshConversations,
 }: InfraHandlerDeps) {
   async function addDbConnection(input: DbConnectionInput) {
     setError("");
@@ -130,6 +139,9 @@ export function createInfraHandlers({
       await api.deleteProject(project.id);
       setActiveProject((current) => (current?.id === project.id ? null : current));
       setProjects(await api.listProjects());
+      // The thread went with it, server-side. Never fatal to the delete: the
+      // project IS gone, and a failed re-read must not report otherwise.
+      await refreshConversations().catch(() => undefined);
     } catch (caught) {
       setError(describeError(caught, "Could not delete that project"));
     }

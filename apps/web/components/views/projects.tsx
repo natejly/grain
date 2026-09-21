@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type {
   Citation,
+  Conversation,
   GeneratedApp,
   ProjectFile,
   ProjectKind,
@@ -60,6 +61,13 @@ export type ProjectChatDeps = {
   openCitation: (citation: Citation) => Promise<void>;
   /** Re-read the open project after an approved write lands. */
   reloadProject: () => Promise<void>;
+  /**
+   * This project's thread, as soon as the panel has it. The rail groups
+   * project threads under their project, and this one may have been created by
+   * opening the panel just now — so the shell is told rather than left to
+   * discover it on the next refresh.
+   */
+  onThreadKnown?: (conversation: Conversation) => void;
   /** `DEV_UNRESTRICTED_AGENT` is on, so the panel wears the warning. */
   unrestricted?: boolean;
   /** Safe mode is on for this member; only changes how loud the panel is. */
@@ -145,6 +153,7 @@ export function ProjectsView({
     // about rather than whatever is open when the reviewer gets to it.
     focus: selected,
     onRunSettled,
+    onThreadKnown: chat?.onThreadKnown,
   });
 
   async function save() {
