@@ -32,6 +32,9 @@ export type View =
   | "crons"
   | "monitors"
   | "spaces"
+  | "pages"
+  | "watches"
+  | "deliverables"
   | "gallery"
   | "recap"
   | "profile";
@@ -174,6 +177,17 @@ export const PAGE_TITLES: Record<View, string> = {
   policies: "Rules & policies",
   admin: "Admin",
   workflows: "Workflows",
+  // A thread published as a document whose citations are frozen to the
+  // passages that were checked — not a window onto the thread, which is what
+  // a share link is everywhere else.
+  pages: "Pages",
+  // A standing question about a file or a space, re-asked on the same tick
+  // that fires schedules, with a brief it rewrites when the answer moves.
+  watches: "Watches",
+  // What a deliverable run produced, joined to the evidence behind it: every
+  // file, the sandbox session it came from, and the queries and passages the
+  // run was holding.
+  deliverables: "Deliverables",
   // A cron is a schedule. Its old title, "Automations", is the *group* now.
   crons: "Schedules",
   // A monitor watches a dataset's number against a threshold on a schedule

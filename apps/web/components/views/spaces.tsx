@@ -55,6 +55,14 @@ type SpacesViewProps = {
   spaceTemplates: SpaceTemplate[];
   conversations: Conversation[];
   sources: Source[];
+  /**
+   * Start a watch on the selected space, and open the deliverables attached to
+   * it. Both optional, so the view still mounts bare in tests — and both live
+   * HERE, on the space, because a watch or a manifest reachable only from a
+   * settings page nobody visits is a feature nobody finds.
+   */
+  watchSpace?: (space: Space) => void;
+  openDeliverables?: (space: Space) => void;
   /** The shell's memory list; the panel shows only the selected space's shelf. */
   memories: MemoryItem[];
   /** The shell's forget handler — tombstones the row and refreshes the list. */
@@ -80,6 +88,8 @@ export function SpacesView({
   onSelectConversation,
   onNewThread,
   onMoveThread,
+  watchSpace,
+  openDeliverables,
 }: SpacesViewProps) {
   const [selectedId, setSelectedId] = useState("");
   const [newName, setNewName] = useState("");
@@ -642,6 +652,42 @@ export function SpacesView({
                   </ul>
                 )}
               </div>
+
+              {/* Two more shelves, on the same page as the knowledge and the
+                  memory they read from. A watch on a space writes to that
+                  space's shelf, and a manifest attached to it names the files
+                  a run there produced — so both belong beside the container
+                  they are scoped to. */}
+              {(watchSpace || openDeliverables) && (
+                <div className="space-memory">
+                  <h2>Watches &amp; deliverables</h2>
+                  <p className="space-memory-empty">
+                    A watch re-asks a standing question about this space on a
+                    schedule; a deliverable run leaves a manifest naming every
+                    file it produced and the evidence behind it.
+                  </p>
+                  <div className="page-actions">
+                    {watchSpace && (
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => watchSpace(selected)}
+                      >
+                        Watch this space
+                      </button>
+                    )}
+                    {openDeliverables && (
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => openDeliverables(selected)}
+                      >
+                        Deliverables in this space
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </section>

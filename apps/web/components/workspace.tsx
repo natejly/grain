@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, DocumentKind, FavoriteKind } from "@workspace/api-client";
-import { BarChart3, Braces, ChevronDown, ChevronRight, CircleDot, Columns2, Download, FolderInput, FolderMinus, Ghost, Layers, Link2, LogOut, Menu, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
+import { BarChart3, BookOpen, Braces, ChevronDown, ChevronRight, CircleDot, Columns2, Download, FolderInput, FolderMinus, Ghost, Layers, Link2, LogOut, Menu, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ApiHealthBanner, useApiHealth } from "./api-health-banner";
@@ -102,7 +102,11 @@ import { SourcesView } from "./views/sources";
 import { ThemeToggle } from "./theme-toggle";
 import { WorkflowsView } from "./views/workflows";
 import { CronsView } from "./views/crons";
+import { seededDraft } from "./views/followup-format";
+import { DeliverablesView } from "./views/deliverables";
 import { MonitorsView } from "./views/monitors";
+import { PagesView } from "./views/pages";
+import { WatchesView } from "./views/watches";
 import { WorkspaceSwitcher, useWorkspaceSelection } from "./workspace-selection";
 
 /**
@@ -217,7 +221,12 @@ export function Workspace() {
     setFast,
     thinking,
     setThinking,
+    selectedPreset,
+    setSelectedPreset,
+    stepPlan,
+    setStepPlan,
     runThinking,
+    runPlan,
     attachments,
     attaching,
     attachFile,
@@ -496,6 +505,42 @@ export function Workspace() {
   // Schedule-from-chat: the draft handed to the Crons composer, on the
   // workflowRequested precedent. The CronsView lowers it once consumed.
   const [cronSeed, setCronSeed] = useState("");
+
+  // Watch-this-file / watch-this-space, on the same seed contract: a source
+  // row or a space pane raises the flag with the target to pre-fill, and the
+  // WatchesView lowers it once consumed, so navigating back later does not
+  // reopen a composer the user dismissed.
+  const [watchSeed, setWatchSeed] = useState<{
+    targetKind: "source" | "space";
+    targetId: string;
+    name: string;
+  } | null>(null);
+
+  /**
+   * Freeze the open thread as a Page, then show it.
+   *
+   * The title is asked for rather than derived: a page is a document somebody
+   * is about to share, and the thread's auto-title is usually the first thing
+   * they typed. The two refusals the server makes (a subject thread, a
+   * temporary chat) are already reflected in the menu item's disabled state,
+   * so reaching here means the publish should work — and a failure still lands
+   * in the ordinary error toast rather than a silent no-op.
+   */
+  async function publishThreadAsPage(conversation: Conversation) {
+    const title = window.prompt(
+      "Publish this thread as a page. Its citations will be frozen to the passages that were checked.",
+      conversation.title || "Untitled page",
+    );
+    if (title === null) return;
+    const wanted = title.trim();
+    if (!wanted) return;
+    try {
+      await api.publishPage({ conversation_id: conversation.id, title: wanted });
+      setView("pages");
+    } catch (caught) {
+      setError(describeActionError(caught, "Could not publish that thread"));
+    }
+  }
 
   /** Download the open thread's transcript as a file. Through the API client
    *  (a bare <a href> carries no X-Workspace-Id and no cross-site cookie),
@@ -861,6 +906,33 @@ export function Workspace() {
                     <Link2 size={13} /> Public link…
                   </button>
                 )}
+              {/* Publish as a Page — beside the sharing actions, because it is
+                  the third way a thread leaves this workspace. Disabled with
+                  an explanation for the two threads the server refuses (409),
+                  so the person meets the refusal before the request rather
+                  than after it. A subject thread belongs to its subject, and a
+                  temporary chat is not a thing to freeze. */}
+              {activeConversation === conversation.id && (
+                <button
+                  className="disclosure-option thread-publish-page"
+                  aria-label={`Publish ${conversation.title} as a page`}
+                  disabled={Boolean(conversation.subject_id) || conversation.incognito}
+                  title={
+                    conversation.subject_id
+                      ? "A subject thread belongs to its subject — publish the document or dashboard instead"
+                      : conversation.incognito
+                        ? "A temporary chat cannot be published"
+                        : "Freeze this thread as a page, with its citations pinned"
+                  }
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    close();
+                    void publishThreadAsPage(conversation);
+                  }}
+                >
+                  <BookOpen size={13} /> Publish as a page…
+                </button>
+              )}
               <button
                 className="disclosure-option thread-split"
                 aria-label={`Open ${conversation.title} in a new pane`}
@@ -1643,6 +1715,9 @@ export function Workspace() {
               onStyleChange={(preset, customText) =>
                 void updateStylePref(preset, customText)
               }
+              // Straight off bootstrap, already resolved server-side: the note
+              // only appears when the gate really is armed for this workspace.
+              taint={bootstrap?.taint}
             />
             <ThemeToggle />
             {/* The screen and provider pills, folded into one popover: the
@@ -1735,6 +1810,13 @@ export function Workspace() {
                 apps={dashboardApps}
                 draft={draft}
                 setDraft={setDraft}
+                // A chip SEEDS this composer; it never sends. Appending rather
+                // than clobbering, because losing typed work to a stray chip
+                // click is what would get the feature turned off.
+                seedDraft={(text) =>
+                  setDraft((current) => seededDraft(current, text))
+                }
+                showCoverage
                 activeRun={activeRun}
                 runStatus={runStatus}
                 budgetPark={budgetPark}
@@ -1795,8 +1877,16 @@ export function Workspace() {
                   setFast,
                   thinking,
                   setThinking,
+                  // The rail chat is the front door: a preset that only worked
+                  // in an extra pane would not be the feature.
+                  presets: bootstrap?.run_presets,
+                  preset: selectedPreset,
+                  setPreset: setSelectedPreset,
+                  stepPlan,
+                  setStepPlan,
                 }}
                 thinking={runThinking}
+                plan={runPlan}
                 skills={{
                   attached: attachedSkill,
                   argValues: skillArgs,
@@ -1872,6 +1962,14 @@ export function Workspace() {
             }}
             focused={focusedSource}
             setFocused={setFocusedSource}
+            watchSource={(source) => {
+              setWatchSeed({
+                targetKind: "source",
+                targetId: source.id,
+                name: source.filename,
+              });
+              setView("watches");
+            }}
           />
         )}
 
@@ -2143,6 +2241,15 @@ export function Workspace() {
             onSelectConversation={selectConversation}
             onNewThread={(spaceId) => void newConversation(spaceId)}
             onMoveThread={moveConversationToSpace}
+            watchSpace={(space) => {
+              setWatchSeed({
+                targetKind: "space",
+                targetId: space.id,
+                name: space.name,
+              });
+              setView("watches");
+            }}
+            openDeliverables={() => setView("deliverables")}
           />
         )}
         {view === "agents" && (
@@ -2205,6 +2312,22 @@ export function Workspace() {
           <MonitorsView setError={setError} datasets={datasets} />
         )}
 
+        {/* Self-contained like MonitorsView: a page's frozen body and its
+            drift verdicts are nobody's business until they open this. */}
+        {view === "pages" && <PagesView setError={setError} />}
+
+        {/* Self-contained like CronsView, and seeded the same way: "Watch this
+            file" on a source row raises the flag, this panel lowers it. */}
+        {view === "watches" && (
+          <WatchesView
+            setError={setError}
+            composeSeed={watchSeed ?? undefined}
+            onComposeSeedHandled={() => setWatchSeed(null)}
+          />
+        )}
+
+        {view === "deliverables" && <DeliverablesView setError={setError} />}
+
         {view === "mcp" && (
           <McpView
             servers={mcpServers}
@@ -2259,6 +2382,9 @@ export function Workspace() {
                 bootstrap?.identity.role === "owner" ? "admin" : "agents",
               )
             }
+            // A research notice carries no decision; the action is to go and
+            // read the thing it is about.
+            openNotice={(target) => setView(target)}
             identityId={selfId}
             loadMembers={loadMembers}
             assignApproval={assignApproval}

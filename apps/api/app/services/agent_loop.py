@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -29,9 +30,12 @@ from . import (
     checkpoints,
     coworking,
     orgs,
+    provenance,
+    run_presets,
     screen,
     skills,
     spaces,
+    step_plan,
     styles,
     subjects,
     usage,
@@ -44,6 +48,7 @@ from .harness import ModelStep, resolve_harness
 from .llm_tools import (
     ASK_USER,
     EXIT_PLAN_MODE,
+    WEB_FETCH,
     ToolContext,
     ToolResult,
     ToolSpec,
@@ -230,6 +235,12 @@ def _default_model_step(
         model=run.requested_model or None,
         effort=run.requested_effort or None,
         thinking=run.show_thinking,
+        # The turn's identity, for the request fields that vary per workspace
+        # (today the prompt cache key). Ids only — the harness never gets the
+        # `Run` — which is why widening this seam did not widen what a backend
+        # can reach.
+        workspace_id=run.workspace_id,
+        run_id=run.id,
     )
 
 
@@ -442,6 +453,11 @@ class Verdict:
     #: provenance HERE — where the rows and the ceiling are already in hand — is
     #: what keeps the park site from having to re-derive it and drift.
     guardian_may_review: bool = False
+    #: Why the PROVENANCE gate raised this to an ask, as the machine string
+    #: `provenance.gate_reason` builds (`taint:<classes>:<action>`), and "" when
+    #: it did not. Stamped onto `AgentToolCall.gate_reason` at the park, where
+    #: the chat card and the Inbox both read it back over REST.
+    gate_reason: str = ""
 
 
 def evaluate_policy(
@@ -452,6 +468,7 @@ def evaluate_policy(
     spec: Optional[ToolSpec],
     scope: PolicyScope,
     mode: ApprovalMode = ASK_WRITES,
+    taint: frozenset[str] = frozenset(),
 ) -> Verdict:
     """ask | allow | deny for one tool in one situation. The only decision point.
 
@@ -515,6 +532,15 @@ def evaluate_policy(
       refusal. An `ask` row is different in kind — it is a request to be asked,
       and the mode is the conversation answering that request in advance — so
       `auto_writes` does clear one, while nothing clears a deny.
+
+    `taint` is the provenance gate, and it is the same shape as `force_ask`: a
+    tighten-only clamp, applied below, that can turn an `allow` into an `ask`
+    and can never touch a `deny`. It holds the gating-class untrusted content
+    that has already entered this turn — a fetched page, an MCP result — read
+    per call by the loop, never derived here. Empty (the default) means the
+    caller has nothing to report and this function behaves exactly as it did
+    before the gate existed, which is what keeps every other call site honest
+    without a fourth thing to pass wrongly.
 
     Above all of that sits the **organization**, and its rule is the one-way one:
     *scopes may only tighten organization-wide policies*. It is enforced as a
@@ -630,6 +656,35 @@ def evaluate_policy(
     if spec is not None and spec.force_ask and result.policy == "allow":
         result = Verdict(policy="ask")
 
+    # The PROVENANCE clamp, and like `force_ask` above it may only tighten. Its
+    # placement is load-bearing in both directions: after `force_ask`, so a
+    # later rewrite of the Verdict cannot overwrite the `gate_reason` it sets;
+    # before the org ceiling, so the ceiling stays last and unbypassable.
+    #
+    # Two halves, and the second is the one easy to miss. When the verdict is
+    # already `ask` this gate changes no verdict — but it must still strip the
+    # guardian's licence to soften it. A cheap reviewer model asked to triage a
+    # call an injection may have authored is precisely the reviewer the
+    # injection would write for.
+    #
+    # The `allow` branch drops `by_mode` deliberately: an `auto_writes` bypass
+    # that the gate overruled did not let this call through, and saying it did
+    # would be the same lie the org-ceiling branch below already refuses.
+    action = provenance.gated_action(spec) if taint else ""
+    if action:
+        if result.policy == "allow":
+            result = Verdict(
+                policy="ask",
+                gate_reason=provenance.gate_reason(classes=taint, action=action),
+            )
+        elif result.guardian_may_review:
+            result = Verdict(
+                policy=result.policy,
+                by_mode=result.by_mode,
+                guardian_may_review=False,
+                gate_reason=provenance.gate_reason(classes=taint, action=action),
+            )
+
     if spec is None:
         return result
     # The organization ceiling, and it is last on purpose — see the docstring.
@@ -649,7 +704,12 @@ def evaluate_policy(
         if may_review == result.guardian_may_review:
             return result
         return Verdict(
-            policy=result.policy, by_mode=result.by_mode, guardian_may_review=False
+            policy=result.policy,
+            by_mode=result.by_mode,
+            guardian_may_review=False,
+            # Carried: the card still exists and still needs its reason. Only
+            # the guardian's licence was withdrawn.
+            gate_reason=result.gate_reason,
         )
     # The org moved the answer, so a `by_mode` attribution would now be a lie: the
     # bypass did not let this call through, it was overruled. Property 3 of the
@@ -667,6 +727,7 @@ def resolve_policy(
     spec: Optional[ToolSpec],
     scope: PolicyScope,
     mode: ApprovalMode = ASK_WRITES,
+    taint: frozenset[str] = frozenset(),
 ) -> str:
     """`evaluate_policy`'s verdict, as the bare string most callers want.
 
@@ -683,6 +744,7 @@ def resolve_policy(
         spec=spec,
         scope=scope,
         mode=mode,
+        taint=taint,
     ).policy
 
 
@@ -705,6 +767,55 @@ def _run_was_flagged(db: Session, run: Run) -> bool:
         )
         is not None
     )
+
+
+#: Tool name -> the screen kind its output is classified under. Everything
+#: absent from this map is `tool_output`, which is the honest default: one
+#: label for "a tool handed the model a string".
+#:
+#: `web_fetch` earns its own because the kinds are what an operator reads back
+#: off `screen.flagged` events, and "a page off the open internet was poisoned"
+#: and "a row in this workspace's own database was poisoned" are different
+#: incidents with different responses. Folded together they are one number
+#: nobody can act on.
+SCREEN_KINDS: Dict[str, str] = {WEB_FETCH: "web_fetch"}
+
+
+def _screen_kind(tool_name: str) -> str:
+    return SCREEN_KINDS.get(tool_name, "tool_output")
+
+
+def _ingest(
+    db: Session,
+    run: Run,
+    blocks: List[provenance.ContextBlock],
+    *,
+    settings: Settings,
+) -> None:
+    """Fold content into the turn: record its provenance, then screen it.
+
+    The ONE call site for every injection point, so the ledger and the
+    classifier read the same strings. Two halves with two different gates,
+    which is the whole reason this is a function rather than two calls at each
+    site:
+
+    - `provenance.mark` runs UNCONDITIONALLY. A record of what a turn read must
+      not depend on whether a classifier happens to be switched on, or an
+      operator enabling the gate next week would have nothing to look back at.
+    - `_screen` runs only with `screen_enabled`, and only over UNTRUSTED
+      blocks. The `if` moved here from the call sites; the trusted skip is what
+      keeps the user's own prompt unscreened, exactly as before — it is input,
+      not an attack on itself.
+
+    `_screen` itself is untouched: same signature, same event, same payload.
+    """
+    provenance.mark(db, run, blocks, settings=settings)
+    if not settings.screen_enabled:
+        return
+    for block in blocks:
+        if not block.untrusted:
+            continue
+        _screen(db, run, kind=block.kind, text=block.text, settings=settings)
 
 
 def _screen(
@@ -891,6 +1002,43 @@ def policy_scope_for_run(db: Session, run: Run) -> PolicyScope:
     return WORKFLOW_SCOPE if backing is not None else CHAT_SCOPE
 
 
+def _append_deferred(db: Session, run: Run, result: ToolResult) -> None:
+    """Write the run events an executor computed but was not allowed to write.
+
+    THE COORDINATOR WRITES EVERY EVENT. `_delegate_parallel_batch` runs each
+    delegate call on a worker thread with its own Session, and `run_events` is
+    unique on (run_id, sequence) — so an executor that appended its own event
+    from there raced its siblings for the next sequence. The council's
+    `council.scored` was doing exactly that; it now rides home on
+    `ToolResult.deferred_events` and lands here, on the parent session, in
+    queue order, beside the `tool.completed` this sits under.
+
+    Never fails the call. A triage record that could swallow an answer the user
+    is waiting for would be a bad trade, which is the same rule the record it
+    replaced already held.
+    """
+    for entry in result.deferred_events:
+        event_type = str(entry.get("event_type") or "")
+        payload = entry.get("payload")
+        if not event_type or not isinstance(payload, dict):
+            continue
+        try:
+            append_event(
+                db,
+                workspace_id=run.workspace_id,
+                run_id=run.id,
+                event_type=event_type,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001 - the record must not cost the answer
+            logger.warning(
+                "deferred event %s could not be written for run %s",
+                event_type,
+                run.id,
+                exc_info=True,
+            )
+
+
 def _render_result(result: ToolResult, evidence_offset: int) -> str:
     parts: List[str] = []
     if result.content:
@@ -946,8 +1094,16 @@ def _park_for_approval(
     call: Dict[str, Any],
     spec: ToolSpec,
     context: ToolContext,
+    gate_reason: str = "",
 ) -> Paused:
-    """Record the proposed call, persist loop state, and stop the turn."""
+    """Record the proposed call, persist loop state, and stop the turn.
+
+    `gate_reason` is the provenance gate's machine string when IT is why this
+    card exists, "" otherwise. Written to the row and echoed on the event: the
+    row is what the Inbox and a reloaded chat fetch, and a reason that lived
+    only in the event stream would be invisible to exactly the reader deciding
+    the card.
+    """
     raw_arguments = str(call.get("arguments") or "{}")
     record = AgentToolCall(
         workspace_id=run.workspace_id,
@@ -957,6 +1113,7 @@ def _park_for_approval(
         call_id=str(call.get("call_id") or "")[:80],
         proposal_preview=describe_proposal(db, context, spec, raw_arguments),
         status="proposed",
+        gate_reason=gate_reason[:64],
     )
     db.add(record)
     db.flush()
@@ -976,6 +1133,7 @@ def _park_for_approval(
             "description": spec.description,
             "arguments": record.arguments_json,
             "preview": record.proposal_preview,
+            "gate_reason": record.gate_reason,
         },
     )
     append_event(
@@ -1191,6 +1349,7 @@ def execute_agent_tool_call(
             "approved_by_mode": record.approved_by_mode,
         },
     )
+    _append_deferred(db, run, result)
     record_audit(
         db,
         workspace_id=run.workspace_id,
@@ -1279,6 +1438,16 @@ def _guardian_clears(
     never reviews the mode did not already gate.
     """
     if mode != GUARDIAN or scope != CHAT_SCOPE:
+        return False
+    # The provenance gate's SECOND lock, independent of the first. The policy
+    # flag (`guardian_may_review`, cleared by the clamp in `evaluate_policy`)
+    # is what actually stops this being called; this is the guard that keeps
+    # that true after the next edit. Two locks, exactly as plan mode's registry
+    # narrowing and its deny are two locks — a taint-raised ask is not the
+    # tool's own default prudence, so it is not the reviewer's to soften.
+    if provenance.turn_taint(db, run, settings=settings) and provenance.gated_action(
+        spec
+    ):
         return False
     if spec.force_ask or spec.name == EXIT_PLAN_MODE:
         return False
@@ -1383,6 +1552,9 @@ def _delegate_parallel_batch(
             spec=spec,
             scope=scope,
             mode=approval_mode_for_run(db, run, scope=scope, settings=settings),
+            # Per call, like the mode beside it: a batch queued before an MCP
+            # result landed must not fan out after it did.
+            taint=provenance.turn_taint(db, run, settings=settings),
         )
         if verdict.policy != "allow" or verdict.by_mode:
             break
@@ -1480,6 +1652,7 @@ def _delegate_parallel_batch(
                 "approved_by_mode": record.approved_by_mode,
             },
         )
+        _append_deferred(db, run, result)
         record_audit(
             db,
             workspace_id=run.workspace_id,
@@ -1490,15 +1663,7 @@ def _delegate_parallel_batch(
             detail={"tool": DELEGATE_TOOL, "status": record.status},
         )
         db.commit()
-        _screen(
-            db,
-            run,
-            kind="tool_output",
-            text="\n\n".join(
-                [result.content or "", *(item.excerpt for item in result.evidence)]
-            ),
-            settings=settings,
-        )
+        _ingest(db, run, provenance.tool_result_blocks(spec, result), settings=settings)
         state.input_items.append(
             {
                 "type": "function_call_output",
@@ -1601,6 +1766,10 @@ def _drain_pending(
         decided_by = ""
         if decision is None:
             mode = approval_mode_for_run(db, run, scope=scope, settings=settings)
+            # Read PER CALL, for the same reason the mode above is: an MCP
+            # result folded in at step three must gate the very next call in
+            # this same queue, not the next turn.
+            taint = provenance.turn_taint(db, run, settings=settings)
             verdict = evaluate_policy(
                 db,
                 workspace_id=run.workspace_id,
@@ -1611,6 +1780,7 @@ def _drain_pending(
                 spec=spec,
                 scope=scope,
                 mode=mode,
+                taint=taint,
             )
             if verdict.policy == "ask" and spec is not None:
                 # `guardian_may_review` is the policy's provenance ruling: only
@@ -1630,7 +1800,15 @@ def _drain_pending(
                     decision = "approved"
                     decided_by = mode_decider(GUARDIAN)
                 else:
-                    return _park_for_approval(db, run, state, call, spec, context)
+                    return _park_for_approval(
+                        db,
+                        run,
+                        state,
+                        call,
+                        spec,
+                        context,
+                        gate_reason=verdict.gate_reason,
+                    )
             else:
                 decision = "denied" if verdict.policy == "deny" else "approved"
                 decided_by = mode_decider(verdict.by_mode)
@@ -1655,15 +1833,11 @@ def _drain_pending(
         # evidence excerpts (extended into state.evidence below and spliced by
         # _render_result), so a tool that hides an injection in an excerpt rather
         # than the body does not slip past.
-        _screen(
-            db,
-            run,
-            kind="tool_output",
-            text="\n\n".join(
-                [result.content or "", *(item.excerpt for item in result.evidence)]
-            ),
-            settings=settings,
-        )
+        #
+        # The KIND is per tool (`_screen_kind`): everything is `tool_output`
+        # except the classes worth telling apart in an incident, which today
+        # is the one tool that reads the open internet.
+        _ingest(db, run, provenance.tool_result_blocks(spec, result), settings=settings)
         state.input_items.append(
             {
                 "type": "function_call_output",
@@ -1717,12 +1891,8 @@ def _apply_web_search(
     # source class exempt from the screen is a gap, so it is covered for
     # completeness.
     if outcome.evidence:
-        _screen(
-            db,
-            run,
-            kind="web_search",
-            text="\n\n".join(item.excerpt for item in outcome.evidence),
-            settings=settings,
+        _ingest(
+            db, run, provenance.web_search_blocks(outcome.evidence), settings=settings
         )
     return anchor_citations(text, outcome.anchors)
 
@@ -1822,15 +1992,86 @@ def resolve_directives(db: Session, run: Run) -> AgentDirectives:
     return AgentDirectives(instructions=instructions, allowed=allowed)
 
 
+#: Version tag on every fingerprint. It is stored, not implied: the day the
+#: inputs or the canonical form change, old rows must read as "hashed by the
+#: old scheme" rather than as "did not match", and a bare hex digest cannot say
+#: that. `Run.prompt_fingerprint` is 80 characters for exactly this headroom.
+PROMPT_FINGERPRINT_SCHEME = "v1"
+
+
+def prompt_fingerprint(instructions: str, *, model: str, effort: str) -> str:
+    """The identity of one turn's prompt configuration.
+
+    What a historical run is otherwise unattributable about: two runs that
+    answered differently are only comparable if you can say whether they ran
+    under the same instructions, and instructions are assembled at run time
+    from an agent's voice, a space's standing block, a member's style, a
+    skill's body and a coworking digest — none of which is stored on the run.
+    Storing the assembled text would be storing a copy of every prompt this
+    workspace has ever sent; storing its hash costs 67 characters and answers
+    the only question anyone asks of it ("same or not").
+
+    Canonical JSON with sorted keys, so the digest depends on the values and
+    not on the order this function happens to list them in. The domain prefix
+    keeps this hash from ever colliding with another sha256 in the codebase
+    over the same bytes.
+    """
+    payload = json.dumps(
+        {"effort": effort, "instructions": instructions, "model": model},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    digest = hashlib.sha256(("grain:prompt:" + payload).encode("utf-8")).hexdigest()
+    return f"{PROMPT_FINGERPRINT_SCHEME}:{digest}"
+
+
+def _stamp_prompt_fingerprint(
+    db: Session, run: Run, instructions: str, settings: Settings
+) -> None:
+    """Record what this turn's prompt configuration was, on the run.
+
+    Called where the instructions finish assembling — after `_plan_narrowed`,
+    not inside `resolve_directives` — because plan mode splices a further block
+    on, and a fingerprint of the text before that splice would claim two
+    materially different prompts were the same one.
+
+    A resume RE-stamps. The column is the last assembly, which is the honest
+    reading: a turn that parked for an hour and came back under a rewritten
+    space block did not run under the old one, and the loop re-resolves every
+    layer on each entry precisely so that it cannot.
+
+    Never fails a turn. The fingerprint is observability; a write that cannot
+    happen must not be able to stop the answer that was about to.
+    """
+    try:
+        stamp = prompt_fingerprint(
+            instructions,
+            model=run.requested_model or settings.default_model,
+            effort=run.requested_effort or settings.openai_reasoning_effort,
+        )
+        if run.prompt_fingerprint == stamp:
+            return
+        run.prompt_fingerprint = stamp
+        db.commit()
+    except Exception:  # noqa: BLE001 - observability must never fail a turn
+        logger.warning(
+            "prompt fingerprint could not be recorded for run %s",
+            run.id,
+            exc_info=True,
+        )
+        db.rollback()
+
+
 def _registry_for(
     db: Session,
     context: ToolContext,
     subject: Optional[subjects.Subject],
     directives: AgentDirectives,
     settings: Settings,
+    run: Optional[Run] = None,
 ) -> Dict[str, ToolSpec]:
     """The tools this turn may see: the agent's provisioned subset, narrowed
-    again to the families its subject is about.
+    again to the families its subject is about, and again to the run's preset.
 
     Both narrowings are applied HERE, at registry construction, and the ordering
     is the security property rather than an implementation detail. A tool outside
@@ -1857,6 +2098,14 @@ def _registry_for(
         allowed = subjects.narrow(
             allowed,
             subjects.allowed_tools_for(db, context, subject.kind if subject else ""),
+        )
+    # The preset's own narrowing, composed by the same intersection: a preset
+    # of "" or one this build no longer ships yields None, which `narrow`
+    # reads as "no opinion". It can only ever subtract.
+    if run is not None:
+        allowed = subjects.narrow(
+            allowed,
+            run_presets.allowed_tools_for_preset(db, context, run.preset),
         )
     return build_registry(db, context, allowed=allowed)
 
@@ -1912,6 +2161,11 @@ def _advance(
     instructions: str = CHAT_INSTRUCTIONS,
 ) -> Outcome:
     tools = _tool_payload(registry, settings)
+    # Resolved once, at the top: a plan-then-execute turn spends one round
+    # submitting and two per step, so it gets a larger ceiling — and only it
+    # does. `MAX_ITERATIONS` is still the number a default turn is measured
+    # against, so a default turn's arithmetic below is unchanged.
+    budget_iterations = step_plan.iteration_budget(run)
     while True:
         blocked = _drain_pending(
             db,
@@ -1924,7 +2178,7 @@ def _advance(
         )
         if blocked is not None:
             return blocked
-        if state.iteration >= MAX_ITERATIONS:
+        if state.iteration >= budget_iterations:
             raise RuntimeError("Agent loop exceeded the iteration budget")
         db.refresh(run)
         if run.cancel_requested:
@@ -1948,7 +2202,7 @@ def _advance(
         if not verdict.allowed:
             return _park_for_budget(db, run, state, verdict)
 
-        final_round = state.iteration == MAX_ITERATIONS - 1
+        final_round = state.iteration == budget_iterations - 1
         buffer = DeltaBuffer(db, workspace_id=run.workspace_id, run_id=run.id)
         # The thinking trail's own lane: same buffering, distinct event type,
         # so the client can render it apart from the answer. Streamed live and
@@ -1962,9 +2216,24 @@ def _advance(
         )
         response: Any = None
         incomplete = False
-        for kind, value in step(
-            state.input_items, [] if final_round else tools, instructions
-        ):
+        # The last round keeps its tools and is forbidden to call one, rather
+        # than being handed an empty tools array. Same outcome — the turn ends
+        # in an answer — at a fraction of the cost: the tools array is part of
+        # the request prefix the provider's prompt cache is keyed on, so
+        # dropping it made the final round of every long turn a guaranteed
+        # cache miss on the largest prompt of that turn.
+        #
+        # Passed as a keyword ONLY when it is "none". `tool_choice` is
+        # keyword-only with an "auto" default precisely so that every
+        # three-argument step — every scripted double in the suite — stays a
+        # valid `ModelStep`; a step that reaches the iteration ceiling is the
+        # one that has to have an opinion, and it will be told.
+        events = (
+            step(state.input_items, tools, instructions, tool_choice="none")
+            if final_round
+            else step(state.input_items, tools, instructions)
+        )
+        for kind, value in events:
             if kind == "delta":
                 buffer.add(str(value))
             elif kind == "thinking":
@@ -2036,7 +2305,7 @@ def _advance(
             # after the answer, and shown the other way round the model could
             # conclude the answer already addressed it. Hence the peek before
             # either mutation.
-            if state.iteration < MAX_ITERATIONS and _steering_pending(
+            if state.iteration < budget_iterations and _steering_pending(
                 db, run, state
             ):
                 state.input_items.extend(
@@ -2091,8 +2360,14 @@ def run_agent_turn(
     settings: Optional[Settings] = None,
     model_step: Optional[ModelStep] = None,
     workflow_node: bool = False,
+    prompt_classes: Sequence[str] = (),
 ) -> Optional[AgentResult]:
     """Start a turn. None means the run parked for approval or was cancelled.
+
+    `prompt_classes` says where `run.prompt` actually came from, and only the
+    workflow executor passes it: a node prompt with `{{ fetch.output }}` spliced
+    into it is a tool's words, not a person's. Empty — every chat turn — means
+    the user typed it. See `provenance.prompt_blocks`.
 
     `workflow_node` is asserted by the workflow executor, which borrows this
     function for an `agent` node. Nobody else may start a turn on a run that
@@ -2116,12 +2391,17 @@ def run_agent_turn(
     subject = subjects.resolve(db, run)
     context = subjects.tool_context(run, subject, space_id=_space_id_for(db, run))
     directives = resolve_directives(db, run)
-    registry = _registry_for(db, context, subject, directives, settings)
+    registry = _registry_for(db, context, subject, directives, settings, run)
     registry, instructions = _plan_narrowed(
         registry,
         directives.instructions,
         approval_mode_for_run(db, run, scope=scope, settings=settings),
     )
+    # Last, so the most turn-specific block reads last — and HERE rather than in
+    # `resolve_directives`, which is what keeps every `== CHAT_INSTRUCTIONS`
+    # equality assert in the directive tests green.
+    registry, instructions = step_plan.narrowed(registry, instructions, run)
+    _stamp_prompt_fingerprint(db, run, instructions, settings)
     # The files this thread is about, and the thing it is opened beside. One
     # local for both because it is injected below *and* screened further down,
     # and two expressions that must stay equal are one edit away from not being
@@ -2177,28 +2457,21 @@ def run_agent_turn(
         # call below. Resumes do not re-screen — the flag is a run event that
         # persists across a park/resume. The user's own `run.prompt` is trusted
         # input and is deliberately not screened as an attack on itself.
-        if settings.screen_enabled:
-            _screen(
-                db,
-                run,
-                kind="evidence",
-                text="\n\n".join(item.excerpt for item in evidence),
-                settings=settings,
-            )
-            # Named "document" still: it is the event kind every dashboard,
-            # audit query and test in this repo already reads, and what it has
-            # always meant is "the content this turn spliced in from the thing
-            # the user has open". That is now a file or a spec as often as a
-            # document, and renaming the kind would silently empty every
-            # existing query for the sake of a more accurate word.
-            _screen(
-                db,
-                run,
-                kind="document",
-                text=spliced_context,
-                settings=settings,
-            )
-            _screen(db, run, kind="memory", text=memory_context, settings=settings)
+        _ingest(
+            db,
+            run,
+            provenance.turn_start_blocks(
+                prompt=run.prompt,
+                evidence=evidence,
+                spliced_context=spliced_context,
+                memory_context=memory_context,
+                # Empty for a chat turn, so `run.prompt` stays the one trusted
+                # class. The executor passes the classes a workflow node's
+                # resolved template actually carries.
+                prompt_classes=prompt_classes,
+            ),
+            settings=settings,
+        )
         _enforce_org_bounds(db, run, settings)
         outcome = _advance(
             db,
@@ -2348,13 +2621,15 @@ def _continue(
     subject = subjects.resolve(db, run)
     context = subjects.tool_context(run, subject, space_id=_space_id_for(db, run))
     directives = resolve_directives(db, run)
-    registry = _registry_for(db, context, subject, directives, settings)
+    registry = _registry_for(db, context, subject, directives, settings, run)
     scope = policy_scope_for_run(db, run)
     registry, instructions = _plan_narrowed(
         registry,
         directives.instructions,
         approval_mode_for_run(db, run, scope=scope, settings=settings),
     )
+    registry, instructions = step_plan.narrowed(registry, instructions, run)
+    _stamp_prompt_fingerprint(db, run, instructions, settings)
     if any(call.get("name") == EXIT_PLAN_MODE for call in state.pending_calls):
         # The approval that resumes this turn may itself have lifted plan mode,
         # rebuilding the full registry above — but the parked `exit_plan_mode`

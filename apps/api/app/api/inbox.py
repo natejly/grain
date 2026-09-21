@@ -77,6 +77,9 @@ class InboxApprovalOut(ApiModel):
     #: server-side filter: nothing parked is invisible — the client de-emphasizes
     #: rows assigned to someone else rather than this feed hiding them.
     assigned_to: str
+    #: Why the provenance gate raised this call, "" when it did not. The same
+    #: machine string the chat card carries, so both surfaces render one reason.
+    gate_reason: str = ""
     created_at: datetime
 
 
@@ -143,6 +146,36 @@ class InboxAnomalyOut(ApiModel):
     created_at: datetime
 
 
+class InboxNoticeOut(ApiModel):
+    """One research notice: a page whose evidence moved, or a watch that found
+    a change.
+
+    Its own list rather than a sixth kind folded into `alerts`, for the reason
+    anomalies are separate from alerts: these are not a threshold somebody drew
+    being crossed, they are "something you published, or asked a standing
+    question about, is no longer what it was". The next step is to READ, which
+    is why both deep links are here and why the row carries no decision.
+
+    A page notice is addressed to its publisher and a shared watch's is
+    broadcast, so `kind` is what a reader branches on — not the presence of a
+    target, which is the same field for both.
+    """
+
+    id: str
+    #: "page_drift" | "watch_change". A plain string, so an older client meets
+    #: a future kind as an unknown label rather than a validation error.
+    kind: str
+    title: str
+    body: str
+    #: Deep link to the page whose evidence moved; "" for a watch notice.
+    page_id: str
+    #: Deep link to the watch that found a change; "" for a page notice.
+    watch_id: str
+    #: The watch's standing brief, when it has one; "" otherwise.
+    document_id: str
+    created_at: datetime
+
+
 class InboxRunOut(ApiModel):
     """One finished workflow run — the Inbox's history shelf, not its work."""
 
@@ -160,6 +193,7 @@ class InboxOut(ApiModel):
     mentions: List[InboxMentionOut]
     alerts: List[InboxAlertOut]
     anomalies: List[InboxAnomalyOut]
+    notices: List[InboxNoticeOut]
     recent_runs: List[InboxRunOut]
 
 
@@ -191,6 +225,7 @@ def read_inbox(
             workflow_id=item.workflow_id,
             workflow_name=item.workflow_name,
             assigned_to=item.assigned_to,
+            gate_reason=item.gate_reason,
             created_at=item.created_at,
         )
         for item in waiting.approvals
@@ -242,6 +277,20 @@ def read_inbox(
         for row in waiting.anomalies
     ]
 
+    notices = [
+        InboxNoticeOut(
+            id=row.id,
+            kind=row.kind,
+            title=row.title,
+            body=row.body,
+            page_id=row.page_id,
+            watch_id=row.watch_id,
+            document_id=row.document_id,
+            created_at=row.created_at,
+        )
+        for row in waiting.notices
+    ]
+
     outcomes = db.execute(
         select(WorkflowRun, Workflow.name)
         .join(Workflow, Workflow.id == WorkflowRun.workflow_id)
@@ -270,5 +319,6 @@ def read_inbox(
         mentions=mentions,
         alerts=alerts,
         anomalies=anomalies,
+        notices=notices,
         recent_runs=recent_runs,
     )

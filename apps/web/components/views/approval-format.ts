@@ -103,6 +103,89 @@ export function isBypass(mode: string): boolean {
 }
 
 /**
+ * The provenance classes, as a sentence names them. Machine name in, the thing
+ * a reader would call it out.
+ */
+const PROVENANCE_WORDS: Record<string, string> = {
+  web_fetch: "a page fetched from the web",
+  mcp_result: "a result from a connected MCP server",
+  sandbox_output: "output from the sandbox",
+  workspace_chunk: "a passage from your library",
+  memory_item: "a saved memory",
+  tool_result: "a tool's output",
+  user_direct: "something you typed",
+};
+
+/** What the waiting call would do. Two risks, two words. */
+const ACTION_WORDS: Record<string, string> = {
+  write: "changes something",
+  egress: "reaches the network",
+};
+
+function joinWords(words: string[]): string {
+  if (words.length === 1) return words[0];
+  if (words.length === 2) return `${words[0]} and ${words[1]}`;
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/**
+ * Why this call is waiting, in a sentence — or "" when we cannot say.
+ *
+ * Parses exactly `taint:<comma,classes>[,+N]:<action>`. Any other shape, a
+ * class this build does not know, or an unknown action returns "", never a
+ * guess: the same doctrine `describeMode` follows for an unrecognised mode,
+ * and the thing that keeps a future server string from rendering as garbage
+ * inside an approval card.
+ *
+ * `+N` is the server saying it had to drop N class names to fit the column's
+ * 64 characters (`provenance.gate_reason`). It is rendered, never ignored:
+ * the names sort alphabetically, so the ones that fall off the end are
+ * `web_fetch` and `workspace_chunk` — and a card that listed two of three
+ * sources and read as a complete sentence would understate what the turn
+ * read, which is the one direction this copy must not be wrong in.
+ *
+ * The wording is deliberate and the limit is real. It says "This turn read …",
+ * never "This block triggered …". Nothing in a model's output proves which
+ * piece of context caused which tool call — a model can act on something it
+ * read three steps ago — and the enforced guarantee is strictly turn-level. A
+ * reviewer who read this card as proof of causation would have been misled by
+ * us, so the sentence does not offer that reading.
+ */
+export function describeGate(reason: string): string {
+  const parts = (reason || "").split(":");
+  if (parts.length !== 3 || parts[0] !== "taint") return "";
+  const action = ACTION_WORDS[parts[2]];
+  if (!action) return "";
+  const classes = parts[1].split(",").filter(Boolean);
+  if (classes.length === 0) return "";
+  const words: string[] = [];
+  let elided = 0;
+  for (const name of classes) {
+    const dropped = /^\+([1-9][0-9]*)$/.exec(name);
+    if (dropped) {
+      elided = Number(dropped[1]);
+      continue;
+    }
+    const word = PROVENANCE_WORDS[name];
+    // One unknown class poisons the whole sentence rather than being dropped:
+    // a reason that silently listed two of three sources would understate what
+    // the turn read, which is the one direction this copy must not be wrong in.
+    if (!word) return "";
+    if (!words.includes(word)) words.push(word);
+  }
+  if (words.length === 0) return "";
+  if (elided > 0) {
+    words.push(
+      elided === 1 ? "one other kind of source" : `${elided} other kinds of source`,
+    );
+  }
+  return (
+    `This turn read ${joinWords(words)}. Because this call ${action}, it is ` +
+    "waiting for you even though the thread is set to act on its own."
+  );
+}
+
+/**
  * The calls this thread's bypass let through, newest last.
  *
  * Read off `approved_by_mode`, which the server sets only where the mode

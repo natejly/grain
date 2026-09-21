@@ -122,7 +122,8 @@ def test_openai_harness_forwards_the_per_turn_overrides(monkeypatch):
     captured: dict = {}
 
     def spy(client, settings, *, user_id, input_items, tools, instructions,
-            model=None, effort=None, thinking=False, operation=""):
+            model=None, effort=None, thinking=False, operation="",
+            prompt_cache_key="", tool_choice="auto"):
         captured.update(model=model, effort=effort, thinking=thinking)
         yield ("completed", object())
 

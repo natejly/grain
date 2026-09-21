@@ -36,6 +36,8 @@ def notify(
     comment_id: str = "",
     monitor_id: str = "",
     agent_id: str = "",
+    page_id: str = "",
+    watch_id: str = "",
     created_by: str = "",
 ) -> Notification:
     """Add one open notification. Flushes so the caller can read its id."""
@@ -52,6 +54,8 @@ def notify(
         comment_id=comment_id,
         monitor_id=monitor_id,
         agent_id=agent_id,
+        page_id=page_id,
+        watch_id=watch_id,
         created_by=created_by,
     )
     db.add(notification)

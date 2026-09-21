@@ -18,6 +18,7 @@ from app.database import SessionLocal
 from app.models import Chunk, Source, Space
 from app.services.llm_tools import (
     ToolContext,
+    _grounded_answer,  # type: ignore[attr-defined]
     _search_sources,  # type: ignore[attr-defined]
 )
 from app.services.retrieval import search_evidence
@@ -170,3 +171,76 @@ def test_the_search_sources_tool_obeys_the_same_scope(corpus) -> None:
 
     assert tool_filenames(space_a) == {"kestrel.md", "library.md"}
     assert tool_filenames("") == {"library.md"}
+
+
+# --- the grounded-answer tool shares the turn's scope ------------------------
+
+
+def _grounded_filenames(
+    workspace_id: str,
+    user_id: str,
+    *,
+    space_id: str = "",
+    conversation_id: str = "",
+    args: dict | None = None,
+) -> set[str]:
+    db = SessionLocal()
+    try:
+        result = _grounded_answer(
+            db,
+            ToolContext(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                space_id=space_id,
+            ),
+            {"question": "kestrel", **(args or {})},
+        )
+        return {item.filename for item in result.evidence}
+    finally:
+        db.close()
+
+
+def test_the_grounded_answer_tool_obeys_the_turns_space(corpus) -> None:
+    workspace_id, user_id, space_a, _b = corpus
+    assert _grounded_filenames(workspace_id, user_id, space_id=space_a) == {
+        "kestrel.md",
+        "library.md",
+    }
+    assert _grounded_filenames(workspace_id, user_id) == {"library.md"}
+
+
+def test_a_model_argument_cannot_widen_a_threads_space_scope(corpus) -> None:
+    """`_live_sources` reads a space id as `IN ("", space)` — library UNION
+    that space — so on an ordinary space-less thread a model-supplied
+    `space_id` WIDENED retrieval instead of narrowing it, and the model writing
+    that argument has just read workspace text the taint ledger calls
+    untrusted. Widening is the one direction scoping must never fail in.
+    """
+    workspace_id, user_id, space_a, _b = corpus
+    assert _grounded_filenames(
+        workspace_id,
+        user_id,
+        conversation_id="conv-1",
+        args={"space_id": space_a},
+    ) == {"library.md"}
+    # Inside a space, the argument was already ignored; it still is.
+    assert _grounded_filenames(
+        workspace_id,
+        user_id,
+        conversation_id="conv-1",
+        space_id=space_a,
+        args={"space_id": "some-other-space"},
+    ) == {"kestrel.md", "library.md"}
+
+
+def test_a_thread_less_caller_may_still_name_a_space(corpus) -> None:
+    """The MCP and REST doors build a context with no conversation, and
+    `GroundedAnswerRequest.space_id` is a deliberate caller-chosen scope
+    there — so the argument keeps working exactly where it was designed to.
+    """
+    workspace_id, user_id, space_a, _b = corpus
+    assert _grounded_filenames(workspace_id, user_id, args={"space_id": space_a}) == {
+        "kestrel.md",
+        "library.md",
+    }

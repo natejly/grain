@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Optional
+from typing import Optional, Set
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -33,7 +33,11 @@ def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 
 
 def validate_public_https_url(
-    url: str, settings: Settings, *, require_allowlist: bool = True
+    url: str,
+    settings: Settings,
+    *,
+    require_allowlist: bool = True,
+    allow_hosts: Optional[Set[str]] = None,
 ) -> None:
     """HTTPS-only, allowlisted (by default), and never a blocked network.
 
@@ -42,6 +46,13 @@ def validate_public_https_url(
     theatre: the owner chose the host, and the thing still worth refusing is
     the scheme and the internal address space. Model- or document-supplied
     URLs must never pass False here.
+
+    `allow_hosts` names WHICH allowlist, defaulting to the `/tool` endpoint
+    one. `web_fetch` passes its own (`settings.web_fetch_hosts`): the two lists
+    answer different questions, and letting a model-supplied URL be checked
+    against the list of owner-registered `/tool` endpoints would quietly make
+    every such endpoint fetchable by the model. Passing the wrong list is the
+    mistake this parameter exists to make visible at the call site.
     """
     parsed = urlparse(url)
     if parsed.scheme != "https":
@@ -49,7 +60,8 @@ def validate_public_https_url(
     host = (parsed.hostname or "").lower().rstrip(".")
     if not host:
         raise ToolSecurityError("Tool destination is not on the host allowlist")
-    if require_allowlist and host not in settings.allowed_tool_hosts:
+    hosts = settings.allowed_tool_hosts if allow_hosts is None else allow_hosts
+    if require_allowlist and host not in hosts:
         raise ToolSecurityError("Tool destination is not on the host allowlist")
     try:
         addresses = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
@@ -97,27 +109,52 @@ def peer_is_blocked(response: httpx.Response) -> bool:
         return True
 
 
+#: What a `/tool` endpoint is asked for: structured data, not a web page.
+TOOL_ACCEPT = "application/json, text/plain;q=0.9"
+#: What `web_fetch` is asked for. HTML first because the readability pass wants
+#: the document, not a server's idea of a plain-text rendering of it.
+PAGE_ACCEPT = "text/html, text/plain;q=0.9, application/xhtml+xml;q=0.9"
+
+
 def execute_read_only_get(
     url: str,
     settings: Settings,
     *,
     transport: Optional[httpx.BaseTransport] = None,
+    allow_hosts: Optional[Set[str]] = None,
+    require_allowlist: bool = True,
+    accept: str = TOOL_ACCEPT,
 ) -> tuple[int, str]:
     """Fetch a URL, following redirects, refusing anything not demonstrably public.
 
     `transport` is a seam for tests to drive the redirect and peer-address paths
     without a network; production passes nothing and httpx builds its default.
+
+    `allow_hosts`, `require_allowlist` and `accept` are what let `web_fetch`
+    ride this function instead of forking it. Forking was the alternative and
+    the worse one: the SSRF defense here is four separate things — scheme,
+    pre-connect DNS, per-hop revalidation, post-connect peer — and a second
+    copy would have been a second place for one of them to be forgotten, on
+    the path that fetches URLs a *model* chose.
+
+    Every hop is re-validated against the same `allow_hosts`, so a redirect
+    cannot walk a web_fetch onto a `/tool` host or off the allowlist entirely.
     """
     current = url
     with httpx.Client(
         timeout=10.0, follow_redirects=False, transport=transport
     ) as client:
         for _ in range(4):
-            validate_public_https_url(current, settings)
+            validate_public_https_url(
+                current,
+                settings,
+                require_allowlist=require_allowlist,
+                allow_hosts=allow_hosts,
+            )
             with client.stream(
                 "GET",
                 current,
-                headers={"Accept": "application/json, text/plain;q=0.9"},
+                headers={"Accept": accept},
             ) as response:
                 if peer_is_blocked(response):
                     raise ToolSecurityError(

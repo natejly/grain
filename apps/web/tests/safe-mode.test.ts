@@ -182,6 +182,53 @@ describe("the Safe mode toggle", () => {
     );
     expect(seen).toEqual([true]);
   });
+
+  // The provenance gate's NOTE, not a second toggle: it is workspace-wide and
+  // owner-only, so a per-member checkbox here would promise authority the
+  // member does not have. Guarded and optional, so every mount above — which
+  // passes no `taint` at all — renders byte-identically.
+  const GATE_NOTE = /makes writes and network calls ask first/;
+
+  it("says nothing about the gate when the prop is absent", () => {
+    menu(false, () => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    expect(screen.queryByText(GATE_NOTE)).toBeNull();
+  });
+
+  it("stays quiet when the gate is off for this workspace", () => {
+    render(
+      createElement(WorkspaceSettingsMenu, {
+        activeGroup: "chat" as never,
+        open: () => undefined,
+        digest: null,
+        onDigestChange: () => undefined,
+        safeMode: false,
+        onSafeModeChange: () => undefined,
+        taint: { enabled: false },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    expect(screen.queryByText(GATE_NOTE)).toBeNull();
+  });
+
+  it("names the gate, and where it is changed, when it is armed", () => {
+    render(
+      createElement(WorkspaceSettingsMenu, {
+        activeGroup: "chat" as never,
+        open: () => undefined,
+        digest: null,
+        onDigestChange: () => undefined,
+        safeMode: false,
+        onSafeModeChange: () => undefined,
+        taint: { enabled: true },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
+    // Both halves matter: what happens, and that this checkbox is not the
+    // last word on it.
+    expect(screen.getByText(GATE_NOTE)).toBeTruthy();
+    expect(screen.getByText(/Rules & policies/)).toBeTruthy();
+  });
 });
 
 describe("the Memory preference toggle", () => {

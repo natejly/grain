@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from ...config import get_settings
 from ...models import SandboxTool
+from .. import provenance
 from ..llm_tools import ToolContext, ToolResult, ToolSpec
 from .outputs import persist_artifacts
 from .provider import get_provider
@@ -88,17 +89,27 @@ def _substitute(argv_template: Sequence[str], args: Dict[str, Any]) -> List[str]
     return out
 
 
+def _egress_hosts(tool: SandboxTool) -> List[str]:
+    """The tool's own egress allowlist, or [] for anything unparseable.
+
+    Factored out of `_egress_line` because two readers now need it: the
+    approval card's network sentence, and the taint gate's `networked` fact. A
+    tool that can reach a host IS networked, and two expressions that have to
+    agree about that are one edit away from not.
+    """
+    try:
+        hosts = json.loads(tool.egress_hosts_json or "[]")
+    except ValueError:
+        return []
+    return [str(host) for host in hosts] if isinstance(hosts, list) else []
+
+
 def _egress_line(tool: SandboxTool) -> str:
     """The network sentence an approval card must show: code without its egress
     is unreviewable, so the same fact the builtin `_policy_line` renders is shown
     here from the tool's own (tightened) egress."""
     settings = get_settings()
-    try:
-        hosts = json.loads(tool.egress_hosts_json or "[]")
-    except ValueError:
-        hosts = []
-    hosts = [str(h) for h in hosts] if isinstance(hosts, list) else []
-    policy_value, allowed = tool_egress(settings, hosts)
+    policy_value, allowed = tool_egress(settings, _egress_hosts(tool))
     if policy_value == "none":
         return "network: none — this tool has no outbound access"
     allowed_text = ", ".join(allowed) if allowed else "nothing"
@@ -203,6 +214,15 @@ def _executor(tool_id: str):
         return ToolResult(
             content=_render(result, descriptors, dropped=dropped),
             artifacts=descriptors,
+            # A tool with an egress allowlist can bring text in from outside
+            # the deployment, and `sandbox_output` does not gate by default.
+            # Reporting `web_fetch` arms the default gate for exactly the
+            # tools that can dial out — the same rule the builtin run_* family
+            # follows in `sandbox/tools._execute`, read off the same list the
+            # approval card's sentence does.
+            provenance=(
+                [provenance.WEB_FETCH] if _egress_hosts(tool) else []
+            ),
         )
 
     return execute
@@ -244,5 +264,10 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             # evaluate_policy. It can only escalate an allow, never loosen a deny.
             force_ask=(tool.approval == "always"),
             preview=_preview(tool.id),
+            # Sandbox output, like the builtin run_* family. A non-empty egress
+            # allowlist IS the networked fact — the tool carries its own, so
+            # this reads the same list the approval card's sentence does.
+            provenance=provenance.SANDBOX_OUTPUT,
+            networked=bool(_egress_hosts(tool)),
         )
     return specs

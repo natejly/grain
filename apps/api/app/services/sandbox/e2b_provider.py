@@ -36,7 +36,11 @@ from e2b import (
     SandboxNotFoundException,
     TimeoutException,
 )
-from e2b_code_interpreter import Sandbox  # type: ignore[import-untyped]
+
+# Two codes for `garmin.py`'s reason: the ignore is needed where the package is
+# installed and unused where it is not, and `warn_unused_ignores` objects to
+# the second case.
+from e2b_code_interpreter import Sandbox  # type: ignore[import-untyped,unused-ignore]
 
 from .policy import egress_rules
 from .types import (

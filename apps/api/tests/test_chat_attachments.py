@@ -24,6 +24,7 @@ from app.services import attachments as attachments_service
 from app.services.graph import rebuild_graph
 from app.services.llm_tools import (
     ToolContext,
+    _grounded_answer,  # type: ignore[attr-defined]
     _search_sources,  # type: ignore[attr-defined]
 )
 from app.services.retrieval import search_evidence
@@ -200,6 +201,51 @@ def test_the_search_tool_honours_the_same_scope(client) -> None:
 
     assert "kestrel.csv" in filenames(mine)
     assert "kestrel.csv" not in filenames(other)
+
+
+def test_the_grounded_answer_tool_honours_the_same_scope(client) -> None:
+    """The other retrieval tool on the same turn, and the one that produces the
+    citation plate.
+
+    It dropped `conversation_id` entirely, so which tool the model happened to
+    pick decided whether the file the user had just attached existed: ask for
+    "an answer with citations" and the grounded tool answered from the library
+    alone — "No indexed passage answers that question", or worse, a confident
+    cited answer with the attachment silently missing from it. `source_ids`
+    was no escape either, because the filter ran over passages the scope had
+    already excluded.
+    """
+    mine = _conversation(client, "mine")
+    other = _conversation(client, "other")
+    workspace_id, user_id = _workspace_of(mine)
+    attached = _attach(
+        client, mine, "kestrel.csv", b"bird,note\nkestrel,hovers into the wind\n"
+    ).json()
+
+    def filenames(conversation_id: str, **args: object) -> Set[str]:
+        db = SessionLocal()
+        try:
+            result = _grounded_answer(
+                db,
+                ToolContext(
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                ),
+                {"question": "kestrel", **args},
+            )
+            return {item.filename for item in (result.evidence or [])}
+        finally:
+            db.close()
+
+    assert "kestrel.csv" in filenames(mine)
+    # The isolation the scope exists for is unchanged.
+    assert "kestrel.csv" not in filenames(other)
+
+    # And naming the attachment explicitly reaches it rather than nothing:
+    # `source_ids` used to be a post-filter over passages the scope had already
+    # dropped, so even the id was no way in.
+    assert filenames(mine, source_ids=[attached["target_id"]]) == {"kestrel.csv"}
 
 
 def test_an_attachment_is_not_listed_in_the_workspace_library(client) -> None:

@@ -41,12 +41,15 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..config import Settings
 from .errors import UserFacingError
 from .model import stream_words
 from .retrieval import Evidence
+
+if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from .harness.base import ModelStep, ToolChoice
 
 
 @dataclass(frozen=True)
@@ -428,17 +431,28 @@ def scripted_schedule_json(input_text: str) -> str:
 
 def scripted_model_step(
     settings: Settings, *, prompt: str, evidence: List[Evidence]
-) -> Callable[[List[Any], List[Dict[str, Any]], str], Iterable[Tuple[str, Any]]]:
+) -> ModelStep:
     """Build the agent loop's ModelStep for one turn of `prompt`.
 
-    Spelled out rather than annotated `ModelStep`: agent_loop imports this
-    module, so it cannot be imported back for the alias.
+    The annotation is a string and its import is `TYPE_CHECKING`-only:
+    agent_loop imports this module, and `ModelStep` is a keyword-only Protocol
+    that no spelled-out `Callable` can express, so the name has to arrive
+    without a runtime import.
     """
     entry = _matching(settings, prompt, lambda candidate: bool(candidate.steps))
 
     def step(
-        input_items: List[Any], tools: List[Dict[str, Any]], instructions: str
+        input_items: List[Any],
+        tools: List[Dict[str, Any]],
+        instructions: str,
+        *,
+        tool_choice: ToolChoice = "auto",
     ) -> Iterable[Tuple[str, Any]]:
+        # A script says what this turn does; there is no model to forbid a
+        # call to. Accepted to satisfy the contract, ignored deliberately —
+        # a script that calls a tool on its last step is testing the loop's
+        # iteration ceiling, and silently rewriting it into an answer would
+        # hide exactly that.
         if entry is None:
             return _speak(unscripted_answer(evidence))
         # Each scripted step emits at most one call, so the calls already in the

@@ -87,6 +87,19 @@ class Settings(BaseSettings):
     anthropic_context_model: str = "claude-haiku-4-5-20251001"
     openai_model: str = "gpt-5.6-sol"
     openai_reasoning_effort: ReasoningEffort = "low"
+    # Ask the Responses API to return each reasoning item's encrypted content,
+    # so the next round of a tool-using turn can replay the model's own chain
+    # of thought instead of re-deriving it.
+    #
+    # It only means anything because this deployment sends `store=False`: with
+    # no server-side state, a reasoning item replayed from our history is the
+    # ONLY way the thinking survives a tool round. The encrypted blob is opaque
+    # to us — it is replayed verbatim through `_serialize_item` and never read
+    # — so nothing here is a new place a secret can leak sideways.
+    #
+    # A knob rather than a constant because `include` is a request field a
+    # model or an org can reject, and the failure would be every turn.
+    openai_reasoning_replay: bool = True
     # Optional deployment override for the per-turn model allow-list, comma
     # separated. Unset derives the list from the priced models (see
     # `selectable_models`); set it when a deployment prices models it does not
@@ -173,6 +186,48 @@ class Settings(BaseSettings):
     # stated constraint is that spend is fine and latency is not.
     web_search_context_size: Literal["low", "medium", "high"] = "medium"
 
+    # --- web_fetch (the local fetch tool) ----------------------------------
+    # `web_search` is hosted: the provider fetches, and this app never sees a
+    # URL. `web_fetch` is ours — the model names a URL and this process dials
+    # it — so it is gated on its own host allowlist rather than riding
+    # TOOL_HOST_ALLOWLIST, which exists for owner-registered `/tool` endpoints
+    # and would silently widen those to the model.
+    #
+    # "" is the default and it means the tool is NOT REGISTERED at all: no
+    # deployment gains an outbound fetch surface by upgrading. Comma-separated
+    # hostnames opt specific hosts in.
+    #
+    # "*" is the one deliberate operator opt-out of the host allowlist, for a
+    # research deployment where naming hosts in advance defeats the tool. It
+    # relaxes ONLY the allowlist — `validate_public_https_url` still refuses a
+    # non-HTTPS scheme, still resolves the host, and `peer_is_blocked` still
+    # refuses a socket that landed inside (DNS rebinding). It is the same class
+    # of decision as `require_allowlist=False` for an owner-configured webhook:
+    # a human chose it in .env, not a model at runtime.
+    web_fetch_host_allowlist: str = ""
+    # Characters of extracted markdown one fetch hands the model. Below
+    # `llm_tools.MAX_RESULT_CHARS` (4000) so the readability pass, not
+    # `bounded_content`, is what decides where a page stops — a clip applied
+    # after the envelope was built cuts the JSON, not the prose.
+    web_fetch_max_chars: int = 3000
+
+    # --- Cross-run denial memory -------------------------------------------
+    # A denied tool call is a preference the user stated once and has no way to
+    # carry forward: the standing-policy tick is a *policy* ("never allow this
+    # tool"), which is a bigger thing than "not that, not here". Off this knob,
+    # a denial writes one MemoryItem(kind=preference) owned by the denier.
+    #
+    # Deliberately NOT auto-promotion (roadmap #50 hold): the memory is
+    # recalled like any other note and steers the model's next proposal; it
+    # never grants, denies, or pre-answers anything, and the explicit
+    # `remember` tick keeps its own path into `tool_policies`.
+    denial_memory_enabled: bool = True
+    # Ceiling per workspace per rolling 24h. A model that proposes the same
+    # write ten times in a runaway turn must not mint ten memories, and a
+    # memory shelf is a scarce surface — every row here competes with something
+    # a person chose to save.
+    denial_memory_max_per_day: int = Field(default=5, ge=0)
+
     # --- Prompt-injection screen (threat model) ----------------------------
     # A classifier over the UNTRUSTED content a turn ingests — retrieved
     # passages, the open document, web_search results, tool/MCP output — none of
@@ -196,6 +251,25 @@ class Settings(BaseSettings):
     # Score at or above which a chunk is an injection. The any-high-means-high
     # combine rule then makes one tripped chunk trip the whole passage.
     screen_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    # --- Provenance taint gate (services/provenance.py) --------------------
+    # The screen's deterministic sibling. Where the screen asks "does this text
+    # LOOK like an instruction?", this asks "where did it come from?" — and
+    # when a gating-class untrusted source has entered the turn, a proposed
+    # write or network call escalates to a human approval card for the rest of
+    # it. No classifier, no model judgement, no text matching.
+    #
+    # ON by default, unlike the screen, and that is safe precisely because of
+    # the class set below: neither class enters a turn unless the workspace
+    # configured an MCP server or a search actually returned web sources, so a
+    # grounded chat over the library is byte-identical to today.
+    taint_gating_enabled: bool = True
+    # The classes that ARM the gate. The two genuinely external ones.
+    # workspace_chunk and memory_item are deliberately absent: gating them
+    # would park every write in every grounded turn, and a gate nobody leaves
+    # on protects nobody. That is a stated coverage gap, not an oversight —
+    # see the module docstring in services/provenance.py.
+    taint_gating_classes: str = "web_fetch,mcp_result"
 
     # --- MCP authentication ------------------------------------------------
     # Remote MCP servers authenticate with OAuth 2.1 + dynamic client
@@ -341,6 +415,45 @@ class Settings(BaseSettings):
     # admits at rank 6-50 is a chunk competing on equal footing with a real match.
     # Above ~0.4 the floor starts cutting true matches instead.
     retrieval_dense_floor: float = 0.3
+    # Minimum FUSED (RRF) score for a passage to be handed to a turn at all.
+    # A different quantity from `retrieval_dense_floor`, which is a cosine on
+    # one arm: an RRF score is a sum of 1/(k + rank) terms, so with k=60 a
+    # chunk ranked first by both arms scores 1/61 + 1/61 = 0.0328 and one that
+    # limped in at rank 50 of a single arm scores 1/110 = 0.0091. Never derive
+    # one floor from the other; they do not live on the same scale.
+    #
+    # 0.0 is the deliberate default: it admits everything, which is exactly
+    # today's behaviour, so nothing about this release changes what a turn is
+    # handed. The conservative choice is forced by provenance — the instrument
+    # that could pick a real value is the answerability eval (cluster A), which
+    # does not exist yet. FLAGGED FOR RE-BASELINE: once that eval runs, sweep
+    # this the way `retrieval_dense_floor` was swept and record the A/B here.
+    # Until then a non-zero value is a guess, and a guessed floor silently
+    # starves grounded answers of the evidence they are judged on.
+    retrieval_fused_floor: float = Field(default=0.0, ge=0.0)
+
+    # How much of a cited sentence's vocabulary must appear in the passage it
+    # cites before `services/citations.grade_grounding` calls it verified. A
+    # LEXICAL coverage share, not a probability and not a confidence: at 0.6 a
+    # sentence whose words are 60% present in its passage passes, which says the
+    # words are there and says nothing about whether the sentence is true.
+    #
+    # A knob rather than a constant because the right value depends on the
+    # corpus — terse reference docs paraphrase less than prose does — and
+    # because `evaluate_answerability.py` has to be able to state which floor it
+    # measured at. `grade_grounding` keeps its own default so it stays callable
+    # with no Settings at all (the tests and the eval script do exactly that).
+    grounding_floor: float = Field(default=0.6, ge=0.0, le=1.0)
+    # Whether a completed answer with cited-but-unsupported sentences gets ONE
+    # bounded rewrite attempt before it is stored. Off is a supported posture:
+    # the repair costs a model call between the last streamed delta and
+    # `message.completed`, which on a live deployment is visible dead air at the
+    # end of some turns.
+    grounding_repair_enabled: bool = True
+    # Above this many flagged sentences the answer is not repaired at all. A
+    # rewrite asked to fix half an answer is a regeneration, and a regeneration
+    # is not what a validator may do behind the user's back.
+    grounding_repair_max_sentences: int = Field(default=6, ge=1)
 
     memory_enabled: bool = True
     memory_max_items_per_run: int = 5
@@ -891,6 +1004,25 @@ class Settings(BaseSettings):
         )
 
     @property
+    def taint_gating_class_set(self) -> frozenset[str]:
+        """`taint_gating_classes`, parsed and intersected with what exists.
+
+        Intersected on purpose: a name this build does not know is DROPPED,
+        never carried. Without that, one typo in a comma list would turn the
+        whole setting into a value the gate never matches, silently disarming
+        the classes spelled correctly beside it.
+
+        No `_guard_*` validator, and the omission is deliberate twice over:
+        there is no external dependency to verify, and an empty resolved set is
+        a legitimate posture — "record every ingest, gate nothing" is exactly
+        what an operator measuring before enforcing wants.
+        """
+        from .services.provenance import CLASSES
+
+        named = {part.strip() for part in self.taint_gating_classes.split(",")}
+        return frozenset(named & set(CLASSES))
+
+    @property
     def is_dev_env(self) -> bool:
         """True only for the two environments allowed to relax auth."""
         return self.app_env in {"development", "test"}
@@ -941,6 +1073,31 @@ class Settings(BaseSettings):
             for host in self.tool_host_allowlist.split(",")
             if host.strip()
         }
+
+    @property
+    def web_fetch_hosts(self) -> set[str]:
+        """Hosts `web_fetch` may dial. Empty means the tool is not registered.
+
+        A separate parse from `allowed_tool_hosts` on purpose: these two lists
+        answer different questions (what a model may fetch vs. what an owner
+        registered as a `/tool` endpoint) and merging them would let one grow
+        the other by accident.
+        """
+        return {
+            host.strip().lower()
+            for host in self.web_fetch_host_allowlist.split(",")
+            if host.strip()
+        }
+
+    @property
+    def web_fetch_enabled(self) -> bool:
+        return bool(self.web_fetch_hosts)
+
+    @property
+    def web_fetch_any_host(self) -> bool:
+        """The operator's explicit opt-out of the host allowlist. Scheme and
+        blocked-network checks are unaffected — see `web_fetch_host_allowlist`."""
+        return "*" in self.web_fetch_hosts
 
     @property
     def sandbox_allowed_hosts(self) -> List[str]:

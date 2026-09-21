@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { newThread, openThreadActions, openView } from "./shell";
+import { newThread, openThreadActions, openView, typePrompt } from "./shell";
 
 /**
  * The conversations half of desktop parity, from the outside: the rail search
@@ -192,7 +192,11 @@ test("the composer's '+' menu hands the draft to the schedule composer", async (
   const DRAFT = "Summarise the falcon ledger every morning";
   await page.goto("/");
   await newThread(page);
-  await composer(page).fill(DRAFT);
+  // Through `typePrompt`, because this row is gated on the DRAFT STATE rather
+  // than on the textarea, and a draft lost to the re-keying race in
+  // `use-workspace` presented here as a permanently disabled menu row with the
+  // words still on screen. See that helper for what the race is.
+  await typePrompt(page, DRAFT);
 
   await page.getByRole("button", { name: "Open tools" }).click();
   await page

@@ -242,6 +242,32 @@ def test_calling_runs_the_substituted_command_and_returns_output(
     assert ran[0][1]["command"] == "curl -s https://api.example.com/data"
 
 
+def test_a_tool_with_egress_reports_web_fetch_so_the_gate_arms(
+    db, context, identity, settings, provider
+):
+    """A tool that can dial out brings outside text back with it.
+
+    `sandbox_output` is outside the default gating set, so without this a
+    workspace tool that curls an attacker's URL re-classes external content
+    into something that arms nothing — while the identical bytes through
+    `web_fetch` would have parked the next write.
+    """
+    from app.services import provenance
+
+    provider.script(ExecResult(stdout="<html>ok</html>\n", exit_code=0))
+    _make_tool(db, identity, name="fetch_url", egress_hosts=["api.example.com"])
+    spec = registry_tools(db, context)["fetch_url"]
+
+    result = spec.executor(db, context, {"url": "https://api.example.com/data"})
+    assert provenance.WEB_FETCH in result.provenance
+
+    provider.script(ExecResult(stdout="done\n", exit_code=0))
+    _make_tool(db, identity, name="count_rows", egress_hosts=[])
+    sealed = registry_tools(db, context)["count_rows"]
+    assert sealed.networked is False
+    assert sealed.executor(db, context, {"url": "x"}).provenance == []
+
+
 def test_the_execution_is_frozen_to_the_tools_own_egress(
     db, context, identity, settings, provider
 ):

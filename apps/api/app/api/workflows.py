@@ -24,6 +24,7 @@ scheduling on.
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
@@ -43,7 +44,9 @@ from ..services import crons as cron_service
 from ..services import dashboard_subscriptions as subscription_service
 from ..services import digests as digest_service
 from ..services import monitors as monitor_service
+from ..services import pages as page_service
 from ..services import spend_watch
+from ..services import watches as watch_service
 from ..services import webhooks as webhook_service
 from ..services.audit import record_audit
 from ..services.llm_tools import ToolContext, build_registry
@@ -60,6 +63,8 @@ from ..services.workflows import (
     summarize,
 )
 from .ratelimit import public_rate_limit, rate_limit
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -156,6 +161,14 @@ class WorkflowTickOut(ApiModel):
     #: evaluation is a bounded read done inline — nothing is enqueued — and the
     #: id names the monitor the tick spent time on, not a verdict.
     monitors_evaluated: List[str]
+    #: Pages whose evidence this tick found newly drifted (services/pages.py).
+    #: Edge-triggered: a page already drifted is re-checked and stays quiet, so
+    #: an id here means one publisher was notified once.
+    pages_drifted: List[str]
+    #: Watches this tick claimed and checked (services/watches.py). The id
+    #: names the watch the tick spent time on, not a verdict — an unchanged
+    #: target is checked, writes an observation, and says nothing.
+    watches_checked: List[str]
     #: Spend-anomaly notifications the hourly watch wrote this tick
     #: (services/spend_watch.py). Usually empty — the watch claims at most once
     #: an hour and speaks only on a 3× deviation.
@@ -736,6 +749,9 @@ def tick(
     ):
         raise HTTPException(status_code=401, detail="Not authorised")
 
+    # One clock for the whole tick: every claim below compares against the same
+    # minute, so a sweep that took a second cannot decide it is in the next one.
+    now = schedule.floor_minute(utcnow())
     started = schedule.dispatch_due(db)
     # The tick is also the recovery sweep, because it is the only thing that
     # happens on a schedule. Recovering only at process start means a run
@@ -772,6 +788,26 @@ def tick(
     # on `digest_last_sent_at` elects at most one send per member per day, and
     # the waiting-set queries + rendering + SMTP all run on background tasks.
     digest_membership_ids = digest_service.dispatch_due(db)
+    # Pages and watches ride the same tick, the same claim pattern, the same
+    # clock. Each is wrapped on its own: one workspace's unreadable page or
+    # misconfigured watch must not fail the shared ticker for everyone else —
+    # exactly the argument `crons._start_task_run` makes about a missing agent.
+    drifted_page_ids: List[str] = []
+    try:
+        drifted_page_ids = page_service.sweep(db, moment=now)
+        db.commit()
+    except Exception:
+        logger.warning("page drift sweep raised during tick", exc_info=True)
+        db.rollback()
+    # Watches follow the subscription split exactly: the claim (one conditional
+    # UPDATE per due watch) happens here, and the check — a full chunk scan
+    # under the target plus a live extraction call — runs on a background task.
+    watch_ids: List[str] = []
+    try:
+        watch_ids = watch_service.dispatch_due(db, moment=now, settings=settings)
+    except Exception:
+        logger.warning("watch dispatch raised during tick", exc_info=True)
+        db.rollback()
     for workflow_run in started:
         background_tasks.add_task(executor.process_workflow_run, workflow_run.id)
     for workflow_run_id in recovered:
@@ -786,6 +822,8 @@ def tick(
         background_tasks.add_task(webhook_service.send_delivery, delivery_id)
     for membership_id in digest_membership_ids:
         background_tasks.add_task(digest_service.send_digest, membership_id)
+    for watch_id in watch_ids:
+        background_tasks.add_task(watch_service.check_claimed, watch_id)
     return WorkflowTickOut(
         dispatched=[workflow_run.id for workflow_run in started],
         recovered=recovered,
@@ -795,5 +833,7 @@ def tick(
         subscriptions_dispatched=subscription_ids,
         webhook_deliveries_dispatched=webhook_delivery_ids,
         digests_dispatched=digest_membership_ids,
-        moment=schedule.floor_minute(utcnow()),
+        pages_drifted=drifted_page_ids,
+        watches_checked=watch_ids,
+        moment=now,
     )

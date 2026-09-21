@@ -20,6 +20,14 @@ export const dynamic = "force-dynamic";
  * content — a share link is a window, not a snapshot. A conversation is the
  * same live window a document is: the transcript as it stands at request
  * time, never a frozen copy.
+ *
+ * A PAGE IS THE DELIBERATE EXCEPTION, and the reason this paragraph exists.
+ * A page is a snapshot on purpose: its whole value is that a reader following
+ * a marker sees the passage the answer was written from, so the body and every
+ * excerpt below are what the publisher published, not what the workspace holds
+ * now. Staleness is REPORTED (`page_drifted`), never papered over by quietly
+ * serving newer text. Anything that "fixed the inconsistency" by making pages
+ * live would destroy the feature.
  */
 async function loadShared(token: string): Promise<SharedResource> {
   const apiUrl =
@@ -145,6 +153,44 @@ export default async function SharedResourcePage({
                   )}
                 </article>
               ))}
+            </div>
+          ) : resource.kind === "page" ? (
+            <div className="shared-page">
+              {resource.page_drifted && (
+                <p className="shared-truncated">
+                  Some passages cited here have changed since this page was
+                  published.
+                </p>
+              )}
+              <div className="document-preview">
+                <ReactMarkdown
+                  remarkPlugins={[remarkMath]}
+                  rehypePlugins={[rehypeKatex]}
+                >
+                  {resource.page_body ?? ""}
+                </ReactMarkdown>
+              </div>
+              {(resource.page_citations ?? []).length > 0 && (
+                <section className="shared-page-citations">
+                  <h2>Citations</h2>
+                  {/* Printed in full as well as carried on `title`: a server
+                      component cannot own popover state, so the hover is the
+                      native tooltip and the excerpt is also on the page —
+                      which is what keeps it readable on a phone. */}
+                  <ol>
+                    {(resource.page_citations ?? []).map((citation) => (
+                      <li key={citation.marker} title={citation.frozen_excerpt}>
+                        <strong>[{citation.marker}]</strong>{" "}
+                        {citation.filename || "unnamed source"}
+                        {citation.status !== "frozen" && (
+                          <em> — {citation.status} since publication</em>
+                        )}
+                        <blockquote>{citation.frozen_excerpt}</blockquote>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              )}
             </div>
           ) : resource.document_kind === "text" ? (
             <pre className="document-plain">{resource.content}</pre>

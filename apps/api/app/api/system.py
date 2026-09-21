@@ -9,16 +9,18 @@ from sqlalchemy.orm import Session
 from ..auth import Actor, get_actor
 from ..config import ReasoningEffort, Settings, get_settings
 from ..database import get_db
-from ..models import Agent, Membership
+from ..models import Agent, Membership, Workspace
 from ..schemas import (
     BootstrapResponse,
     DigestStatus,
     HealthResponse,
     Identity,
     ModelProviderStatus,
+    RunPresetOut,
     ScreenStatus,
+    TaintStatus,
 )
-from ..services import orgs
+from ..services import orgs, provenance, run_presets
 
 router = APIRouter(tags=["system"])
 
@@ -52,6 +54,15 @@ def bootstrap(
             Membership.workspace_id == actor.workspace_id,
             Membership.user_id == actor.user_id,
         )
+    )
+    # Resolved, not guessed: the settings note beside Safe mode has to render
+    # what the run path applies, which is the deployment flag AND this
+    # workspace's override AND the class set that survived parsing.
+    gating = provenance.gating_classes(
+        db, workspace_id=actor.workspace_id, settings=settings
+    )
+    taint_override = db.scalar(
+        select(Workspace.taint_gating).where(Workspace.id == actor.workspace_id)
     )
     return BootstrapResponse(
         identity=Identity(
@@ -101,6 +112,11 @@ def bootstrap(
             mode=settings.screen_mode,
             backend=settings.screen_backend,
         ),
+        taint=TaintStatus(
+            enabled=bool(gating),
+            classes=sorted(gating),
+            workspace_override=taint_override or "",
+        ),
         digest=DigestStatus(
             enabled=bool(membership.digest_enabled) if membership else False,
             hour_utc=membership.digest_hour_utc if membership else 9,
@@ -121,6 +137,20 @@ def bootstrap(
         style_preset=membership.style_preset if membership else "normal",
         custom_style_text=membership.custom_style_text if membership else "",
         unrestricted_agent=settings.dev_unrestricted_agent,
+        # Not gated on the provider, unlike `selectable_models` above: the
+        # catalogue pins no model names, so it is the same list under the
+        # scripted double as under a real provider.
+        run_presets=[
+            RunPresetOut(
+                name=policy.name,
+                label=policy.label,
+                description=policy.description,
+                effort=policy.effort,
+                budget=policy.budget,
+                step_plan=policy.step_plan,
+            )
+            for policy in run_presets.catalogue()
+        ],
         feature_flags={
             "cited_memory": True,
             "read_only_tool": True,

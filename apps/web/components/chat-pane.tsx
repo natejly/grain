@@ -96,7 +96,9 @@ export function ChatPane({
       agentId: conversation.default_agent_id,
       model: conversation.default_model,
       effort: conversation.default_effort,
+      preset: conversation.default_preset,
     },
+    presets: bootstrap?.run_presets,
     onSettled,
     onApprovalChanged,
   });
@@ -231,6 +233,8 @@ export function ChatPane({
         apps={apps}
         draft={thread.draft}
         setDraft={thread.setDraft}
+        seedDraft={thread.seedDraft}
+        showCoverage
         activeRun={thread.activeRun}
         runStatus={thread.runStatus}
         budgetPark={thread.budgetPark}
@@ -284,7 +288,15 @@ export function ChatPane({
           setEffort: thread.setSelectedEffort,
           fast: thread.fast,
           setFast: thread.setFast,
+          // A pane is a full composer: a preset that only worked in the shell
+          // would be a half-shipped control.
+          presets: bootstrap?.run_presets,
+          preset: thread.selectedPreset,
+          setPreset: thread.setSelectedPreset,
+          stepPlan: thread.stepPlan,
+          setStepPlan: thread.setStepPlan,
         }}
+        plan={thread.runPlan}
         skills={{
           attached: thread.attachedSkill,
           argValues: thread.skillArgs,

@@ -98,6 +98,28 @@ export type ScreenStatus = {
 };
 
 /**
+ * The provenance gate's posture — the screen's deterministic sibling.
+ *
+ * Where the screen asks whether text LOOKS like an instruction, this keys on
+ * where the text came from: once a gating class has entered a turn, a write or
+ * a network call waits for a person, whatever the thread's approval mode says.
+ *
+ * `enabled` is already resolved — the deployment flag AND this workspace's
+ * override AND the surviving class set — so a client never re-derives it.
+ * `workspace_override` is what is STORED ("" follows the deployment, "on" and
+ * "off" force it), which is what an owner's control has to render: a radio
+ * showing the resolution would move under an owner who changed nothing.
+ */
+export type TaintStatus = {
+  enabled: boolean;
+  classes: string[];
+  workspace_override: string;
+};
+
+/** What an owner may set the gate to. "default" clears the override. */
+export type TaintGatingMode = "default" | "on" | "off";
+
+/**
  * The caller's daily-digest opt-in, as their membership row holds it. Read on
  * bootstrap beside the identity it belongs to; written through
  * `updateDigestPrefs` (PUT /api/me/digest).
@@ -143,8 +165,19 @@ export type Bootstrap = {
     /** The deployment default effort — what an unset per-turn effort resolves to. */
     default_effort: string;
   };
+  /**
+   * The research presets the composer can offer, "auto" first. Code constants
+   * server-side, so the list is deployment-independent. Optional so a client
+   * built against an older server still boots.
+   */
+  run_presets?: RunPreset[];
   /** The prompt-injection screen's posture, for a status indicator. */
   screen: ScreenStatus;
+  /**
+   * The provenance gate's posture, beside the screen. Optional so a client
+   * built against an older server still boots.
+   */
+  taint?: TaintStatus;
   /** The caller's daily "items waiting on me" mail opt-in. */
   digest?: DigestPrefs;
   /**
@@ -208,6 +241,33 @@ export type MessageControls = {
    * an approval resumes against the file it was asked about.
    */
   subjectFocus?: string;
+  /**
+   * A named policy bundle for this turn, from `Bootstrap.run_presets`. "auto"
+   * is accepted and routed server-side into a concrete name before the run row
+   * is written, so the run never records the string "auto". A preset only ever
+   * SEEDS the other controls here — an explicit one wins.
+   */
+  preset?: string;
+  /**
+   * Run this turn in plan-then-execute mode. Tri-state on purpose: `undefined`
+   * means "whatever the preset says" and `false` means "no, even if the preset
+   * turns it on". Collapsing the two would take away the user's ability to
+   * decline.
+   */
+  stepPlan?: boolean;
+  /** How much evidence this turn retrieves: "low" | "medium" | "high". */
+  retrievalBudget?: string;
+};
+
+/** One row of the run-preset picker (`Bootstrap.run_presets`). */
+export type RunPreset = {
+  name: string;
+  label: string;
+  description: string;
+  /** "" means "leave the user's own effort alone" — an identity, not a level. */
+  effort: string;
+  budget: string;
+  step_plan: boolean;
 };
 
 export type Conversation = {
@@ -259,6 +319,13 @@ export type Conversation = {
   default_agent_id: string;
   default_model: string;
   default_effort: string;
+  /**
+   * The remembered research preset, "" for none. A seed like the three above.
+   * Optional, unlike them, because it arrived later: a client built against a
+   * server that predates it still types-checks, and the composer reads a
+   * missing value as "no preset" — which is exactly what it means.
+   */
+  default_preset?: string;
   created_at: string;
   updated_at: string;
 };
@@ -269,6 +336,12 @@ export type ConversationDefaults = {
   default_agent_id?: string;
   default_model?: string;
   default_effort?: string;
+  /**
+   * A catalogue name, "auto", or "" to clear. Unlike the three above this one
+   * IS validated server-side: the catalogue is code, so an unknown name here
+   * is a client bug rather than a value some other deployment might offer.
+   */
+  default_preset?: string;
 };
 
 /**
@@ -305,15 +378,94 @@ export type Citation = {
    * address a reader can follow to check the claim.
    */
   url?: string | null;
+  /**
+   * A fingerprint of the chunk's CONTENT as it stood when it was cited, so a
+   * stored citation can be re-verified against the exact text it quoted — and
+   * so a passage rewritten since the answer is detectable rather than silently
+   * re-read. "" or absent for a web passage, which has no indexed chunk.
+   */
+  fingerprint?: string;
+};
+
+/** One sentence of an answer, and what the lexical support test made of it. */
+export type SentenceGrounding = {
+  /** Offsets into the answer as stored, so a span can be highlighted. */
+  start: number;
+  end: number;
+  /** The sentence, clipped for storage. */
+  text: string;
+  /** "verified" | "cited_unsupported" | "uncited" | "ignored" | "attributed",
+   *  as a plain string so a future verdict arrives as an unknown label, not an
+   *  error. */
+  verdict: string;
+  citations: number[];
+  fabricated: number[];
+  /** Share of the sentence's content words found in the passages it cited. */
+  coverage: number;
+  /** Figures the sentence states that its cited passages do not. */
+  missing_numerals: string[];
 };
 
 /**
- * The citation validator's verdict on one answer — exactly the report in
- * apps/api/app/services/citations.py, no more.
+ * Per-sentence support for one answer, and the one number over it.
+ *
+ * A LEXICAL overlap test: `verified` means the sentence's words are present in
+ * the passage it cites, never that the sentence is true. `scored === 0` means
+ * nothing in the answer was gradable, which is not the same as 0% grounded.
+ */
+export type GroundingCheck = {
+  score: number;
+  scored: number;
+  verified: number;
+  cited_unsupported: number;
+  uncited: number;
+  ignored: number;
+  /**
+   * Sentences whose every citation names a passage nothing local could check —
+   * a hosted web result, whose only available "excerpt" is a slice of the
+   * answer itself. Outside `scored`, because grading a sentence against a
+   * substring of itself scores ~1.0 by construction: the source's publisher
+   * asserts it, and nothing here verified it. Absent on a verdict stored
+   * before the field existed.
+   */
+  attributed?: number;
+  /** The coverage threshold this grading used. */
+  floor: number;
+  truncated: boolean;
+  /** How many sentences the answer HAS; `sentences` is capped at 120. */
+  n_sentences?: number;
+  /** True when a tail of the answer was past the cap and never graded. */
+  sentences_truncated?: boolean;
+  sentences: SentenceGrounding[];
+};
+
+/** What the bounded rewrite of unsupported sentences did, if anything. */
+export type RepairCheck = {
+  attempted: boolean;
+  applied: boolean;
+  /** "" when applied; otherwise "disabled" | "nothing_to_repair" |
+   *  "no_provider" | "rejected_not_better" | "rejected_fabricated" | "failed". */
+  reason: string;
+  score_before: number;
+  score_after: number;
+  unsupported_before: number;
+  unsupported_after: number;
+  /**
+   * True when the report this pass worked from stopped at the grader's
+   * sentence cap, so "nothing to repair" covers only the part that was read.
+   */
+  tail_ungraded?: boolean;
+};
+
+/**
+ * The citation validator's verdict on one answer — the report in
+ * apps/api/app/services/citations.py, its one-line summary, and (when the
+ * answer was graded) the per-sentence grounding report and the repair record.
  *
  * The contract the model is held to is "attach [n] after each claim supported
  * by passage n, and only use [n] markers that match supplied passages". This
- * says whether it did.
+ * says whether it did, and `grounding` says how well the words of each cited
+ * sentence match the passage it named.
  */
 export type CitationCheck = {
   /** How many passages the model was handed. */
@@ -331,6 +483,69 @@ export type CitationCheck = {
   /** False when anything was fabricated or malformed. */
   valid: boolean;
   summary: string;
+  /**
+   * null (or absent, from an older server) means this answer was never graded
+   * per sentence. Not the same as "graded and clean".
+   */
+  grounding?: GroundingCheck | null;
+  repair?: RepairCheck | null;
+};
+
+/** One question for the grounded-answer API. */
+export type GroundedAnswerRequest = {
+  question: string;
+  /** "" is the whole workspace library. */
+  space_id?: string;
+  /**
+   * Only answer from these sources. Applied AFTER ranking, so a narrow list can
+   * return fewer passages than `limit` — "the top-k had nothing from these
+   * sources", which is not "the corpus has nothing".
+   */
+  source_ids?: string[];
+  limit?: number;
+  json_schema?: Record<string, unknown> | null;
+};
+
+export type GroundedAnswer = {
+  receipt_id: string;
+  question: string;
+  answer: string;
+  citations: Citation[];
+  report: CitationCheck;
+  /** The embedding contract the retrieval ran on; "" when none is active. */
+  embedding_generation_id: string;
+  structured?: unknown;
+  schema_error: string;
+  created_at: string;
+};
+
+/** One row of the grounded-answer ledger. No answer body rides the list. */
+export type GroundedReceipt = {
+  id: string;
+  question: string;
+  evidence_count: number;
+  grounding_score: number;
+  /**
+   * How many sentences were gradable. `scored === 0` means nothing in the
+   * answer made a checkable claim, which must not be rendered as 0% — and with
+   * only the score on the row there was no field left to tell that apart from
+   * "graded and failed".
+   */
+  scored: number;
+  valid: boolean;
+  embedding_generation_id: string;
+  created_at: string;
+};
+
+export type GroundedReceiptDetail = {
+  id: string;
+  question: string;
+  answer: string;
+  citations: Citation[];
+  report: CitationCheck | null;
+  space_id: string;
+  embedding_generation_id: string;
+  created_at: string;
 };
 
 export type Message = {
@@ -359,7 +574,29 @@ export type Message = {
    * Optional so a client built against an older server still renders.
    */
   my_feedback?: "" | "up" | "down";
+  /**
+   * The follow-up chips this answer earned. An EMPTY LIST means no suggestion
+   * cleared the retrieval probe — a real and common answer for a thin corpus.
+   * It does not mean the feature is off. Optional so a client built against an
+   * older server still renders.
+   */
+  followups?: Followup[];
   created_at: string;
+};
+
+/**
+ * One suggested next question, and the evidence that the workspace can answer
+ * it. Derived from the knowledge graph's neighbours of the cited passages and
+ * from the answer's own headings, then admitted only when a dense probe at the
+ * embedding generation's own floor returned something.
+ */
+export type Followup = {
+  text: string;
+  /** "kg" — a claim about the corpus; "heading" — a claim about the answer. */
+  origin: "kg" | "heading";
+  probe_score: number;
+  /** What the probe found. Carried so the grounding is visible, not claimed. */
+  chunk_ids: string[];
 };
 
 export type Run = {
@@ -592,6 +829,16 @@ export type AgentToolCall = {
   /** The member this approval is routed to, "" for anyone. Routing only —
    * the decision machinery and its attribution are untouched. */
   assigned_to?: string;
+  /**
+   * Why the provenance gate raised this call to an approval, "" when it did
+   * not.
+   *
+   * A MACHINE string — `taint:<comma,classes>:<action>` — deliberately, not
+   * prose: the server states what happened and the client says it in the
+   * reader's language. `describeGate` parses it and renders nothing it cannot
+   * parse, so a future server string never lands in a card as garbage.
+   */
+  gate_reason?: string;
   created_at: string;
 };
 
@@ -1308,6 +1555,10 @@ export type InboxApproval = {
    * hides assigned-away rows — nothing parked is invisible — so the client
    * partitions the queue by this field instead. */
   assigned_to: string;
+  /** Why the provenance gate raised this call, "" when it did not. The same
+   * machine string the chat card carries, so the two surfaces deciding one
+   * approval render one reason. Optional so an older server still parses. */
+  gate_reason?: string;
   created_at: string;
 };
 
@@ -1361,6 +1612,31 @@ export type InboxAnomaly = {
   created_at: string;
 };
 
+/**
+ * One research notice: a published page whose evidence moved, or a watch that
+ * found a change.
+ *
+ * Its own list rather than a sixth kind of alert, for the reason anomalies are
+ * separate from alerts: these are not a threshold somebody drew being crossed,
+ * they are "something you published, or asked a standing question about, is no
+ * longer what it was". The next step is to READ, so both deep links ride the
+ * row and there is no decision on it.
+ */
+export type InboxNotice = {
+  id: string;
+  /** "page_drift" | "watch_change" — branch on this, not on the target. */
+  kind: string;
+  title: string;
+  body: string;
+  /** The page whose evidence moved; "" for a watch notice. */
+  page_id: string;
+  /** The watch that found a change; "" for a page notice. */
+  watch_id: string;
+  /** The watch's standing brief, when it has one. */
+  document_id: string;
+  created_at: string;
+};
+
 /** One finished workflow run — the Inbox's history shelf, not its work. */
 export type InboxRun = {
   id: string;
@@ -1382,6 +1658,8 @@ export type InboxFeed = {
   mentions: InboxMention[];
   alerts: InboxAlert[];
   anomalies: InboxAnomaly[];
+  /** Optional so a client built against an older server still renders. */
+  notices?: InboxNotice[];
   recent_runs: InboxRun[];
 };
 
@@ -1643,7 +1921,11 @@ export type DashboardLayoutTile = {
 };
 
 /** What a share link points at — the kinds with no public surface of their own. */
-export type ShareLinkKind = "dashboard" | "document" | "conversation";
+export type ShareLinkKind =
+  | "dashboard"
+  | "document"
+  | "conversation"
+  | "page";
 
 /**
  * One revocable public URL onto a dashboard or document. No token appears here
@@ -1712,6 +1994,239 @@ export type SharedResource = {
    * a tail off as the whole thread. Optional for older API payloads.
    */
   truncated?: boolean;
+  /**
+   * The page half. FROZEN, unlike every other half of this type: a page's
+   * evidence is pinned at publish time and the public route serves the text
+   * that was published, not the text the workspace holds now. Anything that
+   * "fixed the inconsistency" by serving live content would destroy the
+   * feature.
+   */
+  page_body?: string;
+  page_citations?: SharedPageCitation[];
+  /**
+   * True once the drift sweep found a cited passage edited or gone. The reader
+   * still sees the published text; this is how they are told it is no longer
+   * what the workspace holds.
+   */
+  page_drifted?: boolean;
+};
+
+/** One frozen marker on a shared page, as an anonymous reader sees it. */
+export type SharedPageCitation = {
+  marker: number;
+  filename: string;
+  ordinal: number;
+  /** The author's words at publish time. Never re-read from the live chunk. */
+  frozen_excerpt: string;
+  /** "frozen" | "changed" | "missing" — this marker's own drift verdict. */
+  status: string;
+};
+
+// --- Pages ---------------------------------------------------------------
+// A thread published as a document whose citations are frozen to the passages
+// that were checked. NOT a window onto the thread, which is what a share link
+// is everywhere else: staleness is reported (`status`, `drift_count`), never
+// papered over by serving newer text.
+
+export type Page = {
+  id: string;
+  /** The thread it was published from. A plain id: the page outlives it. */
+  conversation_id: string;
+  title: string;
+  /** "published" | "drifted". Set by the sweep, never by a read. */
+  status: string;
+  drift_count: number;
+  /** The embedding generation active at publish time. */
+  generation_id: string;
+  published_by: string;
+  /**
+   * null means the drift sweep has never reached this page — a different fact
+   * from "checked and clean", which is "published" WITH a timestamp.
+   */
+  drift_checked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PageCitation = {
+  marker: number;
+  chunk_id: string;
+  source_id: string;
+  filename: string;
+  ordinal: number;
+  /** The author's words at publish time. */
+  frozen_excerpt: string;
+  /** "frozen" | "changed" | "missing". */
+  status: string;
+  checked_at: string | null;
+};
+
+export type PageDetail = {
+  page: Page;
+  body_md: string;
+  citations: PageCitation[];
+};
+
+export type PagePublishInput = {
+  conversation_id: string;
+  title: string;
+};
+
+// --- Coverage ledgers ------------------------------------------------------
+// What a research run actually looked at, as data. The classifier and both
+// counter-queries behind it are pure functions, so nothing here is a model's
+// opinion of its own thoroughness.
+
+export type CoverageEntry = {
+  ordinal: number;
+  sub_question: string;
+  /** "neutral" | "for" | "against". The stances are the forced counter pass. */
+  stance: string;
+  /** Retrieval returned something. NOT entailment. */
+  supported: boolean;
+  query: string;
+  chunk_ids: string[];
+  source_ids: string[];
+};
+
+export type CoverageLedger = {
+  id: string;
+  run_id: string;
+  workflow_run_id: string;
+  question: string;
+  /** "plain" | "debate". */
+  shape: string;
+  in_scope_count: number;
+  consulted_count: number;
+  /** True when a debate question found nothing on one side. */
+  one_sided: boolean;
+  entries: CoverageEntry[];
+  /** The rendered section, from the same renderer the report uses. */
+  report_markdown: string;
+  created_at: string;
+};
+
+// --- Deliverable runs ------------------------------------------------------
+
+export type ManifestFile = {
+  ordinal: number;
+  /**
+   * The Source `sandbox_download` created. Its status is "stored", not
+   * "ready": the file is downloadable and is NOT retrievable or quotable, and
+   * a UI must not imply otherwise.
+   */
+  source_id: string;
+  filename: string;
+  byte_size: number;
+  sandbox_session_id: string;
+  queries: string[];
+  /** The passages the run CITED — not merely what a search returned. */
+  chunk_ids: string[];
+};
+
+export type DeliverableManifest = {
+  id: string;
+  workflow_run_id: string;
+  /** '' is the workspace library, never null. */
+  space_id: string;
+  title: string;
+  /** "complete" | "partial". Partial is a real outcome, not an error. */
+  status: string;
+  budget_seconds: number;
+  budget_tool_calls: number;
+  spent_seconds: number;
+  spent_tool_calls: number;
+  created_by: string;
+  created_at: string;
+};
+
+export type DeliverableManifestDetail = {
+  manifest: DeliverableManifest;
+  files: ManifestFile[];
+  /**
+   * null means no coverage was recorded for this run — common, and not an
+   * error. Render it as "no coverage recorded", never as a failure.
+   */
+  coverage: CoverageLedger | null;
+};
+
+export type DeliverableStartInput = {
+  title?: string;
+  question: string;
+  space_id?: string;
+  budget_seconds?: number;
+  budget_tool_calls?: number;
+};
+
+export type DeliverableStarted = {
+  workflow_id: string;
+  workflow_run_id: string;
+};
+
+// --- Watches ---------------------------------------------------------------
+
+export type Watch = {
+  id: string;
+  name: string;
+  /** "source" | "space". */
+  target_kind: string;
+  target_id: string;
+  /** Derived server-side from the target. '' is the workspace library. */
+  space_id: string;
+  /**
+   * True means this watch writes what it learns to EVERY member's memory
+   * shelf. False means it writes to its creator's. The only control in this
+   * family that widens memory visibility.
+   */
+  shared: boolean;
+  schedule_cron: string;
+  schedule_timezone: string;
+  enabled: boolean;
+  extraction_fields: string[];
+  /** The standing brief it regenerates. '' until the first change. */
+  brief_document_id: string;
+  /**
+   * null means the watch has never run — a different fact from "ran and found
+   * nothing", which is a checked-at with no change-at.
+   */
+  last_checked_at: string | null;
+  last_change_at: string | null;
+  created_by: string;
+  created_at: string;
+};
+
+export type WatchObservation = {
+  id: string;
+  /** False is a real observation: it ran and the target was identical. */
+  changed: boolean;
+  added_chunks: number;
+  removed_chunks: number;
+  summary: string;
+  fields: Record<string, string>;
+  created_at: string;
+};
+
+export type WatchCreateInput = {
+  name: string;
+  target_kind: "source" | "space";
+  target_id: string;
+  schedule_cron: string;
+  schedule_timezone?: string;
+  shared?: boolean;
+  extraction_fields?: string[];
+};
+
+export type WatchUpdateInput = {
+  name?: string;
+  schedule_cron?: string;
+  schedule_timezone?: string;
+  enabled?: boolean;
+  shared?: boolean;
+  extraction_fields?: string[];
+};
+
+export type WatchRunNow = {
+  observation: WatchObservation;
 };
 
 /**
@@ -3195,6 +3710,16 @@ export class WorkspaceApi {
           ...(controls?.subjectFocus
             ? { subject_focus: controls.subjectFocus }
             : {}),
+          ...(controls?.preset ? { preset: controls.preset } : {}),
+          // Sent whenever it is defined, including `false`: the server
+          // distinguishes "absent" from "explicitly off", and an explicit off
+          // is how a user declines a preset that would turn plan mode on.
+          ...(controls?.stepPlan !== undefined
+            ? { step_plan: controls.stepPlan }
+            : {}),
+          ...(controls?.retrievalBudget
+            ? { retrieval_budget: controls.retrievalBudget }
+            : {}),
         }),
       },
       true,
@@ -3702,6 +4227,28 @@ export class WorkspaceApi {
   /** The workspace's standing grants plus the caller's own, never anyone else's. */
   listToolPolicies(): Promise<ToolPolicy[]> {
     return this.request("/api/tool-policies");
+  }
+
+  /**
+   * The provenance gate's posture. Readable by any member, on purpose: it is a
+   * posture everyone in the workspace is governed by, and hiding it from the
+   * people it governs is how "why did that ask me?" becomes unanswerable.
+   */
+  getTaintGating(): Promise<TaintStatus> {
+    return this.request("/api/taint-gating");
+  }
+
+  /**
+   * Override the deployment default for this workspace. Owners only — the
+   * server 403s a member, and "default" clears the override rather than
+   * pinning today's deployment value, so a deployment that later tightens
+   * reaches a workspace that never took a position.
+   */
+  setTaintGating(mode: TaintGatingMode): Promise<TaintStatus> {
+    return this.request("/api/taint-gating", {
+      method: "PUT",
+      body: JSON.stringify({ mode }),
+    });
   }
 
   /**
@@ -4786,6 +5333,37 @@ export class WorkspaceApi {
   }
 
   /**
+   * Ask one question of the workspace's indexed sources, with the verdict.
+   *
+   * The machine door: it authenticates with a workspace bearer token, not this
+   * client's cookie, so a browser cannot call it — the method is here so a
+   * Node script sharing these types can, and so the response shape has one
+   * definition. What comes back is the answer, its citations, and the
+   * per-sentence grounding report; `report.grounding` is a LEXICAL support
+   * check, never a claim that the answer is true.
+   */
+  groundedAnswer(body: GroundedAnswerRequest): Promise<GroundedAnswer> {
+    return this.request("/api/answers/grounded", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * This workspace's grounded-answer ledger, newest first. Owner-gated, like
+   * the tokens that produce it.
+   */
+  listGroundedReceipts(limit?: number): Promise<GroundedReceipt[]> {
+    const query = limit ? `?limit=${limit}` : "";
+    return this.request(`/api/answers/receipts${query}`);
+  }
+
+  /** One receipt, with the answer it recorded and the verdict on it. */
+  getGroundedReceipt(receiptId: string): Promise<GroundedReceiptDetail> {
+    return this.request(`/api/answers/receipts/${receiptId}`);
+  }
+
+  /**
    * Set the org's ceiling for one tool in one scope.
    *
    * A ceiling, not a setting: `allow` here does not make anything run, it lets
@@ -5195,6 +5773,116 @@ export class WorkspaceApi {
    */
   runCronNow(cronId: string): Promise<void> {
     return this.request(`/api/crons/${cronId}/run-now`, { method: "POST" }, true);
+  }
+
+  // --- Pages ---
+  // Publishing FREEZES: the body and every excerpt are captured at publish
+  // time, and the sweep reports drift rather than rewriting them.
+
+  publishPage(payload: PagePublishInput): Promise<PageDetail> {
+    return this.request(
+      "/api/pages",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  listPages(): Promise<Page[]> {
+    return this.request("/api/pages");
+  }
+
+  getPage(pageId: string): Promise<PageDetail> {
+    return this.request(`/api/pages/${pageId}`);
+  }
+
+  /**
+   * Re-check this page's evidence now rather than waiting for the sweep.
+   * Naturally idempotent — it reads the live chunks and writes the verdict
+   * they imply — so it carries no Idempotency-Key.
+   */
+  revalidatePage(pageId: string): Promise<PageDetail> {
+    return this.request(`/api/pages/${pageId}/revalidate`, { method: "POST" });
+  }
+
+  /** Deletes the page AND revokes every share link that served it. */
+  deletePage(pageId: string): Promise<void> {
+    return this.request(`/api/pages/${pageId}`, { method: "DELETE" }, true);
+  }
+
+  // --- Coverage ---
+  // 404 is the ordinary answer for a run nobody recorded coverage for. Render
+  // it as "no coverage recorded for this run", never as an error.
+
+  getRunCoverage(runId: string): Promise<CoverageLedger> {
+    return this.request(`/api/runs/${runId}/coverage`);
+  }
+
+  // --- Deliverable runs ---
+
+  startDeliverable(payload: DeliverableStartInput): Promise<DeliverableStarted> {
+    return this.request(
+      "/api/deliverables",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  listDeliverables(spaceId?: string): Promise<DeliverableManifest[]> {
+    const query =
+      spaceId === undefined
+        ? ""
+        : `?space_id=${encodeURIComponent(spaceId)}`;
+    return this.request(`/api/deliverables${query}`);
+  }
+
+  getDeliverable(manifestId: string): Promise<DeliverableManifestDetail> {
+    return this.request(`/api/deliverables/${manifestId}`);
+  }
+
+  // --- Watches ---
+  // The Cron's shape: the same 5-field schedule + IANA zone, dispatched by the
+  // same tick under the same at-most-once claim. `shared` is the only field
+  // here that widens memory visibility, so it is always explicit.
+
+  listWatches(): Promise<Watch[]> {
+    return this.request("/api/watches");
+  }
+
+  createWatch(payload: WatchCreateInput): Promise<Watch> {
+    return this.request(
+      "/api/watches",
+      { method: "POST", body: JSON.stringify(payload) },
+      true,
+    );
+  }
+
+  getWatch(watchId: string): Promise<Watch> {
+    return this.request(`/api/watches/${watchId}`);
+  }
+
+  /** The target is deliberately not patchable: see the server's router note. */
+  updateWatch(watchId: string, payload: WatchUpdateInput): Promise<Watch> {
+    return this.request(`/api/watches/${watchId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /** Removes the watch and its observations; KEEPS the brief and the memories. */
+  deleteWatch(watchId: string): Promise<void> {
+    return this.request(`/api/watches/${watchId}`, { method: "DELETE" }, true);
+  }
+
+  /**
+   * Check the watch now, ignoring its schedule. Claim-free, like a cron's
+   * run-now: the next scheduled minute still fires on its own.
+   */
+  runWatchNow(watchId: string): Promise<WatchRunNow> {
+    return this.request(`/api/watches/${watchId}/run-now`, { method: "POST" });
+  }
+
+  listWatchObservations(watchId: string): Promise<WatchObservation[]> {
+    return this.request(`/api/watches/${watchId}/observations`);
   }
 
   // --- Metric monitors ---

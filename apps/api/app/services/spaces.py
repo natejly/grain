@@ -22,7 +22,17 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from ..models import Conversation, MemoryItem, Run, Source, Space
+from ..models import (
+    Conversation,
+    DeliverableManifest,
+    ManifestFile,
+    MemoryItem,
+    Run,
+    Source,
+    Space,
+    Watch,
+    WatchObservation,
+)
 from . import conversations
 from . import embedding_generations as generations
 from .ingestion import purge_source
@@ -154,6 +164,11 @@ class SpaceTeardown:
     thread_count: int = 0
     source_count: int = 0
     memory_count: int = 0
+    #: Scheduled watches pointed at this space, and the manifests attached to
+    #: it. Counted separately because a watch is unattended work and a person
+    #: confirming a delete should be told they are stopping one.
+    watch_count: int = 0
+    manifest_count: int = 0
     #: `object_key` of every purged source — the files to unlink once the
     #: transaction has held, never before.
     object_keys: List[str] = field(default_factory=list)
@@ -241,6 +256,69 @@ def delete_space(db: Session, *, workspace_id: str, space_id: str) -> SpaceTeard
     )
     teardown.memory_count = deleted_memories.rowcount or 0
 
+    # Watches and manifests, for exactly the argument above. A space-scoped
+    # watch re-labelled `space_id = ""` would keep firing and would start
+    # writing what it learns to the GLOBAL memory shelf — the one direction
+    # scoping may never fail toward — and a watch left pointed at a deleted
+    # space is a live scheduled job with no target. Children first, as
+    # everywhere else here.
+    watch_ids = list(
+        db.scalars(
+            select(Watch.id).where(
+                Watch.workspace_id == workspace_id,
+                Watch.space_id == space.id,
+            )
+        )
+    )
+    if watch_ids:
+        db.execute(
+            delete(WatchObservation).where(
+                WatchObservation.workspace_id == workspace_id,
+                WatchObservation.watch_id.in_(watch_ids),
+            )
+        )
+        deleted_watches = cast(
+            "CursorResult[Any]",
+            db.execute(
+                delete(Watch).where(
+                    Watch.workspace_id == workspace_id,
+                    Watch.id.in_(watch_ids),
+                )
+            ),
+        )
+        teardown.watch_count = deleted_watches.rowcount or 0
+
+    manifest_ids = list(
+        db.scalars(
+            select(DeliverableManifest.id).where(
+                DeliverableManifest.workspace_id == workspace_id,
+                DeliverableManifest.space_id == space.id,
+            )
+        )
+    )
+    if manifest_ids:
+        db.execute(
+            delete(ManifestFile).where(
+                ManifestFile.workspace_id == workspace_id,
+                ManifestFile.manifest_id.in_(manifest_ids),
+            )
+        )
+        deleted_manifests = cast(
+            "CursorResult[Any]",
+            db.execute(
+                delete(DeliverableManifest).where(
+                    DeliverableManifest.workspace_id == workspace_id,
+                    DeliverableManifest.id.in_(manifest_ids),
+                )
+            ),
+        )
+        teardown.manifest_count = deleted_manifests.rowcount or 0
+
+    # Pages are NOT deleted. A page names a conversation, the conversation
+    # purge above has already run, and a published page is a document somebody
+    # shared: it fail-closes on its own when its chunks vanish (the drift
+    # sweep reports them "missing"), which is a truer answer than deleting
+    # somebody's published document as a side effect.
     db.delete(space)
     return teardown
 

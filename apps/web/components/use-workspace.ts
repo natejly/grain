@@ -3,6 +3,7 @@
 import type {
   ChatAttachment,
   AgentToolCall,
+  ApprovalMode,
   AuditEvent,
   Board,
   Bootstrap,
@@ -55,6 +56,8 @@ import {
 } from "./chat-panes";
 
 export type { ChatPane } from "./chat-panes";
+import type { RunPlan } from "./views/plan-format";
+import { applyPreset } from "./views/preset-format";
 import { viewFromUrl, threadFromUrl, pushWorkspaceUrl } from "./view-url";
 import { isOwnRun } from "./own-runs";
 import { createBoardHandlers } from "./handlers/boards";
@@ -349,18 +352,23 @@ export function useWorkspace() {
   const draftKey = activeConversation ?? "";
   const draft = drafts[draftKey] ?? "";
   /**
-   * The key, read through a ref rather than closed over at render.
+   * The key, read from the SYNCHRONOUS ref rather than closed over at render.
    *
    * `submitPrompt` clears the draft, awaits the send, and on failure puts the
    * words back — and by then `ensureConversation` may have made this the first
    * turn of a brand new thread. The restored text has to land in the composer
    * the user is actually looking at, which is whichever thread is active *now*.
+   *
+   * `activeConversationRef` (not a render-assigned copy of `draftKey`): the
+   * wrapped setter updates it in the same tick as the switch, so an onChange
+   * landing between a thread switch and the re-render files under the NEW
+   * thread. A render-lagged ref filed those keystrokes under the previous
+   * thread and the controlled textarea came back empty — words on screen,
+   * Enter sending nothing.
    */
-  const draftKeyRef = useRef(draftKey);
-  draftKeyRef.current = draftKey;
   const setDraft = useCallback((value: SetStateAction<string>) => {
     setDrafts((current) => {
-      const key = draftKeyRef.current;
+      const key = activeConversationRef.current ?? "";
       const previous = current[key] ?? "";
       const next = typeof value === "function" ? value(previous) : value;
       if (next === previous) return current;
@@ -395,6 +403,10 @@ export function useWorkspace() {
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedEffort, setSelectedEffort] = useState("");
   const [fast, setFast] = useState(false);
+  // The picked preset is remembered on the thread like model/effort; the plan
+  // toggle is per-turn session state like `fast`.
+  const [selectedPreset, setSelectedPreset] = useState("");
+  const [stepPlan, setStepPlan] = useState(false);
   // The Thinking toggle is a *setting*, not per-turn session state: someone
   // who wants to watch the model think wants that every turn, so it persists
   // under the `grain.*` localStorage convention. Seeded in an effect rather
@@ -417,6 +429,9 @@ export function useWorkspace() {
   }, []);
   //: The live reasoning trail streamed by the current run; "" between runs.
   const [runThinking, setRunThinking] = useState("");
+  // Live narration of a step-plan turn, cleared by the turn engine when the
+  // run settles — the plan is not transcript.
+  const [runPlan, setRunPlan] = useState<RunPlan>(null);
   // The skill attached to the next turn and the values for its declared args.
   // Per-turn session state like the controls above: the composer's slash picker
   // sets it, the send consumes it, and it never becomes part of the conversation.
@@ -1301,6 +1316,9 @@ export function useWorkspace() {
     setSelectedEffort(
       thread.default_effort || bootstrap?.model_provider.default_effort || "",
     );
+    setSelectedPreset(thread.default_preset || "");
+    setStepPlan(false);
+    setRunPlan(null);
   }, [activeConversation, conversations, bootstrap]);
 
   /**
@@ -1565,6 +1583,8 @@ export function useWorkspace() {
     selectedEffort,
     fast,
     thinking,
+    preset: selectedPreset,
+    stepPlan,
     attachedSkill,
     skillArgs,
     clearAttachedSkill: detachSkill,
@@ -1582,6 +1602,7 @@ export function useWorkspace() {
     setActiveRun,
     setRunStatus,
     setRunThinking,
+    setRunPlan,
     setBudgetPark,
     onScreenFlag: recordScreenFlag,
     setDraft,
@@ -1610,6 +1631,40 @@ export function useWorkspace() {
     if (!conversationsRef.current.some((item) => item.id === id)) return;
     void chatHandlers.selectConversation(id);
   };
+
+  /**
+   * Pick a preset: remember it, then SEED the visible controls from it — the
+   * identical behaviour the pane's `use-conversation-thread` applies, through
+   * the identical `applyPreset` mapping. Implementing it twice is how the two
+   * composers would come to disagree about what a preset does while both still
+   * looked correct.
+   *
+   * It seeds effort and the plan toggle, and nothing else. It used to seed the
+   * thread's approval mode as well, through `chatHandlers.setApprovalMode` —
+   * a PUT on the conversation row — so a picker advertising retrieval and
+   * effort silently moved threads out of `plan` and `ask_all`. See
+   * `views/preset-format.ts`.
+   */
+  const pickPreset = useCallback(
+    (name: string) => {
+      setSelectedPreset(name);
+      rememberThreadDefault({ default_preset: name });
+      const policy = (bootstrap?.run_presets || []).find(
+        (row) => row.name === name,
+      );
+      if (!policy) return;
+      const seeded = applyPreset(policy, {
+        effort: selectedEffort,
+        stepPlan,
+      });
+      if (seeded.effort !== selectedEffort) {
+        setSelectedEffort(seeded.effort);
+        rememberThreadDefault({ default_effort: seeded.effort });
+      }
+      setStepPlan(seeded.stepPlan);
+    },
+    [bootstrap, rememberThreadDefault, selectedEffort, stepPlan],
+  );
 
   const attachmentHandlers = createAttachmentHandlers({
     setError,
@@ -1813,6 +1868,11 @@ export function useWorkspace() {
     setSelectedEffort: pickEffort,
     fast,
     setFast,
+    selectedPreset,
+    setSelectedPreset: pickPreset,
+    stepPlan,
+    setStepPlan,
+    runPlan,
     thinking,
     setThinking,
     runThinking,

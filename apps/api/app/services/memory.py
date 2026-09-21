@@ -201,6 +201,21 @@ def _retire(db: Session, rows: Sequence[MemoryItem], replacement_id: str) -> Non
     db.flush()
 
 
+def retire_items(
+    db: Session, rows: Sequence[MemoryItem], *, replacement_id: str = ""
+) -> None:
+    """Retire rows nothing replaced — the public name for `_retire`.
+
+    Supersession is scoped to (owner, space) EXACTLY, so a caller that moves a
+    claim out of one scope has to retire what it left behind or those rows stay
+    `active` and unreachable forever. `services/watches.retire_claims` is the
+    first such caller (a watch's `shared` flag flipping). Routed through the
+    same chokepoint as supersession and deletion so recall drops them with no
+    second opinion about what "retired" means.
+    """
+    _retire(db, rows, replacement_id)
+
+
 _ClaimArgs = ParamSpec("_ClaimArgs")
 
 
@@ -1406,6 +1421,7 @@ def remember_memory(
     settings: Optional[Settings] = None,
     owner_id: Optional[str] = None,
     space_id: Optional[str] = None,
+    normalized_key: Optional[str] = None,
 ) -> RememberResult:
     """Store a durable memory now, deduplicating on content.
 
@@ -1420,11 +1436,18 @@ def remember_memory(
     overrides exist solely for the authenticated HTTP manual-add route, where
     the caller chooses between "mine" and "everyone's"; memory_tools.py call
     sites pass neither, so the model still cannot choose scope.
+
+    `normalized_key` overrides the default content hash with a CLAIM key, for
+    a caller whose rows are about a recurring slot rather than a sentence: a
+    denial of the same tool restates one standing preference and should land on
+    one row that grows, not on a new row per proposal. It is server-derived at
+    every call site — never read off a request body and never model-supplied —
+    because the key decides which existing row a write lands on.
     """
     settings = settings or get_settings()
     content = normalize_memory_content(content)
     names = [str(name).strip() for name in (entities or []) if str(name).strip()][:16]
-    normalized_key = _content_key(content)
+    normalized_key = normalized_key or _content_key(content)
     owner_id = (
         owner_id if owner_id is not None else memory_owner(db, conversation_id, user_id)
     )

@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from ...config import Settings, get_settings
 from ...models import AgentToolCall, Run, SandboxExecution, SandboxSession, Source, new_id
+from .. import provenance
 from ..ingestion import object_path, sanitize_filename
 from ..llm_tools import MAX_RESULT_CHARS, ToolContext, ToolResult, ToolSpec
 from ..projects import store
@@ -397,6 +398,20 @@ def _execute(db: Session, context: ToolContext, args: Dict[str, Any], *, kind: s
     return ToolResult(
         content=_render(result, descriptors, dropped=dropped),
         artifacts=descriptors,
+        # A NETWORKED SANDBOX REPORTS WHAT IT IS. `sandbox_output` is outside
+        # the default gating set on purpose — ordinarily this is the model's
+        # own code printing over the workspace's own data. But when the
+        # deployment lets the sandbox dial out, `pip install <attacker
+        # package>` or a curl brings text in from outside the deployment, and
+        # that is the same content `web_fetch` carries. Reporting the class
+        # here (`ToolResult.provenance`, the same seam a delegate child uses)
+        # arms the default gate with no new class and no config change. It is
+        # a DEPLOYMENT fact, matching the spec's own `networked`.
+        provenance=(
+            [provenance.WEB_FETCH]
+            if settings.sandbox_network_policy != "none"
+            else []
+        ),
     )
 
 
@@ -1015,6 +1030,12 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "required": ["code"],
             },
             executor=_run_python,
+            # Whatever the sandbox printed: code the model wrote, run over
+            # data of unknown origin. Not a trusted narrator of its own output.
+            provenance=provenance.SANDBOX_OUTPUT,
+            # Whether the sandbox can dial out is a DEPLOYMENT fact, not a
+            # per-call one — the policy is already resolved above.
+            networked=settings.sandbox_network_policy != "none",
             read_only=False,
             preview=_preview_run_python,
         ),
@@ -1036,6 +1057,12 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "required": ["command"],
             },
             executor=_run_command,
+            # Whatever the sandbox printed: code the model wrote, run over
+            # data of unknown origin. Not a trusted narrator of its own output.
+            provenance=provenance.SANDBOX_OUTPUT,
+            # Whether the sandbox can dial out is a DEPLOYMENT fact, not a
+            # per-call one — the policy is already resolved above.
+            networked=settings.sandbox_network_policy != "none",
             read_only=False,
             preview=_preview_run_command,
         ),
@@ -1060,6 +1087,9 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 },
             },
             executor=_sandbox_upload,
+            # Moves bytes; it executes no code that could dial out, so
+            # marking it networked would gate turns for nothing.
+            provenance=provenance.SANDBOX_OUTPUT,
             read_only=False,
             preview=_preview_upload,
         ),
@@ -1084,6 +1114,9 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "required": ["path"],
             },
             executor=_sandbox_download,
+            # Moves bytes; it executes no code that could dial out, so
+            # marking it networked would gate turns for nothing.
+            provenance=provenance.SANDBOX_OUTPUT,
             read_only=False,
             preview=_preview_download,
         ),
@@ -1108,6 +1141,9 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "required": ["path"],
             },
             executor=_sandbox_read,
+            # Moves bytes; it executes no code that could dial out, so
+            # marking it networked would gate turns for nothing.
+            provenance=provenance.SANDBOX_OUTPUT,
         ),
         "sandbox_write": ToolSpec(
             name="sandbox_write",
@@ -1131,6 +1167,9 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "required": ["path", "content"],
             },
             executor=_sandbox_write,
+            # Moves bytes; it executes no code that could dial out, so
+            # marking it networked would gate turns for nothing.
+            provenance=provenance.SANDBOX_OUTPUT,
             read_only=False,
             preview=_preview_write,
         ),
@@ -1161,6 +1200,9 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 "required": ["path", "find", "replace"],
             },
             executor=_sandbox_edit,
+            # Moves bytes; it executes no code that could dial out, so
+            # marking it networked would gate turns for nothing.
+            provenance=provenance.SANDBOX_OUTPUT,
             read_only=False,
             preview=_preview_edit,
         ),
@@ -1184,6 +1226,9 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
                 },
             },
             executor=_sandbox_list,
+            # Moves bytes; it executes no code that could dial out, so
+            # marking it networked would gate turns for nothing.
+            provenance=provenance.SANDBOX_OUTPUT,
         ),
         "list_sandboxes": ToolSpec(
             name="list_sandboxes",
@@ -1194,5 +1239,8 @@ def registry_tools(db: Session, context: ToolContext) -> Dict[str, ToolSpec]:
             ),
             parameters={"type": "object", "properties": {}},
             executor=_list_sandboxes,
+            # Moves bytes; it executes no code that could dial out, so
+            # marking it networked would gate turns for nothing.
+            provenance=provenance.SANDBOX_OUTPUT,
         ),
     }

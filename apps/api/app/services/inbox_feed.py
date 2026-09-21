@@ -20,7 +20,9 @@ The contract is the inbox module's, restated:
   `WorkflowRun.paused_reason` between nodes, the latter possibly with no
   backing Run at all) and are deduped on workflow_run_id.
 - Mentions are personal (`target_user_id == user_id`, never ''); monitor
-  alerts and spend anomalies are broadcast (`target_user_id == ''`).
+  alerts and spend anomalies are broadcast (`target_user_id == ''`). Research
+  notices are BOTH — a page's drift is addressed to its publisher, a shared
+  watch's change is broadcast — so they filter on the ('', member) pair.
 
 Reads only. Nothing here commits, mutates, or takes a limit.
 """
@@ -53,6 +55,10 @@ class ApprovalItem:
     workflow_id: str
     workflow_name: str
     assigned_to: str
+    #: Why the provenance gate raised this call, "" when it did not. Carried
+    #: here so the Inbox reviewer reads the same sentence a chat reader gets —
+    #: two surfaces deciding one card must not disagree about why it exists.
+    gate_reason: str
     created_at: datetime
 
 
@@ -78,6 +84,13 @@ class WaitingSet:
     mentions: List[Notification] = field(default_factory=list)
     alerts: List[Notification] = field(default_factory=list)
     anomalies: List[Notification] = field(default_factory=list)
+    #: Research notices: a published page whose evidence moved, and a watch
+    #: whose target changed. Their own set rather than a sixth kind folded into
+    #: `alerts`, for the reason `anomalies` is separate from `alerts`: these
+    #: are not thresholds anybody drew, they are "something you published or
+    #: asked about is no longer what it was", and the next step is to read
+    #: rather than to acknowledge.
+    notices: List[Notification] = field(default_factory=list)
 
 
 def origin(*, cron_id: str, workflow_run_id: str, subject_id: str, conversation_id: str) -> str:
@@ -99,7 +112,7 @@ def origin(*, cron_id: str, workflow_run_id: str, subject_id: str, conversation_
 
 
 def waiting_for(db: Session, *, workspace_id: str, user_id: str) -> WaitingSet:
-    """The five waiting sets, as `user_id` is entitled to see them."""
+    """The six waiting sets, as `user_id` is entitled to see them."""
     rows = db.execute(
         select(
             AgentToolCall,
@@ -147,6 +160,7 @@ def waiting_for(db: Session, *, workspace_id: str, user_id: str) -> WaitingSet:
             workflow_id=workflow_id or "",
             workflow_name=workflow_name or "",
             assigned_to=call.assigned_to,
+            gate_reason=call.gate_reason,
             created_at=call.created_at,
         )
         for (
@@ -282,10 +296,30 @@ def waiting_for(db: Session, *, workspace_id: str, user_id: str) -> WaitingSet:
         )
     )
 
+    # The sixth waiting set. Unlike alerts and anomalies these are NOT purely
+    # broadcast: a page's drift is addressed to its publisher (they are the one
+    # person who can decide to republish or withdraw), while a shared watch
+    # speaks to the room. So the filter is the ('' , member) pair mentions use,
+    # not the '' pin automation uses — a personally-targeted notice must reach
+    # exactly one shelf, and a broadcast one must reach everybody's.
+    notices = list(
+        db.scalars(
+            select(Notification)
+            .where(
+                Notification.workspace_id == workspace_id,
+                Notification.kind.in_(("page_drift", "watch_change")),
+                Notification.status == "open",
+                Notification.target_user_id.in_(("", user_id)),
+            )
+            .order_by(Notification.created_at.asc())
+        )
+    )
+
     return WaitingSet(
         approvals=approvals,
         budget_holds=budget_holds,
         mentions=mentions,
         alerts=alerts,
         anomalies=anomalies,
+        notices=notices,
     )

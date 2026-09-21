@@ -76,6 +76,10 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
   // rail, one always-visible click away.
   for (const entry of [
     "Documents",
+    // A published page is a document, and shelved beside them — but a different
+    // KIND of document, which is why it is its own row rather than a filter on
+    // the one above.
+    "Pages",
     "Projects",
     "Boards & todos",
     "Datasets",
@@ -93,13 +97,13 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
     await expect(tabs(page, "Library").getByRole("button", { name: new RegExp(`^${entry}`) }))
       .toBeVisible();
   }
-  // 18, not 15: the six labelled shelf headings are collapse toggles — buttons
-  // in their own right — on top of the twelve view entries, Recap included
+  // 19, not 16: the six labelled shelf headings are collapse toggles — buttons
+  // in their own right — on top of the thirteen view entries, Recap included
   // (the member's month, on the "You" shelf the parity work brings in, which
-  // folds like the rest). Their accessible names say the outcome ("Hide the
-  // Data section"), so none of the anchored per-entry matches above can land
-  // on a heading by mistake.
-  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(18);
+  // folds like the rest) and Pages beside Documents. Their accessible names say
+  // the outcome ("Hide the Data section"), so none of the anchored per-entry
+  // matches above can land on a heading by mistake.
+  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(19);
   // The retired "Lists" entry stays gone: one destination, one listing.
   await expect(tabs(page, "Library").getByRole("button", { name: /^Lists/ })).toHaveCount(0);
   await expect(tabs(page, "Library").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);

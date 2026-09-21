@@ -1726,6 +1726,11 @@
             "title": "Error",
             "type": "string"
           },
+          "gate_reason": {
+            "default": "",
+            "title": "Gate Reason",
+            "type": "string"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -2529,6 +2534,14 @@
           "model_provider": {
             "$ref": "#/components/schemas/ModelProviderStatus"
           },
+          "run_presets": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RunPresetOut"
+            },
+            "title": "Run Presets",
+            "type": "array"
+          },
           "safe_mode": {
             "default": false,
             "title": "Safe Mode",
@@ -2541,6 +2554,14 @@
             "default": "normal",
             "title": "Style Preset",
             "type": "string"
+          },
+          "taint": {
+            "$ref": "#/components/schemas/TaintStatus",
+            "default": {
+              "classes": [],
+              "enabled": false,
+              "workspace_override": ""
+            }
           },
           "unrestricted_agent": {
             "default": false,
@@ -2690,6 +2711,11 @@
             "title": "Filename",
             "type": "string"
           },
+          "fingerprint": {
+            "default": "",
+            "title": "Fingerprint",
+            "type": "string"
+          },
           "ordinal": {
             "title": "Ordinal",
             "type": "integer"
@@ -2726,7 +2752,7 @@
         "type": "object"
       },
       "CitationCheck": {
-        "description": "The citation validator's verdict on one answer.\n\nExactly `services.citations.CitationReport.to_dict()` plus its one-line\nsummary. Nothing is added here: the validator is deliberately a pure\nfunction with its own tests, and a field invented at the API boundary would\nbe a claim no test covers.",
+        "description": "The citation validator's verdict on one answer.\n\n`services.citations.CitationReport.to_dict()`, its one-line summary, and \u2014\nwhen the answer was graded \u2014 the per-sentence grounding report and the\nrecord of the repair pass. Each of those three is composed in exactly one\nplace (`services.grounded.compose_report` and `services.runs.\n_validated_answer`) and each is produced by a pure function with its own\ntests, so nothing is invented at this boundary.\n\n`grounding` and `repair` are None when the answer was never graded \u2014 an\nolder message, a run whose grader raised \u2014 which is a different fact from\n\"graded and clean\", exactly as `citation_report` itself already is.",
         "properties": {
           "cited": {
             "items": {
@@ -2738,6 +2764,16 @@
           "evidence_count": {
             "title": "Evidence Count",
             "type": "integer"
+          },
+          "grounding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroundingCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "malformed": {
             "items": {
@@ -2756,6 +2792,16 @@
             },
             "title": "Out Of Range",
             "type": "array"
+          },
+          "repair": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepairCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "summary": {
             "title": "Summary",
@@ -3065,6 +3111,18 @@
               }
             ],
             "title": "Default Model"
+          },
+          "default_preset": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Preset"
           }
         },
         "title": "ConversationDefaultsRequest",
@@ -3150,6 +3208,11 @@
           "default_model": {
             "default": "",
             "title": "Default Model",
+            "type": "string"
+          },
+          "default_preset": {
+            "default": "",
+            "title": "Default Preset",
             "type": "string"
           },
           "id": {
@@ -3283,6 +3346,122 @@
           "title"
         ],
         "title": "ConversationTitleRequest",
+        "type": "object"
+      },
+      "CoverageEntryOut": {
+        "properties": {
+          "chunk_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Chunk Ids",
+            "type": "array"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "source_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          },
+          "stance": {
+            "title": "Stance",
+            "type": "string"
+          },
+          "sub_question": {
+            "title": "Sub Question",
+            "type": "string"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ordinal",
+          "sub_question",
+          "stance",
+          "supported",
+          "query"
+        ],
+        "title": "CoverageEntryOut",
+        "type": "object"
+      },
+      "CoverageLedgerOut": {
+        "properties": {
+          "consulted_count": {
+            "title": "Consulted Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CoverageEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "in_scope_count": {
+            "title": "In Scope Count",
+            "type": "integer"
+          },
+          "one_sided": {
+            "title": "One Sided",
+            "type": "boolean"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "report_markdown": {
+            "title": "Report Markdown",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "shape": {
+            "title": "Shape",
+            "type": "string"
+          },
+          "workflow_run_id": {
+            "title": "Workflow Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "workflow_run_id",
+          "question",
+          "shape",
+          "in_scope_count",
+          "consulted_count",
+          "one_sided",
+          "report_markdown",
+          "created_at"
+        ],
+        "title": "CoverageLedgerOut",
         "type": "object"
       },
       "CoworkingActivityOut": {
@@ -4661,6 +4840,66 @@
         "title": "DefinedOut",
         "type": "object"
       },
+      "DeliverableStartRequest": {
+        "description": "What to research, where, and how much of it to pay for.\n\nBoth budgets are ENFORCED, between nodes, by the executor\n(`workflows.executor._enforce_budget`), and both are recorded on the\nmanifest beside what the run actually spent. 0 means no limit.",
+        "properties": {
+          "budget_seconds": {
+            "default": 900,
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Budget Seconds",
+            "type": "integer"
+          },
+          "budget_tool_calls": {
+            "default": 40,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Budget Tool Calls",
+            "type": "integer"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "space_id": {
+            "default": "",
+            "maxLength": 36,
+            "title": "Space Id",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "DeliverableStartRequest",
+        "type": "object"
+      },
+      "DeliverableStartedOut": {
+        "properties": {
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          },
+          "workflow_run_id": {
+            "title": "Workflow Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_id",
+          "workflow_run_id"
+        ],
+        "title": "DeliverableStartedOut",
+        "type": "object"
+      },
       "DevOverrideOut": {
         "description": "Whether the local one-click sign-in override is available.\n\nPublic and unauthenticated on purpose: the login screen has to know whether\nto render the button before any session exists. Outside development/test,\nor when DEV_USER is unset, `enabled` is always false.",
         "properties": {
@@ -5253,6 +5492,38 @@
         "title": "FolderUpdateRequest",
         "type": "object"
       },
+      "Followup": {
+        "description": "One suggested next question, and the evidence that it is answerable.\n\nDerived from the knowledge graph's neighbours of the cited passages and\nfrom the answer's own headings, then admitted only when a dense probe at\nthe generation's own floor returned something. `chunk_ids` are what that\nprobe found \u2014 carried so the chip's grounding is visible rather than\nclaimed.",
+        "properties": {
+          "chunk_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Chunk Ids",
+            "type": "array"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "probe_score": {
+            "title": "Probe Score",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "origin",
+          "probe_score"
+        ],
+        "title": "Followup",
+        "type": "object"
+      },
       "GarminCredentialsIn": {
         "properties": {
           "email": {
@@ -5563,6 +5834,293 @@
           "edges"
         ],
         "title": "GraphOut",
+        "type": "object"
+      },
+      "GroundedAnswerOut": {
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "citations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "embedding_generation_id": {
+            "default": "",
+            "title": "Embedding Generation Id",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "report": {
+            "$ref": "#/components/schemas/CitationCheck"
+          },
+          "schema_error": {
+            "default": "",
+            "title": "Schema Error",
+            "type": "string"
+          },
+          "structured": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Structured"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "question",
+          "answer",
+          "report",
+          "created_at"
+        ],
+        "title": "GroundedAnswerOut",
+        "type": "object"
+      },
+      "GroundedAnswerRequest": {
+        "properties": {
+          "json_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Json Schema"
+          },
+          "limit": {
+            "default": 5,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 25,
+            "title": "Source Ids",
+            "type": "array"
+          },
+          "space_id": {
+            "default": "",
+            "maxLength": 36,
+            "title": "Space Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "GroundedAnswerRequest",
+        "type": "object"
+      },
+      "GroundedReceiptDetailOut": {
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "citations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "embedding_generation_id": {
+            "title": "Embedding Generation Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CitationCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "space_id": {
+            "title": "Space Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "answer",
+          "space_id",
+          "embedding_generation_id",
+          "created_at"
+        ],
+        "title": "GroundedReceiptDetailOut",
+        "type": "object"
+      },
+      "GroundedReceiptOut": {
+        "description": "One row of the ledger. No answer body \u2014 that is the detail route's job.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "embedding_generation_id": {
+            "title": "Embedding Generation Id",
+            "type": "string"
+          },
+          "evidence_count": {
+            "title": "Evidence Count",
+            "type": "integer"
+          },
+          "grounding_score": {
+            "title": "Grounding Score",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "scored": {
+            "default": 0,
+            "title": "Scored",
+            "type": "integer"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "evidence_count",
+          "grounding_score",
+          "valid",
+          "embedding_generation_id",
+          "created_at"
+        ],
+        "title": "GroundedReceiptOut",
+        "type": "object"
+      },
+      "GroundingCheck": {
+        "description": "Per-sentence support for one answer, and the one number over it.\n\n`score` is verified / scored, where `scored` leaves out sentences that made\nno checkable claim. `scored == 0` means nothing was gradable here \u2014 which is\nnot \"ungrounded\", and must not be rendered as a 0%.",
+        "properties": {
+          "attributed": {
+            "default": 0,
+            "title": "Attributed",
+            "type": "integer"
+          },
+          "cited_unsupported": {
+            "title": "Cited Unsupported",
+            "type": "integer"
+          },
+          "floor": {
+            "title": "Floor",
+            "type": "number"
+          },
+          "ignored": {
+            "title": "Ignored",
+            "type": "integer"
+          },
+          "n_sentences": {
+            "default": 0,
+            "title": "N Sentences",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "scored": {
+            "title": "Scored",
+            "type": "integer"
+          },
+          "sentences": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SentenceGrounding"
+            },
+            "title": "Sentences",
+            "type": "array"
+          },
+          "sentences_truncated": {
+            "default": false,
+            "title": "Sentences Truncated",
+            "type": "boolean"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "uncited": {
+            "title": "Uncited",
+            "type": "integer"
+          },
+          "verified": {
+            "title": "Verified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "score",
+          "scored",
+          "verified",
+          "cited_unsupported",
+          "uncited",
+          "ignored",
+          "floor",
+          "truncated"
+        ],
+        "title": "GroundingCheck",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -5978,6 +6536,11 @@
             "title": "Created At",
             "type": "string"
           },
+          "gate_reason": {
+            "default": "",
+            "title": "Gate Reason",
+            "type": "string"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -6128,6 +6691,56 @@
         "title": "InboxMentionOut",
         "type": "object"
       },
+      "InboxNoticeOut": {
+        "description": "One research notice: a page whose evidence moved, or a watch that found\na change.\n\nIts own list rather than a sixth kind folded into `alerts`, for the reason\nanomalies are separate from alerts: these are not a threshold somebody drew\nbeing crossed, they are \"something you published, or asked a standing\nquestion about, is no longer what it was\". The next step is to READ, which\nis why both deep links are here and why the row carries no decision.\n\nA page notice is addressed to its publisher and a shared watch's is\nbroadcast, so `kind` is what a reader branches on \u2014 not the presence of a\ntarget, which is the same field for both.",
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "watch_id": {
+            "title": "Watch Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body",
+          "page_id",
+          "watch_id",
+          "document_id",
+          "created_at"
+        ],
+        "title": "InboxNoticeOut",
+        "type": "object"
+      },
       "InboxOut": {
         "properties": {
           "alerts": {
@@ -6165,6 +6778,13 @@
             "title": "Mentions",
             "type": "array"
           },
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/InboxNoticeOut"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
           "recent_runs": {
             "items": {
               "$ref": "#/components/schemas/InboxRunOut"
@@ -6179,6 +6799,7 @@
           "mentions",
           "alerts",
           "anomalies",
+          "notices",
           "recent_runs"
         ],
         "title": "InboxOut",
@@ -6911,6 +7532,149 @@
         "title": "LoginIn",
         "type": "object"
       },
+      "ManifestDetailOut": {
+        "properties": {
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverageLedgerOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "files": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ManifestFileOut"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/ManifestOut"
+          }
+        },
+        "required": [
+          "manifest"
+        ],
+        "title": "ManifestDetailOut",
+        "type": "object"
+      },
+      "ManifestFileOut": {
+        "properties": {
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "chunk_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Chunk Ids",
+            "type": "array"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "queries": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Queries",
+            "type": "array"
+          },
+          "sandbox_session_id": {
+            "title": "Sandbox Session Id",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ordinal",
+          "source_id",
+          "filename",
+          "byte_size",
+          "sandbox_session_id"
+        ],
+        "title": "ManifestFileOut",
+        "type": "object"
+      },
+      "ManifestOut": {
+        "properties": {
+          "budget_seconds": {
+            "title": "Budget Seconds",
+            "type": "integer"
+          },
+          "budget_tool_calls": {
+            "title": "Budget Tool Calls",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "space_id": {
+            "title": "Space Id",
+            "type": "string"
+          },
+          "spent_seconds": {
+            "title": "Spent Seconds",
+            "type": "integer"
+          },
+          "spent_tool_calls": {
+            "title": "Spent Tool Calls",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "workflow_run_id": {
+            "title": "Workflow Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workflow_run_id",
+          "space_id",
+          "title",
+          "status",
+          "budget_seconds",
+          "budget_tool_calls",
+          "spent_seconds",
+          "spent_tool_calls",
+          "created_by",
+          "created_at"
+        ],
+        "title": "ManifestOut",
+        "type": "object"
+      },
       "McpAuthStatusOut": {
         "description": "Everything the Connect button needs and nothing a token could leak.",
         "properties": {
@@ -7513,6 +8277,14 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "followups": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Followup"
+            },
+            "title": "Followups",
+            "type": "array"
           },
           "id": {
             "title": "Id",
@@ -8211,6 +8983,177 @@
         "title": "OrgPolicyOut",
         "type": "object"
       },
+      "PageCitationOut": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "frozen_excerpt": {
+            "title": "Frozen Excerpt",
+            "type": "string"
+          },
+          "marker": {
+            "title": "Marker",
+            "type": "integer"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "marker",
+          "chunk_id",
+          "source_id",
+          "filename",
+          "ordinal",
+          "frozen_excerpt",
+          "status",
+          "checked_at"
+        ],
+        "title": "PageCitationOut",
+        "type": "object"
+      },
+      "PageDetailOut": {
+        "properties": {
+          "body_md": {
+            "title": "Body Md",
+            "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/PageCitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageOut"
+          }
+        },
+        "required": [
+          "page",
+          "body_md",
+          "citations"
+        ],
+        "title": "PageDetailOut",
+        "type": "object"
+      },
+      "PageOut": {
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "drift_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drift Checked At"
+          },
+          "drift_count": {
+            "title": "Drift Count",
+            "type": "integer"
+          },
+          "generation_id": {
+            "title": "Generation Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "published_by": {
+            "title": "Published By",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "conversation_id",
+          "title",
+          "status",
+          "drift_count",
+          "generation_id",
+          "published_by",
+          "drift_checked_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PageOut",
+        "type": "object"
+      },
+      "PagePublishRequest": {
+        "properties": {
+          "conversation_id": {
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "title"
+        ],
+        "title": "PagePublishRequest",
+        "type": "object"
+      },
       "PasswordChangeIn": {
         "properties": {
           "current_password": {
@@ -8688,6 +9631,55 @@
         "title": "RecapGroupOut",
         "type": "object"
       },
+      "RepairCheck": {
+        "description": "What the bounded rewrite of unsupported sentences did, if anything.\n\n`attempted` without `applied` is the ordinary outcome, not a failure: the\nrewrite is discarded unless re-grading says it is strictly better.",
+        "properties": {
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "attempted": {
+            "title": "Attempted",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "score_after": {
+            "title": "Score After",
+            "type": "number"
+          },
+          "score_before": {
+            "title": "Score Before",
+            "type": "number"
+          },
+          "tail_ungraded": {
+            "default": false,
+            "title": "Tail Ungraded",
+            "type": "boolean"
+          },
+          "unsupported_after": {
+            "title": "Unsupported After",
+            "type": "integer"
+          },
+          "unsupported_before": {
+            "title": "Unsupported Before",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempted",
+          "applied",
+          "reason",
+          "score_before",
+          "score_after",
+          "unsupported_before",
+          "unsupported_after"
+        ],
+        "title": "RepairCheck",
+        "type": "object"
+      },
       "ReviewSegment": {
         "description": "One stretch of the document, as it is now and as the proposal wants it.\n\n`index` is -1 for a stretch the edit does not touch, and otherwise the hunk\nnumber a reviewer accepts by \u2014 the same number\n`POST /api/agent-tool-calls/{id}/decision` takes in `accepted_hunks`.",
         "properties": {
@@ -8755,6 +9747,45 @@
           "created_at"
         ],
         "title": "RunOut",
+        "type": "object"
+      },
+      "RunPresetOut": {
+        "description": "One row of the run-preset picker.\n\nThe policy a preset pins, sent whole so the composer can *show* what it\nwill do and then let the user override any part of it.\n\nNo approval mode rides here. A preset pins retrieval and effort, which are\nper-turn facts; approval mode is the user's own containment control, lives\non the conversation, and outlives the turn \u2014 see `services/run_presets.py`\nfor what happened when this model carried one.",
+        "properties": {
+          "budget": {
+            "title": "Budget",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "effort": {
+            "title": "Effort",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "step_plan": {
+            "title": "Step Plan",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "description",
+          "effort",
+          "budget",
+          "step_plan"
+        ],
+        "title": "RunPresetOut",
         "type": "object"
       },
       "RunRequest": {
@@ -9478,6 +10509,34 @@
             ],
             "title": "Model"
           },
+          "preset": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preset"
+          },
+          "retrieval_budget": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Budget"
+          },
           "skill_args": {
             "anyOf": [
               {
@@ -9500,6 +10559,17 @@
               }
             ],
             "title": "Skill Id"
+          },
+          "step_plan": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Plan"
           },
           "subject_focus": {
             "anyOf": [
@@ -9553,6 +10623,64 @@
         "title": "SendMessageResponse",
         "type": "object"
       },
+      "SentenceGrounding": {
+        "description": "One sentence of an answer, and what the lexical support test made of it.\n\n`verified` is the narrowest claim in this file: the words this sentence uses\nare present in the passage it cites. It is NOT entailment \u2014 a negated or\nmisattributed claim whose vocabulary all appears in the passage passes, and\na correct paraphrase with different words fails. Anything rendering this\nmust say \"supported by the words of the passage\", never \"true\".",
+        "properties": {
+          "citations": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "coverage": {
+            "default": 0.0,
+            "title": "Coverage",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "integer"
+          },
+          "fabricated": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Fabricated",
+            "type": "array"
+          },
+          "missing_numerals": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Numerals",
+            "type": "array"
+          },
+          "start": {
+            "title": "Start",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "text",
+          "verdict"
+        ],
+        "title": "SentenceGrounding",
+        "type": "object"
+      },
       "SessionRequest": {
         "properties": {
           "label": {
@@ -9593,7 +10721,8 @@
             "enum": [
               "dashboard",
               "document",
-              "conversation"
+              "conversation",
+              "page"
             ],
             "title": "Resource Kind",
             "type": "string"
@@ -9724,6 +10853,40 @@
         "title": "SharedMessageOut",
         "type": "object"
       },
+      "SharedPageCitationOut": {
+        "description": "One frozen marker as the anonymous reader sees it.\n\nNo chunk id and no source id: a reader outside the workspace cannot open\neither, and naming rows they cannot reach is a leak with no upside. The\nexcerpt is the author's words at publish time, which is the whole point.",
+        "properties": {
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "frozen_excerpt": {
+            "title": "Frozen Excerpt",
+            "type": "string"
+          },
+          "marker": {
+            "title": "Marker",
+            "type": "integer"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "marker",
+          "filename",
+          "ordinal",
+          "frozen_excerpt",
+          "status"
+        ],
+        "title": "SharedPageCitationOut",
+        "type": "object"
+      },
       "SharedResourceOut": {
         "description": "What an anonymous holder of a working link sees. One model for all\nkinds \u2014 the unset halves stay at their empty defaults \u2014 so the public page\nhas one response shape to render.",
         "properties": {
@@ -9768,6 +10931,24 @@
             },
             "title": "Messages",
             "type": "array"
+          },
+          "page_body": {
+            "default": "",
+            "title": "Page Body",
+            "type": "string"
+          },
+          "page_citations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SharedPageCitationOut"
+            },
+            "title": "Page Citations",
+            "type": "array"
+          },
+          "page_drifted": {
+            "default": false,
+            "title": "Page Drifted",
+            "type": "boolean"
           },
           "rows": {
             "default": [],
@@ -10532,6 +11713,52 @@
         "title": "SyncJobOut",
         "type": "object"
       },
+      "TaintGatingRequest": {
+        "description": "The owner-only write behind `PUT /api/taint-gating`.",
+        "properties": {
+          "mode": {
+            "enum": [
+              "default",
+              "on",
+              "off"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "TaintGatingRequest",
+        "type": "object"
+      },
+      "TaintStatus": {
+        "description": "The provenance gate's posture, as the run path actually applies it.\n\nThe screen's deterministic sibling, and `ScreenStatus` is the precedent it\nmirrors: a deployment posture the client renders and cannot set from here.\n`enabled` is False whenever nothing is gated \u2014 the flag off, or the\nworkspace forced it off \u2014 so a client never has to re-derive the\nresolution.\n\n`classes` are the machine names; turning them into prose is the web's job,\nthe same split every other status on this response follows.",
+        "properties": {
+          "classes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Classes",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "workspace_override": {
+            "default": "",
+            "title": "Workspace Override",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "TaintStatus",
+        "type": "object"
+      },
       "TodoItemCreate": {
         "properties": {
           "body": {
@@ -11119,6 +12346,306 @@
           "token"
         ],
         "title": "VerifyEmailIn",
+        "type": "object"
+      },
+      "WatchCreateRequest": {
+        "properties": {
+          "extraction_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Extraction Fields",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "schedule_cron": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "default": "UTC",
+            "maxLength": 64,
+            "title": "Schedule Timezone",
+            "type": "string"
+          },
+          "shared": {
+            "default": false,
+            "title": "Shared",
+            "type": "boolean"
+          },
+          "target_id": {
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "enum": [
+              "source",
+              "space"
+            ],
+            "title": "Target Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "target_kind",
+          "target_id",
+          "schedule_cron"
+        ],
+        "title": "WatchCreateRequest",
+        "type": "object"
+      },
+      "WatchObservationOut": {
+        "properties": {
+          "added_chunks": {
+            "title": "Added Chunks",
+            "type": "integer"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Fields",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "removed_chunks": {
+            "title": "Removed Chunks",
+            "type": "integer"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "changed",
+          "added_chunks",
+          "removed_chunks",
+          "summary",
+          "created_at"
+        ],
+        "title": "WatchObservationOut",
+        "type": "object"
+      },
+      "WatchOut": {
+        "properties": {
+          "brief_document_id": {
+            "title": "Brief Document Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "extraction_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Extraction Fields",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_change_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Change At"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "schedule_cron": {
+            "title": "Schedule Cron",
+            "type": "string"
+          },
+          "schedule_timezone": {
+            "title": "Schedule Timezone",
+            "type": "string"
+          },
+          "shared": {
+            "title": "Shared",
+            "type": "boolean"
+          },
+          "space_id": {
+            "title": "Space Id",
+            "type": "string"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "title": "Target Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "target_kind",
+          "target_id",
+          "space_id",
+          "shared",
+          "schedule_cron",
+          "schedule_timezone",
+          "enabled",
+          "brief_document_id",
+          "last_checked_at",
+          "last_change_at",
+          "created_by",
+          "created_at"
+        ],
+        "title": "WatchOut",
+        "type": "object"
+      },
+      "WatchRunNowOut": {
+        "properties": {
+          "observation": {
+            "$ref": "#/components/schemas/WatchObservationOut"
+          }
+        },
+        "required": [
+          "observation"
+        ],
+        "title": "WatchRunNowOut",
+        "type": "object"
+      },
+      "WatchUpdateRequest": {
+        "description": "Every field optional \u2014 a PATCH sets only what it names.\n\n`target_kind`/`target_id` are deliberately absent: see the module docstring.",
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "extraction_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Fields"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "schedule_cron": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Cron"
+          },
+          "schedule_timezone": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Timezone"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
+          }
+        },
+        "title": "WatchUpdateRequest",
         "type": "object"
       },
       "WebhookCreateRequest": {
@@ -11889,6 +13416,13 @@
             "title": "Monitors Evaluated",
             "type": "array"
           },
+          "pages_drifted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pages Drifted",
+            "type": "array"
+          },
           "recovered": {
             "items": {
               "type": "string"
@@ -11901,6 +13435,13 @@
               "type": "string"
             },
             "title": "Subscriptions Dispatched",
+            "type": "array"
+          },
+          "watches_checked": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Watches Checked",
             "type": "array"
           },
           "webhook_deliveries_dispatched": {
@@ -11916,6 +13457,8 @@
           "recovered",
           "crons_dispatched",
           "monitors_evaluated",
+          "pages_drifted",
+          "watches_checked",
           "anomalies_flagged",
           "subscriptions_dispatched",
           "webhook_deliveries_dispatched",
@@ -13614,6 +15157,183 @@
         "summary": "Update Agent",
         "tags": [
           "agents"
+        ]
+      }
+    },
+    "/api/answers/grounded": {
+      "post": {
+        "description": "Answer one question from the token workspace's own indexed sources.\n\nSynchronous and metered: the `usage_scope` below wraps both the query\nembedding and the model call, so the whole cost of this request lands in\n`model_usage` under one operation and \"what did the grounded API cost\" is a\nquery rather than an estimate.\n\nNo repair pass here, deliberately. The chat path may spend a second model\ncall rewriting unsupported sentences because a person is reading the result;\ndoing that silently inside a metered synchronous API would double its\nlatency and its caller's bill to fix something the response already reports.",
+        "operationId": "grounded_answer_api_answers_grounded_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroundedAnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroundedAnswerOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Grounded Answer",
+        "tags": [
+          "answers"
+        ]
+      }
+    },
+    "/api/answers/receipts": {
+      "get": {
+        "description": "This workspace's grounded-answer ledger, newest first.\n\nOwner-gated like the tokens that produce it: a receipt holds the answer\ntext, and the credential that made it is minted by an owner.",
+        "operationId": "list_grounded_receipts_api_answers_receipts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GroundedReceiptOut"
+                  },
+                  "title": "Response List Grounded Receipts Api Answers Receipts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Grounded Receipts",
+        "tags": [
+          "answers"
+        ]
+      }
+    },
+    "/api/answers/receipts/{receipt_id}": {
+      "get": {
+        "description": "One receipt, with its answer and its verdict.\n\nSelected on BOTH the id and the workspace rather than fetched by primary\nkey: a foreign receipt must be indistinguishable from one that does not\nexist, and the two-clause select is also what keeps the `db.get` tripwire in\ntest_tenant_isolation.py silent without an allowlist entry.",
+        "operationId": "get_grounded_receipt_api_answers_receipts__receipt_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "receipt_id",
+            "required": true,
+            "schema": {
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroundedReceiptDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Grounded Receipt",
+        "tags": [
+          "answers"
         ]
       }
     },
@@ -16850,7 +18570,7 @@
     },
     "/api/conversations/{conversation_id}/defaults": {
       "patch": {
-        "description": "Remember the composer's choices \u2014 agent, model, effort \u2014 on the thread.\n\nA PATCH of preferences, not policy: the run path never reads these (every\nturn still names its controls explicitly), so there is nothing here to\naudit and no gate beyond visibility. Any member a shared thread is visible\nto may set them \u2014 they are the thread's working setup, like its title.\n\nNo `Idempotency-Key`: a retry lands on the same state by construction.",
+        "description": "Remember the composer's choices \u2014 agent, model, effort, preset \u2014 on the\nthread.\n\nA PATCH of preferences, not policy: the run path never reads these (every\nturn still names its controls explicitly), so there is nothing here to\naudit and no gate beyond visibility. Any member a shared thread is visible\nto may set them \u2014 they are the thread's working setup, like its title.\n\nNo `Idempotency-Key`: a retry lands on the same state by construction.",
         "operationId": "set_conversation_defaults_api_conversations__conversation_id__defaults_patch",
         "parameters": [
           {
@@ -19812,6 +21532,201 @@
         "summary": "Test Connection",
         "tags": [
           "database"
+        ]
+      }
+    },
+    "/api/deliverables": {
+      "get": {
+        "operationId": "list_deliverables_api_deliverables_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "space_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Space Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ManifestOut"
+                  },
+                  "title": "Response List Deliverables Api Deliverables Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Deliverables",
+        "tags": [
+          "deliverables"
+        ]
+      },
+      "post": {
+        "operationId": "start_deliverable_api_deliverables_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliverableStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliverableStartedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Deliverable",
+        "tags": [
+          "deliverables"
+        ]
+      }
+    },
+    "/api/deliverables/{manifest_id}": {
+      "get": {
+        "operationId": "get_deliverable_api_deliverables__manifest_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "manifest_id",
+            "required": true,
+            "schema": {
+              "title": "Manifest Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManifestDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Deliverable",
+        "tags": [
+          "deliverables"
         ]
       }
     },
@@ -24767,6 +26682,295 @@
         ]
       }
     },
+    "/api/pages": {
+      "get": {
+        "operationId": "list_pages_api_pages_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PageOut"
+                  },
+                  "title": "Response List Pages Api Pages Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pages",
+        "tags": [
+          "pages"
+        ]
+      },
+      "post": {
+        "description": "Freeze a thread into a page. The thread's visibility decides who may.\n\nRate limited at the mint tier because publishing re-reads every cited chunk\nand writes a row per marker \u2014 the same shape of work minting a share link\ndoes, and budgeted the same way.",
+        "operationId": "publish_page_api_pages_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PagePublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Page",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
+    "/api/pages/{page_id}": {
+      "delete": {
+        "description": "Delete a page and STOP EVERY LINK THAT SERVED IT.\n\nA page that is gone must not keep answering: the public route resolves the\nresource under the link's workspace, so a dangling link would 404 anyway \u2014\nbut a link that still appears live in the share-links list is a promise the\nproduct cannot keep, and revoking is the only honest state.",
+        "operationId": "delete_page_api_pages__page_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "title": "Page Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Page",
+        "tags": [
+          "pages"
+        ]
+      },
+      "get": {
+        "operationId": "get_page_api_pages__page_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "title": "Page Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Page",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
+    "/api/pages/{page_id}/revalidate": {
+      "post": {
+        "description": "Re-check this page's evidence now, rather than waiting for the sweep.\n\nNo Idempotency-Key: re-validating is naturally idempotent \u2014 it reads the\nlive chunks and writes the verdict they imply, so a second click recomputes\nthe same answer. The tool-policies precedent the revoke route cites.",
+        "operationId": "revalidate_page_api_pages__page_id__revalidate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "title": "Page Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revalidate Page",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
     "/api/projects": {
       "get": {
         "operationId": "list_projects_api_projects_get",
@@ -25306,6 +27510,64 @@
         "summary": "Cancel Run",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/coverage": {
+      "get": {
+        "operationId": "get_run_coverage_api_runs__run_id__coverage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageLedgerOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run Coverage",
+        "tags": [
+          "coverage"
         ]
       }
     },
@@ -27856,6 +30118,114 @@
         ]
       }
     },
+    "/api/taint-gating": {
+      "get": {
+        "description": "The provenance gate's posture. Readable by any member.\n\nNot owner-gated, and for the reason `policies.tsx` already makes about the\norganization panel: this is a posture everyone in the workspace is governed\nby, and hiding it from the people it governs is how \"why did that ask me?\"\nbecomes unanswerable.",
+        "operationId": "read_taint_gating_api_taint_gating_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaintStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Taint Gating",
+        "tags": [
+          "tools"
+        ]
+      },
+      "put": {
+        "description": "Override the deployment default for this workspace. Owners only.\n\nA security posture covering every member, so it is an owner's call \u2014 the\nsame gate `PUT /api/tool-policies` puts on a shared grant. Audited on BOTH\nedges, like Safe mode: \"off\" is the interesting direction, and a trail that\nrecorded only the cautious half would be no trail at all.",
+        "operationId": "set_taint_gating_api_taint_gating_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaintGatingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaintStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Taint Gating",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
     "/api/todos": {
       "get": {
         "description": "Every list in the workspace, with its items. The \"without opening a\nboard\" half of the feature \u2014 the other half is the PATCH below.",
@@ -28524,6 +30894,422 @@
         "summary": "List Registry Tools",
         "tags": [
           "tools"
+        ]
+      }
+    },
+    "/api/watches": {
+      "get": {
+        "operationId": "list_watches_api_watches_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WatchOut"
+                  },
+                  "title": "Response List Watches Api Watches Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Watches",
+        "tags": [
+          "watches"
+        ]
+      },
+      "post": {
+        "operationId": "create_watch_api_watches_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Watch",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/watches/{watch_id}": {
+      "delete": {
+        "description": "Delete the watch and its observations. KEEP the brief, KEEP the memories.\n\nThe brief is a Document a person may have edited, and it is not the watch's\nto delete. The memory rows are the workspace's knowledge: they are retired\nby supersession, by a later claim on the same key, not by the question that\nproduced them going away.",
+        "operationId": "delete_watch_api_watches__watch_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watch_id",
+            "required": true,
+            "schema": {
+              "title": "Watch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Watch",
+        "tags": [
+          "watches"
+        ]
+      },
+      "get": {
+        "operationId": "get_watch_api_watches__watch_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watch_id",
+            "required": true,
+            "schema": {
+              "title": "Watch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Watch",
+        "tags": [
+          "watches"
+        ]
+      },
+      "patch": {
+        "operationId": "update_watch_api_watches__watch_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watch_id",
+            "required": true,
+            "schema": {
+              "title": "Watch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Watch",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/watches/{watch_id}/observations": {
+      "get": {
+        "operationId": "list_watch_observations_api_watches__watch_id__observations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watch_id",
+            "required": true,
+            "schema": {
+              "title": "Watch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WatchObservationOut"
+                  },
+                  "title": "Response List Watch Observations Api Watches  Watch Id  Observations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Watch Observations",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/watches/{watch_id}/run-now": {
+      "post": {
+        "description": "Check the watch immediately, without touching the atomic claim.\n\nClaim-free on purpose, the cron run-now precedent: the claim exists to make\nthe unattended ticker fire once a minute, and a person pressing the button\nis asking for exactly one more check regardless of when the last tick was.",
+        "operationId": "run_watch_now_api_watches__watch_id__run_now_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watch_id",
+            "required": true,
+            "schema": {
+              "title": "Watch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchRunNowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Watch Now",
+        "tags": [
+          "watches"
         ]
       }
     },

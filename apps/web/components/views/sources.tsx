@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, File, FileUp, Plus, Trash2, UploadCloud } from "lucide-react";
+import { ExternalLink, Eye, File, FileUp, Plus, Trash2, UploadCloud } from "lucide-react";
 import type { KnowledgeGraph, Source, Space } from "@workspace/api-client";
 import { useState } from "react";
 import { api } from "../api";
@@ -106,6 +106,13 @@ export type SourcesViewProps = {
   openEntity?: (entityId: string) => void;
   focused?: string | null;
   setFocused?: (id: string | null) => void;
+  /**
+   * Start a watch on this file. The affordance belongs on the FILE because
+   * that is what the watch is about — a watch created from a settings page
+   * nobody visits is a feature nobody finds. Optional, so the view still
+   * mounts bare in tests.
+   */
+  watchSource?: (source: Source) => void;
 };
 
 const noFocus = () => undefined;
@@ -124,6 +131,7 @@ export function SourcesView({
   openEntity,
   focused = null,
   setFocused = noFocus,
+  watchSource,
 }: SourcesViewProps) {
   useFocusReveal("source", focused, setFocused);
   const entities = graph?.entities ?? [];
@@ -239,6 +247,16 @@ export function SourcesView({
               <span className="muted-cell">{formatRelative(source.created_at)}</span>
               <div className="source-row-actions">
                 <OpenSourceButton source={source} setError={setError} />
+                {watchSource && (
+                  <button
+                    className="icon-button"
+                    onClick={() => watchSource(source)}
+                    title="Watch this file for changes"
+                    aria-label={`Watch ${source.filename}`}
+                  >
+                    <Eye size={15} />
+                  </button>
+                )}
                 <button
                   className="delete-button"
                   onClick={() => void removeSource(source)}

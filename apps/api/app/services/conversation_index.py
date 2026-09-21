@@ -107,7 +107,7 @@ class ConversationHit:
 # --- visibility -------------------------------------------------------------
 
 
-def _visible(stmt, workspace_id: str, viewer_id: str):  # type: ignore[no-untyped-def]
+def _visible(stmt, workspace_id: str, viewer_id: str):
     """The one visibility rule for conversation chunks, in one place.
 
     Mirrors `conversations.resolve_visible` clause for clause: within the

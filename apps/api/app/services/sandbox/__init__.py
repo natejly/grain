@@ -23,7 +23,7 @@ __all__ = [
 ]
 
 
-def registry_tools(db, context):  # type: ignore[no-untyped-def]
+def registry_tools(db, context):
     """Agent tools for this family. Imported lazily by llm_tools.build_registry.
 
     Local import for the same reason `mcp` and `projects` do it: tool modules

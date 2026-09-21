@@ -25,6 +25,14 @@ jobs:
       # default: an ablated run is EXPECTED to fail the stale ceiling, and CI
       # must never inherit an ambient ablation.
       - run: APP_ENV=development MEMORY_SUPERSESSION=1 PYTHONPATH=apps/api python apps/api/scripts/evaluate_memory.py
+      # APP_ENV is pinned on both of these for the same reason the memory gate
+      # pins it: MODEL_PROVIDER=scripted is gated on a development/test
+      # app_env, and CI has no repo-root .env to supply one.
+      - run: APP_ENV=development PYTHONPATH=apps/api python apps/api/scripts/evaluate_answerability.py
+      # The research gate — follow-up precision, debate accuracy, drift recall.
+      # `make eval` has run it since it landed; CI had not, so those three
+      # floors gated nothing on a push or a PR.
+      - run: APP_ENV=development PYTHONPATH=apps/api python apps/api/scripts/evaluate_research.py
 
       - uses: actions/setup-node@v4
         with:

@@ -707,3 +707,37 @@ def test_no_tools_at_all_when_the_sandbox_is_off(monkeypatch, db, context):
     discovering that they do not work."""
     monkeypatch.setattr(tools_module, "get_settings", lambda: _settings(sandbox_enabled=False))
     assert registry_tools(db, context) == {}
+
+
+def test_a_sandbox_that_can_dial_out_reports_web_fetch(monkeypatch, db, context, provider):
+    """`sandbox_output` does not gate by default, and usually should not: it is
+    the model's own code printing over the workspace's own data.
+
+    A sandbox with egress is different. `pip install <attacker package>` or a
+    curl pulls text in from outside the deployment, and the identical content
+    arriving through `web_fetch` would have parked the next write. The executor
+    therefore REPORTS `web_fetch` on the result — the same seam a delegate
+    child uses — so the default gate arms with no new class and no config.
+    """
+    from app.services import provenance
+
+    monkeypatch.setattr(
+        tools_module,
+        "get_settings",
+        lambda: _settings(sandbox_network_policy="allowlist"),
+    )
+    networked = registry_tools(db, context)
+    result = networked["run_command"].executor(
+        db, context, {"command": "pip install polars"}
+    )
+    assert provenance.WEB_FETCH in result.provenance
+    # And a sealed sandbox reports nothing extra: the spec's own
+    # `sandbox_output` is the whole truth there.
+    monkeypatch.setattr(
+        tools_module, "get_settings", lambda: _settings(sandbox_network_policy="none")
+    )
+    sealed = registry_tools(db, context)
+    assert sealed["run_command"].networked is False
+    assert (
+        sealed["run_command"].executor(db, context, {"command": "ls"}).provenance == []
+    )

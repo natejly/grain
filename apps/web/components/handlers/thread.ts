@@ -13,6 +13,7 @@ import { api } from "../api";
 import { registerOwnRun } from "../own-runs";
 import { readBudgetPark, type BudgetPark } from "../views/budget-format";
 import { readCitationCheck } from "../views/citation-format";
+import { foldPlanEvent, planStatusLine, type RunPlan } from "../views/plan-format";
 import { parseAside } from "../views/commands";
 import { describeActionError, streamingMessageId } from "../views/shared";
 
@@ -55,6 +56,13 @@ export type ThreadHandlerDeps = {
    * events and has nowhere to draw them.
    */
   setRunThinking?: Dispatch<SetStateAction<string>>;
+  /**
+   * The live plan a step-plan turn narrates as it works. Optional for the same
+   * reason as `setRunThinking`: a surface with no plan toggle never receives
+   * the events and has nowhere to draw them. Live narration, not transcript —
+   * cleared when the run ends, like the thinking trail.
+   */
+  setRunPlan?: Dispatch<SetStateAction<RunPlan>>;
   setBudgetPark: Dispatch<SetStateAction<BudgetPark | null>>;
   setDraft: Dispatch<SetStateAction<string>>;
   /**
@@ -153,6 +161,7 @@ export function createThreadHandlers({
   setActiveRun,
   setRunStatus,
   setRunThinking,
+  setRunPlan,
   setBudgetPark,
   setDraft,
   restoreDraft,
@@ -366,6 +375,7 @@ export function createThreadHandlers({
     setActiveRun(runId);
     setRunStatus("Starting");
     setRunThinking?.("");
+    setRunPlan?.(null);
     setBudgetPark(null);
     /**
      * The citation validator's verdict, which arrives just before the message
@@ -376,6 +386,13 @@ export function createThreadHandlers({
      * server. One field, two arrival paths, no reconciliation.
      */
     let citationReport: CitationCheck | null = null;
+    /**
+     * The plan this turn committed to, folded from its own events. A local
+     * beside `citationReport` and for the same reason: it belongs to one run,
+     * and the reducer in `plan-format` is what makes a malformed payload a
+     * no-op rather than a rendering bug.
+     */
+    let plan: RunPlan = null;
     /**
      * Which tool blew up, if one did. `run.failed` follows `tool.failed` with
      * the same error and no name, so the last-writer-wins ordering would throw
@@ -511,6 +528,19 @@ export function createThreadHandlers({
         if (event.event === "run.citations") {
           citationReport = readCitationCheck(event.data);
         }
+        /**
+         * The plan's own lane. Every event goes through the reducer because it
+         * is the identity for anything it does not recognise, so there is no
+         * second list of event names here to fall out of step with that one.
+         */
+        const folded = foldPlanEvent(plan, event as { event: string; data: Record<string, unknown> });
+        if (folded !== plan) {
+          plan = folded;
+          if (stillOpen()) {
+            setRunPlan?.(plan);
+            setRunStatus(planStatusLine(plan) || "Working");
+          }
+        }
         if (event.event === "message.completed" && stillOpen()) {
           const completed: Message = {
             id: String(event.data.message_id),
@@ -546,6 +576,7 @@ export function createThreadHandlers({
       setActiveRun((current) => (current === runId ? null : current));
       setRunStatus("");
       setRunThinking?.("");
+      setRunPlan?.(null);
       // The stream only ends once the run is terminal, and a parked run is not
       // terminal — so reaching here means this run is finished, cancelled or
       // disconnected, and a hold card for it would outlive the hold.

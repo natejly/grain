@@ -164,6 +164,15 @@ class Workspace(Base):
     organization_id: Mapped[str] = mapped_column(
         ForeignKey("organizations.id"), index=True
     )
+    #: The workspace's override of the prompt-injection taint gate: "" follows
+    #: the deployment, "on" forces it on, "off" forces it off.
+    #:
+    #: On the workspace and not on `Membership` because this is a security
+    #: posture, not a working preference — the same line Safe mode already
+    #: draws when it says the workspace-wide lever is OrgToolPolicy/ToolPolicy.
+    #: "" on every existing row means every workspace keeps the deployment
+    #: default, which is why no backfill was needed.
+    taint_gating: Mapped[str] = mapped_column(String(8), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -519,6 +528,14 @@ class Conversation(Base):
     default_effort: Mapped[str] = mapped_column(
         String(24), default="", server_default=""
     )
+    #: The composer's remembered research preset for this thread, "" for none.
+    #: A sibling of `default_model` / `default_effort` and governed by the same
+    #: rule: read ONLY by the composer seed path when the thread reopens, never
+    #: by the run path. A turn's preset is resolved at send time and persisted
+    #: on `Run.preset`; this column can never silently steer one.
+    default_preset: Mapped[str] = mapped_column(
+        String(32), default="", server_default=""
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -567,6 +584,12 @@ class Message(Base):
     # the answer was never checked (a denial, a budget park), which is a
     # different fact from "checked and clean" and must not render as one.
     citation_report_json: Mapped[str] = mapped_column(Text, default="")
+    # The suggested next questions for this answer, a JSON list. "" means the
+    # chips were never computed; "[]" means they were computed and none were
+    # admitted. Two different facts, exactly as `citation_report_json` above
+    # distinguishes "never checked" from "checked and clean" — and a suggester
+    # that raised must leave this EMPTY rather than claim an empty verdict.
+    followups_json: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -693,6 +716,34 @@ class Run(Base):
     #: Same reason `requested_model` lives here.
     subject_focus: Mapped[str] = mapped_column(
         String(400), default="", server_default=""
+    )
+    #: The research preset actually applied to this turn, expanded at send time
+    #: — never the literal "auto", which is resolved to a concrete name before
+    #: the row is written. "" means no preset, today's behaviour. See
+    #: `services/run_presets.py` for the bundle each name expands to.
+    #:
+    #: Persisted for the same reason `requested_model` is: `process_run` reopens
+    #: a fresh session and reads the turn off the row, and a turn parked on an
+    #: approval must resume under the same policy it started with.
+    preset: Mapped[str] = mapped_column(String(32), default="", server_default="")
+    #: How much evidence this turn may gather: "" | low | medium | high, where
+    #: "" resolves to the MEDIUM budget — numerically identical to today's
+    #: `search_evidence` defaults, so a pre-column row behaves exactly as it did.
+    retrieval_budget: Mapped[str] = mapped_column(
+        String(8), default="", server_default=""
+    )
+    #: Whether this turn runs the plan-then-execute loop. False is today's loop,
+    #: which is what every historical row means.
+    step_plan: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    #: sha256 over the instructions, model and effort this turn assembled, hex,
+    #: written where the instructions are assembled rather than where they are
+    #: sent. "" means a run from before the column, which is honestly
+    #: unattributable rather than "matched nothing". 64 hex characters fit; the
+    #: width leaves headroom for a prefixed scheme without another migration.
+    prompt_fingerprint: Mapped[str] = mapped_column(
+        String(80), default="", server_default=""
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -1144,6 +1195,14 @@ class AgentToolCall(Base):
     # records who answered (or which mode bypassed the question). Assignment
     # only narrows who may answer; the decision machinery is untouched.
     assigned_to: Mapped[str] = mapped_column(String(36), default="")
+    # Why the taint gate raised this call to an approval, "" when it did not —
+    # which is the honest reading of every row written before the column.
+    #
+    # A column rather than an event payload because the reason has to outlive
+    # the event stream: the Inbox and a reloaded chat both fetch this row over
+    # REST, and a reason that existed only in a `tool.proposed` event would be
+    # invisible to exactly the reader deciding the card.
+    gate_reason: Mapped[str] = mapped_column(String(64), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     @property
@@ -1687,6 +1746,64 @@ class ApiToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class GroundedReceipt(Base):
+    """The record of one machine-answered question on the grounded-answer API.
+
+    It HOLDS the answer text, which is why it is workspace-scoped and read by
+    the workspace's own members — deliberately unlike `model_usage`, which
+    meters the same calls and holds no content at all. Two stores because they
+    answer two questions ("what did this cost" vs "what did it say"), and one
+    row that tried to be both would have to be readable by whoever may see
+    either.
+
+    `workspace_id` is the only ForeignKey. `token_id`, `user_id`, `space_id`
+    and `generation_id` are plain strings with '' defaults, ledger-style, so a
+    receipt outlives the credential, the member, the space and the embedding
+    generation it names — the house convention for a reference that must
+    survive its target. '' in `space_id` means the whole workspace, the
+    documented global sentinel, and is written only when the request carried
+    one.
+
+    There is deliberately NO usage row reference: metering goes through the
+    existing `usage_scope` chokepoint (operation "grounded_answer"), and a
+    second ledger pointer would be a second thing to keep true.
+    """
+
+    __tablename__ = "grounded_receipts"
+    __table_args__ = (
+        # The owner's ledger view: one workspace's receipts, newest first.
+        Index(
+            "ix_grounded_receipts_workspace_created", "workspace_id", "created_at"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: The ApiToken that invoked the answer, and the member it acts as.
+    token_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    user_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    space_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    question: Mapped[str] = mapped_column(Text, default="", server_default="")
+    answer: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: The same shape `runs._citations` builds, url field included.
+    citations_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    #: `grounded.compose_report()` output; "" means never graded, exactly as on
+    #: `Message.citation_report_json`.
+    report_json: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: The JSON schema the caller asked for, "" when none.
+    schema_json: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: The model's structured output, "" when no schema or when it did not parse.
+    structured_json: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: `embedding_generations.active_generation(db).id` at answer time, so a
+    #: receipt and a Page can be compared against the same contract.
+    generation_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    grounding_score: Mapped[float] = mapped_column(
+        Float, default=0.0, server_default=text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class SandboxSecret(Base):
@@ -2628,6 +2745,338 @@ class Cron(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class Page(Base):
+    """A published answer, with its evidence pinned.
+
+    A page is a SNAPSHOT, deliberately unlike every other share-link resource.
+    `services/share_links.py`'s header says a link is a window and not a
+    snapshot; a page inverts that on purpose, because its entire value is that
+    its evidence is pinned — a reader following a citation must see the text
+    the answer was actually written from. Staleness is told by the drift sweep
+    (`status` flips to "drifted" and `drift_count` says how much), never by
+    silently serving newer text.
+
+    `conversation_id` is a plain column, not a ForeignKey: a page outlives the
+    thread it was published from, per the house convention for references that
+    must survive their target.
+    """
+
+    __tablename__ = "pages"
+    __table_args__ = (
+        # The library view and the drift sweep both scan one workspace by
+        # status; the plain workspace index degrades to a full scan once the
+        # filter includes it, and this table only grows.
+        Index("ix_pages_workspace_status", "workspace_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    title: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    body_md: Mapped[str] = mapped_column(Text, default="", server_default="")
+    published_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    #: The EmbeddingGeneration active at publish time.
+    generation_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    #: published | drifted — set by the sweep, never by a read.
+    status: Mapped[str] = mapped_column(
+        String(16), default="published", server_default="published"
+    )
+    drift_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    drift_checked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class PageCitation(Base):
+    """One frozen marker on a page: the excerpt, and what it was taken from.
+
+    `frozen_excerpt` is the chunk's own `content` and NOT `indexed_text(chunk)`
+    — the context prefix is a retrieval aid and was never part of what a reader
+    was shown. `content_hash` is computed over `indexed_text` instead, because
+    that is the text `chunks_needing_embedding` compares: editing only a
+    prefix changes what the passage retrieves as, and a page that claimed
+    otherwise would under-report drift.
+
+    `chunk_id`, `source_id` and `generation_id` are plain columns: the chunk
+    may be re-ingested or deleted under a page whose whole point is that its
+    evidence stays put.
+    """
+
+    __tablename__ = "page_citations"
+    __table_args__ = (
+        # Markers renumber page-wide at publish, so one marker is one row and
+        # the database is what enforces it.
+        UniqueConstraint("page_id", "marker", name="uq_page_citations_page_marker"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    page_id: Mapped[str] = mapped_column(ForeignKey("pages.id"), index=True)
+    marker: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    chunk_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    source_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    filename: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    frozen_excerpt: Mapped[str] = mapped_column(Text, default="", server_default="")
+    content_hash: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    generation_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    #: frozen | changed | missing — the revalidation verdict for this marker.
+    status: Mapped[str] = mapped_column(
+        String(16), default="frozen", server_default="frozen"
+    )
+    checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CoverageLedger(Base):
+    """What a research run actually looked at, as data.
+
+    Emitted at run finish for plan-mode turns — the cycle's only producer; the
+    deliverable preset does not write one yet — and rendered into a report
+    section. Never a model call: the shape classifier and both counter-
+    queries are pure functions, so a ledger costs nothing and cannot fail a run
+    it is only describing.
+
+    `run_id` and `workflow_run_id` are plain columns — the ledger is a
+    historical record and outlives a purged run.
+    """
+
+    __tablename__ = "coverage_ledgers"
+    __table_args__ = (
+        Index("ix_coverage_ledgers_workspace_run", "workspace_id", "run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    run_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
+    )
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    question: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: plain | debate — a debate question always runs the counter-evidence pass.
+    shape: Mapped[str] = mapped_column(
+        String(16), default="plain", server_default="plain"
+    )
+    in_scope_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    consulted_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    #: True when a stance found nothing, which is the fact the rendered section
+    #: exists to say out loud.
+    one_sided: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CoverageEntry(Base):
+    """One sub-question a ledger asked, and whether the corpus supported it."""
+
+    __tablename__ = "coverage_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "ledger_id", "ordinal", name="uq_coverage_entries_ledger_ordinal"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    ledger_id: Mapped[str] = mapped_column(
+        ForeignKey("coverage_ledgers.id"), index=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sub_question: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: neutral | for | against — a debate ledger always records both sides.
+    stance: Mapped[str] = mapped_column(
+        String(16), default="neutral", server_default="neutral"
+    )
+    supported: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    query: Mapped[str] = mapped_column(Text, default="", server_default="")
+    chunk_ids_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    source_ids_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class DeliverableManifest(Base):
+    """What a deliverable run produced, and what it spent producing it.
+
+    `space_id` is '' for the workspace library and never NULL — the
+    `SHARED_OWNER` rationale verbatim: both engines treat NULLs inside a unique
+    index as distinct, and '' collides with ''. It is derived server-side.
+
+    A `status` of "partial" is a real outcome, not an error: a run that
+    exhausted its budget ships the files that did land plus the coverage ledger
+    id, because the half that exists is worth more than the failure is.
+    """
+
+    __tablename__ = "deliverable_manifests"
+    __table_args__ = (
+        Index(
+            "ix_deliverable_manifests_workspace_space", "workspace_id", "space_id"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default="", index=True
+    )
+    space_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    title: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    #: complete | partial
+    status: Mapped[str] = mapped_column(
+        String(16), default="complete", server_default="complete"
+    )
+    budget_seconds: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    budget_tool_calls: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    spent_seconds: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    spent_tool_calls: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    ledger_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    created_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ManifestFile(Base):
+    """One file a deliverable run produced, joined to the evidence behind it.
+
+    `source_id` is the Source `sandbox_download` already creates — a plain
+    column, and worth reading carefully: `services/sandbox/outputs.py` writes
+    those rows with status "stored", NOT "ready". A stored source is never
+    retrievable and never quotable, and a manifest must not imply that it is.
+    """
+
+    __tablename__ = "manifest_files"
+    __table_args__ = (
+        UniqueConstraint(
+            "manifest_id", "ordinal", name="uq_manifest_files_manifest_ordinal"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    manifest_id: Mapped[str] = mapped_column(
+        ForeignKey("deliverable_manifests.id"), index=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    source_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    filename: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    byte_size: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sandbox_session_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    queries_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    chunk_ids_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Watch(Base):
+    """A standing question about a source or a space, re-asked on a schedule.
+
+    The Cron's shape, deliberately: the same 5-field `schedule_cron` + IANA
+    zone pair validated by the same functions, the same `last_dispatched_at`
+    conditional-UPDATE claim advanced by the same tick. It carries no authority
+    of its own.
+
+    THE OWNER RULE: `shared=False` writes its memory under `created_by`;
+    `shared=True` is the ONLY thing that may write `owner_id=SHARED_OWNER`. A
+    watch that got that backwards would publish one person's reading to the
+    whole workspace, which is the single failure this column exists to prevent.
+
+    `space_id` is the '' sentinel and is derived server-side — never read off a
+    request body.
+    """
+
+    __tablename__ = "watches"
+    __table_args__ = (
+        # The tick's scan: every enabled watch of a workspace, once a minute.
+        Index("ix_watches_workspace_enabled", "workspace_id", "enabled"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    name: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    #: source | space
+    target_kind: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    target_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    space_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    shared: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    schedule_cron: Mapped[str] = mapped_column(
+        String(120), default="", server_default=""
+    )
+    schedule_timezone: Mapped[str] = mapped_column(
+        String(64), default="UTC", server_default="UTC"
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    #: The declared fields the watch extracts, a JSON list.
+    extraction_schema_json: Mapped[str] = mapped_column(
+        Text, default="[]", server_default="[]"
+    )
+    brief_document_id: Mapped[str] = mapped_column(
+        String(36), default="", server_default=""
+    )
+    last_fingerprint: Mapped[str] = mapped_column(
+        String(64), default="", server_default=""
+    )
+    last_chunk_ids_json: Mapped[str] = mapped_column(
+        Text, default="[]", server_default="[]"
+    )
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_change_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    #: The atomic claim column, exactly as Cron carries it: truncated to the
+    #: minute and advanced by a conditional UPDATE, so two ticks in one minute
+    #: produce one check.
+    last_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class WatchObservation(Base):
+    """One check of a watch: what the target looked like, and what moved.
+
+    An unchanged target still writes a row — `changed=False` is the evidence
+    that the watch ran and found nothing, which is a different fact from the
+    watch not having run — and writes no memory, no notification and no brief
+    revision.
+    """
+
+    __tablename__ = "watch_observations"
+    __table_args__ = (
+        Index(
+            "ix_watch_observations_watch_created", "watch_id", "created_at"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    watch_id: Mapped[str] = mapped_column(ForeignKey("watches.id"), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    added_chunks: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    removed_chunks: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    changed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    summary: Mapped[str] = mapped_column(Text, default="", server_default="")
+    fields_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+    memory_ids_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    chunk_ids_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Monitor(Base):
     """A stored question about a dataset's number, asked on a schedule.
 
@@ -2964,6 +3413,8 @@ class Notification(Base):
     comment_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
     monitor_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
     agent_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    page_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    watch_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
     created_by: Mapped[str] = mapped_column(String(36), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

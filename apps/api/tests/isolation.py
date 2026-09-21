@@ -65,6 +65,8 @@ from app.models import (
     Chunk,
     Comment,
     Conversation,
+    CoverageEntry,
+    CoverageLedger,
     Cron,
     Dashboard,
     DashboardPin,
@@ -72,6 +74,7 @@ from app.models import (
     DashboardTemplate,
     Dataset,
     DbConnection,
+    DeliverableManifest,
     Document,
     DocumentVersion,
     Folder,
@@ -79,10 +82,12 @@ from app.models import (
     GraphEdge,
     GraphEntity,
     GraphProjection,
+    GroundedReceipt,
     InboundAddress,
     IntegrationAccount,
     Listing,
     ListingVersion,
+    ManifestFile,
     McpServer,
     McpTool,
     Membership,
@@ -94,6 +99,8 @@ from app.models import (
     OAuthState,
     OrgMembership,
     OrgToolPolicy,
+    Page,
+    PageCitation,
     Project,
     ProjectFile,
     Run,
@@ -115,6 +122,8 @@ from app.models import (
     ToolGrant,
     ToolPolicy,
     User,
+    Watch,
+    WatchObservation,
     WebhookDelivery,
     WebhookEndpoint,
     Workflow,
@@ -1107,6 +1116,150 @@ def build_tenant(label: str) -> Tenant:
         db.flush()
         ids["model_usage"] = model_usage.id
 
+        # One grounded-answer receipt per tenant. Unlike the `model_usage` row
+        # beside it, a receipt HOLDS content — the question and the answer — so
+        # the label goes into both: the list route returns no answer body and
+        # the detail route returns all of it, and the leak scan over the
+        # victim's ids and "<label> secret" strings is what proves neither
+        # crosses a tenant boundary.
+        grounded_receipt = GroundedReceipt(
+            workspace_id=workspace_id,
+            token_id=api_token.id,
+            user_id=user_id,
+            question=f"{label} secret grounded question",
+            answer=f"{label} secret grounded answer [1]",
+            citations_json="[]",
+            report_json='{"evidence_count": 1, "valid": true}',
+            generation_id="",
+            evidence_count=1,
+            grounding_score=1.0,
+        )
+        db.add(grounded_receipt)
+        db.flush()
+        ids["grounded_receipt"] = grounded_receipt.id
+
+        # -- the research surfaces (cluster D) --------------------------------
+        # A published page on this tenant's conversation, with one frozen
+        # citation. A page HOLDS content — its body and its excerpts — so the
+        # label goes into both: a missing workspace filter on the detail route
+        # would hand one tenant another's published answer verbatim.
+        page = Page(
+            workspace_id=workspace_id,
+            conversation_id=conversation.id,
+            title=f"{label} secret page",
+            body_md=f"# {label} secret page\n\n{label} secret body [1]\n",
+            published_by=user_id,
+            status="published",
+        )
+        db.add(page)
+        db.flush()
+        ids["page"] = page.id
+        db.add(
+            PageCitation(
+                workspace_id=workspace_id,
+                page_id=page.id,
+                marker=1,
+                chunk_id=chunk.id,
+                source_id=source.id,
+                filename=source.filename,
+                ordinal=0,
+                frozen_excerpt=f"{label} secret frozen excerpt",
+                content_hash="",
+                status="frozen",
+            )
+        )
+        db.flush()
+
+        # A coverage ledger on this tenant's run, and one entry under it. The
+        # ledger carries the question it was opened for, so it is another row
+        # whose CONTENT would leak and not just its id.
+        ledger = CoverageLedger(
+            workspace_id=workspace_id,
+            run_id=run.id,
+            question=f"{label} secret coverage question",
+            shape="debate",
+            in_scope_count=3,
+            consulted_count=1,
+        )
+        db.add(ledger)
+        db.flush()
+        ids["coverage_ledger"] = ledger.id
+        db.add(
+            CoverageEntry(
+                workspace_id=workspace_id,
+                ledger_id=ledger.id,
+                ordinal=0,
+                sub_question=f"{label} secret sub-question",
+                stance="neutral",
+                supported=True,
+                query=f"{label} secret query",
+                chunk_ids_json=json.dumps([chunk.id]),
+                source_ids_json=json.dumps([source.id]),
+            )
+        )
+        db.flush()
+
+        # A deliverable manifest attached to this tenant's space, and one file
+        # under it. The '' sentinel is deliberately NOT used here: a manifest
+        # named by a space id is what the space filter has to get right.
+        manifest = DeliverableManifest(
+            workspace_id=workspace_id,
+            workflow_run_id=workflow_run.id,
+            space_id=space.id,
+            title=f"{label} secret deliverable",
+            status="complete",
+            ledger_id=ledger.id,
+            created_by=user_id,
+        )
+        db.add(manifest)
+        db.flush()
+        ids["manifest"] = manifest.id
+        db.add(
+            ManifestFile(
+                workspace_id=workspace_id,
+                manifest_id=manifest.id,
+                ordinal=0,
+                source_id=source.id,
+                filename=f"{label.lower()}-secret-output.csv",
+                byte_size=12,
+                sandbox_session_id=sandbox.id,
+                queries_json=json.dumps([f"{label} secret query"]),
+                chunk_ids_json=json.dumps([chunk.id]),
+            )
+        )
+        db.flush()
+
+        # A watch on this tenant's source, with one observation. `run-now`'s
+        # DENY is the sharp one here, exactly as it is for a cron: it proves a
+        # foreign watch cannot be fired — and firing one writes memory.
+        watch = Watch(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            name=f"{label} secret watch",
+            target_kind="source",
+            target_id=source.id,
+            space_id="",
+            shared=False,
+            schedule_cron="0 9 * * *",
+            schedule_timezone="UTC",
+            enabled=True,
+            extraction_schema_json=json.dumps(["owner"]),
+        )
+        db.add(watch)
+        db.flush()
+        ids["watch"] = watch.id
+        db.add(
+            WatchObservation(
+                workspace_id=workspace_id,
+                watch_id=watch.id,
+                fingerprint="",
+                changed=True,
+                summary=f"{label} secret observation",
+                fields_json=json.dumps({"owner": f"{label} secret owner"}),
+            )
+        )
+        db.flush()
+
         # An open spend anomaly on this tenant's agent — the broadcast
         # ('' -targeted) notification kind, so the anomalies feed and the
         # shared resolve route have a row whose *content* would leak, not
@@ -1987,6 +2140,24 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"tool_call_id": "agent_tool_call"},
         body={"user_id": ""},
         body_ids={"user_id": "user"},
+    ),
+    # The provenance gate's posture. Neither route names a resource id: the
+    # workspace is the actor's own, read off the session, so there is no
+    # foreign id here to aim at — SCOPED, like every other me-shaped route.
+    # The PUT is additionally owner-only, which `test_taint_gating.py` pins;
+    # the sweep's probe is about tenancy, not about role.
+    RouteCase(
+        "GET",
+        "/api/taint-gating",
+        SCOPED,
+        note="the posture is the caller's own workspace's, never a named one",
+    ),
+    RouteCase(
+        "PUT",
+        "/api/taint-gating",
+        SCOPED,
+        body={"mode": "default"},
+        note="writes the caller's own workspace row; no id crosses the wire",
     ),
     RouteCase("GET", "/api/tool-policies", SCOPED),
     RouteCase(
@@ -3272,6 +3443,126 @@ ROUTE_CASES: List[RouteCase] = [
     # aggregating rows it should not see, which is exactly what the leak scan
     # over every id and marker string catches.
     RouteCase("GET", "/api/admin/usage", SCOPED),
+    # -- grounded answers ---------------------------------------------------
+    # The machine door. Bearer-gated exactly like /api/mcp, so the sweep's
+    # cookie-authenticated client is refused 401 before any tenant lookup — the
+    # 500 guard and "a wrong-credential caller sees nothing" are the whole
+    # contract the sweep can state here. Its per-workspace scoping is proved by
+    # test_answers_api.py, which can hold a real token.
+    RouteCase(
+        "POST",
+        "/api/answers/grounded",
+        PUBLIC,
+        body={"question": "who owns the launch"},
+    ),
+    # The ledger. Takes no id at all, only a window, so the only way it could
+    # cross tenants is by listing rows it should not see — which is exactly what
+    # the leak scan over the victim's ids and "<label> secret" strings catches.
+    # The /api/admin/usage precedent above.
+    RouteCase("GET", "/api/answers/receipts", SCOPED),
+    # And the one case that proves the detail route's second WHERE clause: a
+    # receipt holds the answer text, so a missing workspace filter here would
+    # hand one tenant another's answers verbatim.
+    RouteCase(
+        "GET",
+        "/api/answers/receipts/{receipt_id}",
+        DENY,
+        path_ids={"receipt_id": "grounded_receipt"},
+    ),
+    # -- pages -----------------------------------------------------------
+    # Publishing resolves the thread through `conversations.resolve_visible`
+    # FIRST, so a foreign conversation id 404s before a page row exists.
+    RouteCase(
+        "POST",
+        "/api/pages",
+        DENY,
+        body={"conversation_id": "x", "title": "t"},
+        body_ids={"conversation_id": "conversation"},
+    ),
+    # The library. No id at all, so the only way it crosses is by listing rows
+    # it should not see — which the leak scan over the victim's ids and
+    # "<label> secret" strings catches.
+    RouteCase("GET", "/api/pages", SCOPED),
+    # A page HOLDS content: its frozen body and excerpts. A missing workspace
+    # filter here would hand one tenant another's published answer verbatim.
+    RouteCase("GET", "/api/pages/{page_id}", DENY, path_ids={"page_id": "page"}),
+    RouteCase(
+        "POST",
+        "/api/pages/{page_id}/revalidate",
+        DENY,
+        path_ids={"page_id": "page"},
+    ),
+    # And the destructive one: deleting a foreign page would also revoke its
+    # share links, so this DENY is guarding two things at once.
+    RouteCase("DELETE", "/api/pages/{page_id}", DENY, path_ids={"page_id": "page"}),
+    # -- coverage ----------------------------------------------------------
+    # The Run is resolved under the caller's workspace before the ledger
+    # question is asked, so a foreign run and an own run with no ledger answer
+    # identically — which is what keeps the 404 from leaking the difference.
+    RouteCase(
+        "GET", "/api/runs/{run_id}/coverage", DENY, path_ids={"run_id": "run"}
+    ),
+    # -- deliverables ------------------------------------------------------
+    # The space is resolved under the caller's workspace before a workflow is
+    # written, so a run can never be attached to a space its starter cannot see.
+    RouteCase(
+        "POST",
+        "/api/deliverables",
+        DENY,
+        body={"title": "t", "question": "q", "space_id": "x"},
+        body_ids={"space_id": "space"},
+    ),
+    RouteCase("GET", "/api/deliverables", SCOPED),
+    RouteCase(
+        "GET",
+        "/api/deliverables/{manifest_id}",
+        DENY,
+        path_ids={"manifest_id": "manifest"},
+    ),
+    # -- watches -----------------------------------------------------------
+    # The target is resolved under the caller's workspace FIRST — and the
+    # watch's memory scope is derived from that resolved row — so a foreign
+    # source 404s before anything writes.
+    RouteCase(
+        "POST",
+        "/api/watches",
+        DENY,
+        body={
+            "name": "w",
+            "target_kind": "source",
+            "target_id": "x",
+            "schedule_cron": "0 9 * * *",
+        },
+        body_ids={"target_id": "source"},
+    ),
+    RouteCase("GET", "/api/watches", SCOPED),
+    RouteCase("GET", "/api/watches/{watch_id}", DENY, path_ids={"watch_id": "watch"}),
+    # PATCH is the sharp one after run-now: `shared` is the only field in this
+    # cluster that widens memory visibility.
+    RouteCase(
+        "PATCH",
+        "/api/watches/{watch_id}",
+        DENY,
+        path_ids={"watch_id": "watch"},
+        body={"enabled": False},
+    ),
+    RouteCase(
+        "DELETE", "/api/watches/{watch_id}", DENY, path_ids={"watch_id": "watch"}
+    ),
+    # Firing a foreign watch would write memory into somebody else's
+    # workspace, which is why this one matters most.
+    RouteCase(
+        "POST",
+        "/api/watches/{watch_id}/run-now",
+        DENY,
+        path_ids={"watch_id": "watch"},
+    ),
+    RouteCase(
+        "GET",
+        "/api/watches/{watch_id}/observations",
+        DENY,
+        path_ids={"watch_id": "watch"},
+    ),
     # The per-agent scorecard. Like /usage it takes no id, only a window; the
     # leak scan over the victim's agent id and marker strings proves its five
     # GROUP BYs aggregate only the caller's rows.
