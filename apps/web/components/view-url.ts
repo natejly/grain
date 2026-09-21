@@ -37,6 +37,9 @@ const VIEW_ROWS = {
   gallery: true,
   recap: true,
   profile: true,
+  pages: true,
+  watches: true,
+  deliverables: true,
 } satisfies Record<View, true>;
 
 const VIEWS: ReadonlySet<string> = new Set(Object.keys(VIEW_ROWS));
