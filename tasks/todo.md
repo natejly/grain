@@ -632,6 +632,15 @@ Gap audit vs Claude desktop (Sept 2026): 16 areas — 2 already full (space inst
 - [x] Attachment previews in chat (image/PDF/CSV cards)
 - [x] Reflect recap view (GET /api/me/recap, deterministic aggregates)
 - [x] Voice dictation (Web Speech API, feature-detected)
+### Cluster E — harness quick wins (digest shortlist; adopted verdicts, none built)
+- [ ] Widen Harness.build_step seam (workspace/run identity) then prompt_cache_key=workspace_id
+- [ ] Encrypted reasoning replay (include reasoning.encrypted_content under store=False)
+- [ ] tool_choice="none" on the final round (keep the cached prefix)
+- [ ] Prompt fingerprint column on Run (sha256 of instruction constants + model + effort)
+- [ ] Cross-run denial memory (denial -> preference MemoryItem at the decision endpoint, capped)
+- [ ] web_fetch ToolSpec (readability pass + fetched-page screen kind over the existing SSRF fetcher)
+- [ ] search_sources `limit` param; query_dataset real nested schema + example
+- [ ] Relevance-gated evidence preload (fused-score floor, read not derived)
 ### Gates before push
 - [x] e2e QA specs for every feature; full Playwright suite green (111 passed, 1 pre-existing fixme skip)
 - [x] Adversarial review workflow; 21 confirmed findings (5 major) all fixed, 1 refuted
@@ -765,3 +774,37 @@ Gap audit vs Claude desktop (Sept 2026): 16 areas — 2 already full (space inst
   intends; wiring a page count is ingestion's later cycle.
 - Recap determinism hardened past the spec: GROUP BYs carry an id tiebreak
   so equal counts order identically on SQLite and Postgres.
+
+---
+
+# Perplexity-harness cycle (worktree-perplexity-harness, 2026-09-21)
+
+Implement all 13 ideas from docs/PERPLEXITY-IDEAS.md (web-verified Perplexity research).
+Ultracode: digest → 4 cluster designs → staged implement → QA → adversarial review → gates → merge.
+
+## Plan
+### Cluster A — verification (ideas 1, 8, 13)
+- [ ] Verified-grounding score: per-sentence validator verdicts, badges, targeted regen pass
+- [ ] Answerability eval harness as merge gate (recall@k, grounding score, validator pass rate)
+- [ ] Grounded-answer API with verification receipts + receipt viewer web surface
+### Cluster B — orchestration (ideas 2, 6, 3, 12)
+- [ ] Retrieval tool parameter parity (scope filters, date filters, token budgets, stable ids)
+- [ ] Plan-then-execute retrieval mode with live plan rendering + step traces
+- [ ] Council delegate: frozen retrieval set, agree/disagree/unique synthesis, validator-demoted candidates
+- [ ] Run presets as policy bundles + auto complexity router
+### Cluster C — trust (idea 9)
+- [ ] Taint-labeled context blocks; guardian gates risky actions on untrusted-provenance triggers
+### Cluster D — research surfaces (ideas 4, 5, 7, 10, 11)
+- [ ] Corpus-grounded follow-up chips (retrieval-probe filtered, KG-seeded)
+- [ ] Provenance-frozen Pages + re-validation sweep
+- [ ] Coverage ledger + counter-evidence pass for deep research
+- [ ] Deliverable runs with output manifest
+- [ ] Watch-and-brief primitive (scheduled diff + extraction + standing brief)
+### Gates before push
+- [ ] e2e QA specs; full Playwright green
+- [ ] Adversarial review; confirmed findings fixed
+- [ ] Full verify chain (ruff, mypy dev-extras, pytest, memory+answerability eval gates, tsc, vitest, build)
+- [ ] Merge to main + push (auto-deploys UAT)
+
+## Review
+(pending)
