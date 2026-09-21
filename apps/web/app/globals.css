@@ -1003,12 +1003,28 @@ label,
   font-size: 9px;
 }
 
+/* The email ellipsizes; the badge beside it never does. Both used to live in
+   one nowrap span, so a normal-length address pushed "unverified" into the
+   clip and the one place the verification state is legible read "UNV…". */
+.identity-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.identity-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workspace-identity > svg {
   color: var(--text-dim);
 }
 
 .identity-unverified {
-  margin-left: 5px;
+  flex-shrink: 0;
   padding: 1px 4px;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -10700,6 +10716,16 @@ label,
   width: 100%;
 }
 
+.spaces-create input,
+.spaces-create select {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
 .space-row {
   display: flex;
   align-items: center;
@@ -10769,6 +10795,21 @@ label,
 @media (max-width: 900px) {
   .space-detail-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The outer split stacks too, the way .documents-layout does at this width:
+     260px of list beside a phone viewport leaves ~130px for the space itself,
+     which clips every control in it. The list keeps a bounded height so the
+     detail below stays reachable. */
+  .spaces-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .spaces-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    max-height: 40vh;
   }
 }
 

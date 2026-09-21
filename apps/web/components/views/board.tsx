@@ -550,6 +550,7 @@ export function BoardView({
             value={name}
             onChange={(event) => setName(event.target.value)}
             aria-label={shape === "list" ? "List name" : "Board name"}
+            placeholder={shape === "list" ? "New list…" : "New board…"}
           />
           <select
             value={shape}

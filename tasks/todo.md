@@ -791,3 +791,39 @@ Gap audit vs Claude desktop (Sept 2026): 16 areas — 2 already full (space inst
       clean; FULL vitest 104 files / 1086 tests; eslint 0 errors on touched
       files; playwright run green — 112 passed, 1 skipped (the pre-existing
       `test.fixme` dashboard-panel spec)
+
+## Full UI QA sweep + fixes (worktree-qa-ui-fixes, 2026-09-21)
+- [x] Regression: full playwright on main — 111/113 green; the one failure
+      (chat-composer draft spec) reran green 3x in isolation → load flake
+- [x] Exploratory: scripted sweep of all 26 `?view=` surfaces + 6 auth pages +
+      mobile viewport; screenshots + console/pageerror/4xx-5xx capture — no
+      unexpected errors (401/503 auth probes are deliberate); dark mode clean;
+      menus/space-create/chat-turn probed interactively
+- [x] Bug 1 (P1): `?view=recap` / `?view=profile` written by pushWorkspaceUrl
+      but refused by viewFromUrl — reload/shared link fell back to chat. The
+      VIEWS set is now derived from a `satisfies Record<View, true>` record so
+      the compiler fails when the union grows; regression test added
+- [x] Bug 2 (P2): `.spaces-layout` never stacked at ≤900px — space detail got
+      ~130px on a phone, every control clipped. Stacks now like documents/
+      projects; list capped at 40vh with a bottom border
+- [x] Bug 3: `.spaces-create` input/select were UA-bare; styled like
+      `.board-new`
+- [x] Bug 4: boards/lists create input had aria-label but no placeholder;
+      "New board…"/"New list…" added
+- [x] Bug 5: "unverified" badge clipped to "UNV…" inside the nowrap email
+      span; email now ellipsizes in its own `.identity-email`, badge no longer
+      shrinks
+- [x] Flake fix: namedThread's first-answer expect now waits 15s
+- [x] Verify (worktree): tsc clean; eslint clean on touched files; vitest
+      104 files / 1087 tests green; FULL playwright 112 passed 1 skipped;
+      post-fix browser probe confirms recap/profile survive reload, mobile
+      spaces stacks, badge visible, placeholder present
+
+### Review
+- Not bugs, by design: Admin's empty section nav (single-item settings group),
+  the floating "N" bubble on auth/mobile pages (Next dev-tools indicator,
+  dev only), 401 /auth/me + 503 /auth/google/start console noise (deliberate
+  fail-closed probes).
+- Machine-sleep artifact: overnight sweeps stall for hours unless caffeinate
+  holds the lid; the ERR_NETWORK_IO_SUSPENDED console error came from that,
+  not the app.
