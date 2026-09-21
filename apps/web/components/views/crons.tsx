@@ -45,6 +45,14 @@ export type CronsViewProps = {
   setError: (message: string) => void;
   /** The shell's one favorites list; without it the rows offer no star. */
   favorites?: FavoritesApi;
+  /**
+   * Schedule-from-chat, on WorkflowsView's composeRequested/onComposeHandled
+   * contract: the shell raises the flag with the chat draft to prefill; this
+   * panel lowers it once it has acted, so navigating back later does not
+   * reopen a composer the user dismissed.
+   */
+  composeSeed?: string;
+  onComposeSeedHandled?: () => void;
 };
 
 const TIMELINE_PLACEHOLDER = "0 9 * * 1";
@@ -113,9 +121,14 @@ export function describeCronSchedule(
 function CronForm({
   setError,
   onCreated,
+  initialPrompt,
 }: {
   setError: (message: string) => void;
   onCreated: (cron: Cron) => void;
+  /** Prefill for the Prompt field — the schedule-from-chat seed. The kind
+   *  default stays "task", which is what a chat draft is: a prompt re-run as
+   *  an unattended turn. */
+  initialPrompt?: string;
 }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<CronKind>("task");
@@ -130,7 +143,7 @@ function CronForm({
       return "UTC";
     }
   });
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(initialPrompt ?? "");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   /** The English sentence, and what the compiler last said it means. */
@@ -359,10 +372,19 @@ function CronForm({
   );
 }
 
-export function CronsView({ setError, favorites }: CronsViewProps) {
+export function CronsView({
+  setError,
+  favorites,
+  composeSeed,
+  onComposeSeedHandled,
+}: CronsViewProps) {
   const [crons, setCrons] = useState<Cron[]>([]);
   const [activeId, setActiveId] = useState("");
   const [composing, setComposing] = useState(false);
+  /** The seed, copied local BEFORE the parent clears its flag — exactly why
+   *  WorkflowsView calls onComposeHandled first — so a re-render with the
+   *  flag lowered keeps the form open and the prompt intact. */
+  const [seed, setSeed] = useState(composeSeed ?? "");
   const [schedulingEnabled, setSchedulingEnabled] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -384,6 +406,15 @@ export function CronsView({ setError, favorites }: CronsViewProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!composeSeed) return;
+    onComposeSeedHandled?.();
+    setSeed(composeSeed);
+    setComposing(true);
+    setActiveId("");
+    setFired("");
+  }, [composeSeed, onComposeSeedHandled]);
 
   /**
    * Whether the ticker can actually fire a cron, asked of the ticker itself,
@@ -469,6 +500,9 @@ export function CronsView({ setError, favorites }: CronsViewProps) {
             className="icon-button"
             aria-label="New automation"
             onClick={() => {
+              // The Plus button is the blank composer: drop any earlier
+              // schedule-from-chat seed so it does not haunt a fresh form.
+              setSeed("");
               setComposing(true);
               setActiveId("");
               setFired("");
@@ -525,7 +559,15 @@ export function CronsView({ setError, favorites }: CronsViewProps) {
 
       {composing && (
         <div className="workflow-main">
-          <CronForm setError={setError} onCreated={created} />
+          {/* The key remounts the form when a NEW seed arrives so the
+              useState initializer re-reads it; the Plus-button blank composer
+              keeps key "blank". */}
+          <CronForm
+            key={seed || "blank"}
+            setError={setError}
+            onCreated={created}
+            initialPrompt={seed}
+          />
         </div>
       )}
 

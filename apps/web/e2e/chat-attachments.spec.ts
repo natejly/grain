@@ -31,6 +31,10 @@ test("a text file attached to a chat becomes an editable chip", async ({ page })
   // for a text file it is a button that opens the editor beside the chat.
   const strip = page.locator(".attachment-strip");
   await expect(strip).toContainText("field-guide.md");
+  // The chip regression half of the preview work: a text file becomes a
+  // document, and a document's preview IS the editor its chip opens — no CSV
+  // peek, no thumbnail, the plain chip it always was.
+  await expect(strip.locator(".attachment-csv-peek")).toHaveCount(0);
   await strip.getByRole("button", { name: "field-guide.md", exact: true }).click();
   await expect(page.locator(".attachment-pane textarea")).toHaveValue(
     /Herons stand still/,
@@ -50,6 +54,22 @@ test("a chat-scoped upload stays out of the workspace library", async ({ page })
   });
   await menu.getByRole("button", { name: "Attach to this chat" }).click();
   await expect(page.locator(".attachment-strip")).toContainText("sightings.csv");
+
+  // A small CSV earns a peek: its first rows as a table under the chip. The
+  // optimistic chip from the upload itself carries no media type, so the
+  // enrichment arrives with the next listing — a reload performs one, and the
+  // thread rides the URL through it.
+  await page.reload();
+  const strip = page.locator(".attachment-strip");
+  await expect(strip).toContainText("sightings.csv");
+  const peek = strip.locator(".attachment-csv-peek");
+  await expect(peek).toBeVisible();
+  await expect(peek.locator("th").first()).toHaveText("bird");
+  await expect(peek.locator("td", { hasText: "heron" })).toBeVisible();
+  // Decoration, not replacement: the chip and its filename stay the handle.
+  await expect(strip.locator(".attachment-chip.with-peek")).toContainText(
+    "sightings.csv",
+  );
 
   // The negative half: the library never lists it. This is the difference
   // between "attach to this chat" and "add to workspace", made visible.

@@ -37,7 +37,10 @@ export type PaletteRow =
   | { kind: "layout"; name: string; label: string; hint: string }
   | { kind: "save-layout"; label: string; hint: string }
   | { kind: "toggle"; toggle: PaletteToggle; label: string; hint: string }
-  | { kind: "thread"; conversationId: string; label: string; hint: string };
+  | { kind: "thread"; conversationId: string; label: string; hint: string }
+  /** Quick-compose: `text` is the message to send; "" means "ask for it in
+   *  the naming step". The `>` prefix mode builds this row on the fly. */
+  | { kind: "compose"; text: string; label: string; hint: string };
 
 /**
  * The shell state the layout and preference rows are built from. Optional on
@@ -53,6 +56,7 @@ export type PaletteExtras = {
 export function buildPaletteRows(
   conversations: Conversation[],
   extras?: PaletteExtras,
+  canCompose = false,
 ): PaletteRow[] {
   const views: PaletteRow[] = NAV_GROUPS.flatMap((group) =>
     group.items.map((item) => ({
@@ -110,13 +114,26 @@ export function buildPaletteRows(
         },
       ]
     : [];
+  // Quick-compose, only where a compose handler is wired: the static row is
+  // findable by label like any other, appears in the empty-query listing (the
+  // kind !== "thread" filter keeps it), and its hint teaches the '>' prefix.
+  const composes: PaletteRow[] = canCompose
+    ? [
+        {
+          kind: "compose" as const,
+          text: "",
+          label: "New message…",
+          hint: "Chat · or type > message",
+        },
+      ]
+    : [];
   const threads: PaletteRow[] = conversations.map((conversation) => ({
     kind: "thread" as const,
     conversationId: conversation.id,
     label: conversation.title,
     hint: conversation.shared ? "Shared thread" : "Thread",
   }));
-  return [...views, ...creates, ...layouts, ...toggles, ...threads];
+  return [...views, ...creates, ...layouts, ...toggles, ...composes, ...threads];
 }
 
 /**
@@ -132,7 +149,23 @@ export function matchPalette(
   query: string,
   limit = 12,
 ): PaletteRow[] {
-  const needle = query.trim().toLowerCase();
+  const raw = query.trim();
+  // "> message" is compose mode: one row, no other matches, so Enter always
+  // means send. Only where the rows carry a compose row at all — a palette
+  // without the handler must not invent the gesture.
+  if (raw.startsWith(">")) {
+    if (!rows.some((row) => row.kind === "compose")) return [];
+    const text = raw.slice(1).trim();
+    return [
+      {
+        kind: "compose",
+        text,
+        label: text ? `Send: “${text.slice(0, 60)}”` : "New message…",
+        hint: text ? "Starts a new thread" : "Type your message after >",
+      },
+    ];
+  }
+  const needle = raw.toLowerCase();
   if (!needle) {
     // Everything navigable and doable, UNSLICED: the empty palette's question
     // is "what can I even do", and a cap of 12 was silently eating every row

@@ -1633,6 +1633,16 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"conversation_id": "conversation"},
     ),
     RouteCase(
+        "GET",
+        "/api/conversations/{conversation_id}/export",
+        DENY,
+        path_ids={"conversation_id": "conversation"},
+        query={"format": "md"},
+        note="an export is the whole transcript in one response; the "
+        "visibility chokepoint must 404 a foreign thread before a byte is "
+        "rendered",
+    ),
+    RouteCase(
         "POST",
         "/api/conversations/{conversation_id}/messages",
         DENY,
@@ -1745,6 +1755,53 @@ ROUTE_CASES: List[RouteCase] = [
     # row, no resource id. enabled=False is the probe, and harmless to leave —
     # the sweep tenant runs nothing that would remember anyway.
     RouteCase("PUT", "/api/me/memory", SCOPED, body={"enabled": False}),
+    # The response style: the caller's own membership row once more. 'normal'
+    # leaves the sweep tenant on the no-block default, so the instruction
+    # byte-identity contract holds for every other test that reuses it.
+    RouteCase(
+        "PUT",
+        "/api/me/style",
+        SCOPED,
+        body={"preset": "normal", "custom_style_text": ""},
+    ),
+    # The display name edits the caller's own user row; no id anywhere.
+    RouteCase(
+        "PATCH", "/api/me/profile", SCOPED, body={"name": "Isolation Probe"}
+    ),
+    # The password change: create_identity users have NO password hash, so the
+    # route answers the federated-account 422 — which is exactly what SCOPED
+    # tolerates (it asserts no foreign ids in the body, not a 2xx), and the
+    # tamper digest proves nothing of tenant B's moved either way.
+    RouteCase(
+        "POST",
+        "/api/me/password",
+        SCOPED,
+        body={
+            "current_password": "not-the-password-anyway",
+            "new_password": "a-policy-passing-throwaway-1",
+        },
+    ),
+    # The recap reads only the caller's own month-to-date aggregates — no
+    # resource id anywhere, every select member-scoped — so SCOPED, with the
+    # tamper digest proving the read moved nothing of tenant B's.
+    RouteCase("GET", "/api/me/recap", SCOPED),
+    # The import door writes only the caller's own personal rows; SCOPED, with
+    # the digest proving tenant B's memory shelf never moved.
+    RouteCase(
+        "POST",
+        "/api/memory/import",
+        SCOPED,
+        body={"items": [{"content": "isolation import probe"}]},
+    ),
+    # Feedback names a foreign message id: it must 404 at resolve_visible
+    # before the role gate could reveal whether the message even exists.
+    RouteCase(
+        "POST",
+        "/api/messages/{message_id}/feedback",
+        DENY,
+        path_ids={"message_id": "message"},
+        body={"verdict": "up", "note": ""},
+    ),
     # Transcript search: a workspace-scoped list whose visibility chokepoint is
     # the same one the agent tool reads; the sweep proves tenant A's query
     # never quotes tenant B's words.
@@ -2146,6 +2203,12 @@ ROUTE_CASES: List[RouteCase] = [
         path_ids={"document_id": "document"},
     ),
     RouteCase(
+        "GET",
+        "/api/documents/{document_id}/versions/{version_id}",
+        DENY,
+        path_ids={"document_id": "document", "version_id": "document_version"},
+    ),
+    RouteCase(
         "POST",
         "/api/documents/{document_id}/versions/{version_id}/restore",
         DENY,
@@ -2533,6 +2596,21 @@ ROUTE_CASES: List[RouteCase] = [
         body={"resource_kind": "dashboard", "resource_id": ""},
         body_ids={"resource_id": "dashboard"},
         note="mints a public link onto another tenant's dashboard",
+    ),
+    # A second probe under the same method+template key: duplicate keys are
+    # established precedent (the two GET marketplace listing cases), and the
+    # sweep parametrizes over this list while CASES_BY_KEY is only read as a
+    # set for coverage — nothing executable is lost to the collision.
+    RouteCase(
+        "POST",
+        "/api/share-links",
+        DENY,
+        body={"resource_kind": "conversation", "resource_id": ""},
+        body_ids={"resource_id": "conversation"},
+        note="mints a public window onto another tenant's thread; the "
+        "harness's conversation is B's own unshared rail thread, so "
+        "resolve_visible's never-removed workspace filter refuses before the "
+        "personal/shared question is even asked",
     ),
     RouteCase(
         "POST",

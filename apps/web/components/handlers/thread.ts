@@ -14,7 +14,7 @@ import { registerOwnRun } from "../own-runs";
 import { readBudgetPark, type BudgetPark } from "../views/budget-format";
 import { readCitationCheck } from "../views/citation-format";
 import { parseAside } from "../views/commands";
-import { describeActionError } from "../views/shared";
+import { describeActionError, streamingMessageId } from "../views/shared";
 
 /**
  * One conversation, driven: send, stream, approve, cancel, regenerate.
@@ -356,7 +356,9 @@ export function createThreadHandlers({
   }
 
   async function followRun(runId: string, conversationId: string) {
-    const temporaryId = `streaming-${runId}`;
+    // Through the shared spelling so the transcript's is-this-row-real gates
+    // (see isStreamingMessage in views/shared.ts) can never drift from it.
+    const temporaryId = streamingMessageId(runId);
     // The one seam EVERY client-started run passes through — the rail, an
     // extra pane, the subject panels — so the memory.updated own-run filter
     // sees them all, not just the primary chat's.
@@ -551,6 +553,50 @@ export function createThreadHandlers({
     }
   }
 
+  /**
+   * The send core: post `content` into a NAMED conversation, append the
+   * accepted message, clear the per-turn attachment, and follow the run.
+   *
+   * Extracted from `submitPrompt`'s happy path so quick-compose can target a
+   * conversation it just created without going through draft state — calling
+   * `submitPrompt` after `setDraft` would read the stale closure draft. The
+   * draft clearing, steer branch and restore-on-failure stay in
+   * `submitPrompt`; a caller of this owns its own failure handling.
+   *
+   * `perTurn: false` is quick-compose's contract: the composer's per-turn
+   * state — the attached skill and its args — belongs to the composer the
+   * user attached it in, so a send from somewhere else neither carries it
+   * (editMessage's exact reasoning: a skill silently riding a different turn
+   * is the surprise the per-turn attachment exists to avoid) nor consumes it
+   * via `onSent`. The session-level controls (model, effort, fast, thinking)
+   * still apply — they describe how the user wants turns run, not this turn.
+   */
+  async function sendPrompt(
+    content: string,
+    conversationId: string,
+    { perTurn = true }: { perTurn?: boolean } = {},
+  ): Promise<void> {
+    const sendControls = perTurn
+      ? controls
+      : controls && {
+          model: controls.model,
+          effort: controls.effort,
+          fast: controls.fast,
+          thinking: controls.thinking,
+        };
+    const response = await api.sendMessage(conversationId, content, agentId, sendControls);
+    setMessages((items) => {
+      const existing = items.some((item) => item.id === response.message.id);
+      return existing ? items : [...items, response.message];
+    });
+    // The turn was accepted, so a per-turn skill has done its job; clear it
+    // beside the draft so it does not attach itself to the next message.
+    // A non-per-turn send never displayed the attachment, so it must not
+    // clear it either.
+    if (perTurn) onSent?.();
+    if (response.run) void followRun(response.run.id, conversationId);
+  }
+
   async function submitPrompt(event?: FormEvent) {
     event?.preventDefault();
     const content = draft.trim();
@@ -606,15 +652,7 @@ export function createThreadHandlers({
         );
         return;
       }
-      const response = await api.sendMessage(conversationId, content, agentId, controls);
-      setMessages((items) => {
-        const existing = items.some((item) => item.id === response.message.id);
-        return existing ? items : [...items, response.message];
-      });
-      // The turn was accepted, so a per-turn skill has done its job; clear it
-      // beside the draft so it does not attach itself to the next message.
-      onSent?.();
-      if (response.run) void followRun(response.run.id, conversationId);
+      await sendPrompt(content, conversationId);
     } catch (caught) {
       if (restoreDraft) restoreDraft(sentTo, content);
       else setDraft(content);
@@ -635,6 +673,7 @@ export function createThreadHandlers({
     regenerate,
     editMessage,
     submitPrompt,
+    sendPrompt,
     followRun,
   };
 }

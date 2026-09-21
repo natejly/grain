@@ -32,7 +32,9 @@ export type View =
   | "crons"
   | "monitors"
   | "spaces"
-  | "gallery";
+  | "gallery"
+  | "recap"
+  | "profile";
 
 /**
  * An unreachable API already has a dedicated banner with a retry, so it returns
@@ -82,6 +84,21 @@ export function slugify(value: string): string {
 
 export function baseName(filename: string): string {
   return filename.replace(/\.[^.]+$/, "") || filename;
+}
+
+/**
+ * The synthetic transcript row a streaming run renders its deltas under,
+ * before `message.completed` delivers the real message id. One spelling,
+ * shared by the stream writer (handlers/thread.ts) and every gate that must
+ * not mistake the placeholder for a persisted message — feedback POSTs by
+ * message id, and `streaming-<runId>` names a row no server has.
+ */
+export function streamingMessageId(runId: string): string {
+  return `streaming-${runId}`;
+}
+
+export function isStreamingMessage(messageId: string): boolean {
+  return messageId.startsWith("streaming-");
 }
 
 export function isTabular(filename: string): boolean {
@@ -165,6 +182,13 @@ export const PAGE_TITLES: Record<View, string> = {
   // Where published skills (and later workflows and agents) are browsed and
   // installed. In Library because it is a shelf you take things from.
   gallery: "Gallery",
+  // The member's month, deterministically counted — threads, runs, memories,
+  // top spaces and agents. A thing you visit, not configure, so it lives in
+  // Library rather than behind the settings menu.
+  recap: "Recap",
+  // The person, not the workspace: display name and password. Behind the
+  // settings menu because it is configuration, visited rarely and on purpose.
+  profile: "Profile",
 };
 
 export function formatBytes(bytes: number): string {

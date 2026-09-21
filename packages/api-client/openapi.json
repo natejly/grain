@@ -2499,6 +2499,11 @@
       },
       "BootstrapResponse": {
         "properties": {
+          "custom_style_text": {
+            "default": "",
+            "title": "Custom Style Text",
+            "type": "string"
+          },
           "default_agent_id": {
             "title": "Default Agent Id",
             "type": "string"
@@ -2531,6 +2536,11 @@
           },
           "screen": {
             "$ref": "#/components/schemas/ScreenStatus"
+          },
+          "style_preset": {
+            "default": "normal",
+            "title": "Style Preset",
+            "type": "string"
           },
           "unrestricted_agent": {
             "default": false,
@@ -2571,6 +2581,11 @@
       "ChatAttachmentOut": {
         "description": "One file attached to a conversation.\n\n`kind` is what the file became and therefore what can be done with it:\n`document` is editable and opens in the editor, `source` is quotable and\ndoes not. The client branches on it rather than on the filename, because the\nrouting decision was made once on the server and re-deriving it from an\nextension is how the two ends drift apart.",
         "properties": {
+          "byte_size": {
+            "default": 0,
+            "title": "Byte Size",
+            "type": "integer"
+          },
           "conversation_id": {
             "title": "Conversation Id",
             "type": "string"
@@ -2590,6 +2605,11 @@
           },
           "kind": {
             "title": "Kind",
+            "type": "string"
+          },
+          "media_type": {
+            "default": "",
+            "title": "Media Type",
             "type": "string"
           },
           "message_id": {
@@ -3048,6 +3068,27 @@
           }
         },
         "title": "ConversationDefaultsRequest",
+        "type": "object"
+      },
+      "ConversationExportOut": {
+        "description": "The JSON export: the thread's wire view plus its full transcript,\nexactly the shapes `GET /conversations/{id}` and `/messages` serve.",
+        "properties": {
+          "conversation": {
+            "$ref": "#/components/schemas/ConversationOut"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageOut"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "conversation",
+          "messages"
+        ],
+        "title": "ConversationExportOut",
         "type": "object"
       },
       "ConversationForkRequest": {
@@ -4846,6 +4887,36 @@
           "updated_at"
         ],
         "title": "DocumentSummaryOut",
+        "type": "object"
+      },
+      "DocumentVersionContentOut": {
+        "description": "One version with its full snapshot, for the history stepper's diffs.\n\nSplit from `DocumentVersionOut` on purpose: version content is unbounded\ntext, and shipping every version's body in the list would bloat a hot\npanel. The client fetches one version's content only when it is selected.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "summary",
+          "created_at",
+          "content"
+        ],
+        "title": "DocumentVersionContentOut",
         "type": "object"
       },
       "DocumentVersionOut": {
@@ -7052,6 +7123,52 @@
         "title": "McpToolOut",
         "type": "object"
       },
+      "MeRecapOut": {
+        "description": "The caller's own month so far, deterministically counted.\n\nAggregate-only: five bounded read-only selects, no LLM anywhere. The\nwindow is UTC calendar month-to-date, and every count is workspace- AND\nmember-scoped \u2014 a teammate's threads never inflate your recap.",
+        "properties": {
+          "memories_learned": {
+            "title": "Memories Learned",
+            "type": "integer"
+          },
+          "runs_started": {
+            "title": "Runs Started",
+            "type": "integer"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "threads_started": {
+            "title": "Threads Started",
+            "type": "integer"
+          },
+          "top_agents": {
+            "items": {
+              "$ref": "#/components/schemas/RecapGroupOut"
+            },
+            "title": "Top Agents",
+            "type": "array"
+          },
+          "top_spaces": {
+            "items": {
+              "$ref": "#/components/schemas/RecapGroupOut"
+            },
+            "title": "Top Spaces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "since",
+          "threads_started",
+          "runs_started",
+          "memories_learned",
+          "top_spaces",
+          "top_agents"
+        ],
+        "title": "MeRecapOut",
+        "type": "object"
+      },
       "MemberOut": {
         "description": "One workspace colleague, as the @-picker needs them: an id to mention\nand a name to show. Deliberately not the admin surface \u2014 no email, no\njoin date \u2014 because every member may see who they can mention.",
         "properties": {
@@ -7109,6 +7226,91 @@
           "content"
         ],
         "title": "MemoryCreate",
+        "type": "object"
+      },
+      "MemoryImportIn": {
+        "description": "Either structured items or a plain-text blob \u2014 at least one of the two.",
+        "properties": {
+          "items": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MemoryImportItem"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Items"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 200000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "title": "MemoryImportIn",
+        "type": "object"
+      },
+      "MemoryImportItem": {
+        "properties": {
+          "content": {
+            "maxLength": 900,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "entities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Entities",
+            "type": "array"
+          },
+          "kind": {
+            "default": "fact",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "MemoryImportItem",
+        "type": "object"
+      },
+      "MemoryImportOut": {
+        "properties": {
+          "added": {
+            "title": "Added",
+            "type": "integer"
+          },
+          "reinforced": {
+            "title": "Reinforced",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added",
+          "reinforced",
+          "skipped"
+        ],
+        "title": "MemoryImportOut",
         "type": "object"
       },
       "MemoryItemOut": {
@@ -7231,6 +7433,58 @@
         "title": "MemoryUpdate",
         "type": "object"
       },
+      "MessageFeedbackIn": {
+        "properties": {
+          "note": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Note",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "up",
+              "down"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict"
+        ],
+        "title": "MessageFeedbackIn",
+        "type": "object"
+      },
+      "MessageFeedbackOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "verdict",
+          "note",
+          "created_at"
+        ],
+        "title": "MessageFeedbackOut",
+        "type": "object"
+      },
       "MessageOut": {
         "properties": {
           "citation_report": {
@@ -7262,6 +7516,11 @@
           },
           "id": {
             "title": "Id",
+            "type": "string"
+          },
+          "my_feedback": {
+            "default": "",
+            "title": "My Feedback",
             "type": "string"
           },
           "role": {
@@ -7952,6 +8211,28 @@
         "title": "OrgPolicyOut",
         "type": "object"
       },
+      "PasswordChangeIn": {
+        "properties": {
+          "current_password": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Current Password",
+            "type": "string"
+          },
+          "new_password": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "New Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "PasswordChangeIn",
+        "type": "object"
+      },
       "PasswordResetConfirmIn": {
         "properties": {
           "password": {
@@ -8114,6 +8395,45 @@
           "updated_at"
         ],
         "title": "PresenceOut",
+        "type": "object"
+      },
+      "ProfileIn": {
+        "description": "The body of `PATCH /api/me/profile` \u2014 the display name only. The email\nis deliberately not accepted: it is the login identity, and changing it is\na verification flow this route does not own.",
+        "properties": {
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProfileIn",
+        "type": "object"
+      },
+      "ProfileOut": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "name"
+        ],
+        "title": "ProfileOut",
         "type": "object"
       },
       "ProjectEntryRequest": {
@@ -8342,6 +8662,30 @@
           "manifest"
         ],
         "title": "PublishedAppOut",
+        "type": "object"
+      },
+      "RecapGroupOut": {
+        "description": "One ranked row of the recap \u2014 a space or an agent, with a count.\n\n`name` resolves through a workspace-scoped lookup, so a stale id (a space\nor agent deleted since the rows were written) keeps its id and answers \"\"\nfor the name \u2014 the admin usage page's stale-id-stays-an-id shape.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "count"
+        ],
+        "title": "RecapGroupOut",
         "type": "object"
       },
       "ReviewSegment": {
@@ -9248,7 +9592,8 @@
           "resource_kind": {
             "enum": [
               "dashboard",
-              "document"
+              "document",
+              "conversation"
             ],
             "title": "Resource Kind",
             "type": "string"
@@ -9344,8 +9689,43 @@
         "title": "ShareLinkOut",
         "type": "object"
       },
+      "SharedMessageOut": {
+        "description": "One transcript turn as the anonymous reader sees it: who spoke (by\ndisplay name \u2014 the mint is an explicit act by someone who can read the\nthread, and a multi-person transcript without attribution misreads who\nsaid what), what they said, and when.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "is_aside": {
+            "default": false,
+            "title": "Is Aside",
+            "type": "boolean"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "sender_name": {
+            "default": "",
+            "title": "Sender Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content",
+          "created_at"
+        ],
+        "title": "SharedMessageOut",
+        "type": "object"
+      },
       "SharedResourceOut": {
-        "description": "What an anonymous holder of a working link sees. One model for both\nkinds \u2014 the unset half stays at its empty default \u2014 so the public page has\none response shape to render.",
+        "description": "What an anonymous holder of a working link sees. One model for all\nkinds \u2014 the unset halves stay at their empty defaults \u2014 so the public page\nhas one response shape to render.",
         "properties": {
           "columns": {
             "default": [],
@@ -9381,6 +9761,14 @@
             "title": "Kind",
             "type": "string"
           },
+          "messages": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SharedMessageOut"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
           "rows": {
             "default": [],
             "items": {
@@ -9398,6 +9786,11 @@
           "title": {
             "title": "Title",
             "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
           },
           "updated_at": {
             "anyOf": [
@@ -10025,6 +10418,50 @@
           "content"
         ],
         "title": "SteerRequest",
+        "type": "object"
+      },
+      "StylePrefIn": {
+        "properties": {
+          "custom_style_text": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Custom Style Text",
+            "type": "string"
+          },
+          "preset": {
+            "enum": [
+              "normal",
+              "concise",
+              "explanatory",
+              "formal",
+              "custom"
+            ],
+            "title": "Preset",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preset"
+        ],
+        "title": "StylePrefIn",
+        "type": "object"
+      },
+      "StylePrefOut": {
+        "properties": {
+          "custom_style_text": {
+            "title": "Custom Style Text",
+            "type": "string"
+          },
+          "preset": {
+            "title": "Preset",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preset",
+          "custom_style_text"
+        ],
+        "title": "StylePrefOut",
         "type": "object"
       },
       "SyncJobOut": {
@@ -16480,6 +16917,79 @@
         ]
       }
     },
+    "/api/conversations/{conversation_id}/export": {
+      "get": {
+        "description": "The whole transcript as one downloadable file, Markdown or JSON.\n\nResolved through the same visibility chokepoint and serialized with the\nsame message shape `list_messages` uses, so what a member exports is\nexactly what they can read \u2014 a colleague's personal thread is\nindistinguishable from absent here as everywhere. A bad `format` is a 422\nfrom the Literal query param; no hand-rolled validation. Deliberately no\naudit row and no Idempotency-Key: a read, matching\nGET /api/sources/{id}/content, and no rate-limit dependency for the same\nreason every other authenticated read carries none.",
+        "operationId": "export_conversation_api_conversations__conversation_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "md",
+              "enum": [
+                "md",
+                "json"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationExportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Conversation",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/conversations/{conversation_id}/fork": {
       "post": {
         "description": "Branch a new thread from everything said up to one message.\n\nThe source is resolved through the same visibility chokepoint as reading\nit (`conversations.resolve_visible`): a foreign workspace's thread or\nanother member's personal thread is the same 404 here as on\n`GET .../messages`. The anchor must belong to *that* conversation \u2014 a\nmessage id from any other thread, this workspace's included, is also a\n404, so the pair of ids never becomes an existence oracle.\n\nThe fork is a plain personal thread: created by the caller, unshared,\nsubjectless, kept in the source's space so it stays findable where the\noriginal lives. Only the transcript up to and including the anchor is\ncopied \u2014 fresh message ids, `run_id` cleared, sender attribution kept \u2014\nand nothing that hangs off the source's runs comes along: a run's tool\ncalls and parked agent state are bound to their original `call_id`\npairing and must never be resumable from a copy.",
@@ -16790,7 +17300,7 @@
     },
     "/api/conversations/{conversation_id}/share": {
       "put": {
-        "description": "Share or unshare a thread with the rest of the workspace.\n\nOwner-gated, mirroring the skills share gate: only the creator, or the\nworkspace owner, may flip a thread between personal and shared. A plain\nmember seeing a shared thread must not be able to unshare it out from under\nthe people using it, nor share a personal thread they merely happened to\nreach \u2014 which is why `resolve_visible` (a 404 for anything outside the\nworkspace or another member's personal thread) is followed by the\ncreator-or-owner gate (a 403). Sharing changes visibility ONLY within the\nworkspace; the `workspace_id` filter in `resolve_visible` is never removed,\nso this can never expose a thread cross-workspace.",
+        "description": "Share or unshare a thread with the rest of the workspace.\n\nOwner-gated, mirroring the skills share gate: only the creator, or the\nworkspace owner, may flip a thread between personal and shared. A plain\nmember seeing a shared thread must not be able to unshare it out from under\nthe people using it, nor share a personal thread they merely happened to\nreach \u2014 which is why `resolve_visible` (a 404 for anything outside the\nworkspace or another member's personal thread) is followed by the\ncreator-or-owner gate (a 403). Sharing changes visibility ONLY within the\nworkspace; the `workspace_id` filter in `resolve_visible` is never removed,\nso this can never expose a thread cross-workspace.\n\nUnsharing REVOKES every colleague-minted public link on the thread,\none-way like every other revoke. The read-time personal-leak gate alone\nwould merely suspend them: the anonymous 404 teaches everyone a leaked\nURL is dead, and a later re-share would silently revive it \u2014 serving the\nlive transcript, additions included. The creator's own links are left\nalone on purpose; they keep the existing gate semantics (a creator's link\nserves their personal thread regardless of the shared flag).",
         "operationId": "set_conversation_shared_api_conversations__conversation_id__share_put",
         "parameters": [
           {
@@ -19830,6 +20340,74 @@
         ]
       }
     },
+    "/api/documents/{document_id}/versions/{version_id}": {
+      "get": {
+        "description": "One version's full snapshot, for the history stepper's diffs.\n\nThe document is resolved first, like `list_versions`: a foreign or missing\ndocument answers the same 404 every other /documents route gives, and a\nversion id that is not this document's answers 404 through the service's\n(workspace, document, version) scoping. Read-only, no `db.get`.",
+        "operationId": "get_version_content_api_documents__document_id__versions__version_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentVersionContentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Version Content",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/api/documents/{document_id}/versions/{version_id}/restore": {
       "post": {
         "operationId": "restore_version_api_documents__document_id__versions__version_id__restore_post",
@@ -22661,6 +23239,176 @@
         ]
       }
     },
+    "/api/me/password": {
+      "post": {
+        "description": "Change the caller's password, proving the current one first.\n\nEvery OTHER session is revoked \u2014 a password change is what you do when you\nsuspect the old one leaked \u2014 while the session making the change survives:\nlogging the person out of the tab they just secured would read as a\nfailure. (`revoke_all_sessions` is the logged-out reset flow's helper and\nrevokes everything including the caller's, so the scoped sweep here is\nwritten out with the caller's session excluded.)\n\nThe caller's live API tokens are revoked too, and the acknowledgement\nsays how many: a `grain_\u2026` bearer minted by whoever held the leaked\npassword appears in no session list and would otherwise survive the\nrotation indefinitely. The reset flow makes the same sweep.\n\nThe change itself is audited with no detail payload \u2014 the fact of it is\nthe record \u2014 and each revoked token gets its own `api_token.revoked` row.",
+        "operationId": "change_password_api_me_password_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChangeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Password",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/me/profile": {
+      "patch": {
+        "description": "Rename the caller. `users.name` is already the attribution source\neverywhere (bootstrap Identity, coworking labels, message sender names),\nso this edits it in place \u2014 no second display-name column.\n\nHistorical records keep the old name by design: actor labels stamped into\npast workspace events and audit rows are records of what happened, and the\nlive surfaces pick the new name up on their next read.",
+        "operationId": "update_profile_api_me_profile_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Profile",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/me/recap": {
+      "get": {
+        "description": "The caller's own month so far \u2014 deterministic aggregates, no LLM.\n\nWindow: UTC calendar month-to-date, no query params. Five bounded\nread-only selects, every one workspace- AND member-scoped, so a\nteammate's activity in the same workspace never inflates this recap.\n`top_spaces` excludes the \"\" sentinel \u2014 it is the global shelf, not a\nspace \u2014 and `memories_learned` counts only what the caller themself\nlearned (their own rows, plus shared rows their own runs extracted; see\n`services.memory.count_learned`), with liveness still through\n`services.memory._active`, so a superseded claim drops out of the number\nthe way it drops out of recall. No `db.get`, no writes.",
+        "operationId": "get_recap_api_me_recap_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeRecapOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Recap",
+        "tags": [
+          "me"
+        ]
+      }
+    },
     "/api/me/safe-mode": {
       "put": {
         "description": "Turn the approval step on or off for the caller's future threads.\n\nA seed, not a switch on anything already running: it changes what\n`services.conversations.default_approval_mode` hands the next thread this\nmember creates, and touches no existing conversation. That is the whole\nreason it can be a plain preference rather than a privileged operation \u2014\nturning it *off* cannot loosen a thread a colleague is watching, and\nturning it *on* cannot strand one mid-turn.\n\nAudited on both edges. Off is the interesting direction, and an audit trail\nthat only recorded the cautious half would be no trail at all.",
@@ -22716,6 +23464,66 @@
           }
         },
         "summary": "Update Safe Mode",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/me/style": {
+      "put": {
+        "description": "Set the caller's response style for their future turns.\n\n\"normal\" means no style instruction at all \u2014 the byte-identity contract\n`services.styles.style_block` keeps. A \"custom\" preset with nothing to say\nis refused rather than stored: an empty custom block must be\nunrepresentable, so the run path never has to decide what it means.\n\nOnly an explicit custom payload rewrites the stored prose. A fixed preset\nleaves `custom_style_text` untouched \u2014 the OpenAPI contract marks the\nfield optional, so the natural minimal body `{\"preset\": \"concise\"}` from\nany client must not silently erase the member's saved directive; the text\nsurvives the switch and is waiting when they flip back to Custom.\n\nAudited on both edges like Safe mode, with the preset only \u2014 never the\nprose, which is the member's own working text.",
+        "operationId": "update_style_pref_api_me_style_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StylePrefIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StylePrefOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Style Pref",
         "tags": [
           "me"
         ]
@@ -22898,6 +23706,66 @@
         ]
       }
     },
+    "/api/memory/import": {
+      "post": {
+        "description": "Batch-import memories \u2014 a JSON export's items, or plain text lines.\n\nEvery row lands PERSONAL (`owner_id` = the importer) on the global shelf\n(`space_id=\"\"`, the intentional sentinel): an export's \"shared\" flag is\nignored on the way in, because widening a sentence to the whole workspace\nis a human decision made row-by-row on the Memory view, never a file\nformat's. Kinds are coerced permissively \u2014 \"preference\" survives,\n\"summary\" is skipped (the rolling summary rewrites itself, the same\nrefusal as PATCH), anything else becomes \"fact\".\n\nDeliberately NO Idempotency-Key: a replayed import converges to the same\nrows through `remember_memory`'s dedupe \u2014 only importance counters move \u2014\nthe \"(enabled at 9) is (enabled at 9)\" doctrine. Two trades are accepted\nand on purpose: a replay reinforces (importance +1 per repeat), and an\nexplicit import RESTORES tombstoned rows, exactly as the remember tool\ndoes \u2014 importing an old export can bring back deliberately forgotten\nmemories, because an import is an explicit user act.",
+        "operationId": "import_memories_api_memory_import_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryImportIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryImportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Memories",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
     "/api/memory/{memory_id}": {
       "delete": {
         "operationId": "forget_memory_api_memory__memory_id__delete",
@@ -23024,6 +23892,75 @@
         "summary": "Update Memory",
         "tags": [
           "memory"
+        ]
+      }
+    },
+    "/api/messages/{message_id}/feedback": {
+      "post": {
+        "description": "Thumbs up or down on an assistant message \u2014 one row per member, upserted.\n\nVisibility FIRST: the message resolves through the same\n`conversations.resolve_visible` chokepoint the transcript uses, so a\nforeign workspace's message and a colleague's personal thread are both a\n404 before the role gate can reveal anything. Only assistant messages take\nfeedback \u2014 a person's words are not the assistant's answer to rate.\n\nNo Idempotency-Key: the (message, user) unique row makes this a natural\nupsert \u2014 replaying \"down\" is \"down\". Two clicks racing both insert; the\nconstraint decides and the loser updates in place.",
+        "operationId": "send_message_feedback_api_messages__message_id__feedback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "title": "Message Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageFeedbackIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageFeedbackOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Message Feedback",
+        "tags": [
+          "chat"
         ]
       }
     },

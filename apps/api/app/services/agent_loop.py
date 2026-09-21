@@ -32,6 +32,7 @@ from . import (
     screen,
     skills,
     spaces,
+    styles,
     subjects,
     usage,
     webhooks,
@@ -1789,6 +1790,19 @@ def resolve_directives(db: Session, run: Run) -> AgentDirectives:
     space = spaces.for_run(db, run)
     if space is not None and space.instructions.strip():
         instructions = f"{instructions}\n\n{spaces.space_block(space)}"
+    # The member's response style, after the space block and before the skill
+    # splice — a style is who is reading, a skill is what this turn does, and
+    # the most turn-specific layer stays last. Member-authored through an
+    # authenticated PUT, so trusted like `Agent.instructions` (not _screen'ed).
+    # 'normal', a missing membership, an automation run (blank created_by, a
+    # cron task's cron_id, or a backing WorkflowRun — automation never
+    # inherits its creator's style; see styles.for_run), an unknown preset
+    # value and blank custom text ALL render "" — no block, never a failed
+    # turn, and byte-identical instructions for every member who never
+    # touched the setting.
+    style = styles.for_run(db, run)
+    if style:
+        instructions = f"{instructions}\n\n{style}"
     # A skill invoked for this turn is spliced onto the agent's voice, not in
     # place of it: same instruction path, resolved once per loop entry, so a
     # turn that parks and resumes re-injects the identical body. A deleted skill

@@ -28,6 +28,7 @@ from ..models import (
     Membership,
     MemoryItem,
     Message,
+    MessageFeedback,
     Run,
     RunEvent,
     Source,
@@ -298,6 +299,20 @@ def purge(
         # orphan row and a workspace should not accumulate them.
         db.execute(delete(AgentToolCall).where(AgentToolCall.run_id.in_(run_ids)))
         db.execute(delete(RunEvent).where(RunEvent.run_id.in_(run_ids)))
+    # Feedback rows first: MessageFeedback.message_id is a real FK onto
+    # messages, so on Postgres a surviving row makes the Message delete below
+    # fail outright (the purge-takes-attachments invariant, MemoryItem's exact
+    # bug class), and on SQLite it would orphan a verdict forever.
+    db.execute(
+        delete(MessageFeedback).where(
+            MessageFeedback.message_id.in_(
+                select(Message.id).where(
+                    Message.conversation_id == conversation.id,
+                    Message.workspace_id == workspace_id,
+                )
+            )
+        )
+    )
     db.execute(
         delete(Message).where(
             Message.conversation_id == conversation.id,
@@ -488,17 +503,26 @@ def truncate_after(
         db.execute(delete(ToolCall).where(ToolCall.run_id.in_(removed_runs)))
         db.execute(delete(AgentToolCall).where(AgentToolCall.run_id.in_(removed_runs)))
         db.execute(delete(RunEvent).where(RunEvent.run_id.in_(removed_runs)))
-    db.execute(
-        delete(Message).where(
-            Message.conversation_id == conversation_id,
-            Message.workspace_id == workspace_id,
-            # Asides after the pivot go with the cut; run-backed messages go
-            # with their runs, wherever their timestamps landed.
+    # Asides after the pivot go with the cut; run-backed messages go
+    # with their runs, wherever their timestamps landed.
+    doomed_messages = (
+        (Message.conversation_id == conversation_id)
+        & (Message.workspace_id == workspace_id)
+        & (
             ((Message.run_id == "") & (Message.created_at > pivot.created_at))
             | (Message.id == pivot.id)
-            | (Message.run_id.in_(removed_runs) if removed_runs else false()),
+            | (Message.run_id.in_(removed_runs) if removed_runs else false())
         )
     )
+    # Feedback before messages, the same FK order as `purge`: this is the
+    # OTHER delete(Message) site, and a missed one is a production
+    # IntegrityError on the first edit over a rated answer.
+    db.execute(
+        delete(MessageFeedback).where(
+            MessageFeedback.message_id.in_(select(Message.id).where(doomed_messages))
+        )
+    )
+    db.execute(delete(Message).where(doomed_messages))
     if removed_runs:
         db.execute(delete(Run).where(Run.id.in_(removed_runs)))
         db.execute(

@@ -1,14 +1,15 @@
 "use client";
 
-import { Pencil, Plus, Search, Trash2, User, Users } from "lucide-react";
+import { Download, Pencil, Plus, Search, Trash2, Upload, User, Users, X } from "lucide-react";
 import type {
   Conversation,
   GraphEntity,
   KnowledgeGraph,
+  MemoryImportSummary,
   MemoryItem,
   Space,
 } from "@workspace/api-client";
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { formatRelative } from "./shared";
 import { spaceNameForId } from "./space-threads";
 import { useFocusReveal } from "./use-focus-reveal";
@@ -44,7 +45,122 @@ export type MemoryViewProps = {
    *  409 dedup, a network blip); the form then stays open with the draft.
    *  `void` — older stubs, read-only mounts — counts as accepted. */
   editMemory?: (item: MemoryItem, content: string) => Promise<boolean | void>;
+  /**
+   * POST the parsed import payload; resolves to the server's accounting.
+   * Optional like the other write props, so bare test mounts stand — with it
+   * absent, neither the Import button nor Download renders' sibling changes.
+   */
+  importMemories?: (payload: MemoryImportPayload) => Promise<MemoryImportSummary>;
 };
+
+/** The wire payload `POST /api/memory/import` takes. */
+export type MemoryImportPayload = {
+  items?: { content: string; kind?: string; entities?: string[] }[];
+  text?: string;
+};
+
+/**
+ * The client-side export: v1 of a documented, versioned shape, built from the
+ * list the view already holds (GET /memory returns the caller's whole visible
+ * ledger). The `shared` flag rides OUT for the reader's benefit; the import
+ * door deliberately ignores it on the way back in.
+ */
+export function buildMemoryExport(memories: MemoryItem[]): {
+  format: "grain-memory-export";
+  version: 1;
+  exported_at: string;
+  items: {
+    id: string;
+    content: string;
+    kind: string;
+    shared: boolean;
+    space_id: string;
+    entity_names: string[];
+    created_at: string;
+    updated_at: string;
+  }[];
+} {
+  return {
+    format: "grain-memory-export",
+    version: 1,
+    exported_at: new Date().toISOString(),
+    items: memories.map((item) => ({
+      id: item.id,
+      content: item.content,
+      kind: item.kind,
+      shared: item.shared,
+      space_id: item.space_id,
+      entity_names: item.entity_names,
+      created_at: item.created_at,
+      updated_at: item.updated_at,
+    })),
+  };
+}
+
+/**
+ * Parse whatever a person hands the file input into the import payload: a v1
+ * export (object with `items`), a bare JSON array of item-shaped rows, or —
+ * for anything that is not JSON — plain text, one memory per line.
+ */
+export function parseMemoryImport(raw: string): MemoryImportPayload {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { text: raw };
+  }
+  const rows: unknown[] | null = Array.isArray(parsed)
+    ? parsed
+    : parsed !== null &&
+        typeof parsed === "object" &&
+        Array.isArray((parsed as { items?: unknown }).items)
+      ? ((parsed as { items: unknown[] }).items)
+      : null;
+  if (rows === null) return { text: raw };
+  const items = rows.flatMap((row) => {
+    if (typeof row === "string") return row.trim() ? [{ content: row }] : [];
+    if (row === null || typeof row !== "object") return [];
+    const shaped = row as {
+      content?: unknown;
+      kind?: unknown;
+      entity_names?: unknown;
+      entities?: unknown;
+    };
+    if (typeof shaped.content !== "string" || !shaped.content.trim()) return [];
+    const entities = Array.isArray(shaped.entity_names)
+      ? shaped.entity_names
+      : Array.isArray(shaped.entities)
+        ? shaped.entities
+        : [];
+    return [
+      {
+        content: shaped.content,
+        kind: typeof shaped.kind === "string" ? shaped.kind : "fact",
+        entities: entities.filter(
+          (name): name is string => typeof name === "string",
+        ),
+      },
+    ];
+  });
+  return { items };
+}
+
+/** "2 added, 1 reinforced, 0 skipped" — the dismissible line's sentence. */
+export function importSummaryLine(summary: MemoryImportSummary): string {
+  return `${summary.added} added, ${summary.reinforced} reinforced, ${summary.skipped} skipped`;
+}
+
+/** `file.text()` where it exists; the FileReader long way where the runtime's
+ *  Blob lacks it (jsdom — see viewable-blob.test.ts for the same gap). */
+function readFileText(file: File): Promise<string> {
+  if (typeof file.text === "function") return file.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Unreadable file"));
+    reader.readAsText(file);
+  });
+}
 
 /**
  * Everything a memory can be matched on, lowercased once per row per query.
@@ -106,8 +222,47 @@ export function MemoryView({
   setFocused = noFocus,
   addMemory,
   editMemory,
+  importMemories,
 }: MemoryViewProps) {
   const [query, setQuery] = useState("");
+  // The import file input and the dismissible result line.
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [importSummary, setImportSummary] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  const downloadExport = () => {
+    const blob = new Blob(
+      [JSON.stringify(buildMemoryExport(memories), null, 2)],
+      { type: "application/json" },
+    );
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `grain-memory-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    // Deferred, per the sources.tsx precedent: Safari reads the blob
+    // asynchronously after click(), and a same-tick revoke silently aborts
+    // the save. A minute far outlasts any read and still bounds the leak.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
+  const importFile = async (file: File) => {
+    if (!importMemories) return;
+    setImporting(true);
+    try {
+      const summary = await importMemories(
+        parseMemoryImport(await readFileText(file)),
+      );
+      setImportSummary(importSummaryLine(summary));
+    } catch {
+      // The workspace handler already surfaced the error toast; the line
+      // here only ever reports an accounting that actually happened.
+    } finally {
+      setImporting(false);
+    }
+  };
   // The add form and per-row edit drafts. Local component state only: an
   // abandoned half-typed memory is not a thing worth remembering, unlike a
   // composer draft, so no storage rides along.
@@ -169,6 +324,42 @@ export function MemoryView({
           </button>
         )}
         {memories.length > 0 && (
+          <button
+            className="ghost-button"
+            onClick={downloadExport}
+            title="Download every memory on this page as JSON"
+          >
+            <Download size={14} />
+            Download memory
+          </button>
+        )}
+        {importMemories && (
+          <>
+            <button
+              className="ghost-button"
+              disabled={importing}
+              onClick={() => importInputRef.current?.click()}
+              title="Import a memory export or a plain text file, one memory per line"
+            >
+              <Upload size={14} />
+              {importing ? "Importing…" : "Import"}
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json,.txt"
+              hidden
+              aria-label="Memory file to import"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                // Reset so picking the same file twice re-fires the change.
+                event.target.value = "";
+                if (file) void importFile(file);
+              }}
+            />
+          </>
+        )}
+        {memories.length > 0 && (
           <label className="memory-search">
             <Search size={14} />
             <input
@@ -180,6 +371,18 @@ export function MemoryView({
           </label>
         )}
       </div>
+
+      {importSummary && (
+        <div className="notice-toast" role="status">
+          <span>{importSummary}</span>
+          <button
+            onClick={() => setImportSummary(null)}
+            aria-label="Dismiss import summary"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {addMemory && adding && (
         <div className="memory-add-form">

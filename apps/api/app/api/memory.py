@@ -14,7 +14,13 @@ from ..clock import utcnow
 from ..config import get_settings
 from ..database import get_db
 from ..models import MemoryItem
-from ..schemas import MemoryCreate, MemoryItemOut, MemoryUpdate
+from ..schemas import (
+    MemoryCreate,
+    MemoryImportIn,
+    MemoryImportOut,
+    MemoryItemOut,
+    MemoryUpdate,
+)
 from ..services import spaces as spaces_service
 from ..services.audit import record_audit
 from ..services.coworking import append_workspace_event
@@ -186,6 +192,115 @@ def create_memory(
         db, workspace_id=actor.workspace_id, item_id=item_id, owner_id=owner_id
     )
     return _memory_out(result.item)
+
+
+#: The most one import call takes; anything past it is counted as skipped.
+IMPORT_CAP = 200
+
+
+@router.post("/memory/import", response_model=MemoryImportOut)
+def import_memories(
+    payload: MemoryImportIn,
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> MemoryImportOut:
+    """Batch-import memories — a JSON export's items, or plain text lines.
+
+    Every row lands PERSONAL (`owner_id` = the importer) on the global shelf
+    (`space_id=""`, the intentional sentinel): an export's "shared" flag is
+    ignored on the way in, because widening a sentence to the whole workspace
+    is a human decision made row-by-row on the Memory view, never a file
+    format's. Kinds are coerced permissively — "preference" survives,
+    "summary" is skipped (the rolling summary rewrites itself, the same
+    refusal as PATCH), anything else becomes "fact".
+
+    Deliberately NO Idempotency-Key: a replayed import converges to the same
+    rows through `remember_memory`'s dedupe — only importance counters move —
+    the "(enabled at 9) is (enabled at 9)" doctrine. Two trades are accepted
+    and on purpose: a replay reinforces (importance +1 per repeat), and an
+    explicit import RESTORES tombstoned rows, exactly as the remember tool
+    does — importing an old export can bring back deliberately forgotten
+    memories, because an import is an explicit user act.
+    """
+    if payload.items is None and payload.text is None:
+        raise HTTPException(
+            status_code=422, detail="Provide items or text to import"
+        )
+    worklist: list[tuple[str, str, list[str]]] = []
+    if payload.items is not None:
+        for item in payload.items:
+            worklist.append((item.content, item.kind, list(item.entities)))
+    else:
+        for line in (payload.text or "").splitlines():
+            if line.strip():
+                worklist.append((line, "fact", []))
+    skipped = max(0, len(worklist) - IMPORT_CAP)
+    worklist = worklist[:IMPORT_CAP]
+    added = 0
+    reinforced = 0
+    imported_ids: list[str] = []
+    for content, kind, entities in worklist:
+        if not normalize_memory_content(content):
+            skipped += 1
+            continue
+        if kind == "summary":
+            # The rolling summary rewrites itself — same refusal as PATCH.
+            skipped += 1
+            continue
+        coerced = "preference" if kind == "preference" else "fact"
+        result = remember_memory(
+            db,
+            workspace_id=actor.workspace_id,
+            conversation_id=None,
+            user_id=actor.user_id,
+            content=content,
+            kind=coerced,
+            entities=entities,
+            owner_id=actor.user_id,
+            space_id="",
+        )
+        imported_ids.append(result.item.id)
+        if result.outcome == "created":
+            added += 1
+        else:  # "updated" or "restored" — the row already existed.
+            reinforced += 1
+    record_audit(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="memory.imported",
+        resource_type="memory_item",
+        resource_id="",
+        detail={"added": added, "reinforced": reinforced, "skipped": skipped},
+    )
+    db.commit()
+    if imported_ids:
+        # One aggregated ping, the _signal_memory_updated shape: the row
+        # commit already happened, and a sequence collision must cost the
+        # signal, never the rows. Personal scope, so the stream shows it to
+        # the importer's own tabs and nobody else's.
+        try:
+            append_workspace_event(
+                db,
+                workspace_id=actor.workspace_id,
+                event_type="memory.updated",
+                payload={
+                    "run_id": "",
+                    "conversation_id": "",
+                    "count": len(imported_ids),
+                    "ids": imported_ids[:50],
+                    "owner_id": actor.user_id,
+                },
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.warning(
+                "memory.updated event was not appended for an import of %d rows",
+                len(imported_ids),
+                exc_info=True,
+            )
+    return MemoryImportOut(added=added, reinforced=reinforced, skipped=skipped)
 
 
 @router.patch("/memory/{memory_id}", response_model=MemoryItemOut)

@@ -26,7 +26,10 @@ from ..models import ShareLink
 
 #: The kinds a link may point at. Published apps already have a public surface
 #: of their own (`/published/apps/{slug}`), so they are deliberately absent.
-RESOURCE_KINDS = ("dashboard", "document")
+#: Conversations joined the tuple with the transcript share: the mint gate and
+#: the personal-leak rule live in `api/share_links.py`, not here — issue,
+#: load_active and revoke stay kind-agnostic.
+RESOURCE_KINDS = ("dashboard", "document", "conversation")
 
 
 def hash_token(raw_token: str) -> str:

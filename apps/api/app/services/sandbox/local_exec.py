@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import resource
+import signal
 import subprocess
 import threading
 import time
@@ -421,6 +422,14 @@ def run_process(
         # Reported as an error rather than a raised exception: a script that runs
         # too long is a result the model can act on by writing a faster one.
         error = f"timed out after {timeout:.0f}s"
+    elif process.returncode == -signal.SIGXCPU:
+        # The CPU rlimit is set to trail the wall clock (see the provider's
+        # preexec), but a busy loop burns CPU at wall speed, so with a short
+        # timeout SIGXCPU races the wait() above and can win by a scheduler
+        # tick. It is the same fact as the wall timeout and must read as one —
+        # without this branch the caller sees exit_code=-24 and no error,
+        # which is a kill nobody explains.
+        error = f"timed out after {timeout:.0f}s (CPU limit)"
     return ExecResult(
         stdout="".join(out),
         stderr=stderr_text,

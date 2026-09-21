@@ -21,6 +21,7 @@ deliberately leaves to it.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -28,12 +29,16 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
+from conftest import TEST_BASE_URL, create_identity, issue_session
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select
 
+from app.api import share_links as share_links_api
 from app.clock import utcnow
 from app.config import get_settings
 from app.database import SessionLocal, engine
-from app.models import AuditEvent, ShareLink
+from app.main import app
+from app.models import AuditEvent, Membership, Message, ShareLink, User
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -436,3 +441,370 @@ def test_a_foreign_tenants_link_cannot_be_revoked_or_listed(client, identity_cli
     assert created["link"]["id"] not in listed.text
     # And the failed revoke changed nothing: the link still serves.
     assert client.get(f"/shared/{created['token']}").status_code == 200
+
+
+# --------------------------------------------------------------------------
+# Conversation share links: the transcript window and the personal-leak gate
+
+
+def _client_for(identity) -> TestClient:
+    settings = get_settings()
+    other = TestClient(app, base_url=TEST_BASE_URL)
+    other.cookies.set(settings.session_cookie_name, identity.token)
+    other.headers[settings.csrf_header_name] = identity.csrf_token
+    return other
+
+
+def _member(workspace_id: str, *, name: str) -> TestClient:
+    """A second member of the same workspace — test_conversation_sharing's
+    `_member` pattern, since the personal/shared question only exists inside
+    one workspace."""
+    db = SessionLocal()
+    try:
+        user = User(email=f"{os.urandom(6).hex()}@example.com", name=name)
+        db.add(user)
+        db.flush()
+        db.add(Membership(workspace_id=workspace_id, user_id=user.id, role="member"))
+        db.commit()
+        user_id = user.id
+    finally:
+        db.close()
+    token, csrf_token = issue_session(user_id)
+    settings = get_settings()
+    other = TestClient(app, base_url=TEST_BASE_URL)
+    other.cookies.set(settings.session_cookie_name, token)
+    other.headers[settings.csrf_header_name] = csrf_token
+    return other
+
+
+def _conversation(client, title: str = "Share fixture", incognito: bool = False) -> str:
+    created = client.post(
+        "/api/conversations",
+        headers=key(),
+        json={"title": title, "incognito": incognito},
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+def _plant_turns(conversation_id: str, *, workspace_id: str, sender_id: str) -> str:
+    """One user prompt and one assistant answer, planted directly so no run is
+    needed. Returns the sender's display name."""
+    base = utcnow()
+    db = SessionLocal()
+    try:
+        sender = db.get(User, sender_id)
+        assert sender is not None
+        name = sender.name
+        db.add_all(
+            [
+                Message(
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_id,
+                    run_id="run-share-1",
+                    role="user",
+                    content="How did the launch land?",
+                    created_by=sender_id,
+                    created_at=base,
+                ),
+                Message(
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_id,
+                    run_id="run-share-1",
+                    role="assistant",
+                    content="Smoothly — three sign-ups in the first hour.",
+                    created_by=sender_id,
+                    created_at=base + timedelta(seconds=1),
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+    return name
+
+
+def test_a_shared_conversation_is_served_to_an_anonymous_caller(anonymous_client):
+    owner = create_identity(name="Sharer A", workspace_name="Conv share ws")
+    client_a = _client_for(owner)
+    conversation_id = _conversation(client_a, title="Launch retro")
+    name = _plant_turns(
+        conversation_id, workspace_id=owner.workspace_id, sender_id=owner.user_id
+    )
+    assert (
+        client_a.put(
+            f"/api/conversations/{conversation_id}/share", json={"shared": True}
+        ).status_code
+        == 200
+    )
+
+    # Any member may mint on a shared thread — flat authority, like documents.
+    member_b = _member(owner.workspace_id, name="Member B")
+    created = share(member_b, "conversation", conversation_id)
+
+    response = anonymous_client.get(f"/shared/{created['token']}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["kind"] == "conversation"
+    assert body["title"] == "Launch retro"
+    assert [m["content"] for m in body["messages"]] == [
+        "How did the launch land?",
+        "Smoothly — three sign-ups in the first hour.",
+    ]
+    # Attribution is deliberate: the mint was an explicit act by someone who
+    # can read the thread, and an unattributed multi-person transcript
+    # misreads who said what.
+    assert body["messages"][0]["sender_name"] == name
+    assert body["messages"][0]["role"] == "user"
+    assert body["messages"][1]["role"] == "assistant"
+    # No credential in any form rides the public body.
+    assert created["token"] not in response.text
+    assert "token" not in response.text
+
+
+def test_a_personal_thread_public_link_is_creator_only(anonymous_client):
+    owner = create_identity(name="Private P", workspace_name="Personal mint ws")
+    client_a = _client_for(owner)
+    conversation_id = _conversation(client_a, title="P's own notes")
+    _plant_turns(
+        conversation_id, workspace_id=owner.workspace_id, sender_id=owner.user_id
+    )
+
+    # A colleague cannot even see the personal thread, so the mint 404s —
+    # indistinguishable from absent, exactly like every other by-id door.
+    member_b = _member(owner.workspace_id, name="Member B")
+    denied = member_b.post(
+        "/api/share-links",
+        headers=key(),
+        json={"resource_kind": "conversation", "resource_id": conversation_id},
+    )
+    assert denied.status_code == 404, denied.text
+
+    # The creator may mint on their own personal thread, and the link serves.
+    created = share(client_a, "conversation", conversation_id)
+    served = anonymous_client.get(f"/shared/{created['token']}")
+    assert served.status_code == 200, served.text
+    assert served.json()["kind"] == "conversation"
+
+
+def test_unsharing_darkens_a_colleagues_link_but_not_the_creators(anonymous_client):
+    """The personal-leak gate, both directions: a thread unshared after a
+    colleague minted goes dark through their link, while the creator's own
+    link on their now-personal thread keeps serving."""
+    owner = create_identity(name="Gate G", workspace_name="Leak gate ws")
+    client_a = _client_for(owner)
+    conversation_id = _conversation(client_a, title="Was shared once")
+    _plant_turns(
+        conversation_id, workspace_id=owner.workspace_id, sender_id=owner.user_id
+    )
+    assert (
+        client_a.put(
+            f"/api/conversations/{conversation_id}/share", json={"shared": True}
+        ).status_code
+        == 200
+    )
+
+    member_b = _member(owner.workspace_id, name="Member B")
+    link_b = share(member_b, "conversation", conversation_id)
+    link_a = share(client_a, "conversation", conversation_id)
+    assert anonymous_client.get(f"/shared/{link_b['token']}").status_code == 200
+    assert anonymous_client.get(f"/shared/{link_a['token']}").status_code == 200
+
+    assert (
+        client_a.put(
+            f"/api/conversations/{conversation_id}/share", json={"shared": False}
+        ).status_code
+        == 200
+    )
+
+    # The colleague's link goes dark — the uniform 404, so the anonymous
+    # holder learns nothing — while the creator's own keeps serving.
+    darkened = anonymous_client.get(f"/shared/{link_b['token']}")
+    assert darkened.status_code == 404
+    unknown = anonymous_client.get("/shared/not-a-token-anyone-issued")
+    assert darkened.json() == unknown.json()
+    assert anonymous_client.get(f"/shared/{link_a['token']}").status_code == 200
+
+
+def test_unshare_revokes_colleague_links_so_a_reshare_cannot_revive_them(
+    anonymous_client,
+):
+    """The re-share leg the darken test stops short of: unshare REVOKES a
+    colleague-minted link rather than suspending it. Without the revoke, the
+    uniform 404 teaches everyone a leaked URL is dead — and a later re-share
+    silently revives it, live transcript and all. The creator's own link
+    keeps the existing gate semantics throughout."""
+    owner = create_identity(name="Reshare R", workspace_name="Reshare ws")
+    client_a = _client_for(owner)
+    conversation_id = _conversation(client_a, title="Shared, unshared, reshared")
+    _plant_turns(
+        conversation_id, workspace_id=owner.workspace_id, sender_id=owner.user_id
+    )
+    assert (
+        client_a.put(
+            f"/api/conversations/{conversation_id}/share", json={"shared": True}
+        ).status_code
+        == 200
+    )
+    member_b = _member(owner.workspace_id, name="Member B")
+    link_b = share(member_b, "conversation", conversation_id)
+    link_a = share(client_a, "conversation", conversation_id)
+    assert anonymous_client.get(f"/shared/{link_b['token']}").status_code == 200
+
+    assert (
+        client_a.put(
+            f"/api/conversations/{conversation_id}/share", json={"shared": False}
+        ).status_code
+        == 200
+    )
+    assert anonymous_client.get(f"/shared/{link_b['token']}").status_code == 404
+
+    # Re-share for the team: the colleague's leaked link must STAY dead —
+    # revoked one-way, indistinguishable from unknown — while the creator's
+    # own link serves again.
+    assert (
+        client_a.put(
+            f"/api/conversations/{conversation_id}/share", json={"shared": True}
+        ).status_code
+        == 200
+    )
+    revived = anonymous_client.get(f"/shared/{link_b['token']}")
+    assert revived.status_code == 404
+    unknown = anonymous_client.get("/shared/not-a-token-anyone-issued")
+    assert revived.json() == unknown.json()
+    assert anonymous_client.get(f"/shared/{link_a['token']}").status_code == 200
+
+    # The lifecycle is honest in the link list (revoked_at is stamped, so the
+    # list no longer shows a dead link as live) and in the audit trail.
+    rows = {row["id"]: row for row in client_a.get("/api/share-links").json()}
+    assert rows[link_b["link"]["id"]]["revoked_at"] is not None
+    assert rows[link_a["link"]["id"]]["revoked_at"] is None
+    db = SessionLocal()
+    try:
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.workspace_id == owner.workspace_id,
+                AuditEvent.action == "share_link.revoked",
+                AuditEvent.resource_id == link_b["link"]["id"],
+            )
+        )
+        assert audit is not None
+    finally:
+        db.close()
+
+
+def test_a_btw_aside_is_marked_in_the_public_transcript(anonymous_client):
+    """A "/btw" aside (role user, run_id "") carries `is_aside`, so the public
+    page can say what the Markdown export says — otherwise the context note
+    renders as a prompt the assistant appears to ignore."""
+    owner = create_identity(name="Aside A", workspace_name="Aside share ws")
+    client_a = _client_for(owner)
+    conversation_id = _conversation(client_a, title="With an aside")
+    _plant_turns(
+        conversation_id, workspace_id=owner.workspace_id, sender_id=owner.user_id
+    )
+    db = SessionLocal()
+    try:
+        db.add(
+            Message(
+                workspace_id=owner.workspace_id,
+                conversation_id=conversation_id,
+                run_id="",
+                role="user",
+                content="btw the client's real budget is 40k",
+                created_by=owner.user_id,
+                created_at=utcnow() + timedelta(seconds=5),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    created = share(client_a, "conversation", conversation_id)
+
+    body = anonymous_client.get(f"/shared/{created['token']}").json()
+    assert [m["is_aside"] for m in body["messages"]] == [False, False, True]
+    assert body["messages"][2]["role"] == "user"
+    # The full transcript fits, so nothing was cut.
+    assert body["truncated"] is False
+
+
+def test_the_public_conversation_window_is_capped_to_the_newest_turns(
+    anonymous_client, monkeypatch
+):
+    """The dashboard branch's PUBLIC_ROW_CAP philosophy on transcripts: an
+    anonymous GET serves a tail window, newest PUBLIC_ROW_CAP turns in
+    ascending order, and says so via `truncated`."""
+    owner = create_identity(name="Cap C", workspace_name="Cap share ws")
+    client_a = _client_for(owner)
+    conversation_id = _conversation(client_a, title="A very long thread")
+    base = utcnow()
+    db = SessionLocal()
+    try:
+        db.add_all(
+            [
+                Message(
+                    workspace_id=owner.workspace_id,
+                    conversation_id=conversation_id,
+                    run_id=f"run-cap-{index}",
+                    role="user" if index % 2 == 0 else "assistant",
+                    content=f"turn {index}",
+                    created_by=owner.user_id,
+                    created_at=base + timedelta(seconds=index),
+                )
+                for index in range(7)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+    created = share(client_a, "conversation", conversation_id)
+
+    monkeypatch.setattr(share_links_api, "PUBLIC_ROW_CAP", 5)
+    body = anonymous_client.get(f"/shared/{created['token']}").json()
+    assert body["truncated"] is True
+    # The newest five, oldest of them first — a window, not a scramble.
+    assert [m["content"] for m in body["messages"]] == [
+        f"turn {index}" for index in range(2, 7)
+    ]
+
+
+def test_a_subject_thread_cannot_be_publicly_shared(client):
+    document = make_document(client)
+    subject = client.post(
+        f"/api/documents/{document['id']}/conversation", headers=key()
+    )
+    assert subject.status_code in (200, 201), subject.text
+    response = client.post(
+        "/api/share-links",
+        headers=key(),
+        json={"resource_kind": "conversation", "resource_id": subject.json()["id"]},
+    )
+    assert response.status_code == 409, response.text
+    assert "subject" in response.json()["detail"]
+
+
+def test_a_temporary_chat_cannot_be_publicly_shared(client):
+    conversation_id = _conversation(client, title="Ephemeral", incognito=True)
+    response = client.post(
+        "/api/share-links",
+        headers=key(),
+        json={"resource_kind": "conversation", "resource_id": conversation_id},
+    )
+    assert response.status_code == 409, response.text
+    assert "temporary" in response.json()["detail"]
+
+
+def test_a_deleted_conversation_link_fails_closed(client, anonymous_client):
+    conversation_id = _conversation(client, title="Doomed thread")
+    created = share(client, "conversation", conversation_id)
+    assert anonymous_client.get(f"/shared/{created['token']}").status_code == 200
+
+    deleted = client.delete(
+        f"/api/conversations/{conversation_id}", headers=key()
+    )
+    assert deleted.status_code in (200, 204), deleted.text
+
+    after = anonymous_client.get(f"/shared/{created['token']}")
+    assert after.status_code == 404
+    unknown = anonymous_client.get("/shared/not-a-token-anyone-issued")
+    assert after.json() == unknown.json()

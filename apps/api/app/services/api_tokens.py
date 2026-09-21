@@ -12,7 +12,8 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
-from typing import Optional
+from datetime import datetime
+from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -55,6 +56,33 @@ def mint(db: Session, *, workspace_id: str, user_id: str, name: str) -> MintedTo
     db.add(token)
     db.flush()
     return MintedToken(token=token, secret=secret)
+
+
+def revoke_all_for_user(
+    db: Session, *, user_id: str, now: Optional[datetime] = None
+) -> List[ApiToken]:
+    """Revoke every live token this user holds, across all their workspaces.
+
+    The credential-rotation sweep: a password change or reset is what you do
+    when you suspect a leak, and a `grain_…` token minted by whoever held the
+    old password is exactly the standing access the rotation exists to cut
+    off — it appears in no session list, so nothing else would ever kill it.
+    Returns the rows this call revoked so the caller can write one audit row
+    per token (each in its own workspace); never commits, like everything
+    here.
+    """
+    stamp = now or utcnow()
+    tokens = list(
+        db.scalars(
+            select(ApiToken).where(
+                ApiToken.user_id == user_id,
+                ApiToken.revoked_at.is_(None),
+            )
+        )
+    )
+    for token in tokens:
+        token.revoked_at = stamp
+    return tokens
 
 
 def resolve(db: Session, secret: str) -> Optional[ResolvedToken]:

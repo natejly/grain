@@ -51,6 +51,7 @@ from ..schemas import (
     WorkspaceCreate,
     WorkspaceMembershipOut,
 )
+from ..services import api_tokens as api_tokens_service
 from ..services import orgs
 from ..services.audit import record_audit
 from ..services.auth import email as email_service
@@ -867,6 +868,20 @@ def confirm_password_reset(
     # Every other device is logged out: a reset is what you do when you think
     # someone else has your account.
     revoke_all_sessions(db, user.id)
+    # And every live API token dies with the credential, for the same reason:
+    # a `grain_…` bearer minted by whoever had the account resolves past every
+    # session check and appears in no session list. Same sweep as the
+    # authenticated password change (api/me.py), through the shared helper.
+    for api_token in api_tokens_service.revoke_all_for_user(db, user_id=user.id):
+        record_audit(
+            db,
+            workspace_id=api_token.workspace_id,
+            actor_id=user.id,
+            action="api_token.revoked",
+            resource_type="api_token",
+            resource_id=api_token.id,
+            detail={"name": api_token.name, "reason": "password_reset"},
+        )
     db.commit()
     return AuthAcknowledgement(detail="Password updated. Sign in with your new password.")
 

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { newThread } from "./shell";
+import { newThread, openThreadActions } from "./shell";
 
 /**
  * The composer's two promises about the words you have typed but not sent.
@@ -118,4 +118,47 @@ test("a send that never reaches the API says so, and keeps the words", async ({ 
   await composer(page).press("Enter");
   await expect(page.locator(".message").first()).toContainText(words);
   await settled(page);
+});
+
+test("the mic button renders exactly where the browser can listen", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await newThread(page);
+
+  // Feature-detected here the same way the component detects it, because the
+  // answer is the environment's, not the app's: headless Chromium builds may
+  // omit the Web Speech constructors entirely, and the composer's contract is
+  // "a mic where dictation can work, no dead chrome where it cannot" — not
+  // "a mic everywhere". Asserting visibility unconditionally would pin the CI
+  // browser's build flags, which is nobody's feature.
+  const supported = await page.evaluate(() => {
+    const host = window as unknown as Record<string, unknown>;
+    return (
+      typeof host.SpeechRecognition === "function" ||
+      typeof host.webkitSpeechRecognition === "function"
+    );
+  });
+
+  const mic = page.getByRole("button", { name: "Dictate" });
+  if (supported) {
+    await expect(mic).toBeVisible();
+    // Idle until pressed — the pressed state is what the recording UI keys on.
+    await expect(mic).toHaveAttribute("aria-pressed", "false");
+  } else {
+    await expect(mic).toHaveCount(0);
+  }
+
+  // Unlike the drafts above, this thread says nothing worth keeping — an
+  // empty "New conversation" left in the shared rail is noise for the specs
+  // that count or name rows after this file.
+  const threads = page.locator(".thread");
+  const before = await threads.count();
+  page.once("dialog", (dialog) => dialog.accept());
+  await openThreadActions(page.locator(".thread.active"));
+  await page
+    .locator(".thread.active")
+    .getByRole("button", { name: /^Delete / })
+    .click();
+  await expect(threads).toHaveCount(before - 1);
 });

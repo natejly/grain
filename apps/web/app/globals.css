@@ -4758,6 +4758,55 @@ label,
   color: var(--text-dim);
 }
 
+/* The thumbs beside an assistant message's Copy button, plus the note
+   popover a thumbs-down opens. The buttons reuse .copy-button for the
+   hover-reveal; the wrapper only anchors the popover. */
+.feedback-buttons {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* A verdict already cast stays visible without the pointer — feedback that
+   vanishes with the hover reads as feedback that was not recorded. */
+.message-author .feedback-buttons .copy-button.feedback-active {
+  opacity: 1;
+  color: var(--accent-text);
+}
+
+.feedback-note-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px var(--tint);
+}
+
+.feedback-note-pop textarea {
+  width: 100%;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.feedback-note-pop .ghost-button {
+  align-self: flex-end;
+}
+
 .message:hover .message-author .copy-button:disabled,
 .message:hover .message-author .copy-button[aria-disabled="true"] {
   opacity: 0.45;
@@ -5493,6 +5542,81 @@ label,
   font-size: 11px;
   line-height: 1.45;
   max-width: 30ch;
+}
+
+/* The Profile pane: two bordered panels (identity, password) in the
+   memory-panel idiom, with labelled fields stacked inside. */
+.profile-panel {
+  width: min(560px, 100%);
+  margin: 0 auto 16px;
+  padding-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 14px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.profile-field input {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.profile-field input:read-only {
+  background: var(--surface);
+  color: var(--text-dim);
+}
+
+.profile-hint {
+  margin: 8px 14px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.profile-error {
+  margin: 8px 14px 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.profile-success {
+  margin: 8px 14px 0;
+  color: var(--accent-text);
+  font-size: 12px;
+}
+
+.profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px 14px 0;
+}
+
+/* The custom response-style textarea inside the settings menu: the one
+   member-authored prose the panel holds, so it gets room the checkboxes
+   never needed. */
+.style-custom-text {
+  margin: 0 8px 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
 }
 
 .document-editor {
@@ -11728,4 +11852,404 @@ label,
    compete with the per-actor hue that makes the dot recognisable. */
 .share-presence-dot.here {
   box-shadow: 0 0 0 2px var(--accent-border-strong);
+}
+
+/* ---- Rail chat search (Feature: conversations parity) ---- */
+
+/* The persistent search at the top of the Chat rail. Spacing matches the
+   .new-thread-row it sits under; the input borrows .thread-rename-input's
+   styling, full width, with a leading icon gap. */
+.rail-search {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rail-search-row svg {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.rail-search-row input {
+  width: 100%;
+  margin: 2px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  outline: 0;
+}
+
+.rail-search-row input:focus {
+  border-color: var(--accent);
+}
+
+/* Results render above the thread list, additively — capped and scrollable
+   so a short viewport is never all results. */
+.rail-search-results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.rail-search-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* The roving highlight, same surface the palette rows use. */
+.rail-search-hit.focused,
+.rail-search-hit[data-focused="true"] {
+  background: var(--surface-raised);
+}
+
+.rail-search-hit strong {
+  font-size: 12px;
+}
+
+.rail-search-hit .rail-search-snippet {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.rail-search-hit time {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.rail-search-empty {
+  margin: 4px 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* ---- Public shared transcript (/share/[token]) ---- */
+
+/* A readable column inside the .published-card frame; single-column already,
+   so phone width needs nothing special. */
+.shared-transcript {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 8px 14px 14px;
+}
+
+.shared-turn {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.shared-turn:first-child {
+  border-top: 0;
+}
+
+.shared-turn header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.shared-turn header time {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.shared-turn.user p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* The capped-payload notice above a truncated public transcript. */
+.shared-truncated {
+  margin: 0 0 4px;
+  padding: 8px 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ---- Space knowledge capacity meter ---- */
+
+.capacity-meter-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 8px;
+}
+
+.capacity-meter {
+  height: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.capacity-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  /* A shelf never shows literally nothing once it holds a byte. */
+  min-width: 2px;
+  transition: width 0.2s ease;
+}
+
+.capacity-meter-line {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* ---- Attachment previews in the chat strip ---- */
+
+.attachment-chip.attachment-preview {
+  border-radius: 10px;
+  padding: 4px;
+  max-width: 260px;
+}
+
+.attachment-thumb {
+  display: inline-flex;
+  max-width: 120px;
+  max-height: 90px;
+  overflow: hidden;
+  border-radius: 7px;
+}
+
+.attachment-thumb .artifact-image {
+  max-width: 120px;
+  max-height: 90px;
+  object-fit: cover;
+  display: block;
+}
+
+.attachment-thumb .artifact-pending {
+  width: 120px;
+  height: 60px;
+  background: var(--surface-hover);
+  border-radius: 7px;
+}
+
+.attachment-file-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+
+.attachment-file-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.attachment-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.attachment-file-size {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+/* The chip that also carries a CSV peek wraps into a small card. */
+.attachment-chip.with-peek {
+  flex-wrap: wrap;
+  border-radius: 10px;
+  max-width: 320px;
+}
+
+.attachment-csv-peek {
+  width: 100%;
+  margin: 2px 6px 6px;
+  border-collapse: collapse;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  table-layout: fixed;
+}
+
+.attachment-csv-peek th,
+.attachment-csv-peek td {
+  padding: 1px 6px 1px 0;
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.attachment-csv-peek th {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.attachment-csv-peek tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ---- Voice dictation ---- */
+
+.mic-button.recording {
+  border-color: var(--accent-border-strong);
+  background: var(--accent-muted);
+  color: var(--accent-text);
+}
+
+.mic-button.recording svg {
+  animation: pulse 1.4s infinite;
+}
+
+/* ---- Document history stepper ---- */
+
+.document-history-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.document-history-pick {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.document-history-pick[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: var(--accent-muted);
+}
+
+.document-history li.selected {
+  background: var(--accent-wash);
+  border-radius: 7px;
+}
+
+.document-history-diff {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+/* ---- Recap ---- */
+
+.recap-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.recap-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.recap-tile strong {
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.recap-tile span {
+  font-size: 12px;
+}
+
+.recap-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.recap-list {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px 14px;
+}
+
+.recap-list ol {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recap-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.recap-list-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.recap-list-count {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.recap-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12.5px;
 }

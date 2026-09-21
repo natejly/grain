@@ -1,7 +1,8 @@
 "use client";
 
-import type { DigestPrefs } from "@workspace/api-client";
+import type { DigestPrefs, StylePreset } from "@workspace/api-client";
 import { ChevronDown, Settings } from "lucide-react";
+import { useState } from "react";
 import { DisclosureMenu } from "./disclosure-menu";
 import { SETTINGS_GROUPS, type GroupId } from "./views/navigation";
 
@@ -44,7 +45,110 @@ export type WorkspaceSettingsMenuProps = {
    */
   memoryEnabled?: boolean | null;
   onMemoryEnabledChange?: (enabled: boolean) => void;
+  /**
+   * The member's response style. Null until bootstrap lands (section hidden,
+   * like the digest and memory) and on a bare mount, so older call sites
+   * stand unchanged. "normal" means no style instruction at all — the hint
+   * says so, because that boundary is the whole setting.
+   */
+  stylePreset?: string | null;
+  customStyleText?: string;
+  onStyleChange?: (preset: StylePreset, customText: string) => void;
 };
+
+/** The preset rows the style select offers, in menu order. */
+export const STYLE_PRESETS: { value: StylePreset; label: string }[] = [
+  { value: "normal", label: "Normal" },
+  { value: "concise", label: "Concise" },
+  { value: "explanatory", label: "Explanatory" },
+  { value: "formal", label: "Formal" },
+  { value: "custom", label: "Custom" },
+];
+
+/**
+ * Its own component so the picked-but-unsaved "custom" choice and the textarea
+ * draft live INSIDE the popover panel: closing it unmounts them, and the next
+ * open greets the saved preference rather than a half-typed one.
+ */
+function StyleSection({
+  preset,
+  customText,
+  onChange,
+}: {
+  preset: string;
+  customText: string;
+  onChange: (preset: StylePreset, customText: string) => void;
+}) {
+  const [choice, setChoice] = useState(preset);
+  const [draft, setDraft] = useState(customText);
+  const saveCustom = () => {
+    // An empty custom block is unrepresentable server-side (422); the Save
+    // simply stays inert until there is something to say.
+    if (draft.trim()) onChange("custom", draft.trim());
+  };
+  return (
+    <>
+      <p className="disclosure-note">Response style</p>
+      <label className="approval-assignee">
+        Style
+        <select
+          value={choice}
+          aria-label="Response style"
+          onChange={(event) => {
+            const next = event.target.value as StylePreset;
+            setChoice(next);
+            // A fixed preset saves on pick; "custom" waits for its text.
+            // The pick carries the LIVE draft (falling back to the saved
+            // prose when the draft is blank): clicking the select blurs the
+            // textarea first, so the blur-save and this pick race as two
+            // PUTs — making the pick self-contained means whichever lands
+            // last leaves the server holding the text the user actually
+            // typed, and updateStylePref sequences the calls so the pick,
+            // being the last gesture, is the state both pickers show.
+            if (next !== "custom") onChange(next, draft.trim() || customText);
+          }}
+        >
+          {STYLE_PRESETS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {choice === "custom" && (
+        <>
+          <textarea
+            className="style-custom-text"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={() => {
+              if (draft.trim() && draft.trim() !== customText) saveCustom();
+            }}
+            maxLength={2000}
+            rows={3}
+            aria-label="Custom style instructions"
+            placeholder="How should answers to you read?"
+          />
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={!draft.trim()}
+            onClick={saveCustom}
+          >
+            Save style
+          </button>
+        </>
+      )}
+      {/* Names the two boundaries: persistent (every thread, future turns
+          only) and that Normal is the absence of an instruction, not a
+          fifth flavour of one. */}
+      <p className="disclosure-hint">
+        Applies to your future turns in every thread. Normal means no style
+        instruction at all.
+      </p>
+    </>
+  );
+}
 
 /** "9" reads as "09:00 UTC" — the mail goes out after the hour, on the tick. */
 export function digestHourLabel(hour: number): string {
@@ -60,6 +164,9 @@ export function WorkspaceSettingsMenu({
   onSafeModeChange,
   memoryEnabled = null,
   onMemoryEnabledChange,
+  stylePreset = null,
+  customStyleText = "",
+  onStyleChange,
 }: WorkspaceSettingsMenuProps) {
   const inSettings = SETTINGS_GROUPS.some((group) => group.id === activeGroup);
 
@@ -142,6 +249,13 @@ export function WorkspaceSettingsMenu({
                   : "Your runs neither recall nor store memories. Asking the assistant to remember something still works, and the Memory page keeps what it already learned."}
               </p>
             </>
+          )}
+          {stylePreset !== null && onStyleChange && (
+            <StyleSection
+              preset={stylePreset}
+              customText={customStyleText}
+              onChange={onStyleChange}
+            />
           )}
           {digest && (
             <>

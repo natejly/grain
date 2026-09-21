@@ -115,6 +115,11 @@ def bootstrap(
         # missing row as opted in, so the toggle must render the same default
         # the recall path actually applies.
         memory_enabled=bool(membership.memory_enabled) if membership else True,
+        # The response style, from the same membership row: 'normal'/'' for a
+        # missing row, matching the safe_mode missing-row convention — the
+        # defaults are exactly what the run path applies with no row to read.
+        style_preset=membership.style_preset if membership else "normal",
+        custom_style_text=membership.custom_style_text if membership else "",
         unrestricted_agent=settings.dev_unrestricted_agent,
         feature_flags={
             "cited_memory": True,

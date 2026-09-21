@@ -85,6 +85,7 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
     "Sources",
     "Memory",
     "Graph",
+    "Recap",
     "Gallery",
   ]) {
     // Anchored: "Boards" is a substring of "Dashboards", and the count badge is
@@ -92,12 +93,13 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
     await expect(tabs(page, "Library").getByRole("button", { name: new RegExp(`^${entry}`) }))
       .toBeVisible();
   }
-  // 16, not 14: the five labelled shelf headings are collapse toggles — buttons
-  // in their own right — on top of the eleven view entries, Gallery included
-  // (the marketplace shelf this merge brings in, which folds like the rest).
-  // Their accessible names say the outcome ("Hide the Data section"), so none
-  // of the anchored per-entry matches above can land on a heading by mistake.
-  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(16);
+  // 18, not 15: the six labelled shelf headings are collapse toggles — buttons
+  // in their own right — on top of the twelve view entries, Recap included
+  // (the member's month, on the "You" shelf the parity work brings in, which
+  // folds like the rest). Their accessible names say the outcome ("Hide the
+  // Data section"), so none of the anchored per-entry matches above can land
+  // on a heading by mistake.
+  await expect(tabs(page, "Library").getByRole("button")).toHaveCount(18);
   // The retired "Lists" entry stays gone: one destination, one listing.
   await expect(tabs(page, "Library").getByRole("button", { name: /^Lists/ })).toHaveCount(0);
   await expect(tabs(page, "Library").getByRole("button", { name: /Sandbox/ })).toHaveCount(0);
@@ -109,6 +111,7 @@ test("each destination opens with its siblings in reach", async ({ page }) => {
     "Data",
     "Dashboards",
     "Knowledge",
+    "You",
     "Gallery",
   ]) {
     await expect(

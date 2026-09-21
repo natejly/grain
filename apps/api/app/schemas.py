@@ -84,6 +84,15 @@ class BootstrapResponse(ApiModel):
     #: same shape as `safe_mode` above: it governs future runs only, and the
     #: explicit remember/forget tools keep working either way.
     memory_enabled: bool = True
+    #: The member's response style — the same membership row as `safe_mode`.
+    #: "normal" is the default and means no style block is injected at all,
+    #: so a client that never renders the control changes nothing.
+    style_preset: str = "normal"
+    #: The member's own directive, read only when `style_preset` is "custom".
+    #: The stored text survives a switch to a fixed preset (see models.py),
+    #: and bootstrap echoes whatever is stored so the composer's Custom
+    #: textarea can offer it back.
+    custom_style_text: str = ""
     #: `DEV_UNRESTRICTED_AGENT` is on: every tool available and nothing parks.
     #: A first-class field rather than a `feature_flags` entry because the client
     #: does not *branch* on it, it *warns* about it — the failure mode is not
@@ -91,6 +100,118 @@ class BootstrapResponse(ApiModel):
     #: developer's machine; `config._guard_dev_unrestricted` makes that
     #: structural rather than advisory.
     unrestricted_agent: bool = False
+
+
+#: The five response styles a member can hold. "normal" injects nothing —
+#: byte-identical instructions to a member who never touched the setting.
+StylePreset = Literal["normal", "concise", "explanatory", "formal", "custom"]
+
+
+class StylePrefIn(ApiModel):
+    preset: StylePreset
+    #: The member's own directive, read only when `preset` is "custom" — a
+    #: fixed-preset PUT ignores it and keeps the stored text, so the minimal
+    #: body `{"preset": "concise"}` can never erase saved prose. Bounded
+    #: like space instructions: generous for prose, tiny next to the window.
+    custom_style_text: str = Field(default="", max_length=2000)
+
+
+class StylePrefOut(ApiModel):
+    preset: str
+    custom_style_text: str
+
+
+class ProfileIn(ApiModel):
+    """The body of `PATCH /api/me/profile` — the display name only. The email
+    is deliberately not accepted: it is the login identity, and changing it is
+    a verification flow this route does not own."""
+
+    name: str = Field(min_length=1, max_length=120)
+
+
+class ProfileOut(ApiModel):
+    user_id: str
+    #: Read-only here — echoed from the row, never taken from the body.
+    email: str
+    name: str
+
+
+class PasswordChangeIn(ApiModel):
+    # Bounds only; the real policy lives in services/auth/passwords.py so the
+    # signup, reset and change paths cannot drift apart (the SignupIn doctrine).
+    current_password: str = Field(min_length=1, max_length=4096)
+    new_password: str = Field(min_length=1, max_length=4096)
+
+
+class RecapGroupOut(ApiModel):
+    """One ranked row of the recap — a space or an agent, with a count.
+
+    `name` resolves through a workspace-scoped lookup, so a stale id (a space
+    or agent deleted since the rows were written) keeps its id and answers ""
+    for the name — the admin usage page's stale-id-stays-an-id shape.
+    """
+
+    id: str
+    name: str
+    count: int
+
+
+class MeRecapOut(ApiModel):
+    """The caller's own month so far, deterministically counted.
+
+    Aggregate-only: five bounded read-only selects, no LLM anywhere. The
+    window is UTC calendar month-to-date, and every count is workspace- AND
+    member-scoped — a teammate's threads never inflate your recap.
+    """
+
+    since: datetime
+    threads_started: int
+    runs_started: int
+    #: Currently-active memories the member THEMSELF learned in the window:
+    #: their own rows, plus shared rows their own runs extracted — a
+    #: teammate's shared learnings never count here (see
+    #: `services.memory.count_learned`). Liveness still routes through
+    #: `services.memory._active`, so a superseded claim drops out of this
+    #: number the same way it drops out of recall — retroactively, on purpose.
+    memories_learned: int
+    top_spaces: List[RecapGroupOut]
+    top_agents: List[RecapGroupOut]
+
+
+class MessageFeedbackIn(ApiModel):
+    verdict: Literal["up", "down"]
+    #: Optional note, collected by the thumbs-down popover. Stored, audited as
+    #: `has_note`, and never echoed back into anyone's transcript.
+    note: str = Field(default="", max_length=2000)
+
+
+class MessageFeedbackOut(ApiModel):
+    message_id: str
+    verdict: str
+    note: str
+    created_at: datetime
+
+
+class MemoryImportItem(ApiModel):
+    content: str = Field(min_length=1, max_length=900)
+    #: A plain str, coerced server-side ("preference" survives, "summary" is
+    #: skipped, anything else becomes "fact") — an import door is permissive
+    #: about other tools' vocabularies where the manual-add door is not.
+    kind: str = "fact"
+    entities: List[str] = []
+
+
+class MemoryImportIn(ApiModel):
+    """Either structured items or a plain-text blob — at least one of the two."""
+
+    items: Optional[List[MemoryImportItem]] = Field(default=None, max_length=200)
+    text: Optional[str] = Field(default=None, max_length=200_000)
+
+
+class MemoryImportOut(ApiModel):
+    added: int
+    reinforced: int
+    skipped: int
 
 
 class SignupIn(ApiModel):
@@ -653,6 +774,10 @@ class MessageOut(ApiModel):
     #: owner-gated, so a plain member could not resolve it client-side). "" when
     #: unattributed or the user row is gone.
     sender_name: str = ""
+    #: The VIEWER'S own thumbs verdict on this message — "up", "down" or "".
+    #: Only ever the caller's: nobody's note and nobody else's verdict rides
+    #: the transcript.
+    my_feedback: str = ""
     created_at: datetime
 
 
@@ -770,6 +895,13 @@ class ChatAttachmentOut(ApiModel):
     kind: str
     target_id: str
     filename: str
+    #: The server-decided mime and size of the underlying Source, populated
+    #: only for kind == "source" (the list route joins them in). A document
+    #: attachment keeps ""/0 and keeps its chip — the editor is its preview.
+    #: The client branches on this, never on the filename's extension, for the
+    #: same reason it branches on `kind`.
+    media_type: str = ""
+    byte_size: int = 0
     created_at: datetime
 
 
@@ -1032,6 +1164,20 @@ class DocumentVersionOut(ApiModel):
     id: str
     summary: str
     created_at: datetime
+
+
+class DocumentVersionContentOut(ApiModel):
+    """One version with its full snapshot, for the history stepper's diffs.
+
+    Split from `DocumentVersionOut` on purpose: version content is unbounded
+    text, and shipping every version's body in the list would bloat a hot
+    panel. The client fetches one version's content only when it is selected.
+    """
+
+    id: str
+    summary: str
+    created_at: datetime
+    content: str
 
 
 class BoardCardOut(ApiModel):

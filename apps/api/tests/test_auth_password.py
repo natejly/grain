@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.main import app
 from app.models import EmailToken, Membership, User, UserSession, Workspace
+from app.services import api_tokens as token_service
 from app.services.auth import email as email_service
 from app.services.auth.passwords import (
     EQUALIZER_PLAINTEXT,
@@ -345,6 +346,53 @@ def test_password_reset_is_single_use_and_revokes_every_session(sent_emails):
     fresh = fresh_client()
     assert login(fresh, email, password=PASSWORD).status_code == 401
     assert login(fresh, email, password=new_password).status_code == 200
+
+
+def test_password_reset_revokes_the_users_api_tokens(sent_emails):
+    """The reset flow's sweep reaches API tokens too: a `grain_…` bearer
+    minted by whoever had the account must die with the credential — it
+    resolves past every session check and shows in no session list."""
+    client = fresh_client()
+    email = unique_email()
+    signup(client, email)
+    assert login(client, email).status_code == 200
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        membership = db.scalar(
+            select(Membership).where(Membership.user_id == user.id)
+        )
+        assert membership is not None
+        minted = token_service.mint(
+            db,
+            workspace_id=membership.workspace_id,
+            user_id=user.id,
+            name="minted before the reset",
+        )
+        db.commit()
+        secret = minted.secret
+    finally:
+        db.close()
+    db = SessionLocal()
+    try:
+        assert token_service.resolve(db, secret) is not None
+    finally:
+        db.close()
+
+    client.post("/api/auth/password/reset/request", json={"email": email})
+    token = token_from(sent_emails[-1])
+    confirm = client.post(
+        "/api/auth/password/reset/confirm",
+        json={"token": token, "password": "an-entirely-new-passphrase"},
+    )
+    assert confirm.status_code == 200, confirm.text
+
+    db = SessionLocal()
+    try:
+        assert token_service.resolve(db, secret) is None
+    finally:
+        db.close()
 
 
 def test_password_reset_request_answers_the_same_for_an_unknown_address(sent_emails):

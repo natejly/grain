@@ -607,3 +607,161 @@ Ultracode run: understand → design → implement → review. Research base: do
 - Deferred, recorded in ADR 0011: real concurrent editing (CRDT/OT) — stage 1 (precondition +
   conflict banner) shipped here; per-range attribution, per-document ACLs, delta transport.
 - Post-merge: `alembic upgrade head` (0070 -> 0071) on the dev DB.
+
+---
+
+# Claude-desktop parity cycle (worktree-claude-desktop-parity, 2026-09-20)
+
+Gap audit vs Claude desktop (Sept 2026): 16 areas — 2 already full (space instructions, starred threads), 14 to build. Ultracode: gap research → 3 cluster specs → sequential implement → QA → review → push.
+
+## Plan
+### Conversations cluster
+- [x] Rail chat search field (existing deep-search backend, new chrome door)
+- [x] Conversation export (GET /export?format=md|json + disclosure-menu download)
+- [x] Public conversation share links (ShareLink 'conversation', personal-leak gate, /share/[token] transcript)
+- [x] Quick-compose in ⌘K ('New message…' row + '>' prefix)
+- [x] Schedule-from-chat ('+' menu → crons view with draft prefilled)
+### Identity cluster (owns migration 0072)
+- [x] Styles: persistent per-member response presets + custom, resolve_directives block ('normal' = byte-identical)
+- [x] Memory import/export (ledger download + POST /api/memory/import)
+- [x] Message feedback (MessageFeedback table, upsert route, thumbs UI)
+- [x] Profile view (display name, password change)
+### Surfaces cluster
+- [x] Space knowledge capacity meter (byte_size sum + meter)
+- [x] Document version stepper with line diffs
+- [x] Attachment previews in chat (image/PDF/CSV cards)
+- [x] Reflect recap view (GET /api/me/recap, deterministic aggregates)
+- [x] Voice dictation (Web Speech API, feature-detected)
+### Gates before push
+- [x] e2e QA specs for every feature; full Playwright suite green (111 passed, 1 pre-existing fixme skip)
+- [x] Adversarial review workflow; 21 confirmed findings (5 major) all fixed, 1 refuted
+- [x] Full verify chain (ruff, mypy dev-extras, pytest, eval gate, tsc, vitest 1080, build)
+- [x] Merge to main + push (auto-deploys UAT) only after all green
+
+## Review
+
+### Conversations cluster (implemented 2026-09-20)
+- Export: `GET /api/conversations/{id}/export?format=md|json` in chat.py rides
+  `resolve_visible` + a shared `_sender_names` helper extracted from
+  `list_messages` (list and export cannot drift); md is a pure
+  `_render_markdown` (asides labelled, `> Sources:` line), json is
+  `ConversationExportOut` (ConversationOut + MessageOut). No audit row, no
+  Idempotency-Key, no rate limiter — the GET-read posture, stated in the
+  docstring for the security reviewer.
+- Public conversation links: RESOURCE_KINDS grew "conversation";
+  `_resolve_resource` now takes the actor and resolves conversations through
+  the visibility chokepoint (creator-only personal mint, 409 subject/incognito);
+  `/shared/{token}` serves a LIVE transcript with the personal-leak gate
+  (`not shared and link.created_by != conversation.created_by` → uniform 404),
+  both directions pinned in test_share_links.py. Sender names served to
+  anonymous readers by design (attribution trade-off, asserted in tests).
+- Rail search: new `components/rail-search.tsx` (dedupeHits + RailSearch),
+  mounted under the new-thread-row; same debounce/stale/error discipline as
+  the palette's deep-search effect.
+- Quick-compose: palette row kind "compose" + '>' prefix mode (one row, Enter
+  always sends); `sendPrompt` extracted from submitPrompt (byte-equivalent
+  paths); `composeNewThread` in handlers/chat.ts with split-try draft restore.
+- Schedule-from-chat: `scheduleDraft` prop on ChatView '+' menu → cronSeed →
+  CronsView composeSeed/onComposeSeedHandled (WorkflowsView contract line for
+  line, seed copied local before the flag lowers, `key={seed || "blank"}`).
+- Isolation: export RouteCase + second POST /api/share-links case (duplicate
+  key is the marketplace precedent; CASES_BY_KEY only feeds a coverage set).
+- Zero migrations; DB_GET_ALLOWLIST, RATE_LIMITED_ROUTES, navigation.test.ts,
+  resolve_directives all untouched as constrained.
+- Verify (worktree, 2026-09-20): uv sync --extra dev; ruff clean; mypy clean
+  (183 files); FULL pytest exit 0 (one run had test_sandbox_local
+  runaway-loop flake under CPU contention with the concurrent vitest run —
+  passed 3/3 isolated and in the clean full re-run); tsc clean; full vitest
+  97 files / 1019 tests green.
+- e2e conversations-parity.spec.ts deliberately NOT written — the QA phase
+  agent owns apps/web/e2e/** (scenarios listed in the cluster spec).
+
+## Identity cluster (styles / feedback / profile / memory import — 2026-09-20)
+
+- Response styles: `Membership.style_preset`/`custom_style_text` (safe_mode
+  column pattern), pure `services/styles.py` (`style_block` + `for_run`,
+  total-fallback), spliced in `resolve_directives` AFTER the space block and
+  BEFORE the skill splice (task-pinned order, layer-order test pins
+  space < style < skill). 'normal' renders '' — byte-identity pinned first in
+  test_style_directives.py; the four existing `== CHAT_INSTRUCTIONS` files
+  pass with ZERO edits.
+- PUT /api/me/style (422 on blank custom), PATCH /api/me/profile (edits
+  `users.name` in place — no display_name column, verified attribution
+  source), POST /api/me/password (verify current → policy → hash; revokes
+  every OTHER session, caller's survives; audited with `{}` detail).
+  NOTE spec/code divergence: `revoke_all_sessions` revokes the caller too
+  (the logged-out reset flow's helper), so the route writes its own scoped
+  sweep excluding `actor.session_id` — the docstring says why.
+- POST /api/memory/import: items door (schema-capped at 200 → 422 past it) +
+  text door (truncates past 200, counts skipped); always personal owner +
+  `space_id=""`; 'summary' skipped, unknown kinds → 'fact'; one aggregated
+  memory.updated event + one memory.imported audit row; deliberately no
+  Idempotency-Key (dedupe converges) — tombstone-restore trade documented.
+- Message feedback: `MessageFeedback` table (UNIQUE(message_id, user_id)),
+  POST /api/messages/{id}/feedback behind resolve_visible-then-role-gate,
+  IntegrityError-upsert; transcript stamps `my_feedback` (viewer's own only,
+  notes never serialize); BOTH delete(Message) sites (purge AND
+  truncate_after) clear feedback rows first.
+- Migration 0072 (linear on 0071, guarded template, downgrade guarded):
+  membership style columns, message_feedback, and `sources.page_count` —
+  included per the surfaces spec's optional 0072 column note; model column
+  added too so create_all and the chain agree. Round-tripped
+  0071↔0072 on a scratch DB (up=0 down=0 up=0).
+- Web: profile View + settings-surface nav group (navigation.test.ts pin
+  updated to ['Profile','Connections','Admin']); Response-style section in
+  the settings menu (null-until-bootstrap, popover-local draft state);
+  composer picker labelled 'Response style · you' (Custom offered only once
+  text exists); thumbs + note popover beside CopyButton (assistant messages,
+  only when wired); Memory download (v1 export shape) + import with
+  dismissible accounting line; ProfileView (read-only email, rename +
+  password change, session refresh after rename).
+- Isolation: five new ROUTE_CASES (style/profile/password/import SCOPED,
+  feedback DENY via ids['message']); DB_GET_ALLOWLIST untouched (all scoped
+  selects).
+- Root-cause fix outside the cluster's files (verify chain tripped on it):
+  sandbox `local_exec.run_process` now labels a SIGXCPU death as
+  "timed out … (CPU limit)" — the CPU rlimit (== int(timeout)) races the
+  wall-clock wait and the runaway-loop test was a coin flip under load
+  (failed 2/5 isolated pre-fix, 6/6 green post-fix; the previous cluster's
+  note saw the same flake).
+- Verify (worktree, 2026-09-20): uv sync --extra dev; ruff clean; mypy clean
+  (184 files); FULL pytest green (direct exit code); memory eval exit 0 (api/
+  memory.py touched); tsc clean; FULL vitest 100 files / 1041 tests green;
+  eslint 0 errors (10 pre-existing warnings, none in touched regions).
+
+## SURFACES cluster (claude-desktop-parity worktree, 2026-09-20)
+- [x] Backend: DocumentVersionContentOut + GET /documents/{id}/versions/{vid};
+      documents.get_version; ChatAttachmentOut media_type/byte_size + enriched
+      list_attachments; MeRecapOut/RecapGroupOut + GET /api/me/recap;
+      memory.count_learned through _active(ALL_SPACES); isolation ROUTE_CASES x2
+- [x] Web: space capacity meter (space-knowledge.ts, cosmetic 50MB ceiling);
+      history stepper + diff-lines.ts (LCS, 3-ctx, merged hunks, >20k/DP-area
+      fallback); attachment previews (previewKindOf/csvPreviewRows, ImageThumb/
+      PdfCard/CsvPeek, strip branches on server mime); RecapView + Library
+      "you" section; dictation.ts reducer + feature-detected mic button
+      (mounted detect, manual-edit/send/unmount/onerror all stop, no toast);
+      globals.css tokens-only styles appended at EOF
+- [x] api-client: getDocumentVersion, getRecap, ChatAttachment media_type/
+      byte_size (required — server always sends), MeRecap/RecapGroup types
+- [x] Tests: space-knowledge/diff-lines/attachment-preview/dictation unit
+      suites; test_me_recap.py, test_document_version_content.py, enrichment
+      test in test_chat_attachments.py; chat-attachments fixture gained the
+      two fields
+- [x] SKIPPED per computed task: apps/web/e2e/*.spec.ts edits (navigation,
+      chat-composer mic, chat-attachments CSV, spaces meter — QA agent owns)
+- [x] Verify (worktree, 2026-09-20): uv sync --extra dev; ruff clean; mypy
+      clean (184 files); FULL pytest exit 0 (direct capture, PYTHONPATH
+      pinned); memory eval exit 0 (services/memory.py touched); tsc clean;
+      FULL vitest 104 files / 1076 tests green; eslint 0 errors on touched
+      files
+
+### Review — spec/code divergences (code won)
+- Spec said navigation.test.ts is "existing, unchanged — run it, don't edit
+  it", but that test PINS Library's exact section list (lines ~139-162), so
+  adding the "you" shelf required extending the pinned enumeration. One
+  entry added, nothing else touched.
+- Source.page_count landed in 0072 (identity agent) but nothing stamps it
+  yet, so the PDF card shows "PDF · size" as the spec's deferred note
+  intends; wiring a page count is ingestion's later cycle.
+- Recap determinism hardened past the spec: GROUP BYs carry an id tiebreak
+  so equal counts order identically on SQLite and Postgres.

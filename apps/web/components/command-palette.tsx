@@ -5,7 +5,7 @@ import type {
   ConversationSearchHit,
   DocumentKind,
 } from "@workspace/api-client";
-import { Columns2, CornerDownLeft, MessageSquare, Plus, Search, Settings2 } from "lucide-react";
+import { Columns2, CornerDownLeft, MessageSquare, MessageSquarePlus, Plus, Search, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CreateAction } from "./views/navigation";
 import {
@@ -66,6 +66,12 @@ export type CommandPaletteProps = {
   deleteLayout?: (name: string) => void;
   /** Flip (and persist) the named preference: Enter on its toggle row. */
   togglePreference?: (toggle: PaletteToggle) => void;
+  /**
+   * Quick-compose: start a new thread with these words as its first message
+   * and land in it. Optional so the palette stands without it; no compose
+   * handler, no compose rows — same contract as searchTranscripts.
+   */
+  compose?: (text: string) => Promise<void>;
 };
 
 /**
@@ -94,6 +100,7 @@ export function CommandPalette({
   saveLayout,
   deleteLayout,
   togglePreference,
+  compose,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
@@ -101,7 +108,10 @@ export function CommandPalette({
   const [naming, setNaming] = useState<NamingTask | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
 
-  const rows = useMemo(() => buildPaletteRows(conversations, extras), [conversations, extras]);
+  const rows = useMemo(
+    () => buildPaletteRows(conversations, extras, Boolean(compose)),
+    [conversations, extras, compose],
+  );
   const instant = useMemo(() => matchPalette(rows, query), [rows, query]);
 
   // Deep hits arrive late and never reorder the instant rows above them: a
@@ -109,7 +119,15 @@ export function CommandPalette({
   // wrong thing. Debounced, three characters minimum, stale replies dropped.
   const [deepHits, setDeepHits] = useState<ConversationSearchHit[]>([]);
   useEffect(() => {
-    if (!open || naming || !searchTranscripts || query.trim().length < 3) {
+    // A compose draft ("> …") is words being written, not a search — it must
+    // never query the transcript index.
+    if (
+      !open ||
+      naming ||
+      !searchTranscripts ||
+      query.trim().length < 3 ||
+      query.trim().startsWith(">")
+    ) {
       setDeepHits([]);
       return;
     }
@@ -228,6 +246,24 @@ export function CommandPalette({
       close();
       return;
     }
+    if (row.kind === "compose") {
+      if (!compose) return;
+      if (row.text) {
+        close();
+        await compose(row.text);
+        return;
+      }
+      // The empty-text row reuses the existing NamingTask second step exactly
+      // as "Save layout as…" does: Enter submits, Esc backs out.
+      setNaming({
+        prompt: "Message",
+        noun: "message",
+        verb: "sends",
+        submit: (text) => compose(text),
+      });
+      setQuery("");
+      return;
+    }
     // A create that names itself later runs now; one that needs a name asks
     // for it in place — the input becomes the name field.
     if (!row.action.prompt) {
@@ -341,6 +377,8 @@ export function CommandPalette({
                   >
                     {row.kind === "thread" ? (
                       <MessageSquare size={14} aria-hidden="true" />
+                    ) : row.kind === "compose" ? (
+                      <MessageSquarePlus size={14} aria-hidden="true" />
                     ) : row.kind === "create" || row.kind === "save-layout" ? (
                       <Plus size={14} aria-hidden="true" />
                     ) : row.kind === "layout" ? (
