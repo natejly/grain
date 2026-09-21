@@ -166,22 +166,39 @@ def list_conversations(
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> List[ConversationOut]:
-    # Subject-scoped threads are deliberately absent. They belong to the side
-    # panel of the document, project or dashboard they are about, are created
-    # and deleted with it, and one entry per thing opened would turn the Chat
-    # rail into a list of things the user never started.
+    # Two kinds of row, one listing.
     #
-    # The caller sees the workspace's shared threads PLUS their own personal
-    # ones. The `workspace_id` filter is never removed — `shared` only relaxes
-    # the within-workspace creator filter, so this can never return another
-    # workspace's rows, and another member's personal thread stays hidden.
+    # An ordinary rail thread (`subject_id == ""`) is the caller's own or is
+    # shared with the workspace. A DOCUMENT or DASHBOARD thread is still
+    # deliberately absent: it belongs to the side panel of the thing it is
+    # about, and one entry per file opened would turn the rail into a list of
+    # things the user never started.
+    #
+    # A PROJECT thread is listed, because a project is a place you work in
+    # rather than a file you glance at, and the rail groups its threads under
+    # the project's own header. It is workspace-visible with no personal/shared
+    # clause, mirroring `conversations.resolve_visible`: a subject thread is
+    # reached beside a workspace-scoped subject, so gating it on `created_by`
+    # would hide from the rail a thread the same member can open from the
+    # project page.
+    #
+    # The `workspace_id` filter is never removed — neither branch below relaxes
+    # it — so this can never return another workspace's rows, and another
+    # member's personal rail thread stays hidden.
     stmt = (
         select(Conversation)
         .where(
             Conversation.workspace_id == actor.workspace_id,  # NEVER removed
-            Conversation.subject_id == "",
-            (Conversation.shared.is_(True))
-            | (Conversation.created_by == actor.user_id),
+            or_(
+                and_(
+                    Conversation.subject_id == "",
+                    or_(
+                        Conversation.shared.is_(True),
+                        Conversation.created_by == actor.user_id,
+                    ),
+                ),
+                Conversation.subject_kind == subjects.PROJECT,
+            ),
         )
         .order_by(Conversation.updated_at.desc())
     )

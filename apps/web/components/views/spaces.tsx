@@ -259,8 +259,13 @@ export function SpacesView({
     ? memories.filter((item) => item.space_id === selected.id)
     : [];
   // What "Add a thread" can offer: rail threads in no (known) space. Subject
-  // threads never reach this list — the server keeps them out of the rail.
-  const addable = unspacedThreads(spaces, conversations);
+  // threads are refused here rather than assumed absent — the listing carries
+  // project threads now (the rail groups them under their project), and the
+  // server 409s any attempt to file one into a space, so offering them would
+  // be a row whose only outcome is an error.
+  const addable = unspacedThreads(spaces, conversations).filter(
+    (row) => !row.subject_id,
+  );
 
   return (
     <div className="spaces-layout">

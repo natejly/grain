@@ -1,6 +1,11 @@
 "use client";
 
-import type { AgentToolCall, ApprovalMode, Message } from "@workspace/api-client";
+import type {
+  AgentToolCall,
+  ApprovalMode,
+  Conversation,
+  Message,
+} from "@workspace/api-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { createThreadHandlers } from "./handlers/thread";
@@ -26,6 +31,13 @@ export type SubjectThreadDeps = {
   onRunSettled?: () => Promise<void>;
   /** A write parked mid-stream and the caller renders the review inline. */
   onToolProposed?: () => Promise<void>;
+  /**
+   * The panel resolved which thread this subject has. The shell uses it to
+   * learn about a thread its own listing has never seen — a project thread is
+   * created by opening the panel, not by the rail, so without this the rail
+   * has no row to group under the project until the next full refresh.
+   */
+  onThreadKnown?: (conversation: Conversation) => void;
 };
 
 /**
@@ -56,6 +68,7 @@ export function useSubjectThread({
   focus,
   onRunSettled,
   onToolProposed,
+  onThreadKnown,
 }: SubjectThreadDeps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   // The subject thread's approval mode — a real Conversation column, so the
@@ -84,6 +97,15 @@ export function useSubjectThread({
    */
   const loadingFor = useRef("");
   const key = `${kind}:${subjectId}`;
+  /**
+   * The notifier, read through a ref so the loader effect below keeps its
+   * three deps. A caller that closes over its own state rebuilds this callback
+   * every render; in the dep array it would re-run the fetch on every keystroke
+   * in the shell, and a subject panel that re-fetches its transcript that often
+   * is a worse bug than the one this callback fixes.
+   */
+  const threadKnownRef = useRef(onThreadKnown);
+  threadKnownRef.current = onThreadKnown;
 
   useEffect(() => {
     conversationRef.current = conversationId;
@@ -117,6 +139,10 @@ export function useSubjectThread({
         // which is why the panel could not show its own thread's mode.
         setApprovalModeState(conversation.approval_mode);
         setMessages(history);
+        // After the subject check, never before: a response for the subject the
+        // user just left must not teach the shell about that thread as if this
+        // panel had opened it.
+        threadKnownRef.current?.(conversation);
       } catch (caught) {
         if (loadingFor.current !== key) return;
         setError(describeError(caught, "Could not open the chat for this"));
